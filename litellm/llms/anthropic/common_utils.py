@@ -161,7 +161,7 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
     return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
 
 
-def _validated_object_mapping(value: object) -> dict[object, object] | None:
+def validated_object_mapping(value: object) -> dict[object, object] | None:
     try:
         return _OBJECT_MAPPING_ADAPTER.validate_python(value)
     except ValidationError:
@@ -200,7 +200,7 @@ def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     blocks: Final = _validated_claude_code_list(system)
     if blocks is None:
         return None
-    block_mappings: Final = tuple(_validated_object_mapping(block) for block in blocks)
+    block_mappings: Final = tuple(validated_object_mapping(block) for block in blocks)
     if any(block is None for block in block_mappings):
         return None
     text_values: Final = tuple(
@@ -233,7 +233,7 @@ def is_claude_code_one_shot_subagent_request(
     tools: object,
     user_agent: str | None,
 ) -> bool:
-    only_message: Final = _validated_object_mapping(messages[0]) if len(messages) == 1 else None
+    only_message: Final = validated_object_mapping(messages[0]) if len(messages) == 1 else None
     return (
         user_agent is not None
         and is_claude_code_user_agent(user_agent)
@@ -932,7 +932,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return
         if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
             return
-        thinking: Final = _validated_object_mapping(optional_params.get("thinking"))
+        thinking: Final = validated_object_mapping(optional_params.get("thinking"))
         if thinking is None or thinking.get("type") != "enabled":
             return
 
@@ -1621,11 +1621,12 @@ def is_anthropic_thinking_binding_mismatch_error(error_text: str) -> bool:
     return "bound to a different conversation" in error_text.lower()
 
 
-def anthropic_request_errors_on_thinking_binding_mismatch(request_body: Mapping[str, object]) -> bool:
+def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) -> bool:
     """``thinking.block_binding.prefix_mismatch_behavior: error`` is the caller asking
     for the 400, so a retry that strips thinking must not override it."""
-    thinking: Final = _validated_object_mapping(request_body.get("thinking"))
-    binding: Final = _validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
+    body: Final = validated_object_mapping(request_body)
+    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
+    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
 
 
@@ -1905,7 +1906,7 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
 
 
 def tool_call_is_rebuilt_as_server_tool_use(tool_call_id: object, provider_specific_fields: object) -> bool:
-    fields: Final = _validated_object_mapping(provider_specific_fields)
+    fields: Final = validated_object_mapping(provider_specific_fields)
     if not isinstance(tool_call_id, str) or fields is None:
         return False
     return (

@@ -2099,7 +2099,7 @@ class BaseLLMHTTPHandler:
         # str when the caller passes a pre-serialized (unsigned) body to avoid
         # re-dumping; bytes when a provider signed the request (e.g. Bedrock).
         signed_json_body: str | bytes | None,
-        request_body: dict,
+        request_body: dict[str, object],
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseAnthropicMessagesConfig,

@@ -17,7 +17,7 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -348,9 +348,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not isinstance(output_config, dict):
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
-        raw: Final = anthropic_messages_request.get("thinking")
-        fields: Final = cast(Mapping[str, object], raw) if isinstance(raw, dict) else {}  # cast-ok: isinstance narrowed
-        carried: Final = {key: value for key, value in fields.items() if key not in ("type", "budget_tokens")}
+        thinking: Final = validated_object_mapping(anthropic_messages_request.get("thinking"))
+        carried: Final = {key: value for key, value in (thinking or {}).items() if key not in ("type", "budget_tokens")}
         anthropic_messages_request["output_config"] = output_config
         anthropic_messages_request["thinking"] = {**carried, "type": "adaptive"}
         verbose_logger.debug(
