@@ -128,9 +128,7 @@ class TestDashScopeConfig:
         ]
 
         # Call the _transform_messages method directly
-        transformed_messages = config._transform_messages(
-            messages=messages, model="qwen-turbo", is_async=False
-        )
+        transformed_messages = config.transform_messages(messages=messages, model="qwen-turbo", is_async=False)
 
         # Verify that the content is still in list format and has not been transformed to a string
         assert isinstance(transformed_messages[0]["content"], list)

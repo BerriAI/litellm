@@ -25,7 +25,7 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI: Final[
 ] = {
     "Submitted": "validating",
     "Validating": "validating",
-    "Scheduled": "validating",
+    "Scheduled": "in_progress",
     "InProgress": "in_progress",
     "Stopping": "cancelling",
     "Stopped": "cancelled",
@@ -167,7 +167,7 @@ class BedrockBatchesHandler:
         )
 
         def job_status() -> "LiteLLMBatch":
-            return BedrockBatchesHandler._handle_model_invocation_job_status(
+            return BedrockBatchesHandler.handle_model_invocation_job_status(
                 batch_id=batch_id,
                 aws_region_name=region,
                 logging_obj=logging_obj,
@@ -187,7 +187,7 @@ class BedrockBatchesHandler:
         return job_status()
 
     @staticmethod
-    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -210,7 +210,7 @@ class BedrockBatchesHandler:
             embedding_handler: Final = BedrockEmbedding()
 
             # Get the status of the async invoke job
-            status_response: Final = await embedding_handler._get_async_invoke_status(
+            status_response: Final = await embedding_handler.get_async_invoke_status(
                 invocation_arn=batch_id,
                 aws_region_name=aws_region_name,
                 logging_obj=logging_obj,
@@ -263,8 +263,10 @@ class BedrockBatchesHandler:
             future: Final = executor.submit(run_in_thread)
             return future.result()
 
+    _handle_async_invoke_status = handle_async_invoke_status
+
     @staticmethod
-    def _handle_model_invocation_job_status(
+    def handle_model_invocation_job_status(
         batch_id: str,
         aws_region_name: str | None = None,
         logging_obj=None,
@@ -406,3 +408,5 @@ class BedrockBatchesHandler:
             input_file_id=input_uri,
             output_file_id=output_file_uri if openai_status == "completed" else None,
         )
+
+    _handle_model_invocation_job_status = handle_model_invocation_job_status

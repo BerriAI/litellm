@@ -53,7 +53,7 @@ async def test_get_key_object_loads_object_permission():
             "litellm.proxy.auth.auth_checks.get_object_permission",
             AsyncMock(return_value=mock_object_permission),
         ),
-        patch("litellm.proxy.auth.auth_checks._cache_key_object", AsyncMock()),
+        patch("litellm.proxy.auth.auth_checks.cache_key_object", AsyncMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
     ):
         result = await get_key_object(
@@ -94,7 +94,7 @@ async def test_get_key_object_no_permission_id():
     mock_proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
 
     with (
-        patch("litellm.proxy.auth.auth_checks._cache_key_object", AsyncMock()),
+        patch("litellm.proxy.auth.auth_checks.cache_key_object", AsyncMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
     ):
         result = await get_key_object(
@@ -147,7 +147,7 @@ async def test_get_team_object_loads_object_permission():
             "litellm.proxy.auth.auth_checks.get_object_permission",
             AsyncMock(return_value=mock_object_permission),
         ),
-        patch("litellm.proxy.auth.auth_checks._cache_team_object", AsyncMock()),
+        patch("litellm.proxy.auth.auth_checks.cache_team_object", AsyncMock()),
         patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True),
         patch("litellm.proxy.auth.auth_checks._update_last_db_access_time"),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),

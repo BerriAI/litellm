@@ -20,6 +20,7 @@ overwrite each other within the same day, producing incomplete data.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
@@ -28,6 +29,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAVVRIK_FOCUS_EXPORT_JOB_NAME
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -83,7 +85,8 @@ def _is_empty_metrics_marker(marker: object | None) -> bool:
 class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime, **kwargs: Any) -> None:
+        self._clock: Final = clock
         frequency: Final = os.getenv("MAVVRIK_FOCUS_FREQUENCY", "daily").lower()
         if frequency != "daily":
             raise ValueError(
@@ -116,7 +119,7 @@ class MavvrikFocusLogger(FocusLogger):
         """Export with Mavvrik row cap applied when no explicit limit is passed."""
         effective_limit: Final = limit if limit is not None else self._max_rows
         engine: Final = self._ensure_engine()
-        data: Final = await engine._database.get_usage_data(
+        data: Final = await engine.database.get_usage_data(
             limit=effective_limit,
             start_time_utc=window.start_time,
             end_time_utc=window.end_time,
@@ -134,13 +137,13 @@ class MavvrikFocusLogger(FocusLogger):
         if data.is_empty():
             verbose_proxy_logger.debug("Mavvrik FOCUS export: no usage data for window %s", window)
         else:
-            normalized: Final = engine._transformer.transform(data)
+            normalized: Final = engine.transformer.transform(data)
             if not normalized.is_empty():
-                payload = engine._serializer.serialize(normalized)
-        await engine._destination.deliver(
+                payload = engine.serializer.serialize(normalized)
+        await engine.destination.deliver(
             content=payload or b"",
             time_window=window,
-            filename=engine._build_filename(window),
+            filename=engine.build_filename(window),
         )
 
     # Maximum number of days to catch up in a single run. Prevents runaway
@@ -165,7 +168,7 @@ class MavvrikFocusLogger(FocusLogger):
             FocusMavvrikDestination,
         )
 
-        destination: Final = engine._destination
+        destination: Final = engine.destination
         if not isinstance(destination, FocusMavvrikDestination):
             await super()._run_scheduled_export()
             return
@@ -174,7 +177,7 @@ class MavvrikFocusLogger(FocusLogger):
         # metricsMarker may be a Unix timestamp (int/float) or an ISO date string.
         marker: Final = await destination.get_metrics_marker()
 
-        now: Final = datetime.now(timezone.utc)
+        now: Final = self._clock()
         yesterday: Final = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
         last_ingested: Final = _parse_metrics_marker(marker)
