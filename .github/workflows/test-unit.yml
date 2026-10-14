@@ -322,6 +322,7 @@ jobs:
               tests/unit/llms/perplexity
               tests/unit/llms/pg_vector
               tests/unit/llms/publicai
+              tests/unit/llms/qdrant
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
               tests/unit/llms/reducto
