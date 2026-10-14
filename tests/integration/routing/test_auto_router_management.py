@@ -31,6 +31,34 @@ def _tier_peer(model: str, prompts: tuple[str, ...]) -> Callable[[Request], Repl
         if request.method == "GET":
             return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST", request.method
+        if request.target == "/v1/responses":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "id": "resp-" + uuid.uuid4().hex[:8],
+                        "object": "response",
+                        "created_at": 1700000000,
+                        "status": "completed",
+                        "model": model,
+                        "output": [
+                            {
+                                "id": "msg-" + uuid.uuid4().hex[:8],
+                                "type": "message",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": "synthetic tier response",
+                                        "annotations": [],
+                                    }
+                                ],
+                            }
+                        ],
+                        "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+                    }
+                ).encode()
+            )
         assert request.target == "/v1/chat/completions", request.target
         body: Final = JSON_OBJECT.validate_json(request.body)
         expected_bodies: Final = tuple(
@@ -161,6 +189,20 @@ def _assert_rollup_row(
     }
 
 
+def _rollup_row(api_key: str, database_url: str, router_name: str, session_id: str) -> dict[str, object]:
+    key_hash: Final = hashlib.sha256(api_key.encode()).hexdigest()
+    rows: Final = read_rows(
+        "SELECT session_id, router_name, router_type, last_model, turns, spend, saved_spend, "
+        "savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend, "
+        "savings_estimated_baseline_models, baseline_models, tier_turns "
+        'FROM "LiteLLM_AutoRouterSession" WHERE api_key = %s AND session_id = %s AND router_name = %s',
+        (key_hash, session_id, router_name),
+        database_url=database_url,
+    )
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
 def _session_contract(session_id: str, router_name: str) -> dict[str, object]:
     return {
         "session_id": session_id,
@@ -185,6 +227,8 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
     tmp_path: Path,
 ) -> None:
     normal_session_id: Final = str(uuid.uuid4())
+    messages_session_id: Final = str(uuid.uuid4())
+    responses_session_id: Final = str(uuid.uuid4())
     codex_session_id: Final = str(uuid.uuid4())
     codex_thread_id: Final = str(uuid.uuid4())
     opencode_session_id: Final = str(uuid.uuid4())
@@ -192,10 +236,41 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
     long_session_id: Final = "s" * 300
     router_name: Final = "auto-router-" + uuid.uuid4().hex[:8]
     normal_prompt: Final = f"integration-auto-simple {normal_session_id}"
+    messages_prompt: Final = f"integration-auto-simple {messages_session_id}"
+    messages_second_prompt: Final = f"integration-auto-medium {messages_session_id}"
+    responses_prompt: Final = f"integration-auto-simple {responses_session_id}"
     codex_prompt: Final = f"integration-auto-simple {codex_session_id}"
     opencode_prompt: Final = f"integration-auto-simple {opencode_session_id}"
     thread_only_prompt: Final = f"integration-auto-simple {thread_only_session_id}"
     long_prompt: Final = f"integration-auto-simple {long_session_id}"
+    messages_upstream_body: Final = {
+        "model": "integration-simple",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": messages_prompt}],
+            }
+        ],
+        "include": ["reasoning.encrypted_content"],
+        "max_output_tokens": 32,
+    }
+    messages_second_upstream_body: Final = {
+        "model": "integration-medium",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": messages_second_prompt}],
+            }
+        ],
+        "include": ["reasoning.encrypted_content"],
+        "max_output_tokens": 32,
+    }
+    responses_upstream_body: Final = {
+        "model": "integration-simple",
+        "input": responses_prompt,
+    }
 
     with (
         scratch_database() as database_url,
@@ -205,7 +280,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                 (normal_prompt, codex_prompt, opencode_prompt, thread_only_prompt, long_prompt),
             )
         ) as simple,
-        wire_server(_tier_peer("integration-medium", (normal_prompt,))) as medium,
+        wire_server(_tier_peer("integration-medium", ())) as medium,
         wire_server(_tier_peer("integration-complex", (normal_prompt,))) as complex_tier,
         wire_server(_tier_peer("integration-baseline", (normal_prompt,))) as baseline,
     ):
@@ -221,7 +296,10 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "model": "auto_router/complexity_router",
                     "complexity_router_config": {
                         "classifier_type": "heuristic",
-                        "keyword_tier_rules": [{"keywords": ["integration-auto-simple"], "tier": "SIMPLE"}],
+                        "keyword_tier_rules": [
+                            {"keywords": ["integration-auto-simple"], "tier": "SIMPLE"},
+                            {"keywords": ["integration-auto-medium"], "tier": "MEDIUM"},
+                        ],
                         "tiers": {
                             "SIMPLE": "integration-simple",
                             "MEDIUM": "integration-medium",
@@ -278,6 +356,103 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                 assert JSON_OBJECT.validate_json(hidden.content) == {
                     "detail": f"No auto-routed turns recorded for session {normal_session_id!r} under this key"
                 }, hidden.text
+
+                messages_response: Final = candidate.client.post(
+                    "/v1/messages",
+                    json={
+                        "model": router_name,
+                        "max_tokens": 32,
+                        "messages": [{"role": "user", "content": messages_prompt}],
+                    },
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                        "x-claude-code-session-id": messages_session_id,
+                    },
+                )
+                assert messages_response.status_code == 200, messages_response.text
+                assert JSON_OBJECT.validate_json(messages_response.content)["content"] == [
+                    {"type": "text", "text": "synthetic tier response"}
+                ], messages_response.text
+
+                messages_second_response: Final = candidate.client.post(
+                    "/v1/messages",
+                    json={
+                        "model": router_name,
+                        "max_tokens": 32,
+                        "messages": [{"role": "user", "content": messages_second_prompt}],
+                    },
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                        "x-claude-code-session-id": messages_session_id,
+                    },
+                )
+                assert messages_second_response.status_code == 200, messages_second_response.text
+                assert JSON_OBJECT.validate_json(messages_second_response.content)["content"] == [
+                    {"type": "text", "text": "synthetic tier response"}
+                ], messages_second_response.text
+
+                messages_session: Final = _session_response(candidate, key, messages_session_id)
+                assert JSON_OBJECT.validate_json(messages_session.content) == {
+                    "session_id": messages_session_id,
+                    "router_name": router_name,
+                    "router_type": "complexity",
+                    "turns": 2,
+                    "last_model": "openai/integration-medium",
+                    "spend": pytest.approx(0.000045),
+                    "savings_estimated_turns": 2,
+                    "savings_estimated_actual_spend": pytest.approx(0.000045),
+                    "saved_spend": pytest.approx(0.000255),
+                    "baseline_spend": pytest.approx(0.0003),
+                    "savings_estimated_baseline_spend": pytest.approx(0.0003),
+                    "baseline_model": "openai/integration-baseline",
+                    "baseline_models": {"openai/integration-baseline": 2},
+                }, messages_session.text
+                assert _rollup_row(key, database_url, router_name, messages_session_id) == {
+                    "session_id": messages_session_id,
+                    "router_name": router_name,
+                    "router_type": "complexity",
+                    "last_model": "openai/integration-medium",
+                    "turns": 2,
+                    "spend": pytest.approx(0.000045),
+                    "saved_spend": pytest.approx(0.000255),
+                    "savings_estimated_turns": 2,
+                    "savings_estimated_actual_spend": pytest.approx(0.000045),
+                    "savings_estimated_saved_spend": pytest.approx(0.000255),
+                    "savings_estimated_baseline_models": {"openai/integration-baseline": 2},
+                    "baseline_models": {"openai/integration-baseline": 2},
+                    "tier_turns": {"SIMPLE": 1, "MEDIUM": 1},
+                }
+
+                responses_response: Final = candidate.client.post(
+                    "/v1/responses",
+                    json={"model": router_name, "input": responses_prompt},
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "user-agent": "codex_cli_rs/0.50.0",
+                        "session-id": responses_session_id,
+                        "thread-id": str(uuid.uuid4()),
+                    },
+                )
+                assert responses_response.status_code == 200, responses_response.text
+                responses_output: Final = JSON_ARRAY.validate_python(
+                    JSON_OBJECT.validate_json(responses_response.content)["output"]
+                )
+                assert len(responses_output) == 1, responses_response.text
+                assert object_value(responses_output[0])["content"] == [
+                    {
+                        "type": "output_text",
+                        "text": "synthetic tier response",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ], responses_response.text
+                responses_session: Final = _session_response(candidate, key, responses_session_id)
+                assert JSON_OBJECT.validate_json(responses_session.content) == _session_contract(
+                    responses_session_id, router_name
+                ), responses_session.text
+                _assert_rollup_row(key, database_url, router_name, responses_session_id)
 
                 codex_response: Final = candidate.request(
                     "POST",
@@ -421,27 +596,41 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
             (
                 request.method,
                 request.target,
-                json.loads(request.body)["model"],
-                json.loads(request.body)["messages"],
+                json.loads(request.body),
             )
             for request in simple_calls
         ) == (
-            ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": normal_prompt}]),
-            ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": codex_prompt}]),
             (
                 "POST",
                 "/v1/chat/completions",
-                "integration-simple",
-                [{"role": "user", "content": opencode_prompt}],
+                {"model": "integration-simple", "messages": [{"role": "user", "content": normal_prompt}]},
+            ),
+            ("POST", "/v1/responses", messages_upstream_body),
+            ("POST", "/v1/responses", responses_upstream_body),
+            (
+                "POST",
+                "/v1/chat/completions",
+                {"model": "integration-simple", "messages": [{"role": "user", "content": codex_prompt}]},
             ),
             (
                 "POST",
                 "/v1/chat/completions",
-                "integration-simple",
-                [{"role": "user", "content": thread_only_prompt}],
+                {"model": "integration-simple", "messages": [{"role": "user", "content": opencode_prompt}]},
             ),
-            ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": long_prompt}]),
+            (
+                "POST",
+                "/v1/chat/completions",
+                {"model": "integration-simple", "messages": [{"role": "user", "content": thread_only_prompt}]},
+            ),
+            (
+                "POST",
+                "/v1/chat/completions",
+                {"model": "integration-simple", "messages": [{"role": "user", "content": long_prompt}]},
+            ),
         ), response.text
-        assert tuple(request for request in medium.drain() if request.method == "POST") == (), response.text
+        medium_calls: Final = tuple(request for request in medium.drain() if request.method == "POST")
+        assert tuple((request.method, request.target, json.loads(request.body)) for request in medium_calls) == (
+            ("POST", "/v1/responses", messages_second_upstream_body),
+        ), response.text
         assert tuple(request for request in complex_tier.drain() if request.method == "POST") == (), response.text
         assert tuple(request for request in baseline.drain() if request.method == "POST") == (), response.text

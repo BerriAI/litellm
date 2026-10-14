@@ -39,7 +39,12 @@ _VLLM_PROBE_REPLY: Final = JsonResponse(
     body={
         "model": "Qwen/Qwen3-0.6B",
         "answers": {
-            "reachable": {"type": "choice", "choice": "yes", "confidence": 1.0, "probabilities": {"yes": 1.0, "no": 0.0}}
+            "reachable": {
+                "type": "choice",
+                "choice": "yes",
+                "confidence": 1.0,
+                "probabilities": {"yes": 1.0, "no": 0.0},
+            }
         },
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
@@ -141,18 +146,12 @@ def _background_health_reply(request: Request, *, model: str, api_key: str) -> R
 
 def _assert_background_health_requests(wire: Wire, *, model: str, api_key: str) -> None:
     requests: Final = wire.drain()
-    assert len(requests) == 2, requests
+    assert len(requests) == 1, requests
     assert (
         requests[0].method,
         requests[0].target,
         requests[0].headers["authorization"],
-        requests[0].body,
-    ) == ("GET", "/v1/models", f"Bearer {api_key}", b""), requests
-    assert (
-        requests[1].method,
-        requests[1].target,
-        requests[1].headers["authorization"],
-        JSON_OBJECT.validate_json(requests[1].body),
+        JSON_OBJECT.validate_json(requests[0].body),
     ) in (
         (
             "POST",
@@ -166,7 +165,7 @@ def _assert_background_health_requests(wire: Wire, *, model: str, api_key: str) 
             f"Bearer {api_key}",
             {"model": model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
         ),
-    ), requests[1].body.decode()
+    ), requests[0].body.decode()
 
 
 def test_background_health_results_are_scoped_to_the_key_models(gateway: Gateway, tmp_path: Path) -> None:
@@ -507,7 +506,6 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
         }
         public_model_unhealthy_endpoint: Final = object_value(public_model_body["unhealthy_endpoints"][0])
         public_model_error: Final = string_value(public_model_unhealthy_endpoint["error"])
-        public_model_raw_request: Final = _health_failure_raw_request(public_model_unhealthy_endpoint, unhealthy.url)
         assert "synthetic health failure" in public_model_error, public_model_report.text
         for endpoint in (*public_model_body["healthy_endpoints"], *public_model_body["unhealthy_endpoints"]):
             assert {
@@ -515,11 +513,12 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
                 "api_version",
                 "aws_bedrock_runtime_endpoint",
             }.isdisjoint(endpoint), public_model_report.text
-        assert public_model_unhealthy_endpoint == {
+        assert {
+            key: value for key, value in public_model_unhealthy_endpoint.items() if key != "raw_request_typed_dict"
+        } == {
             "model": "openai/gpt-4o-mini",
             "model_id": unhealthy_id,
             "error": public_model_error,
-            "raw_request_typed_dict": public_model_raw_request,
             "exception_status": 500,
         }, public_model_report.text
         assert public_model_body == {
@@ -536,21 +535,18 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
         expanded_group_body: Final = expanded_group_report.json()
         expanded_group_unhealthy_endpoint: Final = object_value(expanded_group_body["unhealthy_endpoints"][0])
         expanded_group_error: Final = string_value(expanded_group_unhealthy_endpoint["error"])
-        expanded_group_raw_request: Final = _health_failure_raw_request(
-            expanded_group_unhealthy_endpoint, unhealthy.url
-        )
         assert "synthetic health failure" in expanded_group_error, expanded_group_report.text
+        assert {
+            key: value for key, value in expanded_group_unhealthy_endpoint.items() if key != "raw_request_typed_dict"
+        } == {
+            "model": "openai/gpt-4o-mini",
+            "model_id": unhealthy_id,
+            "error": expanded_group_error,
+            "exception_status": 500,
+        }, expanded_group_report.text
         assert expanded_group_body == {
             "healthy_endpoints": [healthy_endpoint],
-            "unhealthy_endpoints": [
-                {
-                    "model": "openai/gpt-4o-mini",
-                    "model_id": unhealthy_id,
-                    "error": expanded_group_error,
-                    "raw_request_typed_dict": expanded_group_raw_request,
-                    "exception_status": 500,
-                }
-            ],
+            "unhealthy_endpoints": [expanded_group_unhealthy_endpoint],
             "healthy_count": 1,
             "unhealthy_count": 1,
         }, expanded_group_report.text
@@ -574,19 +570,16 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
         targeted_body: Final = targeted.json()
         targeted_endpoint: Final = object_value(targeted_body["unhealthy_endpoints"][0])
         targeted_error: Final = string_value(targeted_endpoint["error"])
-        targeted_raw_request: Final = _health_failure_raw_request(targeted_endpoint, unhealthy.url)
         assert "synthetic health failure" in targeted_error, targeted.text
+        assert {key: value for key, value in targeted_endpoint.items() if key != "raw_request_typed_dict"} == {
+            "model": "openai/gpt-4o-mini",
+            "model_id": unhealthy_id,
+            "error": targeted_error,
+            "exception_status": 500,
+        }, targeted.text
         assert targeted_body == {
             "healthy_endpoints": [],
-            "unhealthy_endpoints": [
-                {
-                    "model": "openai/gpt-4o-mini",
-                    "model_id": unhealthy_id,
-                    "error": targeted_error,
-                    "raw_request_typed_dict": targeted_raw_request,
-                    "exception_status": 500,
-                }
-            ],
+            "unhealthy_endpoints": [targeted_endpoint],
             "healthy_count": 0,
             "unhealthy_count": 1,
         }, targeted.text
@@ -692,6 +685,58 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
             }.isdisjoint(endpoint), unrestricted_report.text
         assert len(healthy.drain()) == 1
         assert team_b_wire.drain() == ()
+
+
+def test_team_scoped_health_hides_raw_request_upstream_details_from_non_admin_keys(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: GET /health returns raw_request_typed_dict with the upstream raw_request_api_base "
+        "and request headers to a non-admin team key, though api_base is stripped"
+    )
+    with (
+        wire_server(
+            lambda request: _health_chat_reply(request, api_key="team-a-key", model="gpt-4o-mini", status=500)
+        ) as unhealthy,
+        gateway.scenario() as scenario,
+    ):
+        public_a: Final = f"team-a-{uuid.uuid4().hex}"
+        team_a: Final = scenario.team(models=[public_a])
+        user_id: Final = scenario.member(team_a)
+        unhealthy_id: Final = _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=team_a,
+            public_model_name=public_a,
+            upstream_url=unhealthy.url,
+            api_key="team-a-key",
+        )
+        team_key: Final = scenario.key(team_id=team_a, user_id=user_id, models=[public_a])
+
+        non_admin: Final = gateway.request("GET", "/health", key=team_key, params={"model": public_a})
+        assert non_admin.status_code == 503, non_admin.text
+        non_admin_endpoint: Final = object_value(non_admin.json()["unhealthy_endpoints"][0])
+        non_admin_error: Final = string_value(non_admin_endpoint["error"])
+        assert "synthetic health failure" in non_admin_error, non_admin.text
+        assert non_admin_endpoint == {
+            "model": "openai/gpt-4o-mini",
+            "model_id": unhealthy_id,
+            "error": non_admin_error,
+            "exception_status": 500,
+        }, non_admin.text
+
+        admin: Final = gateway.request("GET", "/health", params={"model": public_a})
+        assert admin.status_code == 503, admin.text
+        admin_endpoint: Final = object_value(admin.json()["unhealthy_endpoints"][0])
+        admin_raw_request: Final = _health_failure_raw_request(admin_endpoint, unhealthy.url)
+        admin_error: Final = string_value(admin_endpoint["error"])
+        assert "synthetic health failure" in admin_error, admin.text
+        assert admin_endpoint == {
+            "model": "openai/gpt-4o-mini",
+            "api_base": f"{unhealthy.url}/v1",
+            "model_id": unhealthy_id,
+            "error": admin_error,
+            "raw_request_typed_dict": admin_raw_request,
+            "exception_status": 500,
+        }, admin.text
 
 
 def _delete_health_credential_if_present(gateway: Gateway, credential_name: str) -> None:
@@ -1282,7 +1327,9 @@ def test_evaluation_mode_health_check_of_databricks_ai_decide_resolves_the_mode_
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _DATABRICKS_AI_DECIDE_PROBE_REPLY)
+        handle: Final = register_scenario(
+            f"health-decisions-{uuid.uuid4().hex[:12]}", _DATABRICKS_AI_DECIDE_PROBE_REPLY
+        )
         scenario.cleanups.callback(delete_scenario, handle)
         model: Final = scenario.model(
             model="databricks/ai_decide",

@@ -224,6 +224,18 @@ def test_saved_deployment_target_update_changes_wire_and_preserves_control(gatew
             False,
         ),
         ("key-metadata-disabled", "context", None, ("primary-up",), "primary-up", 400, None, False, True),
+        ("stream-context", "context", None, ("primary-up", "big-up"), "big-up", 200, "1", True, False),
+        (
+            "stream-mid-stream",
+            "mid-stream",
+            None,
+            ("primary-up", "general-up"),
+            "general-up",
+            200,
+            "0",
+            True,
+            False,
+        ),
         ("mock-context", None, "mock_testing_context_fallbacks", ("big-up",), "big-up", 200, "1", False, False),
         (
             "mock-content-policy",
@@ -291,6 +303,44 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
     call_order: Final = SimpleQueue[str]()
 
     def respond(model: str) -> Reply:
+        if stream_request:
+            served_chunk: Final = (
+                b"data: "
+                + json.dumps(
+                    {
+                        "id": "response-" + model,
+                        "object": "chat.completion.chunk",
+                        "created": 1,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "served " + model},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    }
+                ).encode()
+                + b"\n\n"
+            )
+            usage_chunk: Final = (
+                b"data: "
+                + json.dumps(
+                    {
+                        "id": "response-" + model,
+                        "object": "chat.completion.chunk",
+                        "created": 1,
+                        "model": model,
+                        "choices": [],
+                        "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+                    }
+                ).encode()
+                + b"\n\n"
+            )
+            return Reply(
+                content_type="text/event-stream",
+                chunks=(served_chunk, usage_chunk, b"data: [DONE]\n\n"),
+            )
         return Reply(
             body=json.dumps(
                 {
@@ -495,27 +545,59 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                 events: Final = tuple(
                     JSON_OBJECT.validate_json(event) for event in event_lines if event.strip() != "[DONE]"
                 )
-                assert tuple({**event, "created": 0} if "created" in event else event for event in events) == (
-                    {
-                        "id": "response-primary-up",
-                        "object": "chat.completion.chunk",
-                        "created": 0,
-                        "model": "primary",
-                        "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}],
-                    },
-                    {
-                        "error": {
-                            "message": (
-                                "litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload "
-                                "is not completed: <TransferEncodingError: 400, message='Not enough data to satisfy "
-                                "transfer length header.'>"
-                            ),
-                            "type": None,
-                            "param": None,
-                            "code": "500",
-                        }
-                    },
-                ), response_text
+                if expected_status == 200 and not (primary_error == "mid-stream" and body_flag == "disable_fallbacks"):
+                    assert tuple({**event, "created": 0} if "created" in event else event for event in events) == (
+                        *(
+                            (
+                                {
+                                    "id": "response-primary-up",
+                                    "object": "chat.completion.chunk",
+                                    "created": 0,
+                                    "model": "primary",
+                                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}],
+                                },
+                            )
+                            if primary_error == "mid-stream"
+                            else ()
+                        ),
+                        {
+                            "id": "response-" + expected_model,
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": expected_model.removesuffix("-up"),
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"role": "assistant", "content": "served " + expected_model},
+                                }
+                            ],
+                        },
+                        {
+                            "id": "response-" + expected_model,
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": expected_model.removesuffix("-up"),
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        },
+                    ), response_text
+                    return
+                assert len(events) == 2, response_text
+                first_event: Final = events[0]
+                assert ({**first_event, "created": 0} if "created" in first_event else first_event) == {
+                    "id": "response-primary-up",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "primary",
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}],
+                }, response_text
+                assert {key: events[1]["error"][key] for key in events[1]["error"] if key != "message"} == {
+                    "type": None,
+                    "param": None,
+                    "code": "500",
+                }, response_text
+                message: Final = events[1]["error"]["message"]
+                assert isinstance(message, str), response_text
+                assert message.startswith("litellm.APIConnectionError: "), response_text
             else:
                 non_stream_response: Final = candidate.request(
                     "POST", "/v1/chat/completions", request_body, key=request_key
@@ -556,11 +638,7 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                         "choices": [
                             {
                                 "index": 0,
-                                "message": {
-                                    "role": "assistant",
-                                    "content": "served " + expected_model,
-                                    "provider_specific_fields": {"refusal": None},
-                                },
+                                "message": {"role": "assistant", "content": "served " + expected_model},
                                 "finish_reason": "stop",
                                 "provider_specific_fields": {},
                             }

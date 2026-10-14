@@ -170,6 +170,13 @@ def test_proxy_stream_usage_visibility_keeps_exact_persisted_charge(gateway: Gat
                 model: Final = scenario.model(
                     api_base=wire.url + "/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
                 )
+                eventually(
+                    lambda: tuple(
+                        object_value(entry).get("model_name") for entry in gateway.get("/model/info")["data"]
+                    ),
+                    lambda model_names, model=model: model in model_names,
+                    seconds=60,
+                )
                 with OpenAI(
                     api_key=gateway.key, base_url=str(gateway.client.base_url), timeout=5, max_retries=0
                 ) as client:
