@@ -151,11 +151,25 @@ def _marked_message(index: int, message: object, mark: _Mark) -> object:
     }
 
 
+def _with_function_breakpoint_hoisted(tool: _Fields) -> _Fields:
+    """Converse reads only a tool's top-level mark, so a breakpoint written under ``function`` moves up."""
+    function: Final = _fields(tool.get("function"))
+    marker: Final = None if function is None else function.get("prompt_cache_breakpoint")
+    if function is None or marker is None:
+        return tool
+    keeps_client_mark: Final = function.get("cache_control") is not None or "prompt_cache_breakpoint" in tool
+    return {
+        **tool,
+        "function": {key: value for key, value in function.items() if key != "prompt_cache_breakpoint"},
+        **({} if keeps_client_mark else {"prompt_cache_breakpoint": marker}),
+    }
+
+
 def _marked_tool(index: int, tool: object, mark: _Mark) -> object:
     fields: Final = _fields(tool)
     if fields is None:
         return tool
-    marked: Final = mark(("tools", index), fields)
+    marked: Final = mark(("tools", index), _with_function_breakpoint_hoisted(fields))
     function: Final = _fields(marked.get("function"))
     return marked if function is None else {**marked, "function": mark(("tools", index, "function"), function)}
 

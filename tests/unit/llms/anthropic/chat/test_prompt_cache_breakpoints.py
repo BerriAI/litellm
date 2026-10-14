@@ -78,7 +78,7 @@ def test_breakpoints_become_cache_control_on_every_block_that_carries_one():
     ]
     assert list(result.tools or ()) == [
         {"type": "function", "function": {"name": "a"}, "cache_control": _EPHEMERAL},
-        {"type": "function", "function": {"name": "b", "cache_control": _EPHEMERAL}},
+        {"type": "function", "function": {"name": "b"}, "cache_control": _EPHEMERAL},
     ]
 
 

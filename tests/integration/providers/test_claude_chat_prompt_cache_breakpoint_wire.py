@@ -192,6 +192,21 @@ def test_breakpoint_becomes_a_cache_mark_on_the_same_block(gateway: Gateway, pro
     assert _labels(provider, request) == [_expected(provider, site, marker)]
 
 
+@pytest.mark.parametrize("provider", _PROVIDERS)
+def test_breakpoint_under_a_tool_function_marks_the_tool(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = new_marker()
+    function: Final = TOOL["function"]
+    assert isinstance(function, dict), TOOL
+    tool: Final[dict[str, JsonValue]] = {**TOOL, "function": {**function, "prompt_cache_breakpoint": _EXPLICIT}}
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        status, _, text = post_chat(gateway, {**_body(model, marker, _marked(())), "tools": [tool]})
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert b"prompt_cache_breakpoint" not in request.body, request.body
+    assert _labels(provider, request) == [_expected(provider, "tool", marker)]
+
+
 def test_breakpoint_ttl_claude_supports_is_kept(gateway: Gateway) -> None:
     marker: Final = new_marker()
     marks: Final = _marked(("user_part",), {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}})
