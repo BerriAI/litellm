@@ -9,7 +9,13 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-from litellm.llms.anthropic.pass_through.caller_model_checks import CallerModelVerdict
+from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.pass_through.caller_model_checks import (
+    CallerModelVerdict,
+    _caller_within_team_member_model_budget,
+)
 from litellm.llms.anthropic.pass_through.safeguards import (
     CLASSIFIER_MAX_TOKENS,
     CLASSIFIER_SYSTEM_PROMPT,
@@ -26,7 +32,13 @@ from litellm.llms.anthropic.pass_through.safeguards import (
     requested_dangerous_tool_use,
     with_safeguard_results,
 )
-from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
+from litellm.llms.anthropic.pass_through.utils import proxy_sub_call_metadata
+from litellm.proxy._types import LiteLLM_EndUserTable, Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+    team_member_budget_entity_id,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.router import Router
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
@@ -499,6 +511,80 @@ async def test_the_classifier_call_reaches_only_a_deployment_in_the_callers_acce
         )
     assert evaluator is not None
     assert _verdicts(await evaluator.evaluate((LS,))) == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
+
+
+class _SuccessEventLogged(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_call_charges_the_team_members_classifier_budget_so_the_next_turn_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    budget: Final = {"classifier": {"max_budget": 1e-9, "budget_duration": "1d"}}
+    member: Final = UserAPIKeyAuth(user_id="member-1", team_id="team-1", team_member_model_max_budget=budget)
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    classifier_logged: Final = _SuccessEventLogged()
+    monkeypatch.setattr(litellm, "callbacks", [limiter, classifier_logged])
+    monkeypatch.setattr(litellm, "_async_success_callback", [limiter, classifier_logged])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": '{"verdicts": {"call_ls": {"flagged": false}}}',
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 1e-6,
+                },
+            }
+        ]
+    )
+
+    async def member_budget_verdict(model: str) -> CallerModelVerdict:
+        return await _caller_within_team_member_model_budget(
+            user_api_key_auth=member, model_max_budget_limiter=limiter, model=model
+        )
+
+    evaluator: Final = SafeguardsEvaluator(
+        classifier_model="classifier",
+        classifier_context='{"permission_mode": "auto"}',
+        transcript='{"user": "set up the repo"}',
+        litellm_metadata=proxy_sub_call_metadata(
+            {
+                "user_api_key_hash": "member-key-hash",
+                "user_api_key_user_id": "member-1",
+                "user_api_key_team_id": "team-1",
+                "user_api_key_team_member_model_max_budget": budget,
+                "user_api_key_auth": member,
+            }
+        ),
+        allowed_model_region=None,
+        acompletion=router.acompletion,
+        caller_model_verdict=member_budget_verdict,
+    )
+
+    assert _verdicts(await evaluator.evaluate((LS,))) == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(classifier_logged.logged.wait(), timeout=30.0)
+    member_spend: Final = await limiter.dual_cache.async_get_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.TEAM_MEMBER,
+            entity_id=team_member_budget_entity_id(user_id="member-1", team_id="team-1"),
+            budget_model="classifier",
+            budget_duration="1d",
+        )
+    )
+    assert member_spend is not None and member_spend > 0
+    assert await evaluator.evaluate((LS,)) == UNSUPPORTED
 
 
 def test_build_evaluator_without_a_router_calls_litellm_directly():
