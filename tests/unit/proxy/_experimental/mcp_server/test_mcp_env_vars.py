@@ -1690,3 +1690,44 @@ def test_mcp_user_env_var_lock_keys_use_sha256_and_legacy_blake2b_for_user_and_s
         int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True),
         int.from_bytes(hashlib.blake2b(b"alice:srv-1", digest_size=8).digest(), "big", signed=True),
     )
+
+
+def _blake2b_unavailable(*args, **kwargs):
+    raise ValueError("blake2b is not available on this FIPS-enforcing runtime")
+
+
+def test_mcp_identifier_lock_keys_drop_the_legacy_key_when_blake2b_is_unavailable(monkeypatch: pytest.MonkeyPatch):
+    """A FIPS-enforcing runtime without blake2b must not crash MCP writes: the
+    legacy key is skipped and the sha256 key alone serialises new workers."""
+    monkeypatch.setattr(hashlib, "blake2b", _blake2b_unavailable)
+
+    keys: Final = _mcp_identifier_lock_keys("Name")
+
+    assert keys == (int.from_bytes(hashlib.sha256(b"mcp_identifier:name").digest()[:8], "big", signed=True),)
+
+
+def test_mcp_user_env_var_lock_keys_drop_the_legacy_key_when_blake2b_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy._experimental.mcp_server.db import _mcp_user_env_var_lock_keys
+
+    monkeypatch.setattr(hashlib, "blake2b", _blake2b_unavailable)
+
+    keys: Final = _mcp_user_env_var_lock_keys("alice", "srv-1")
+
+    assert keys == (int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True),)
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_succeeds_when_blake2b_is_unavailable(
+    env_vars_salt_key, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(hashlib, "blake2b", _blake2b_unavailable)
+    prisma: Final = _transactional_env_vars_prisma()
+
+    merged: Final = await merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN": "x"}, allowed_names=["TOKEN"])
+
+    assert merged == {"TOKEN": "x"}
+    assert list(prisma.db._store.locks) == [
+        int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True)
+    ]

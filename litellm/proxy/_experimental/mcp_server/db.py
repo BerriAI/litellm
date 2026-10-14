@@ -663,19 +663,44 @@ async def find_mcp_server_identifier_conflict(
     )
 
 
+_legacy_lock_key_unavailable_logged: bool = False
+
+
+def _legacy_blake2b_lock_key(digest: bytes) -> int | None:
+    """Legacy blake2b advisory-lock key for mixed-version rolling upgrades.
+
+    Returns ``None`` when the runtime has no blake2b (FIPS-enforcing builds),
+    where writes must not fail: the sha256 key alone still serialises
+    new-worker writes there."""
+    global _legacy_lock_key_unavailable_logged
+    try:
+        return int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True)
+    except (AttributeError, ValueError):
+        if not _legacy_lock_key_unavailable_logged:
+            _legacy_lock_key_unavailable_logged = True
+            verbose_proxy_logger.warning(
+                "blake2b is unavailable on this runtime; MCP locks skip the legacy "
+                "mixed-version key and use the sha256 key only"
+            )
+        return None
+
+
 def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     """Deterministic advisory-lock keys for the lowercased identifiers, sorted
     so concurrent requests for the same pair always lock in the same order.
 
     Each identifier locks its sha256 key and then the legacy blake2b key:
     transition window for mixed-version rolling upgrades, where pre-change
-    workers still take only the blake2b lock. Delete the legacy element once
-    main-only workers are gone."""
+    workers still take only the blake2b lock. The legacy element is skipped on
+    runtimes without blake2b (FIPS-enforcing builds). Delete the legacy element
+    once main-only workers are gone."""
     keys: list[int] = []
     for normalized in sorted(frozenset(value.lower() for value in identifiers if value)):
         digest: Final = f"mcp_identifier:{normalized}".encode()
         keys.append(int.from_bytes(hashlib.sha256(digest).digest()[:8], "big", signed=True))
-        keys.append(int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True))
+        legacy: Final = _legacy_blake2b_lock_key(digest)
+        if legacy is not None:
+            keys.append(legacy)
     return tuple(keys)
 
 
@@ -2429,13 +2454,15 @@ def _mcp_user_env_var_lock_keys(user_id: str, server_id: str) -> tuple[int, ...]
 
     The sha256 key comes first, then the legacy blake2b key: transition window
     for mixed-version rolling upgrades, where pre-change workers still take
-    only the blake2b lock. Delete the legacy element once main-only workers
-    are gone."""
+    only the blake2b lock. The legacy element is skipped on runtimes without
+    blake2b (FIPS-enforcing builds). Delete the legacy element once main-only
+    workers are gone."""
     digest: Final = f"{user_id}:{server_id}".encode()
-    return (
-        int.from_bytes(hashlib.sha256(digest).digest()[:8], "big", signed=True),
-        int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True),
-    )
+    keys: Final = [int.from_bytes(hashlib.sha256(digest).digest()[:8], "big", signed=True)]
+    legacy: Final = _legacy_blake2b_lock_key(digest)
+    if legacy is not None:
+        keys.append(legacy)
+    return tuple(keys)
 
 
 async def merge_user_env_vars(
