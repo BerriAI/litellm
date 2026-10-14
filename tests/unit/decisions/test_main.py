@@ -540,6 +540,74 @@ async def test_empty_custom_provider_falls_back_to_the_model_prefix(respx_mock: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("provider", "model"), (("laya", "english"), ("bespoke", "nimble-latest")))
+async def test_oss_classifier_env_key_goes_only_to_its_env_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    model: str,
+) -> None:
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", "https://operator-configured.example")
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "operator-env-key")
+    env_upstream: Final = respx_mock.post("https://operator-configured.example/v1/systemone").respond(
+        json=_STRANDS_RESPONSE
+    )
+    other_upstream: Final = respx_mock.post("https://deployment-chosen.example/v1/systemone").respond(
+        json=_STRANDS_RESPONSE
+    )
+    questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+
+    await litellm.asystemone(model=f"{provider}/{model}", state="review", questions=questions)
+    await litellm.asystemone(
+        model=f"{provider}/{model}",
+        state="review",
+        questions=questions,
+        api_base="https://deployment-chosen.example",
+        api_key="",
+    )
+    await litellm.asystemone(
+        model=f"{provider}/{model}",
+        state="review",
+        questions=questions,
+        api_base="https://operator-configured.example/",
+    )
+
+    assert [call.request.headers["authorization"] for call in env_upstream.calls] == [
+        "Bearer operator-env-key",
+        "Bearer operator-env-key",
+    ]
+    assert "authorization" not in other_upstream.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "error"),
+    (
+        ("laya/any-checkpoint", "https://laya.example", "laya model must be one of"),
+        ("bespoke/any-checkpoint", "https://bespoke.example", "bespoke model must be one of"),
+        ("laya/english", "https://laya.example?token=x", "must not contain credentials, a query"),
+        ("bespoke/nimble", "http://user:secret@bespoke.example", "must not contain credentials, a query"),
+        ("laya/english", "ftp://laya.example", "must be an HTTP or HTTPS server URL"),
+    ),
+)
+async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_http(
+    respx_mock: respx.MockRouter,
+    model: str,
+    api_base: str,
+    error: str,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=re.escape(error)):
+        await litellm.asystemone(
+            model=model,
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base=api_base,
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
         json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
