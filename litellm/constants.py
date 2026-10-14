@@ -364,11 +364,12 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
-FIPS_SSL_CIPHERS: Final = os.getenv(
-    "LITELLM_SSL_CIPHERS",
+# Certified GCM-only list: deliberately NOT overridable via LITELLM_SSL_CIPHERS so a
+# custom override cannot silently weaken the FIPS posture when LITELLM_FIPS_MODE is set.
+FIPS_SSL_CIPHERS: Final = (
     "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:"
     "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256",
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256"
 )
 DEFAULT_SSL_CIPHERS: Final = os.getenv(
     "LITELLM_SSL_CIPHERS",

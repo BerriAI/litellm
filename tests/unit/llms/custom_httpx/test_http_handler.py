@@ -366,6 +366,80 @@ def test_get_ssl_configuration_uses_fips_cipher_list_only_in_fips_mode(monkeypat
     assert get_ssl_configuration() is fips_context
 
 
+_CHACHA_OVERRIDE: Final = "ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA256"
+
+
+def _simulate_cipher_override_at_import(monkeypatch: pytest.MonkeyPatch, http_handler) -> None:
+    """Simulate a process that started with LITELLM_SSL_CIPHERS set: litellm.constants
+    re-reads the env at import and http_handler binds those values at import. Reloading
+    http_handler itself would rebind its classes and break isinstance in later tests, so
+    only constants is re-executed and the handler's bindings are swapped explicitly."""
+    from litellm import constants
+
+    importlib.reload(constants)
+    monkeypatch.setattr(http_handler, "DEFAULT_SSL_CIPHERS", constants.DEFAULT_SSL_CIPHERS)
+    monkeypatch.setattr(http_handler, "FIPS_SSL_CIPHERS", constants.FIPS_SSL_CIPHERS)
+
+
+def _restore_cipher_constants(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import constants
+
+    monkeypatch.delenv("LITELLM_SSL_CIPHERS", raising=False)
+    importlib.reload(constants)
+
+
+def test_get_ssl_configuration_ignores_ssl_ciphers_override_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    import logging
+
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", _CHACHA_OVERRIDE)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    _simulate_cipher_override_at_import(monkeypatch, http_handler)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        context = http_handler.get_ssl_configuration()
+    _restore_cipher_constants(monkeypatch)
+
+    assert isinstance(context, ssl.SSLContext)
+    names = _context_tls12_cipher_names(context)
+    supported = _supported_tls12_cipher_names()
+    assert names == (_tls12_cipher_names(http_handler.FIPS_SSL_CIPHERS) & supported)
+    assert not any("CHACHA" in name for name in names)
+    assert "LITELLM_SSL_CIPHERS override ignored" in caplog.text
+
+
+def test_get_ssl_configuration_applies_ssl_ciphers_override_outside_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    import logging
+
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", _CHACHA_OVERRIDE)
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    _simulate_cipher_override_at_import(monkeypatch, http_handler)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        context = http_handler.get_ssl_configuration()
+    _restore_cipher_constants(monkeypatch)
+
+    assert isinstance(context, ssl.SSLContext)
+    names = _context_tls12_cipher_names(context)
+    supported = _supported_tls12_cipher_names()
+    assert names == (_tls12_cipher_names(_CHACHA_OVERRIDE) & supported)
+    assert any("CHACHA" in name for name in names)
+    assert "LITELLM_SSL_CIPHERS override ignored" not in caplog.text
+
+
 # Session Reuse Tests
 class MockClientSession:
     """Mock ClientSession that is not callable"""
@@ -1532,7 +1606,6 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
-
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1927,6 +2000,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1979,6 +2053,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1998,6 +2073,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -2021,11 +2097,13 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 _SERVER_DELAY_S = 5
 
 _PER_REQUEST_TIMEOUT_S = 1.0
 
 _CLIENT_DEFAULT_TIMEOUT_S = 60.0
+
 
 class _SlowHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -2039,6 +2117,7 @@ class _SlowHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_post_delay_exceeds_per_request_timeout_raises():

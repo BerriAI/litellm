@@ -96,12 +96,15 @@ def test_fips_ssl_ciphers_tls12_suites_are_all_gcm():
     assert all("-GCM-" in suite for suite in tls12_suites)
 
 
-def test_ssl_ciphers_env_override_applies_to_both_lists(monkeypatch: pytest.MonkeyPatch):
+def test_ssl_ciphers_env_override_applies_to_default_list_only(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LITELLM_SSL_CIPHERS", "ECDHE-RSA-AES128-GCM-SHA256")
     importlib.reload(constants)
     try:
         assert constants.DEFAULT_SSL_CIPHERS == "ECDHE-RSA-AES128-GCM-SHA256"
-        assert constants.FIPS_SSL_CIPHERS == "ECDHE-RSA-AES128-GCM-SHA256"
+        # The FIPS list must stay certified regardless of the override so FIPS mode
+        # cannot be silently weakened by LITELLM_SSL_CIPHERS.
+        assert constants.FIPS_SSL_CIPHERS != "ECDHE-RSA-AES128-GCM-SHA256"
+        assert all("-GCM-" in suite for suite in _cipher_suites(constants.FIPS_SSL_CIPHERS) if not suite.startswith("TLS_"))
     finally:
         monkeypatch.delenv("LITELLM_SSL_CIPHERS")
         importlib.reload(constants)
