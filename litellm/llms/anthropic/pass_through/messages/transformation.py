@@ -1,10 +1,12 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, cast
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -64,6 +66,38 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
 
 def messages_carry_output_config(messages: Sequence[object]) -> bool:
     return any(isinstance(message, Mapping) and "output_config" in message for message in messages)
+
+
+def _without_prompt_cache_breakpoint(block: object) -> object:
+    """``block`` minus its ``prompt_cache_breakpoint`` and that of every block nested in its ``content``."""
+    if not isinstance(block, Mapping):
+        return block
+    fields: Final = cast("Mapping[str, object]", block)  # cast-ok: JSON object keys are strings
+    return {
+        key: _blocks_without_prompt_cache_breakpoint(value) if key == "content" else value
+        for key, value in fields.items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+def _blocks_without_prompt_cache_breakpoint(blocks: object) -> object:
+    if not isinstance(blocks, list):
+        return blocks
+    items: Final = cast("list[object]", blocks)  # cast-ok: each item is parsed on its own
+    return [_without_prompt_cache_breakpoint(item) for item in items]
+
+
+_BLOCK_LIST_FIELDS: Final = frozenset({"messages", "system", "tools"})
+
+
+def without_prompt_cache_breakpoints(anthropic_messages_request: Mapping[str, object]) -> Mapping[str, object]:
+    """The request with OpenAI's ``prompt_cache_breakpoint`` stripped from its messages, system and tool blocks.
+
+    /v1/messages speaks Anthropic syntax only, so the OpenAI mark is never translated, only dropped."""
+    return {
+        field: _blocks_without_prompt_cache_breakpoint(value) if field in _BLOCK_LIST_FIELDS else value
+        for field, value in anthropic_messages_request.items()
+    }
 
 
 _messages_carry_output_config = messages_carry_output_config
@@ -660,7 +694,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             **anthropic_messages_optional_request_params,
         )
-        return dict(anthropic_messages_request)
+        drop_params: Final = (
+            normalize_drop_params(litellm.drop_params) is True
+            or normalize_drop_params(litellm_params.drop_params) is True
+        )
+        return dict(
+            without_prompt_cache_breakpoints(anthropic_messages_request) if drop_params else anthropic_messages_request
+        )
 
     def transform_anthropic_messages_response(
         self,
