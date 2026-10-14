@@ -4110,6 +4110,69 @@ def test_transform_request_includes_cache_control():
     assert result["cache_control"] == {"type": "ephemeral"}
 
 
+def _anthropic_body(messages: list, litellm_params: dict | None = None) -> dict:
+    return AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"max_tokens": 100},
+        litellm_params=litellm_params or {},
+        headers={},
+    )
+
+
+def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
+    body = _anthropic_body(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {
+                        "type": "text",
+                        "text": "Bye",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert body["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Bye", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker, expected_block",
+    [
+        ({"mode": "explicit", "ttl": "30m"}, {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}),
+        ({"mode": "implicit"}, {"type": "text", "text": "Hello"}),
+    ],
+)
+def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _anthropic_body(copy.deepcopy(messages))
+
+    body = _anthropic_body(messages, litellm_params={"drop_params": True})
+    assert body["messages"] == [{"role": "user", "content": [expected_block]}]
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.

@@ -13,12 +13,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionReasoningItem,
@@ -1785,6 +1789,7 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
 
 
 _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
@@ -1803,6 +1808,49 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     return cast(  # cast-ok: same block shape as the input with the marker key renamed
         _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
     )
+
+
+def prompt_cache_breakpoint_as_cache_control(block: _MarkedT, drop_params: bool) -> _MarkedT:
+    """OpenAI's ``prompt_cache_breakpoint`` mark rewritten as Anthropic's ``cache_control`` on the same block.
+    A ``cache_control`` the client already wrote on the block wins, TTL included."""
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if marker is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+    control: Final = (
+        None
+        if block.get("cache_control") is not None
+        else _cache_control_for_prompt_cache_breakpoint(marker, drop_params)
+    )
+    marked: Final = unmarked if control is None else {**unmarked, "cache_control": control}
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input with the marker key renamed
+
+
+def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool) -> ChatCompletionCachedContent | None:
+    try:
+        breakpoint_mark: Final = _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}} with an optional ttl of '30m', "
+                    f"got {marker!r}. Fix the marker, or set `litellm.drop_params = True` to drop it."
+                ),
+                status_code=400,
+            )
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+        return None
+    ttl: Final = breakpoint_mark.get("ttl")
+    if ttl is not None and not drop_params:
+        raise UnsupportedParamsError(
+            message=(
+                f"Claude caches a prompt for 5m or 1h, so prompt_cache_breakpoint ttl={ttl!r} has no equivalent. "
+                "Remove the ttl, set `litellm.drop_params = True` to send a 5m breakpoint instead, "
+                "or send cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block."
+            ),
+            status_code=400,
+        )
+    return ChatCompletionCachedContent(type="ephemeral")
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})

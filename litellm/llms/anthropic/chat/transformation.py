@@ -22,6 +22,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     sanitize_input_schema_for_anthropic,
@@ -2010,10 +2011,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
-            drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            drop_params=drop_params,
             custom_llm_provider=self.custom_llm_provider,
         )
 
@@ -2054,7 +2056,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Only the leading system run becomes the top-level system prompt. A later
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
-        leading_system_run, later_messages = split_leading_system_run(messages)
+        leading_system_run, later_messages = split_leading_system_run(
+            tuple(
+                AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
+                for message in messages
+            )
+        )
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:

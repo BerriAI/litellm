@@ -9254,6 +9254,61 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         assert "cachePoint" not in json.dumps(transformed_messages)
 
 
+def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
+    request = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            },
+        ],
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert request["system"] == [{"text": "You are terse."}, {"cachePoint": {"type": "default"}}]
+    assert request["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]}
+    ]
+
+
+def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
+    return litellm.AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+    )
+
+
+def test_converse_rejects_30m_breakpoint_ttl_only_where_a_cache_point_is_written():
+    claude: Final = "anthropic.claude-sonnet-5-5"
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _converse_request_with_30m_breakpoint(claude, {})
+
+    assert _converse_request_with_30m_breakpoint(claude, {"drop_params": True})["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]}
+    ]
+    assert _converse_request_with_30m_breakpoint("meta.llama3-1-8b-instruct-v1:0", {})["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}]}
+    ]
+
+
 @pytest.mark.parametrize(
     "model, expected_supports_tool_call",
     [

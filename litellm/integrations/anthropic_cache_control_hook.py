@@ -24,6 +24,7 @@ from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
+    prompt_cache_breakpoint_as_cache_control,
     with_prompt_cache_breakpoint,
 )
 from litellm.llms.anthropic.common_utils import (
@@ -96,6 +97,12 @@ def _part_with_cache_control_renamed(part: object) -> object:
     if not _accepts_prompt_cache_breakpoint(part):
         return part
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
+
+
+def _part_with_prompt_cache_breakpoint_renamed(part: object, drop_params: bool) -> object:
+    if not _carries_prompt_cache_breakpoint(part):
+        return part
+    return prompt_cache_breakpoint_as_cache_control(_CONTENT_PART_ADAPTER.validate_python(part), drop_params)
 
 
 def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
@@ -248,6 +255,10 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
+
+
+def _carries_prompt_cache_breakpoint(block: object) -> bool:
+    return _accepts_prompt_cache_breakpoint(block) and _attribute_or_key(block, "prompt_cache_breakpoint") is not None
 
 
 def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
@@ -654,6 +665,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if fields.get("cache_control") is None:
             return renamed
         return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(renamed)
+
+    @staticmethod
+    def prompt_cache_breakpoints_as_cache_control(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+        """Every OpenAI ``prompt_cache_breakpoint`` on a part OpenAI accepts one on moved to Anthropic's
+        ``cache_control``. Marks with no OpenAI slot are left for the caller to strip."""
+        parts: Final = _as_object_list(_attribute_or_key(message, "content"))
+        if parts is None or not _may_carry_prompt_cache_breakpoint(message):
+            return message
+        if not any(_carries_prompt_cache_breakpoint(part) for part in parts):
+            return message
+        return cast(  # cast-ok: the same message with its part marks renamed
+            AllMessageValues,
+            {**message, "content": [_part_with_prompt_cache_breakpoint_renamed(part, drop_params) for part in parts]},
+        )
 
     @staticmethod
     def _insert_prompt_cache_breakpoint_in_message(message: AllMessageValues) -> AllMessageValues:
