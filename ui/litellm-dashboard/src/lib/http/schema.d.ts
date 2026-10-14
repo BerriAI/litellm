@@ -35087,6 +35087,10 @@ export interface components {
             output_vector_size?: number | null;
             /** Provider Affinity Header */
             provider_affinity_header?: string | null;
+            /** Qdrant Text Field */
+            qdrant_text_field?: string | null;
+            /** Qdrant Vector Name */
+            qdrant_vector_name?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -50225,6 +50229,10 @@ export interface components {
             output_vector_size?: number | null;
             /** Provider Affinity Header */
             provider_affinity_header?: string | null;
+            /** Qdrant Text Field */
+            qdrant_text_field?: string | null;
+            /** Qdrant Vector Name */
+            qdrant_vector_name?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;

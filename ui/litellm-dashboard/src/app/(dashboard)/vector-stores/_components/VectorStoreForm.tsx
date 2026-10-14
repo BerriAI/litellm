@@ -36,7 +36,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
 
-const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb"]);
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb", "qdrant"]);
 
 export const buildVectorStoreLitellmParams = (
   provider: string,
@@ -69,6 +69,8 @@ const PROVIDER_FIELD_NAMES = [
   "vertex_collection_id",
   "vertex_engine_id",
   "embedding_model",
+  "qdrant_text_field",
+  "qdrant_vector_name",
   "vector_bucket_name",
   "index_name",
   "aws_region_name",
@@ -105,6 +107,8 @@ const vectorStoreShape = {
   vertex_collection_id: optionalText,
   vertex_engine_id: optionalText,
   embedding_model: optionalText,
+  qdrant_text_field: optionalText,
+  qdrant_vector_name: optionalText,
   vector_bucket_name: optionalText,
   index_name: optionalText,
   aws_region_name: optionalText,
@@ -143,6 +147,7 @@ const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
   "vertex_ai/search_api": 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)',
   valkey: "my-search-index (FT index name in Valkey)",
   mongodb: "my-vector-index (MongoDB Vector Search index name)",
+  qdrant: "my-collection (existing Qdrant collection name)",
 };
 
 const VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER = "Any identifier you'll use to reference this in LiteLLM";
@@ -155,6 +160,7 @@ const EMPTY_VALUES: VectorStoreFormValues = {
   vertex_location: "global",
   mongodb_embedding_field: "embedding",
   mongodb_text_field: "text",
+  qdrant_text_field: "text",
   valkey_port: "6379",
   valkey_ssl: "false",
   valkey_text_field: "text",

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,6 +66,43 @@ describe("VectorStoreForm submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockResolvedValue(undefined);
+  });
+
+  it("registers an existing Qdrant collection with a proxy embedding alias and no API key", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Qdrant");
+    fireEvent.change(screen.getByPlaceholderText("my-collection (existing Qdrant collection name)"), {
+      target: { value: "documents" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("http://localhost:6333"), {
+      target: { value: "http://qdrant:6333" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Vector Name" }), {
+      target: { value: "dense" },
+    });
+    await chooseFromSelect(user, 1, "text-embedding-3-small");
+    await submit(user);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    const expected = {
+      vector_store_id: "documents",
+      custom_llm_provider: "qdrant",
+      vector_store_name: undefined,
+      vector_store_description: undefined,
+      vector_store_metadata: {},
+      litellm_credential_name: undefined,
+      litellm_params: {
+        api_base: "http://qdrant:6333",
+        api_key: undefined,
+        litellm_embedding_model: "text-embedding-3-small",
+        qdrant_text_field: "text",
+        qdrant_vector_name: "dense",
+      },
+    };
+    expect(createdPayload()).toStrictEqual(expected);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 
   it("sends every payload key for the default provider, leaving untouched optional fields undefined", async () => {

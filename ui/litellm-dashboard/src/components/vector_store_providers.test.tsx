@@ -9,6 +9,18 @@ import {
 } from "./vector_store_providers";
 
 describe("getVectorStoreProviderLogoAndName", () => {
+  it("offers Qdrant configuration for authenticated and local collections", () => {
+    expect(getVectorStoreProviderLogoAndName("qdrant")).toEqual({
+      logo: expect.stringContaining("qdrant"),
+      displayName: "Qdrant",
+    });
+    const fields = getProviderSpecificFields("qdrant");
+    expect(fields.find((field) => field.name === "api_base")).toMatchObject({ required: true });
+    expect(fields.find((field) => field.name === "api_key")).toMatchObject({ required: false, type: "password" });
+    expect(fields.find((field) => field.name === "embedding_model")).toMatchObject({ required: true, type: "select" });
+    expect(fields.find((field) => field.name === "qdrant_text_field")).toMatchObject({ initialValue: "text" });
+    expect(fields.find((field) => field.name === "qdrant_vector_name")).toMatchObject({ required: false });
+  });
   it("resolves vector-store-only slugs to their own logo and display name", () => {
     expect(getVectorStoreProviderLogoAndName("pg_vector")).toEqual({
       logo: expect.stringContaining("postgresql"),

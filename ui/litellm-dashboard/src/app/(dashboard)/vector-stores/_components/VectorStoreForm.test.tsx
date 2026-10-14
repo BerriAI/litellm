@@ -80,6 +80,24 @@ const MONGODB_REQUIRED_FORM_VALUES = {
 };
 
 describe("buildVectorStoreLitellmParams", () => {
+  it("sends Qdrant fields and the proxy embedding alias without stale provider fields", () => {
+    const formValues = {
+      api_base: "http://qdrant:6333",
+      api_key: "",
+      embedding_model: "query-embeddings",
+      qdrant_text_field: "metadata.body",
+      qdrant_vector_name: "dense",
+      mongodb_database: "stale",
+    };
+    const expected = {
+      api_base: "http://qdrant:6333",
+      api_key: "",
+      litellm_embedding_model: "query-embeddings",
+      qdrant_text_field: "metadata.body",
+      qdrant_vector_name: "dense",
+    };
+    expect(buildVectorStoreLitellmParams("qdrant", formValues)).toEqual(expected);
+  });
   it("renames embedding_model to litellm_embedding_model for valkey", () => {
     const valkeyFormValues = {
       valkey_host: "my-valkey.example.com",

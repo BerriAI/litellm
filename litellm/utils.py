@@ -9644,12 +9644,16 @@ class ProviderConfigManager:
             )
 
             return AzureAIVectorStoreConfig()
-        elif litellm.LlmProviders.MILVUS == provider:
+        elif provider in (litellm.LlmProviders.MILVUS, litellm.LlmProviders.QDRANT):
             from litellm.llms.milvus.vector_stores.transformation import (
                 MilvusVectorStoreConfig,
             )
+            from litellm.llms.qdrant.vector_stores.transformation import QdrantVectorStoreConfig
 
-            return MilvusVectorStoreConfig()
+            return {
+                litellm.LlmProviders.MILVUS: MilvusVectorStoreConfig,
+                litellm.LlmProviders.QDRANT: QdrantVectorStoreConfig,
+            }[provider]()
         elif litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.vector_stores.transformation import (
                 GeminiVectorStoreConfig,

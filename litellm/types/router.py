@@ -557,6 +557,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Vector Store Params
     vector_store_id: str | None = None
     milvus_text_field: str | None = None
+    qdrant_text_field: str | None = None
+    qdrant_vector_name: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None
     valkey_host: str | None = None

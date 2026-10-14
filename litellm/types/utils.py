@@ -4219,6 +4219,7 @@ class LlmProviders(str, Enum):
     STRANDS_DECIDER = "strands_decider"
     MISTRAL = "mistral"
     MILVUS = "milvus"
+    QDRANT = "qdrant"
     GROQ = "groq"
     A2A = "a2a"
     GIGACHAT = "gigachat"
