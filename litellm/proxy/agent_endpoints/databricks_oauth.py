@@ -25,8 +25,9 @@ Config example::
 import asyncio
 import base64
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -43,7 +44,7 @@ _TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
 _DEFAULT_TTL_SECONDS: Final = 3600
 
 
-def _resolve_secret(value: Any) -> str | None:
+def _resolve_secret(value: object) -> str | None:
     """Resolve a config value, expanding ``os.environ/`` references."""
     if not isinstance(value, str):
         return None
@@ -75,7 +76,7 @@ class DatabricksAppOAuthConfig:
 
 
 def parse_databricks_oauth_config(
-    litellm_params: dict[str, Any] | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> DatabricksAppOAuthConfig | None:
     """Build a Databricks App OAuth config from an agent's ``litellm_params``.
 
@@ -191,7 +192,7 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
         except httpx.HTTPError as exc:
             raise ValueError(f"Databricks App OAuth token request failed: {exc}") from exc
 
-        body: Final = response.json()
+        body: Final[object] = response.json()
         if not isinstance(body, dict):
             raise ValueError(
                 f"Databricks App OAuth token response returned non-object JSON (got {type(body).__name__})"
@@ -215,7 +216,7 @@ databricks_app_oauth_token_cache: Final = DatabricksAppOAuthTokenCache()
 
 
 async def resolve_databricks_app_auth_header(
-    litellm_params: dict[str, Any] | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """Return ``{"Authorization": "Bearer <token>"}`` for a Databricks App agent.
 

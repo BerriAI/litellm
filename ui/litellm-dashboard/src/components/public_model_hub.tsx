@@ -714,6 +714,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           })}
                         </div>
                       </div>
+                      {selectedModel.description && (
+                        <div className="col-span-2">
+                          <p className="font-medium">Description:</p>
+                          <p className="mt-1">{selectedModel.description}</p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Wildcard Routing Note */}
@@ -1275,7 +1281,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
@@ -1315,7 +1321,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
