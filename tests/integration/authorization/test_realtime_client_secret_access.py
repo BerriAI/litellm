@@ -177,6 +177,11 @@ def test_calls_refuses_missing_forged_and_proxy_credentials_without_reaching_ope
 
         refusals: Final[dict[str, tuple[Mapping[str, str], dict[str, str]]]] = {
             "no_header": ({}, {"error": "Missing or invalid Authorization header"}),
+            "bare_token": ({"Authorization": token}, {"error": "Missing or invalid Authorization header"}),
+            "basic_scheme": (
+                {"Authorization": f"Basic {token}"},
+                {"error": "Missing or invalid Authorization header"},
+            ),
             "virtual_key": ({"Authorization": f"Bearer {key}"}, {"error": "Invalid or expired token"}),
             "master_key": ({"Authorization": f"Bearer {gateway.key}"}, {"error": "Invalid or expired token"}),
             "flipped": (
@@ -185,7 +190,7 @@ def test_calls_refuses_missing_forged_and_proxy_credentials_without_reaching_ope
             ),
         }
         observed: Final = {
-            name: (response.status_code, response.json())
+            name: (response.status_code, response.json() if response.status_code == 401 else response.text)
             for name, (headers, _expected) in refusals.items()
             for response in (_redeem(gateway, headers),)
         }

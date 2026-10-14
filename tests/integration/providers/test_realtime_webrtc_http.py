@@ -113,10 +113,13 @@ def _json_body(request: Request) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(request.body)
 
 
-def _without_top_level_model(session: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    # main adds a top-level model to every replayed transcription session, owned by the BUG-skipped
-    # test_transcription_session_replayed_at_calls_carries_no_top_level_model
-    return {key: value for key, value in session.items() if key != "model"}
+def _assert_transcription_replay(replayed: Mapping[str, JsonValue], model: str) -> None:
+    # The BUG-skipped test_transcription_session_replayed_at_calls_carries_no_top_level_model owns this key
+    assert {key: value for key, value in replayed.items() if key != "model"} == {
+        "type": "transcription",
+        "audio": {"input": {"transcription": {"model": model}}},
+    }, replayed
+    assert replayed.get("model", model) == model, replayed
 
 
 def _text_parts(request: Request) -> dict[str, str]:
@@ -567,10 +570,7 @@ def test_transcription_client_secret_replays_transcription_session_at_calls(
     gateway: Gateway, mint_spelling: str
 ) -> None:
     name, replayed = _mint_transcription_and_redeem(gateway, mint_spelling)
-    assert _without_top_level_model(replayed) == {
-        "type": "transcription",
-        "audio": {"input": {"transcription": {"model": name}}},
-    }, replayed
+    _assert_transcription_replay(replayed, name)
 
 
 @pytest.mark.parametrize("mint_spelling", ["ga_nested", "ga_flat", "beta"], ids=["ga_nested", "ga_flat", "beta"])
@@ -654,7 +654,5 @@ def test_beta_transcription_session_routes_on_model_hint_over_smuggled_nested_mo
             f"{allowed_path}/v1/realtime/calls",
             f"Bearer {raw}",
         ), calls_request.headers
-        assert _without_top_level_model(JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])) == {
-            "type": "transcription",
-            "audio": {"input": {"transcription": {"model": allowed_name}}},
-        }, calls_request.body
+        replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
+        _assert_transcription_replay(replayed, allowed_name)
