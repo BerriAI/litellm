@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
@@ -80,30 +80,30 @@ _ADISPATCH: Final = PublicDispatch(
     context=_context,
 )
 
+RESPONSES: Final = PublicRoute(
+    dispatch=_DISPATCH,
+    binding=NATIVE_RESPONSES,
+    native=native_call_hook,
+    python=_PYTHON_RESPONSES,
+)
+
+ARESPONSES: Final = AsyncPublicRoute(
+    dispatch=_ADISPATCH,
+    binding=NATIVE_ARESPONSES,
+    native=native_call_hook,
+    python=_PYTHON_ARESPONSES,
+)
+
 
 def responses(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
-    python: Final = _PYTHON_RESPONSES
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_RESPONSES,
-        native=native_call_hook,
-    )
+    return RESPONSES.run(args, kwargs)
 
 
 async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwargs-ok: preserve the public call shape
-    python: Final = _PYTHON_ARESPONSES
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_ARESPONSES,
-        native=native_call_hook,
-    )
+    return await ARESPONSES.arun(args, kwargs)
 
 
 responses.__doc__ = _PYTHON_RESPONSES.__doc__

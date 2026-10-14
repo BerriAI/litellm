@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -105,30 +105,30 @@ _ADISPATCH: Final = PublicDispatch(
     bypass=_python_serves,
 )
 
+ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
+    dispatch=_DISPATCH,
+    binding=NATIVE_MESSAGES,
+    native=native_call_hook,
+    python=_PYTHON_MESSAGES,
+)
+
+ANTHROPIC_MESSAGES: Final = AsyncPublicRoute(
+    dispatch=_ADISPATCH,
+    binding=NATIVE_AMESSAGES,
+    native=native_call_hook,
+    python=_PYTHON_AMESSAGES,
+)
+
 
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
-    python: Final = _PYTHON_MESSAGES
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_MESSAGES,
-        native=native_call_hook,
-    )
+    return ANTHROPIC_MESSAGES_HANDLER.run(args, kwargs)
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
-    python: Final = _PYTHON_AMESSAGES
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_AMESSAGES,
-        native=native_call_hook,
-    )
+    return await ANTHROPIC_MESSAGES.arun(args, kwargs)
 
 
 anthropic_messages_handler.__doc__ = _PYTHON_MESSAGES.__doc__

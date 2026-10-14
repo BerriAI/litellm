@@ -122,3 +122,37 @@ class PublicDispatch(Generic[RequestT]):
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PublicRoute(Generic[RequestT, NativeT, ResultT]):
+    """A public function's dispatch with its Python and native implementations bound.
+
+    ``rules`` is the only input a caller supplies beyond the public call, so a test selects a
+    backend for the exact object the public function runs instead of rebinding the catalog.
+    """
+
+    dispatch: PublicDispatch[RequestT]
+    binding: NativeBinding[NativeT]
+    native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+    python: Callable[..., ResultT] | runtime.NoPythonImplementation
+
+    def run(self, args: tuple[object, ...], kwargs: Mapping[str, object], *, rules: Rules | None = None) -> ResultT:
+        return self.dispatch.run(
+            args, kwargs, python=self.python, binding=self.binding, native=self.native, rules=rules
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncPublicRoute(Generic[RequestT, NativeT, ResultT]):
+    dispatch: PublicDispatch[RequestT]
+    binding: NativeBinding[NativeT]
+    native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]]
+    python: Callable[..., Awaitable[ResultT]] | runtime.NoPythonImplementation
+
+    async def arun(
+        self, args: tuple[object, ...], kwargs: Mapping[str, object], *, rules: Rules | None = None
+    ) -> ResultT:
+        return await self.dispatch.arun(
+            args, kwargs, python=self.python, binding=self.binding, native=self.native, rules=rules
+        )

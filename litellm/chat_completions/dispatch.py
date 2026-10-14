@@ -8,7 +8,7 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
 )
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
@@ -82,30 +82,30 @@ _ADISPATCH: Final = PublicDispatch(
     context=_context,
 )
 
+COMPLETION: Final = PublicRoute(
+    dispatch=_DISPATCH,
+    binding=NATIVE_COMPLETION,
+    native=native_call_hook,
+    python=_PYTHON_COMPLETION,
+)
+
+ACOMPLETION: Final = AsyncPublicRoute(
+    dispatch=_ADISPATCH,
+    binding=NATIVE_ACOMPLETION,
+    native=native_call_hook,
+    python=_PYTHON_ACOMPLETION,
+)
+
 
 def completion(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
-    python: Final = _PYTHON_COMPLETION
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_COMPLETION,
-        native=native_call_hook,
-    )
+    return COMPLETION.run(args, kwargs)
 
 
 async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-ok: preserve the public call shape
-    python: Final = _PYTHON_ACOMPLETION
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_ACOMPLETION,
-        native=native_call_hook,
-    )
+    return await ACOMPLETION.arun(args, kwargs)
 
 
 completion.__doc__ = _PYTHON_COMPLETION.__doc__

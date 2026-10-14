@@ -20,7 +20,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route, RouteContext, Rules
 from litellm.rust_bridge.token_counter import (
     TOKEN_COUNTER,
     RustTokenCounterFactory,
@@ -47,6 +47,8 @@ async def count_input_tokens(
     request_body: dict,
     raw_body: bytes | None,
     models: Sequence[str],
+    *,
+    rules: Rules | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per model, sharing one native count across models that
     select the same tokenizer."""
@@ -60,6 +62,7 @@ async def count_input_tokens(
             raw_body=raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
+            rules=rules,
         )
         for tokenizer in groups
     ]
@@ -73,6 +76,7 @@ async def _count_group(
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
+    rules: Rules | None,
 ) -> Mapping[str, int]:
     async def python() -> Mapping[str, int]:
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
@@ -91,6 +95,7 @@ async def _count_group(
             binding=TOKEN_COUNTER,
             native=lambda factory: _native_counts(factory, tokenizer, raw_body, models),
             python=python,
+            rules=rules,
         )
     except (RuntimeError, ValueError) as error:
         from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
