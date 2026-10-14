@@ -12,19 +12,19 @@
 #   - litellm/ Python  -> `make lint` (test-linting.yml's python job)
 #   - tests/e2e and tests/e2e_harness Python
 #                      -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
-#                         + raw HTTP client ban (test-linting.yml's check_e2e_no_raw_requests)
 #   - tests/ Python, ruff-tests.toml, scripts/check_test_quality.py,
 #     scripts/test_quality_gate.py
 #                      -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
 #                         test-tree ruff and test-quality gate steps)
 #   - dashboard        -> prettier + eslint + lint budgets (test-linting.yml's ui job)
 #   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (test-linting.yml's ui-api-types job)
+#   - any file         -> scripts/code_quality_checks.py --local (test-linting.yml's code-quality job)
 #
-# Each block is skipped when no matching files are in scope, so unrelated commits
-# stay fast. This is intentionally not auto-installed as a git hook (see
-# scripts/install_git_hooks.sh): the dashboard and basedpyright passes can take
-# minutes, so it's run on demand rather than firing on every human commit. It is
-# hook-compatible if you want that anyway:
+# Every block but the code-quality checks is skipped when no matching files are in
+# scope, so unrelated commits stay fast. This is intentionally not auto-installed as
+# a git hook (see scripts/install_git_hooks.sh): the dashboard and basedpyright passes
+# can take minutes, so it's run on demand rather than firing on every human commit.
+# It is hook-compatible if you want that anyway:
 # `ln -s ../../scripts/pre_commit_lint.sh .git/hooks/pre-commit`.
 
 set -eu
@@ -146,7 +146,7 @@ if [ -n "$staged" ]; then
         printf '%s\n' "$missed" | sed 's/^/    /' >&2
     }
     warn_skipped "Python lint (make lint)" "$litellm_py_pattern" "$litellm_py_files"
-    warn_skipped "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_pattern" "$e2e_py_files"
+    warn_skipped "tests/e2e basedpyright" "$e2e_py_pattern" "$e2e_py_files"
     warn_skipped "test-tree lint (ruff-tests.toml + test-quality gate)" "$test_tree_pattern" "$test_tree_files"
     warn_skipped "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_pattern" "$ui_prettier_changed"
     warn_skipped "dashboard API-type sync (npm run gen:api)" "$spec_pattern" "$spec_files"
@@ -210,8 +210,8 @@ python_checks() {
 
 on_interrupt() {
     trap - INT TERM
-    rm -f "${python_log:-}" "${dash_log:-}" "${gen_log:-}"
-    for job_pid in ${python_pid:-} ${dash_pid:-} ${gen_pid:-}; do
+    rm -f "${python_log:-}" "${quality_log:-}" "${dash_log:-}" "${gen_log:-}"
+    for job_pid in ${python_pid:-} ${quality_pid:-} ${dash_pid:-} ${gen_pid:-}; do
         kill -- "-$job_pid" 2>/dev/null || true
     done
     exit 130
@@ -226,15 +226,21 @@ if [ -n "$litellm_py_files" ]; then
     set +m
 fi
 
+code_quality_checks() {
+    echo "check: running the code-quality checks (scripts/code_quality_checks.py --local)"
+    uv run --no-sync python scripts/code_quality_checks.py --local \
+        || { echo "✗ Code-quality checks failed. Fix each FAIL above, then re-run make check." >&2; return 1; }
+}
+
+quality_log=$(mktemp)
+set -m
+code_quality_checks > "$quality_log" 2>&1 &
+quality_pid=$!
+set +m
+
 if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
     echo "check: type-checking tests/e2e (make lint-e2e-basedpyright)"
     make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make check." >&2; status=1; }
-fi
-
-if [ -n "$e2e_py_files" ]; then
-    echo "check: checking tests/e2e raw HTTP client ban (check_e2e_no_raw_requests)"
-    uv run --no-sync python tests/code_coverage_tests/check_e2e_no_raw_requests.py \
-        || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make check." >&2; status=1; }
 fi
 
 dashboard_checks() {
@@ -313,6 +319,8 @@ if [ -n "${python_pid:-}" ]; then
     wait "$python_pid" || status=1
     cat "$python_log"; rm -f "$python_log"
 fi
+wait "$quality_pid" || status=1
+cat "$quality_log"; rm -f "$quality_log"
 if [ -n "${dash_pid:-}" ]; then
     wait "$dash_pid" || status=1
     cat "$dash_log"; rm -f "$dash_log"
@@ -333,17 +341,12 @@ summary_item() {
 
 echo "check: summary"
 summary_item "Python lint (make lint)" "$litellm_py_files" "no litellm/ Python files in scope"
-summary_item "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_files" "no tests/e2e Python files in scope"
+summary_item "tests/e2e basedpyright" "$e2e_py_files" "no tests/e2e Python files in scope"
 summary_item "test-tree lint (ruff-tests.toml + test-quality gate)" "$test_tree_files" \
     "no tests/ Python files or test-tree lint inputs in scope"
 summary_item "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_changed$ui_eslint_changed" "no dashboard files in scope"
 summary_item "dashboard API-type sync (npm run gen:api)" "$spec_files" "no litellm/proxy, litellm/types, or generator files in scope"
-
-if [ -z "$litellm_py_files$e2e_py_files$test_tree_files$ui_prettier_changed$ui_eslint_changed$spec_files" ]; then
-    echo "check: NOTE - no gating lint check matches the files in scope, so nothing ran:" >&2
-    printf '%s\n' "$scope" | sed 's/^/    /' >&2
-    echo "  A pass here is a no-op, not a lint verdict." >&2
-fi
+echo "    ran:     code-quality checks (scripts/code_quality_checks.py --local)"
 
 if [ "$status" -eq 0 ]; then
     echo "check: PASS"

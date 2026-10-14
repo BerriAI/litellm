@@ -18,6 +18,7 @@ import yaml
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 CIRCLECI_CONFIG = REPO_ROOT / ".circleci" / "config.yml"
+CODE_QUALITY_MANIFEST_NAME: Final = "code-quality-checks.yml"
 ALLOWLIST_FILE = REPO_ROOT / ".github" / "ci-coverage-allowlist.yml"
 TESTS_ROOT = REPO_ROOT / "tests"
 
@@ -116,7 +117,8 @@ def _scalars(node: object, key: str) -> tuple[Scalar, ...]:
 def _config_files() -> tuple[pathlib.Path, ...]:
     workflows = tuple(sorted(path for path in WORKFLOW_DIR.iterdir() if path.suffix in (".yml", ".yaml")))
     circleci = (CIRCLECI_CONFIG,) if CIRCLECI_CONFIG.is_file() else ()
-    return workflows + circleci
+    manifest = WORKFLOW_DIR.parent / CODE_QUALITY_MANIFEST_NAME
+    return workflows + circleci + ((manifest,) if manifest.is_file() else ())
 
 
 def _all_scalars() -> tuple[Scalar, ...]:
