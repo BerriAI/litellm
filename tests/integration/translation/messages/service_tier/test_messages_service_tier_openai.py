@@ -6,7 +6,7 @@ from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.openai import GPT_5_4_TEST_CASE
-from integration.translation.runner import assert_translation, translation_params
+from integration.translation.runner import assert_translation
 
 GPT_5_4_SERVICE_TIER_TEST_CASE: Final = replace(
     GPT_5_4_TEST_CASE,
@@ -37,6 +37,6 @@ GPT_5_4_SERVICE_TIER_TEST_CASE: Final = replace(
 )
 
 
-@pytest.mark.parametrize("case", translation_params(GPT_5_4_SERVICE_TIER_TEST_CASE))
+@pytest.mark.parametrize("case", [GPT_5_4_SERVICE_TIER_TEST_CASE], ids=lambda case: case.id)
 def test_messages_service_tier_openai(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
     assert_translation(case, gateway, provider)

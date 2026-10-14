@@ -6,7 +6,7 @@ from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.bedrock_mantle import CLAUDE_SONNET_5_TEST_CASE
-from integration.translation.runner import assert_translation, translation_params
+from integration.translation.runner import assert_translation
 
 CLAUDE_SONNET_5_SERVICE_TIER_TEST_CASE: Final = replace(
     CLAUDE_SONNET_5_TEST_CASE,
@@ -21,11 +21,10 @@ CLAUDE_SONNET_5_SERVICE_TIER_TEST_CASE: Final = replace(
         **CLAUDE_SONNET_5_TEST_CASE.expected_litellm_response,
         "id": "msg_bdrk_6oqdfuf56lp47vwldyos5f7l4lyyot337z2cv3h3lbaj3a3ei7vq",
     },
-    known_bug="/v1/messages drops service_tier before the Bedrock Mantle Anthropic request. get_requested_anthropic_messages_optional_param keeps only AnthropicMessagesRequestOptionalParams keys and service_tier is not one of them",
 )
 
 
-@pytest.mark.parametrize("case", translation_params(CLAUDE_SONNET_5_SERVICE_TIER_TEST_CASE))
+@pytest.mark.parametrize("case", [CLAUDE_SONNET_5_SERVICE_TIER_TEST_CASE], ids=lambda case: case.id)
 def test_messages_service_tier_bedrock_mantle(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
