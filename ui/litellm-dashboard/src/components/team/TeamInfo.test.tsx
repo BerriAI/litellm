@@ -2047,6 +2047,82 @@ describe("TeamInfoView", () => {
       expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
     });
 
+    it("saves a team admin's metadata edit with the proxy's own keys carried over", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(useTeamMetadataSchema).mockReturnValue({
+        data: [{ key: "cost_center", label: "Cost Center" }],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: { cost_center: "eng", priority: "high" },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: ["metadata"],
+            proxy_controlled_metadata_keys: ["priority"],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      const costCenter = await screen.findByLabelText("Cost Center");
+      expect(costCenter).toHaveValue("eng");
+      expect(screen.queryByDisplayValue("priority")).not.toBeInTheDocument();
+
+      await user.clear(costCenter);
+      await user.type(costCenter, "sales");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toMatchObject({
+        metadata: { cost_center: "sales", priority: "high" },
+      });
+    });
+
+    it("saves other fields when a declared metadata field is also a proxy setting", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(useTeamMetadataSchema).mockReturnValue({
+        data: [
+          { key: "cost_center", label: "Cost Center" },
+          { key: "priority", label: "Priority" },
+        ],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 1000,
+          metadata: { cost_center: "eng", priority: "high" },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: ["metadata", "tpm_limit"],
+            proxy_controlled_metadata_keys: ["priority"],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      expect(screen.queryByLabelText("Priority")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+
+      const tpm = screen.getByLabelText("Tokens per minute Limit (TPM)");
+      await user.clear(tpm);
+      await user.type(tpm, "2000");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+      const sent = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(sent).toMatchObject({ tpm_limit: 2000 });
+      expect(sent).not.toHaveProperty("metadata");
+    });
+
     it("prefills the member defaults a team admin may edit from the team's member budget", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(

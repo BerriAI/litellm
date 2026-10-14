@@ -163,6 +163,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TEAM_MEMBER_DEFAULT_FIELDS,
     TeamMemberDefaults,
@@ -535,6 +536,9 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             return TeamEditAsTeamAdmin(
                 editable_fields=tuple(sorted(permitted)),
                 may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+                proxy_controlled_metadata_keys=(
+                    tuple(sorted(PROXY_CONTROLLED_TEAM_METADATA_KEYS)) if "metadata" in permitted else ()
+                ),
             )
         case None:
             return TeamEditNone()
@@ -2383,6 +2387,8 @@ async def update_team(
                         if reads_member_defaults
                         else None
                     ),
+                    proxy_controlled_metadata_keys=PROXY_CONTROLLED_TEAM_METADATA_KEYS,
+                    declared_metadata_keys=frozenset(field.key for field in TEAM_METADATA_SCHEMA_REGISTRY.get()),
                 )
             )
 

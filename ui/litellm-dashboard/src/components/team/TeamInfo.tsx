@@ -56,6 +56,8 @@ import {
   parseTeamEditAccess,
   TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
   TEAM_ADMIN_EDITING_DISABLED_TITLE,
+  teamAdminDeclaredFields,
+  teamAdminMetadataPairs,
   type TeamAdminSettingsChanges,
 } from "./teamAdminEditAccess";
 import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
@@ -1303,6 +1305,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
+  const teamAdminSchemaFields =
+    teamEditAccess.kind === "team_admin"
+      ? teamAdminDeclaredFields(teamMetadataSchemaFields, teamEditAccess.proxyControlledMetadataKeys)
+      : [];
+  const teamAdminDeclaredKeys = teamAdminSchemaFields.map((field) => field.key);
   const teamAdminSettingsEditor =
     teamEditAccess.kind === "team_admin" ? (
       <TeamAdminSettingsForm
@@ -1315,6 +1322,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           team_member_budget_duration: info.team_member_budget_table?.budget_duration,
           team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
           team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
+        }}
+        metadata={{
+          pairs: teamAdminMetadataPairs(
+            info.metadata,
+            teamEditAccess.proxyControlledMetadataKeys,
+            teamAdminDeclaredKeys,
+          ),
+          context: {
+            storedMetadata: info.metadata ?? {},
+            proxyControlledKeys: teamEditAccess.proxyControlledMetadataKeys,
+            declaredKeys: new Set(teamAdminDeclaredKeys),
+          },
+          schemaFields: teamAdminSchemaFields,
+          schemaLoading: isTeamMetadataSchemaLoading,
         }}
         editableFields={teamEditAccess.editableFields}
         mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
