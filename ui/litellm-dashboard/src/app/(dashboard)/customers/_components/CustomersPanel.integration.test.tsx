@@ -718,6 +718,48 @@ describe("Customers management", () => {
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
   });
 
+  it("updates a customer's own maximum without replacing its budget link", async () => {
+    const user = userEvent.setup();
+    const budget = { budget_id: "own-budget", max_budget: 100, created_at: "2026-01-01T00:00:00Z" };
+    const customer: EndUser = { ...activeCustomer, budget_id: budget.budget_id, litellm_budget_table: budget };
+    get.mockResolvedValue([budget]);
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [customer, blockedCustomer] : customer,
+      isLoading: false,
+      isError: false,
+    }));
+    renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });
+    expect(screen.getByLabelText("Budget")).toHaveTextContent("Keep current budget");
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "25" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
+        accessToken: "sk-test",
+        body: { user_id: customer.user_id, alias: "Alice", models: [], max_budget: 25 },
+      }),
+    );
+  });
+
+  it.each(["loading", "error"])("keeps maximum edits guarded while the customer list is %s", async (status) => {
+    const user = userEvent.setup();
+    const budget = { budget_id: "budget-id", max_budget: 100, created_at: "2026-01-01T00:00:00Z" };
+    const customer: EndUser = { ...activeCustomer, budget_id: budget.budget_id, litellm_budget_table: budget };
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? undefined : customer,
+      isLoading: path === "/customer/list" && status === "loading",
+      isError: path === "/customer/list" && status === "error",
+    }));
+    renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "25" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(
+      await screen.findByText("Unable to verify budget sharing. Reload customers before changing Max Budget"),
+    ).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("rejects a max budget when keeping a shared budget link", async () => {
     const user = userEvent.setup();
     const budget = { budget_id: "shared-budget", max_budget: 100, created_at: "2026-01-01T00:00:00Z" };
@@ -739,7 +781,7 @@ describe("Customers management", () => {
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     expect(
-      await screen.findByText("This customer has a linked budget. Leave Max Budget empty or choose another budget"),
+      await screen.findByText("This customer has a shared budget. Leave Max Budget empty or choose another budget"),
     ).toBeInTheDocument();
     expect(post).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "" } });

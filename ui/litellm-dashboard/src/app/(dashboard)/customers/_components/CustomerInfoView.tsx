@@ -35,6 +35,7 @@ type CustomerInfoViewProps = {
   isEdit: boolean;
   tab: CustomerTab;
   isBlocking: boolean;
+  hasSharedBudget: boolean | undefined;
   onTabChange: (tab: CustomerTab) => void;
   onBack: () => void;
   onEdit: () => void;
@@ -170,6 +171,7 @@ export default function CustomerInfoView({
   customer,
   accessToken,
   canModify,
+  hasSharedBudget,
   isEdit,
   tab,
   onTabChange,
@@ -255,6 +257,7 @@ export default function CustomerInfoView({
                   customer={customer}
                   isEdit
                   isSaving={isSaving}
+                  hasSharedBudget={hasSharedBudget}
                   onSubmit={handleSave}
                   onCancel={onCancelEdit}
                 />

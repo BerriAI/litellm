@@ -4,6 +4,12 @@ import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 import { extractMcpEntitlement, type McpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
 
+export const hasSharedCustomerBudget = (customer: EndUser, customers: readonly EndUser[]): boolean =>
+  Boolean(
+    customer.budget_id &&
+      customers.some((other) => other.user_id !== customer.user_id && other.budget_id === customer.budget_id),
+  );
+
 export type CustomerFormValues = {
   user_id: string;
   alias: string;

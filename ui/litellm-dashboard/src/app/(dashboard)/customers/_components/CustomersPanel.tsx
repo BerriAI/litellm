@@ -23,6 +23,7 @@ import { all_admin_roles, isProxyAdminRole } from "@/utils/roles";
 import { CreateCustomerModal } from "./CreateCustomerModal";
 import CustomerInfoView from "./CustomerInfoView";
 import CustomersTable from "./CustomersTable";
+import { hasSharedCustomerBudget } from "./customerPayload";
 
 const CUSTOMER_VIEW_PARSERS = {
   customer: parseAsString,
@@ -136,6 +137,11 @@ export default function CustomersPanel() {
           canModify={canModify}
           premiumUser={premiumUser}
           isEdit={edit}
+          hasSharedBudget={
+            customer.data && customers.data && !customers.isError
+              ? hasSharedCustomerBudget(customer.data, customers.data)
+              : undefined
+          }
           tab={tab}
           onTabChange={(value) => void setView({ customer_tab: value, edit: null })}
           isBlocking={isBlocking}

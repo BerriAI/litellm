@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { buildCustomerPayload, toCustomerFormValues } from "./customerPayload";
+import { buildCustomerPayload, hasSharedCustomerBudget, toCustomerFormValues } from "./customerPayload";
 
 const customer: EndUser = { user_id: "customer-id", blocked: false, spend: 0 };
 const permission = {
@@ -26,6 +26,24 @@ const server: MCPServer = {
   updated_at: "2026-01-01T00:00:00Z",
   updated_by: "admin",
 };
+
+describe("shared customer budgets", () => {
+  it("allows a budget linked to only one customer", () => {
+    const owned = { ...customer, budget_id: "own-budget" };
+    expect(
+      hasSharedCustomerBudget(owned, [owned, { ...customer, user_id: "another-customer", budget_id: "other-budget" }]),
+    ).toBe(false);
+  });
+
+  it("guards a budget referenced by another customer", () => {
+    const shared = { ...customer, budget_id: "shared-budget" };
+    expect(hasSharedCustomerBudget(shared, [shared, { ...shared, user_id: "another-customer" }])).toBe(true);
+  });
+
+  it("does not treat customers without budgets as sharing a budget", () => {
+    expect(hasSharedCustomerBudget(customer, [customer, { ...customer, user_id: "another-customer" }])).toBe(false);
+  });
+});
 
 describe("customer form values", () => {
   it("starts with empty optional values and grants", () => {
