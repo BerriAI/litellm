@@ -183,6 +183,7 @@ class _CombinedChunkSplitter:
         # Anthropic sends tool calls one after the other, but openai may interlace them. In order to
         # translate, we need to hold onto partial openai tool calls that we haven't seen all of yet.
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
+        self._live_call_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -320,6 +321,7 @@ class _CombinedChunkSplitter:
             for _, (template, part) in sorted(self._held_calls.items())
         )
         self._held_calls = MappingProxyType({})
+        self._live_call_index = None
         return released
 
     def _route_tool_calls(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
@@ -343,17 +345,21 @@ class _CombinedChunkSplitter:
         parts: Final = self._tool_call_parts(tool_calls)
         held: Final = self._held_calls
         if not held and len(parts) == 1:
+            if parts[0].name:
+                self._live_call_index = parts[0].index
             return (chunk,)
 
         new_parts: Final = tuple(part for part in parts if part.index not in held)
-        # Only the first call opened while nothing is held may stream live. Any
-        # later opener waits, since the live call can still receive fragments.
-        live_opener: Final = None if held else next((part.index for part in new_parts if part.name), None)
-        live: Final = tuple(part for part in new_parts if not part.name or part.index == live_opener)
+        keeps_live_call: Final = bool(held) or any(part.index == self._live_call_index for part in parts)
+        live_index: Final = (
+            self._live_call_index if keeps_live_call else next((part.index for part in new_parts if part.name), None)
+        )
+        self._live_call_index = live_index
+        live: Final = tuple(part for part in new_parts if not part.name or part.index == live_index)
         self._held_calls = MappingProxyType(
             {
                 **{index: (template, held_part.extended(parts)) for index, (template, held_part) in held.items()},
-                **{part.index: (chunk, part) for part in new_parts if part.name and part.index != live_opener},
+                **{part.index: (chunk, part) for part in new_parts if part.name and part.index != live_index},
             }
         )
         return tuple(self._with_tool_call(chunk, part, keep_role=position == 0) for position, part in enumerate(live))
