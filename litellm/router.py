@@ -3204,7 +3204,7 @@ class Router:
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
         # weak, so the generator closing over it does not keep the wrapper out of
         # refcount teardown and delay the `finally` that releases the deployment slot
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     @staticmethod
@@ -3808,7 +3808,7 @@ class Router:
 
         wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
         # weak, for the same reason as the async twin
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
