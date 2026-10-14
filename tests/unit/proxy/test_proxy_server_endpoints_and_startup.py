@@ -6551,57 +6551,40 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
 
 
-@pytest.mark.asyncio
-async def test_init_sso_settings_in_db():
-    """
-    Test that _init_sso_settings_in_db properly loads SSO settings from database,
-    uppercases keys, and calls _decrypt_and_set_db_env_variables.
-    """
-    from unittest.mock import AsyncMock, MagicMock, patch
+def _unset_sso_env_for_test(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
+    for key in keys:
+        monkeypatch.setenv(key, "placeholder")
+        monkeypatch.delenv(key)
 
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
     from litellm.proxy.proxy_server import ProxyConfig
 
-    proxy_config = ProxyConfig()
-
-    # Test Case 1: SSO settings exist in database
-    mock_sso_config = MagicMock()
-    mock_sso_config.sso_settings = {
+    stored: Final = {
         "google_client_id": "test-client-id",
         "google_client_secret": "test-client-secret",
         "microsoft_client_id": "ms-client-id",
         "microsoft_client_secret": "ms-client-secret",
     }
+    _unset_sso_env_for_test(monkeypatch, *stored, *(key.upper() for key in stored))
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-init-sso-test-salt")
+    proxy_config: Final = ProxyConfig()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(
+            sso_settings={key: encrypt_value_helper(value) for key, value in stored.items()}
+        )
+    )
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
-    # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
-        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
-
-        # Verify find_unique was called with correct parameters
-        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
-
-        # Verify _decrypt_and_set_db_env_variables was called with uppercased keys
-        mock_decrypt_and_set.assert_called_once()
-        call_args = mock_decrypt_and_set.call_args
-        uppercased_settings = call_args.kwargs["environment_variables"]
-
-        # Verify all keys are uppercased
-        assert "GOOGLE_CLIENT_ID" in uppercased_settings
-        assert "GOOGLE_CLIENT_SECRET" in uppercased_settings
-        assert "MICROSOFT_CLIENT_ID" in uppercased_settings
-        assert "MICROSOFT_CLIENT_SECRET" in uppercased_settings
-
-        # Verify values are preserved
-        assert uppercased_settings["GOOGLE_CLIENT_ID"] == "test-client-id"
-        assert uppercased_settings["GOOGLE_CLIENT_SECRET"] == "test-client-secret"
-        assert uppercased_settings["MICROSOFT_CLIENT_ID"] == "ms-client-id"
-        assert uppercased_settings["MICROSOFT_CLIENT_SECRET"] == "ms-client-secret"
-
-        # Verify original lowercase keys are not present
-        assert "google_client_id" not in uppercased_settings
-        assert "microsoft_client_id" not in uppercased_settings
+    mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
+    assert {key.upper(): os.environ.get(key.upper()) for key in stored} == {
+        key.upper(): value for key, value in stored.items()
+    }
+    assert [key for key in stored if key in os.environ] == []
 
 
 @pytest.mark.asyncio
@@ -6650,41 +6633,24 @@ async def test_init_sso_settings_in_db_error_handling():
 
 
 @pytest.mark.asyncio
-async def test_init_sso_settings_in_db_empty_settings():
-    """
-    Test that _init_sso_settings_in_db handles empty SSO settings dictionary.
-    """
-    from unittest.mock import AsyncMock, MagicMock, patch
-
+async def test_init_sso_settings_in_db_empty_settings() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
-    proxy_config = ProxyConfig()
+    proxy_config: Final = ProxyConfig()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(sso_settings={})
+    )
+    environment_before: Final = dict(os.environ)
 
-    # Mock SSO config with empty settings dictionary
-    mock_sso_config = MagicMock()
-    mock_sso_config.sso_settings = {}
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
-
-    # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
-        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
-
-        # Verify find_unique was called
-        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
-
-        # Verify _decrypt_and_set_db_env_variables was called with empty dict
-        mock_decrypt_and_set.assert_called_once()
-        call_args = mock_decrypt_and_set.call_args
-        uppercased_settings = call_args.kwargs["environment_variables"]
-
-        # Verify empty dictionary
-        assert uppercased_settings == {}
+    mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
+    assert dict(os.environ) == environment_before
 
 
 @pytest.mark.asyncio
-async def test_init_sso_settings_in_db_retries_on_transport_error():
+async def test_init_sso_settings_in_db_retries_on_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_init_sso_settings_in_db` self-heals across one ClientNotConnectedError
     via call_with_db_reconnect_retry — mirrors the auth-path behavior so
     startup/reload bursts don't spam the log."""
@@ -6692,9 +6658,13 @@ async def test_init_sso_settings_in_db_retries_on_transport_error():
 
     from litellm.proxy.proxy_server import ProxyConfig
 
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    _unset_sso_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-init-sso-test-salt")
     proxy_config = ProxyConfig()
     mock_sso_config = MagicMock()
-    mock_sso_config.sso_settings = {"GOOGLE_CLIENT_ID": "xxx"}
+    mock_sso_config.sso_settings = {"GOOGLE_CLIENT_ID": encrypt_value_helper("xxx")}
 
     invocations: list = []
 
@@ -6710,14 +6680,13 @@ async def test_init_sso_settings_in_db_retries_on_transport_error():
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
 
-    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt:
-        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
     assert reconnect_kwargs["reason"] == "init_sso_settings_in_db_lookup_failure"
-    mock_decrypt.assert_called_once()
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "xxx"
 
 
 @pytest.mark.asyncio

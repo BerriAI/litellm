@@ -1302,6 +1302,82 @@ class TestProxySettingEndpoints:
         assert data["status"] == "success"
         assert "LITELLM_FAVICON_URL" not in os.environ
 
+    def test_update_ui_theme_settings_logo_removed_from_the_db_on_another_pod_is_unset_at_the_next_sync(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("UI_LOGO_PATH", "placeholder")
+        monkeypatch.delenv("UI_LOGO_PATH")
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"logo_url": "https://example.com/saved-here.png"},
+        )
+        assert response.status_code == 200
+        assert os.environ.get("UI_LOGO_PATH") == "https://example.com/saved-here.png"
+
+        async def env_row_cleared_on_another_pod(_, param_name):
+            if param_name != "environment_variables":
+                return None
+            return SimpleNamespace(param_name=param_name, param_value={})
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.get_config_param",
+            env_row_cleared_on_another_pod,
+        )
+        asyncio.run(
+            proxy_config._update_config_from_db(
+                MagicMock(), {}, store_model_in_db=True
+            )
+        )
+
+        assert "UI_LOGO_PATH" not in os.environ
+
+    def test_update_sso_settings_field_cleared_on_another_pod_is_unset_at_the_next_sync(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "placeholder")
+        monkeypatch.delenv("GOOGLE_CLIENT_ID")
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        response = client.patch(
+            "/update/sso_settings", json={"google_client_id": "saved-here"}
+        )
+        assert response.status_code == 200
+        assert os.environ.get("GOOGLE_CLIENT_ID") == "saved-here"
+
+        sso_table_cleared_on_another_pod = MagicMock()
+        sso_table_cleared_on_another_pod.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=SimpleNamespace(sso_settings={"google_client_id": None})
+        )
+        asyncio.run(
+            proxy_config._init_sso_settings_in_db(
+                prisma_client=sso_table_cleared_on_another_pod
+            )
+        )
+
+        assert "GOOGLE_CLIENT_ID" not in os.environ
+
     def test_get_ui_theme_settings_includes_favicon_schema(self, mock_proxy_config):
         """Test UI theme settings includes favicon_url in schema"""
         response = client.get("/get/ui_theme_settings")

@@ -7924,6 +7924,20 @@ class ProxyConfig:
             else:
                 os.environ[key] = value
 
+    def apply_saved_db_environment_variables(self, updates: Mapping[str, str | None]) -> None:
+        self._db_environment_keys = self._applied_saved_environment_keys(self._db_environment_keys, updates)
+
+    def apply_saved_sso_environment_variables(self, updates: Mapping[str, str | None]) -> None:
+        self._sso_environment_keys = self._applied_saved_environment_keys(self._sso_environment_keys, updates)
+
+    def _applied_saved_environment_keys(
+        self, tracked_keys: frozenset[str], updates: Mapping[str, str | None]
+    ) -> frozenset[str]:
+        saved: Final = {key: value for key, value in updates.items() if value}
+        self._restore_environment_without_db(frozenset(updates) - saved.keys())
+        os.environ.update(saved)
+        return tracked_keys | frozenset(saved)
+
     def decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
         Decrypts a dictionary of variables and returns them.
@@ -8809,8 +8823,12 @@ class ProxyConfig:
             for key, value in stored_sso_settings.items()
             if key not in _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT
         }
-        applied: Final = self.decrypt_and_set_db_env_variables(environment_variables=sso_environment_variables)
-        still_stored: Final = frozenset(key for key, value in sso_environment_variables.items() if value is not None)
+        decrypted: Final = self._decrypted_db_env_variables(sso_environment_variables, return_original_value=False)
+        applied: Final = {key: value for key, value in decrypted.items() if value}
+        still_stored: Final = frozenset(
+            key for key, value in sso_environment_variables.items() if value is not None and decrypted.get(key) != ""
+        )
+        os.environ.update(applied)
         self._restore_environment_without_db(self._sso_environment_keys - still_stored - self._db_environment_keys)
         self._sso_environment_keys = frozenset(applied) | (self._sso_environment_keys & still_stored)
 

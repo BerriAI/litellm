@@ -1232,7 +1232,6 @@ async def update_sso_settings(
     Update SSO configuration by saving to the dedicated SSO table.
     """
     import json
-    import os
 
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
@@ -1284,14 +1283,9 @@ async def update_sso_settings(
 
     # Update environment variables in config and in memory
     sso_data: Final = sso_config.model_dump()
-    for field_name, value in sso_data.items():
-        if field_name in SSO_FIELD_ENV_VARS:
-            env_var_name = SSO_FIELD_ENV_VARS[field_name]
-            if value:
-                os.environ[env_var_name] = value
-            else:
-                # Clear environment variable if value is null/empty
-                os.environ.pop(env_var_name, None)
+    proxy_config.apply_saved_sso_environment_variables(
+        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
+    )
 
     encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
@@ -1429,8 +1423,6 @@ async def update_ui_theme_settings(
     Update UI theme configuration.
     Updates logo settings for the admin UI.
     """
-    import os
-
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
         proxy_config,
@@ -1473,11 +1465,7 @@ async def update_ui_theme_settings(
         "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
-    for env_key, env_value in env_updates.items():
-        if env_value is not None:
-            os.environ[env_key] = env_value
-        else:
-            os.environ.pop(env_key, None)
+    proxy_config.apply_saved_db_environment_variables(env_updates)
 
     # Persist the theme config (litellm_settings). save_config defaults to
     # include_env_vars=False, so it does not snapshot environment_variables.

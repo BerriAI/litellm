@@ -3991,6 +3991,12 @@ async def test_ProxyConfig_db_env_row_with_an_invalid_environment_entry_still_sy
     assert "LIT_DB_ENV_NUL" not in os.environ
 
 
+def _encrypted_sso_table(sso_settings: Mapping[str, str | None] | None) -> Mapping[str, str | None] | None:
+    if sso_settings is None:
+        return None
+    return {key: None if value is None else encrypt_value_helper(value) for key, value in sso_settings.items()}
+
+
 def _prisma_with_sso_table(sso_settings: Mapping[str, str | None] | None) -> MagicMock:
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
@@ -4111,8 +4117,8 @@ async def test_ProxyConfig_non_sso_key_removed_from_the_env_row_skips_the_sso_ta
 @pytest.mark.parametrize("startup_client_id", [None, "pod-own-id"], ids=["unset-at-startup", "set-at-startup"])
 @pytest.mark.parametrize(
     "cleared_sso_table",
-    [{"google_client_id": None}, {}, None],
-    ids=["field-set-to-null", "field-removed", "sso-row-deleted"],
+    [{"google_client_id": None}, {"google_client_id": ""}, {}, None],
+    ids=["field-set-to-null", "field-set-to-empty", "field-removed", "sso-row-deleted"],
 )
 async def test_ProxyConfig_sso_field_cleared_in_the_sso_table_takes_the_startup_value(
     monkeypatch: pytest.MonkeyPatch,
@@ -4127,7 +4133,50 @@ async def test_ProxyConfig_sso_field_cleared_in_the_sso_table_takes_the_startup_
 
     await pc._init_sso_settings_in_db(_prisma_with_sso_table({"google_client_id": encrypt_value_helper("sso-id")}))
     assert os.environ.get("GOOGLE_CLIENT_ID") == "sso-id"
-    await pc._init_sso_settings_in_db(_prisma_with_sso_table(cleared_sso_table))
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table(cleared_sso_table)))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == startup_client_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup_logo", [None, "https://example.com/startup.png"], ids=["unset-at-startup", "set-at-startup"])
+@pytest.mark.parametrize("cleared_on_another_pod", [False, True], ids=["cleared-here", "removed-from-the-row-elsewhere"])
+async def test_ProxyConfig_db_env_var_an_endpoint_saved_then_cleared_takes_the_startup_value(
+    monkeypatch: pytest.MonkeyPatch, startup_logo: str | None, cleared_on_another_pod: bool
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    if startup_logo is not None:
+        monkeypatch.setenv("UI_LOGO_PATH", startup_logo)
+    pc: Final = ProxyConfig()
+
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/saved-here.png"})
+    assert os.environ.get("UI_LOGO_PATH") == "https://example.com/saved-here.png"
+    if cleared_on_another_pod:
+        await _sync_db_env_row(monkeypatch, pc, {}, {})
+    else:
+        pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": None})
+
+    assert os.environ.get("UI_LOGO_PATH") == startup_logo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup_client_id", [None, "pod-own-id"], ids=["unset-at-startup", "set-at-startup"])
+@pytest.mark.parametrize("cleared_on_another_pod", [False, True], ids=["cleared-here", "cleared-in-the-sso-table-elsewhere"])
+async def test_ProxyConfig_sso_field_an_endpoint_saved_then_cleared_takes_the_startup_value(
+    monkeypatch: pytest.MonkeyPatch, startup_client_id: str | None, cleared_on_another_pod: bool
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    if startup_client_id is not None:
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", startup_client_id)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+
+    pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": "saved-here"})
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "saved-here"
+    if cleared_on_another_pod:
+        await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table({"google_client_id": ""})))
+    else:
+        pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": ""})
 
     assert os.environ.get("GOOGLE_CLIENT_ID") == startup_client_id
 
