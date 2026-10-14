@@ -18,6 +18,7 @@ import {
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
+import { fallbackModelLabel, isProviderWildcard, wildcardProvider } from "./providerWildcards";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
@@ -27,12 +28,17 @@ const modelCardClass =
 
 const iconWrapperClass = "inline-flex shrink-0 items-center justify-center px-1.5 py-1.5";
 
+const providerForModel = (modelName: string, getProviderFromModel?: (modelName: string) => string): string =>
+  isProviderWildcard(modelName) ? wildcardProvider(modelName) : getProviderFromModel?.(modelName) ?? modelName;
+
 function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
-  const provider = getProviderFromModel?.(modelName) ?? modelName;
+  const provider = providerForModel(modelName, getProviderFromModel);
   return (
     <span className={modelCardClass}>
       <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-      <span className="break-words">{modelName}</span>
+      <span className="break-words" title={modelName}>
+        {fallbackModelLabel(modelName)}
+      </span>
     </span>
   );
 }
@@ -46,11 +52,13 @@ function renderFallbacksChain(
   if (list.length === 0) return null;
 
   const ChainCard = ({ modelName }: { modelName: string }) => {
-    const provider = getProviderFromModel?.(modelName) ?? modelName;
+    const provider = providerForModel(modelName, getProviderFromModel);
     return (
       <span className={modelCardClass}>
         <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-        <span className="break-words">{modelName}</span>
+        <span className="break-words" title={modelName}>
+          {fallbackModelLabel(modelName)}
+        </span>
       </span>
     );
   };

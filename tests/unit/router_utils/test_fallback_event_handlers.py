@@ -1463,6 +1463,80 @@ def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
     assert fallback_model_group is None
 
 
+@pytest.mark.parametrize("model_group", ["openai/gpt-4o", "gpt-4o"])
+def test_get_fallback_model_group_provider_wildcard_key_matches_every_model_of_that_provider(model_group: str):
+    fallbacks = [{"openai/*": ["anthropic/claude-sonnet-4-5"]}, {"*": ["gemini-2.5-flash"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_group)
+
+    assert fallback_model_group == ["anthropic/claude-sonnet-4-5"]
+
+
+@pytest.mark.parametrize("model_group", ["anthropic/claude-sonnet-4-5", "claude-sonnet-4-5"])
+def test_get_fallback_model_group_provider_wildcard_key_skips_other_providers(model_group: str):
+    fallbacks = [{"openai/*": ["anthropic/claude-sonnet-4-5"]}, {"*": ["gemini-2.5-flash"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_group)
+
+    assert fallback_model_group == ["gemini-2.5-flash"]
+
+
+def test_get_fallback_model_group_exact_key_beats_provider_wildcard_key():
+    fallbacks = [{"openai/*": ["anthropic/claude-sonnet-4-5"]}, {"openai/gpt-4o": ["openai/gpt-4o-mini"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group == ["openai/gpt-4o-mini"]
+
+
+@pytest.mark.parametrize(
+    ("model_group", "specific_key"),
+    [("gpt-4o", "openai/gpt-4o"), ("openai/gpt-4o", "gpt-4o")],
+)
+@pytest.mark.parametrize("specific_first", [True, False])
+def test_get_fallback_model_group_per_model_key_beats_provider_wildcard_key_in_any_order(
+    model_group: str, specific_key: str, specific_first: bool
+):
+    specific: Final = {specific_key: ["openai/gpt-4o-mini"]}
+    wildcard: Final = {"openai/*": ["anthropic/claude-sonnet-4-5"]}
+    fallbacks: Final = [specific, wildcard] if specific_first else [wildcard, specific]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_group)
+
+    assert fallback_model_group == ["openai/gpt-4o-mini"]
+
+
+@pytest.mark.parametrize("fallback_key", ["*" * 100 + "Z", "openai/gpt-*", "*/*", "/*"])
+def test_get_fallback_model_group_ignores_keys_that_are_not_a_single_provider_wildcard(fallback_key: str):
+    fallbacks: Final = [{fallback_key: ["anthropic/claude-sonnet-4-5"]}, {"*": ["gemini-2.5-flash"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group == ["gemini-2.5-flash"]
+
+
+def test_router_falls_back_from_provider_wildcard_key():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            },
+            {
+                "model_name": "anthropic/claude-sonnet-4-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "fake", "mock_response": "hi"},
+            },
+        ],
+        fallbacks=[{"openai/*": ["anthropic/claude-sonnet-4-5"]}],
+        num_retries=0,
+    )
+
+    response = router.completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "hi"
+
+
 def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
