@@ -1166,13 +1166,14 @@ async def test_add_deployment_hydrates_non_llm_objects_when_model_reconcile_fail
     hydration inside one try/except. A failure in the reconcile skipped guardrails,
     vector stores, MCP servers, agents and pass-through endpoints for that pass, and
     the swallowed exception left only a log line behind. add_deployment also runs on a
-    timer, so a transient DB error dropped every non-LLM object until a later pass.
+    timer, so while the reconcile kept failing, no pass loaded new or changed non-LLM
+    objects.
     """
     from litellm.proxy.proxy_server import ProxyConfig
     from litellm.proxy.utils import ProxyLogging
 
     class FailingReconcileProxyConfig(ProxyConfig):
-        """Reconcile fails the way a DB outage makes it fail; hydration records itself."""
+        """Reconcile raises inside the shared try, before the hydration; hydration records itself."""
 
         def __init__(self):
             super().__init__()
@@ -1227,7 +1228,7 @@ async def test_add_deployment_survives_a_non_llm_hydration_failure():
     proxy_config = FailingHydrationProxyConfig()
 
     outcome = await proxy_config.add_deployment_locked(
-        prisma_client=MagicMock(),
+        prisma_client=MagicMock(get_generic_data=AsyncMock(return_value=None)),
         proxy_logging_obj=MagicMock(spec=ProxyLogging),
     )
 
