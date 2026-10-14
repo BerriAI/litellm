@@ -3411,6 +3411,7 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         data["tools"][0]["defer_loading"] = "false"
         data["tools"][1]["tools"][0]["allowed_callers"] = "direct"
         data["tools"][2]["defer_loading"] = 1
+        data["tools"].append({"type": "tool_search", "execution": ""})
         expected_tools: Final = copy.deepcopy(data["tools"])
         guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
 

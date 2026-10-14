@@ -115,6 +115,7 @@ from .custom_tools import (
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
     validated_defer_loading,
+    validated_tool_search_execution,
     without_malformed_tool_flags,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
@@ -2181,7 +2182,7 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if is_server_tool_search_tool(tool):
+        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) != "client":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
         if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
             verbose_logger.warning(

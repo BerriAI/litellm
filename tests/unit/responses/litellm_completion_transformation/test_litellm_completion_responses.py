@@ -2052,6 +2052,34 @@ class TestToolTransformation:
         }
         assert all("allowed_callers" not in tool for tool in function_tools)
 
+    @pytest.mark.parametrize("execution", ["", "bogus", 5, ["server"]])
+    def test_malformed_tool_search_execution_answers_400_unless_drop_params_drops_it(self, execution: object) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        tools: Final = [{"type": "tool_search", "execution": execution}, *_deferred_tools_with_server_tool_search()[1:]]
+
+        with pytest.raises(litellm.BadRequestError, match="tool_search execution must be 'server' or 'client'"):
+            transform(
+                model="anthropic/claude-sonnet-5-5",
+                input="What is the weather in Paris right now?",
+                responses_api_request={"tools": tools},
+                custom_llm_provider="anthropic",
+            )
+        dropped: Final = transform(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            drop_params=True,
+        )
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_call('{"pattern": "weather"}'),
+            responses_api_request={"tools": tools},
+        )
+
+        assert dropped["tools"][0] == {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
+        assert all(tool.get("defer_loading") is True for tool in dropped["tools"][1:])
+        assert [item.type for item in items] == ["tool_search_call", "function_call"]
+
     def test_top_level_function_allowed_callers_must_be_a_list_of_strings(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools
         weather_tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
