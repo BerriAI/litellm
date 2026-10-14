@@ -6074,7 +6074,7 @@ class PrismaClient:
             if prisma_obj.is_connected() is not True:
                 return 0
             engine: Final = prisma_obj._engine  # pyright: ignore[reportPrivateUsage]  # Prisma engine internals
-            process: Final = getattr(engine, "process", None) if engine is not None else None
+            process: Final = getattr(engine, "process", None)
             if process is not None:
                 pid: Final[object] = process.pid
                 if isinstance(pid, int):

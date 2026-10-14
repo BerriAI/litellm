@@ -446,7 +446,7 @@ def _generate_budget_windows(
 
 
 def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> LiteLLM_VerificationToken:
-    requested: Final = data.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
     metadata_fields: Final = MappingProxyType(
         {field: value for field, value in requested.items() if field in _KEY_METADATA_REQUEST_FIELDS}
     )
@@ -489,7 +489,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     changed_fields: Final = MappingProxyType(
         {
             field: value
-            for field, value in data.model_dump(exclude_unset=True).items()
+            for field, value in _as_object_dict(data.model_dump(exclude_unset=True)).items()
             if field in UpdateKeyRequest.model_fields
             and field != "key"
             and not (field in _EMPTY_DURATION_MEANS_UNCHANGED and value == "")

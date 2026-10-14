@@ -1069,14 +1069,9 @@ def update_db_model(
             _cost_map_entry(db_model, incoming_model_info),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
+        stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(
-            MappingProxyType(
-                dict(
-                    (k, v)
-                    for k, v in without_server_derived_pricing(incoming_model_info).items()
-                    if k not in echoed_fields
-                )
-            )
+            MappingProxyType(dict((k, v) for k, v in stored_model_info_fields.items() if k not in echoed_fields))
         )
         for k in echoed_fields:
             if k in merged_model_info and merged_model_info[k] != incoming_model_info[k]:

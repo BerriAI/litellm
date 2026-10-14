@@ -218,6 +218,7 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 
 
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _TeamRowGrants(LiteLLMBaseModel):
@@ -264,10 +265,6 @@ class _ServicePrincipalPage(Protocol):
 
     @overload
     def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
-
-
-def _as_object(value: object) -> object:
-    return value
 
 
 def _hash_cli_sso_secret(secret: str) -> str:
@@ -4063,7 +4060,7 @@ class SSOAuthenticationHandler:
         access_token string. Raises ProxyException on any validation failure.
         """
         try:
-            token_response_raw: Final[object] = _as_object(response.json())
+            token_response_raw: Final = _DECODED_JSON.validate_python(response.json())
         except Exception as json_err:
             verbose_proxy_logger.error(
                 "Failed to parse token response as JSON: %s. Body: %s",

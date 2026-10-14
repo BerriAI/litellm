@@ -20,7 +20,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast
 
 import httpx
 from fastapi import HTTPException
@@ -255,6 +255,14 @@ def _is_responses_api_route(request_route: str | None) -> bool:
         return False
     call_types: Final = get_call_types_for_route(request_route)
     return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -2207,7 +2215,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         status_code: Final = response.status_code
         message: Final = "Bedrock guardrail request failed"
         try:
-            body: Final = response.json()
+            body: Final = _json_body(response)
         except Exception:
             text: Final = getattr(response, "text", None) or ""
             if isinstance(text, str) and text.strip():

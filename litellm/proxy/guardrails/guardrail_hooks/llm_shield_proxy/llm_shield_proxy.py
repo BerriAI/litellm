@@ -5,7 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__
+    Any,  # noqa: TID251  # the streaming hook and the flush copy pass provider chunks through untyped
     ClassVar,
     Final,
     Literal,
@@ -15,6 +15,7 @@ from typing import (
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -93,6 +94,10 @@ def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, st
             yield function, arguments
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class _ContentDelta(Protocol):
     content: object
 
@@ -123,7 +128,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         guardrail_name: str = GUARDRAIL_NAME,
         api_base: str | None = None,
         api_key: str | None = None,
-        **kwargs: Any,  # noqa: LIT008  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
+        **kwargs: Unpack[_CustomGuardrailOptions],  # noqa: LIT008  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         env_base: Final = os.environ.get("LLM_SHIELD_PROXY_API_BASE")

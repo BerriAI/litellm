@@ -180,7 +180,7 @@ class PrismaWrapper:
 
     def __init__(
         self,
-        original_prisma: Any,
+        original_prisma: "Prisma",
         iam_token_db_auth: bool = False,
         *,
         token_auth: DatabaseTokenAuth | None = None,

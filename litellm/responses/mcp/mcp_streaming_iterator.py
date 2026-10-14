@@ -730,6 +730,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Don't set phase to "finished" here — let __anext__ emit any
             # pre-generated MCP discovery events before ending the iteration.
 
+    async def start_initial_response(self) -> None:
+        await self._create_initial_response_iterator()
+        if self._initial_creation_error is not None:
+            raise self._initial_creation_error
+
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
         if not self.collected_response:

@@ -136,6 +136,8 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 def _tools_the_model_accepts(
@@ -315,9 +317,10 @@ class AmazonConverseConfig(BaseConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("_")
             and not isinstance(
                 v,
@@ -2524,12 +2527,13 @@ class AmazonConverseConfig(BaseConfig):
             Unwrapped JSON string or original if unwrapping not needed
         """
         try:
-            response_data = json.loads(json_str)
-            if isinstance(response_data, dict) and "properties" in response_data and len(response_data) == 1:
-                response_data = response_data["properties"]
-                return json.dumps(response_data)
+            response_data: Final = _JSON_VALUE.validate_python(json.loads(json_str))
         except json.JSONDecodeError:
-            pass
+            return json_str
+        if isinstance(response_data, dict):
+            json_object: Final = _JSON_OBJECT.validate_python(response_data)
+            if "properties" in json_object and len(json_object) == 1:
+                return json.dumps(json_object["properties"])
         return json_str
 
     @staticmethod

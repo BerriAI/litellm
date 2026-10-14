@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
+    from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
@@ -1195,7 +1196,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_server_map: dict[str, str],
         served_tools: Sequence[MCPTool] | None = None,
         **kwargs,
-    ) -> Any:
+    ) -> "MCPEnhancedStreamingIterator":
         """
         Create MCP enhanced streaming response that handles the full MCP workflow.
 
