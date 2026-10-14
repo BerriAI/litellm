@@ -59,22 +59,18 @@ async def _scrape(client: httpx.AsyncClient, headers: Mapping[str, str] | None =
 
 @pytest.mark.asyncio
 async def test_render_does_not_block_the_event_loop():
-    ticks: Final[list[float]] = []  # mutable-ok: records loop wakeups while the scrape is in flight
-
-    async def ticker() -> None:
-        while True:
-            await asyncio.sleep(0.01)
-            ticks.append(time.monotonic())
-
-    ticker_task: Final = asyncio.create_task(ticker())
-    async with _client(_registry_with(_SlowCollector(block_seconds=0.5))) as client:
+    collector: Final = _GatedCollector()
+    async with _client(_registry_with(collector)) as client:
         try:
-            response: Final = await _scrape(client)
+            scrape: Final = asyncio.create_task(_scrape(client))
+            assert await asyncio.to_thread(collector.started.wait, _GATE_TIMEOUT_SECONDS), "render never started"
+            assert not collector.finished.is_set(), "event loop was blocked while the registry was rendered"
+            collector.release.set()
+            response: Final = await scrape
         finally:
-            ticker_task.cancel()
+            collector.release.set()
 
-    assert b"slow_metric" in response.content
-    assert len(ticks) > 5, "event loop was blocked while the registry was rendered"
+    assert b"gated_metric" in response.content
 
 
 @pytest.mark.asyncio
@@ -170,6 +166,7 @@ class _GatedCollector(Collector):
     def __init__(self) -> None:
         self.started = threading.Event()
         self.release = threading.Event()
+        self.finished = threading.Event()
         self._lock = threading.Lock()
         self.collect_calls = 0
 
@@ -178,6 +175,7 @@ class _GatedCollector(Collector):
             self.collect_calls += 1
         self.started.set()
         self.release.wait(timeout=_GATE_TIMEOUT_SECONDS)
+        self.finished.set()
         family: Final = GaugeMetricFamily("gated_metric", "gated")
         family.add_metric((), 1.0)
         yield family

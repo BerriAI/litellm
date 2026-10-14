@@ -178,7 +178,7 @@ async def test_schedule_background_health_check_db_save_creates_task(monkeypatch
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
     prisma_client = MagicMock()
     shared_manager = SimpleNamespace(pod_id="pod-xyz")
@@ -227,7 +227,7 @@ async def test_schedule_background_health_check_db_save_invalid_no_event_loop_ra
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
     def _broken_create_task(_coro):
         raise RuntimeError("no running event loop")
@@ -261,7 +261,7 @@ def _capture_saves(monkeypatch, persisted=True):
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
     return saves
 
 
@@ -271,7 +271,7 @@ def _cancel_during_save(monkeypatch):
 
     import litellm.proxy.health_endpoints._health_endpoints as he
 
-    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(he, "save_background_health_checks_to_db", _fake_save)
 
 
 def _schedule_with(lock_manager):
@@ -433,7 +433,7 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     import litellm.router_utils.cooldown_handlers as cd
 
-    monkeypatch.setattr(cd, "_set_cooldown_deployments", lambda **_kw: None)
+    monkeypatch.setattr(cd, "set_cooldown_deployments", lambda **_kw: None)
 
     import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
 
@@ -507,7 +507,7 @@ def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeyp
 
     monkeypatch.setattr(
         cd,
-        "_set_cooldown_deployments",
+        "set_cooldown_deployments",
         lambda **kw: cooldowns.append(kw.get("deployment")),
     )
 
@@ -560,7 +560,7 @@ def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypat
 @pytest.mark.asyncio
 async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     fake_ar = MagicMock()
-    fake_ar._state_loaded = True
+    fake_ar.state_loaded = True
     fake_ar.queue.flush_state_to_db = AsyncMock()
     fake_ar.queue.flush_session_to_db = AsyncMock()
 

@@ -266,3 +266,106 @@ def test_lite_entrypoint_prints_nothing_on_stderr(monkeypatch, capsys, requests_
     assert "LiteLLM Proxy Server Version: 1.2.3" in captured.out
     assert f"LiteLLM Proxy CLI Version: {litellm_version}" in captured.out
     assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("args", "config", "expected_context", "expected_authorization"),
+    [
+        (
+            ["--base-url", "https://flag-proxy.example.com/", "--api-key", "sk-flag"],
+            {},
+            {
+                "base_url": "https://flag-proxy.example.com",
+                "api_key": "sk-flag",
+                "api_key_from_token_file": False,
+                "base_url_explicit": True,
+            },
+            "Bearer sk-flag",
+        ),
+        (
+            [],
+            {},
+            {
+                "base_url": "http://localhost:4000",
+                "api_key": None,
+                "api_key_from_token_file": True,
+                "base_url_explicit": False,
+            },
+            None,
+        ),
+        (
+            ["--api-key", ""],
+            {"base_url": "https://config-proxy.example.com"},
+            {
+                "base_url": "https://config-proxy.example.com",
+                "api_key": "",
+                "api_key_from_token_file": False,
+                "base_url_explicit": True,
+            },
+            None,
+        ),
+    ],
+)
+def test_cli_stores_the_resolved_connection_on_the_supplied_context_object(
+    cli_runner, isolated_home, requests_mock, args, config, expected_context, expected_authorization
+):
+    _write_config_file(isolated_home, config)
+    requests_mock.get(f"{expected_context['base_url']}/health/readiness", json={"litellm_version": "1.2.3"})
+    context: Final[dict[str, object]] = {}
+
+    result = cli_runner.invoke(cli, [*args, "version"], obj=context)
+
+    assert result.exit_code == 0
+    assert json.dumps(context) == json.dumps(expected_context)
+    assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") == expected_authorization
+
+
+@pytest.mark.parametrize(
+    ("context", "expected_lines", "expected_authorization"),
+    [
+        (
+            {"base_url": "http://localhost:4000", "api_key": "sk-context"},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            "Bearer sk-context",
+        ),
+        (
+            {"base_url": "http://localhost:4000"},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            None,
+        ),
+        (
+            {"base_url": "http://localhost:4000", "api_key": None, "api_key_from_token_file": True},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            None,
+        ),
+    ],
+)
+def test_version_command_reads_the_connection_from_the_context_object(
+    cli_runner, requests_mock, context, expected_lines, expected_authorization
+):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli.commands["version"], [], obj=context)
+
+    assert result.exit_code == 0
+    assert result.output.splitlines() == [f"LiteLLM Proxy CLI Version: {litellm_version}", *expected_lines]
+    assert requests_mock.last_request.headers.get("Authorization") == expected_authorization
+
+
+def test_version_command_without_a_base_url_reports_the_failed_lookup(cli_runner):
+    result = cli_runner.invoke(cli.commands["version"], [], obj={"api_key": "sk-context"})
+
+    lines: Final = result.output.splitlines()
+    assert result.exit_code == 0
+    assert len(lines) == 2
+    assert lines[0] == f"LiteLLM Proxy CLI Version: {litellm_version}"
+    assert lines[1].startswith("Could not retrieve server version: ")
+
+
+def test_version_command_without_a_context_object_fails_reading_it(cli_runner):
+    result = cli_runner.invoke(cli.commands["version"], [])
+
+    assert result.exit_code == 1
+    assert type(result.exception) is AttributeError
+    assert result.output == ""

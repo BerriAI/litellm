@@ -13,6 +13,7 @@ export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const stringGrants = (fallback: string[]) =>
   z
     .unknown()
+    .optional()
     .transform((value) =>
       Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : fallback,
     );
