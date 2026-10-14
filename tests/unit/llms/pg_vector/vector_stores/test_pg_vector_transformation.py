@@ -237,7 +237,7 @@ class TestPGVectorStoreConfig:
 
             # Test parameters - use a different vector store ID than test registry
             api_base = "http://localhost:8001"
-            api_key = "sk-1234"
+            api_key = "sk-9876"
             vector_store_id = (
                 "pg-vector-test-store-123"  # Different from test registry IDs
             )

@@ -206,7 +206,7 @@ class CompletionRequest(LiteLLMBaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _CompletionDispatchContext:
+class CompletionDispatchContext:
     _azure_detection_model: str
     acompletion: bool
     api_base: str | None
@@ -238,6 +238,9 @@ class _CompletionDispatchContext:
     text_completion: bool
     timeout: float | str | httpx.Timeout | None
     top_p: float | None
+
+
+_CompletionDispatchContext = CompletionDispatchContext
 
 
 _CompletionDispatchResult = Union[
