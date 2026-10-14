@@ -25,6 +25,37 @@ const MAX_PREVIEW = 5;
 
 const shortId = (id: string) => (id.length > 20 ? `${id.slice(0, 10)}...${id.slice(-6)}` : id);
 
+const describeAllowedTools = (tools: readonly string[] | undefined): string => {
+  if (tools === undefined) {
+    return "All tools";
+  }
+  return tools.length === 0 ? "No tools" : tools.join(", ");
+};
+
+function MCPToolPermissionList({
+  servers,
+  toolPermissions,
+}: {
+  servers: readonly AccessGroupResource[];
+  toolPermissions: Readonly<Record<string, string[]>> | null;
+}) {
+  if (toolPermissions === null || servers.length === 0) {
+    return null;
+  }
+  return (
+    <section className="mt-6 space-y-2" aria-label="MCP tool permissions">
+      {servers.map(({ id, name }) => {
+        return (
+          <div key={id} className="flex flex-wrap items-baseline gap-2 text-sm">
+            <span className="font-medium">{name ?? id}</span>
+            <span className="text-muted-foreground">{describeAllowedTools(toolPermissions[id])}</span>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 function ResourceList({ items, emptyMessage }: { items: readonly AccessGroupResource[]; emptyMessage: string }) {
   if (items.length === 0) {
     return <p className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>;
@@ -237,6 +268,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </TabsContent>
             <TabsContent value="mcp" className="pt-4">
               <ResourceList items={mcpServers} emptyMessage="No MCP servers assigned to this group" />
+              <MCPToolPermissionList servers={mcpServers} toolPermissions={accessGroup.mcp_tool_permissions ?? null} />
             </TabsContent>
             <TabsContent value="agents" className="pt-4">
               <ResourceList items={agents} emptyMessage="No agents assigned to this group" />

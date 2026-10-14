@@ -7502,6 +7502,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/deployment_warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deployment Warnings
+         * @description List the active deployment warnings with their severity and whether an admin ignored or snoozed them.
+         *     Readable by proxy admins and proxy admin viewers.
+         */
+        get: operations["get_deployment_warnings_health_deployment_warnings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/deployment_warnings/{warning_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Deployment Warning Ignore
+         * @description Ignore, snooze, or restore one deployment warning for every admin of this proxy.
+         *     Only proxy admins can call this, and it needs a database.
+         */
+        patch: operations["update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch"];
+        trace?: never;
+    };
     "/health/drain": {
         parameters: {
             query?: never;
@@ -25069,6 +25111,10 @@ export interface components {
             assigned_team_ids?: string[] | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
         };
         /** AccessGroupInfo */
         AccessGroupInfo: {
@@ -25125,6 +25171,10 @@ export interface components {
             created_by?: string | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
             /**
              * Updated At
              * Format: date-time
@@ -25149,6 +25199,10 @@ export interface components {
             assigned_team_ids?: string[] | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
         };
         /**
          * AcknowledgedSafetyCheck
@@ -25448,6 +25502,26 @@ export interface components {
             callback_vars: {
                 [key: string]: string;
             };
+        };
+        /** AdminIgnore */
+        AdminIgnore: {
+            /**
+             * Ignored At
+             * Format: date-time
+             */
+            ignored_at: string;
+            /** Ignored By */
+            ignored_by: string;
+            /**
+             * Ignored Until
+             * @description When the snooze ends. Null means the warning is ignored until an admin restores it.
+             */
+            ignored_until?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "admin";
         };
         /**
          * AgentCapabilities
@@ -31496,6 +31570,47 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DeploymentWarning */
+        DeploymentWarning: {
+            /** Id */
+            id: string;
+            /** Ignore */
+            ignore?: (components["schemas"]["AdminIgnore"] | components["schemas"]["EnvVarIgnore"]) | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+        };
+        /** DeploymentWarningIgnoreResponse */
+        DeploymentWarningIgnoreResponse: {
+            /** Id */
+            id: string;
+            ignore: components["schemas"]["AdminIgnore"] | null;
+        };
+        /** DeploymentWarningIgnoreUpdate */
+        DeploymentWarningIgnoreUpdate: {
+            /**
+             * Ignored
+             * @description True ignores the warning for every admin, false restores it.
+             */
+            ignored: boolean;
+            /**
+             * Snooze Seconds
+             * @description How long to ignore the warning, up to 30 days. Leave it out to ignore it forever.
+             */
+            snooze_seconds?: number | null;
+        };
+        /** DeploymentWarningsResponse */
+        DeploymentWarningsResponse: {
+            /**
+             * Ignore Available
+             * @description False when no database is connected, so warnings cannot be ignored.
+             */
+            ignore_available: boolean;
+            /** Warnings */
+            warnings: components["schemas"]["DeploymentWarning"][];
+        };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
             /**
@@ -31833,6 +31948,16 @@ export interface components {
             service_principal_id?: string | null;
             /** Tenant Id */
             tenant_id: string;
+        };
+        /** EnvVarIgnore */
+        EnvVarIgnore: {
+            /** Env Var */
+            env_var: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "env_var";
         };
         /** EnvironmentReport */
         EnvironmentReport: {
@@ -37068,6 +37193,10 @@ export interface components {
             dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
+            /** Id Jag Resource Client Id */
+            id_jag_resource_client_id?: string | null;
+            /** Id Jag Resource Client Secret */
+            id_jag_resource_client_secret?: string | null;
             /** Id Jag Resource Token Endpoint */
             id_jag_resource_token_endpoint?: string | null;
             /** Redirect Uris */
@@ -47439,6 +47568,8 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /** Gateway Base Url */
+            gateway_base_url?: string | null;
             /**
              * Hide Default Credentials Hint
              * @default false
@@ -47994,6 +48125,8 @@ export interface components {
             cooldown_time?: number | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Fallback On Unsupported Params */
+            fallback_on_unsupported_params?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
@@ -61042,6 +61175,61 @@ export interface operations {
             };
         };
     };
+    get_deployment_warnings_health_deployment_warnings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningsResponse"];
+                };
+            };
+        };
+    };
+    update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warning_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentWarningIgnoreUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningIgnoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_drain_health_drain_get: {
         parameters: {
             query?: never;
@@ -71554,6 +71742,22 @@ export interface operations {
                         content_type: string;
                     })[];
                     /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -80417,6 +80621,22 @@ export interface operations {
                          */
                         content_type: string;
                     })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
                     /**
                      * Model
                      * @description A decision model from the proxy model_list

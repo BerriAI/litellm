@@ -1710,6 +1710,12 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.laya.decisions.transformation import (
+        LayaDecisionsConfig as LayaDecisionsConfig,
+    )
+    from .llms.bespoke.decisions.transformation import (
+        BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )

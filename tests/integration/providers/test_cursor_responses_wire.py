@@ -399,7 +399,6 @@ def test_cursor_messages_body_uses_chat_completions_wire(
                         "message": {
                             "content": "Patch inspected.",
                             "role": "assistant",
-                            "provider_specific_fields": {"refusal": None},
                         },
                         "provider_specific_fields": {},
                     }

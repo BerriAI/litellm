@@ -686,6 +686,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -867,6 +884,23 @@
               ],
               "title": "Description"
             },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
+            },
             "updated_at": {
               "format": "date-time",
               "title": "Updated At",
@@ -995,6 +1029,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",
@@ -10600,6 +10651,49 @@
                       "title": "Audio",
                       "type": "array"
                     },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -11447,6 +11541,49 @@
                       "maxItems": 4,
                       "title": "Audio",
                       "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
@@ -33920,6 +34057,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -36680,6 +36839,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -40063,6 +40244,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -44103,6 +44306,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
