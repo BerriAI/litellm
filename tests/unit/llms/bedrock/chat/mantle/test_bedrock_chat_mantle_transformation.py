@@ -170,7 +170,7 @@ def _json_schema_stream_kwargs(model):
 
 
 def _wrapped_json_tool_stream(request):
-    wrapper = json.dumps({"tool_name": "json_tool_call", "parameters": RISK_ANSWER})
+    wrapper = json.dumps({"$FUNCTION_NAME": "json_tool_call", "PARAMETER_VALUE": RISK_ANSWER})
     events = (
         {
             "type": "message_start",
