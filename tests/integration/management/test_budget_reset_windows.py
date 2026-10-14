@@ -144,7 +144,7 @@ def months_later(moment: datetime, months: int) -> datetime:
 def monthly_window_in_another_span() -> MonthlyWindow:
     now: Final = datetime.fromtimestamp(math.floor(time.time()), tz=timezone.utc)
     candidates: Final = (
-        MonthlyWindow(months, now - timedelta(days=days_back)) for months, days_back in product((1, 2), range(1, 59))
+        MonthlyWindow(months, now - timedelta(days=days_back)) for months, days_back in product((1, 2, 3), range(1, 93))
     )
     return next(window for window in candidates if window.differs_from_a_window_opened_at(now) and window.open_at(now))
 
