@@ -5,10 +5,9 @@ import pytest
 from integration._support.responses_stream import (
     AZURE_TARGET,
     RATE_LIMIT_MESSAGE,
-    created,
-    frame,
     function_tools,
-    openai_error_event,
+    healthy_stream,
+    openai_error_stream,
     rate_limited_stream,
     serve,
 )
@@ -141,7 +140,7 @@ async def test_router_async_stream_in_stream_rate_limit_with_fallbacks_disabled_
 
 
 def _openai_error_stream(marker: str, code: str, message: str) -> tuple[bytes, ...]:
-    return (frame(created(f"resp_{marker}")), frame(openai_error_event(code, message)))
+    return openai_error_stream(f"resp_{marker}", code, message)
 
 
 def test_sync_completion_stream_openai_error_event_raises_the_provider_code_and_message() -> None:
@@ -176,3 +175,92 @@ async def test_router_async_stream_openai_error_event_rate_limit_surfaces_the_pr
             async for _ in response:
                 pass
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
+
+
+async def test_async_completion_stream_top_level_rate_limit_wraps_the_provider_exception_once() -> None:
+    marker: Final = uuid.uuid4().hex
+    stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
+    with wire_server(serve(stream, AZURE_TARGET)) as wire:
+        response: Final = await litellm.acompletion(
+            model=_MODEL,
+            messages=_messages(marker),
+            tools=_TOOLS,
+            stream=True,
+            num_retries=0,
+            api_base=wire.url,
+            api_key=_API_KEY,
+        )
+        with pytest.raises(MidStreamFallbackError) as raised:
+            async for _ in response:
+                pass
+        _assert_wraps_the_provider_exception_once(raised.value, wire, marker)
+
+
+def test_router_sync_stream_top_level_rate_limit_with_fallbacks_disabled_surfaces_the_provider_exception() -> None:
+    marker: Final = uuid.uuid4().hex
+    stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
+    with wire_server(serve(stream, AZURE_TARGET)) as wire:
+        response: Final = _router(wire).completion(
+            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
+        )
+        with pytest.raises(RateLimitError) as raised:
+            for _ in response:
+                pass
+        _assert_surfaces_the_provider_exception(raised.value, wire, marker)
+
+
+async def test_router_async_stream_top_level_rate_limit_falls_back_to_the_healthy_deployment() -> None:
+    marker: Final = uuid.uuid4().hex
+    limited: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
+    with (
+        wire_server(serve(limited, AZURE_TARGET)) as primary,
+        wire_server(serve(healthy_stream(f"resp_{marker}", "fallback answer"), AZURE_TARGET)) as spare,
+    ):
+        router: Final = Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": _MODEL, "api_base": wire.url, "api_key": _API_KEY}}
+                for name, wire in ((_GROUP, primary), ("bridged-spare", spare))
+            ],
+            num_retries=0,
+            disable_cooldowns=True,
+            fallbacks=[{_GROUP: ["bridged-spare"]}],
+        )
+        response: Final = await router.acompletion(model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True)
+        content: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk.choices])
+        assert content == "fallback answer", content
+        _assert_one_attempt(primary, marker)
+        _assert_one_attempt(spare, marker)
+
+
+def _provider_rate_limit(raised: Exception, message: str) -> None:
+    inner: Final = raised.original_exception if isinstance(raised, MidStreamFallbackError) else raised
+    assert type(inner) is RateLimitError, repr(inner)
+    assert getattr(raised, "status_code", None) == 429 and message in str(raised), str(raised)
+
+
+def test_sync_responses_stream_top_level_rate_limit_raises_the_provider_rate_limit() -> None:
+    marker: Final = uuid.uuid4().hex
+    stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
+    with wire_server(serve(stream, AZURE_TARGET)) as wire:
+        response: Final = litellm.responses(
+            model=_MODEL, input=marker, stream=True, api_base=wire.url, api_key=_API_KEY
+        )
+        with pytest.raises((MidStreamFallbackError, RateLimitError)) as raised:
+            for _ in response:
+                pass
+        _provider_rate_limit(raised.value, RATE_LIMIT_MESSAGE)
+        _assert_one_attempt(wire, marker)
+
+
+async def test_async_responses_stream_top_level_insufficient_quota_raises_a_rate_limit() -> None:
+    marker: Final = uuid.uuid4().hex
+    quota: Final = "You exceeded your current quota, please check your plan and billing details."
+    with wire_server(serve(_openai_error_stream(marker, "insufficient_quota", quota), AZURE_TARGET)) as wire:
+        response: Final = await litellm.aresponses(
+            model=_MODEL, input=marker, stream=True, api_base=wire.url, api_key=_API_KEY
+        )
+        with pytest.raises((MidStreamFallbackError, RateLimitError)) as raised:
+            async for _ in response:
+                pass
+        _provider_rate_limit(raised.value, quota)
+        _assert_one_attempt(wire, marker)
