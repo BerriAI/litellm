@@ -22,6 +22,7 @@ from integration._support.pdf_document import (
     pdf_bytes,
     pdf_data_url,
     pdf_document,
+    responses_input_file,
     rendered_tokens,
     text_document,
 )
@@ -76,6 +77,29 @@ def _local(gateway: Gateway, provider: SharedProvider, parts: Sequence[JsonValue
     assert response.status_code == 200, response.text
     assert provider.received() == ()
     return _int(_JSON_OBJECT.validate_json(response.content)["total_tokens"])
+
+
+def _responses_count(gateway: Gateway, model: str, pages: Sequence[Page]) -> int:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/responses/input_tokens",
+        {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        responses_input_file(pdf_data_url(pages)),
+                        {"type": "input_text", "text": _ASK},
+                    ],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload: Final = _JSON_OBJECT.validate_json(response.content)
+    assert payload["object"] == "response.input_tokens", response.text
+    return _int(payload["input_tokens"])
 
 
 def _cost(gateway: Gateway, parts: Sequence[JsonValue]) -> float:
@@ -233,11 +257,12 @@ def test_utils_token_counter_prices_a_chat_file_by_its_pages(gateway: Gateway, p
     assert text_page - one == text_part - one, (text_page, text_part, one)
 
 
-def test_utils_token_counter_prices_an_anthropic_document_by_its_pages(
-    gateway: Gateway, provider: SharedProvider
-) -> None:
-    one: Final = _local(gateway, provider, [pdf_document((LETTER,))])
-    three: Final = _local(gateway, provider, [pdf_document((LETTER,) * 3)])
+def test_responses_input_tokens_prices_an_input_file_by_its_pages(gateway: Gateway, provider: SharedProvider) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model="xai/grok-4.20", api_base=f"{provider.wire.url}/v1")
+        one: Final = _responses_count(gateway, model, (LETTER,))
+        three: Final = _responses_count(gateway, model, (LETTER,) * 3)
+        assert provider.received() == ()
     assert three - one == rendered_tokens((LETTER,) * 2), (three, one)
 
 

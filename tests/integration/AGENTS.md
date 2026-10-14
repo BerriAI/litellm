@@ -4,7 +4,8 @@ Real proxy, Postgres, Redis, scripted upstream. `README.md` has shards and CI wi
 
 ## What good looks like
 
-The root example is from here. The spend row lands async: poll, never sleep
+Poll async spend rows, never sleep. Assert request bodies at the upstream because proxy responses can hide leaks.
+`monkeypatch.setenv` is fine, but don't patch LiteLLM functions in integration tests
 
 ```python
 rows = eventually(
@@ -15,13 +16,10 @@ rows = eventually(
 assert float(rows[0]["spend"]) == pytest.approx(10 * 0.001 + 5 * 0.0001 + 7 * 0.002 + 4 * 0.002)
 ```
 
-`sleep(3)` fails on a slow runner and taxes every fast one. Assert the outbound body in the upstream
-handler. A leaked field is invisible from the response. `monkeypatch.setenv` is fine. Patching our own
-function in a full stack is not
-
 ## Where it goes
 
-By the domain a user would name: `pricing`, `spend`, `routing`, `mcp`. A file only needs to live in a
-directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no `covers` marker on new
-tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
-fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
+Group by user-facing domain: `pricing`, `spend`, `routing`, `mcp`. Put files in a `GROUPS` directory in
+`run.py`, with no manifest or `covers` marker. After the 2026-10-14 Responses `input_file` conversion
+dropped pricing coverage, preserve distinct route/request-shape coverage and check for duplicates. A product bug
+uses `pytest.skip("BUG: <symptom>")` at the top, never a test fix or deletion. Tests needing no network,
+proxy, DB, or Redis belong in `tests/unit`
