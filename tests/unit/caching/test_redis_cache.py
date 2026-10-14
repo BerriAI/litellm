@@ -3,7 +3,7 @@ import time
 import types
 from collections.abc import Iterator
 from datetime import timedelta
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1306,6 +1306,32 @@ async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
     assert breaker.is_open() is False, "a busy pool is a timeout gated on duration, not a dead Redis"
     assert await _run_under_circuit_breaker(breaker, "op", lambda: client.get("k")) is None
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cluster_pool_exhaustion_is_a_timeout_failure_not_hard_connectivity():
+    """The async cluster client has no blocking pool: a node whose max_connections are all busy raises
+    MaxConnectionsError at once. That is the cluster shape of a busy pool, so it must sit behind the
+    timeout duration gate like the standalone pool's wait timeout instead of opening the breaker."""
+    from redis import exceptions as redis_exceptions
+
+    max_connections_error = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # old stubs
+    )
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    async def pool_exhausted() -> None:
+        raise max_connections_error()
+
+    for _ in range(breaker.failure_threshold * 2):
+        with pytest.raises(max_connections_error):
+            await _run_under_circuit_breaker(breaker, "op", pool_exhausted)
+
+    assert breaker.is_open() is False, "an exhausted client-side pool is a timeout, not a dead Redis"
 
 
 def test_timeout_classification_follows_the_explicit_cause_chain_only():
