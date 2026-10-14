@@ -8060,6 +8060,7 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
 
+
 def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
     """Regression test for https://github.com/BerriAI/litellm/issues/46363
 
@@ -8090,9 +8091,7 @@ def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
 
     class MockDB:
         def __init__(self):
-            self.litellm_verificationtoken = MockTable(
-                [Row({"token": "key-1"}), Row({"token": "key-2"})]
-            )
+            self.litellm_verificationtoken = MockTable([Row({"token": "key-1"}), Row({"token": "key-2"})])
             self.litellm_teamtable = MockTable([Row({"team_id": "team-1"})])
 
     class MockPrismaClient:

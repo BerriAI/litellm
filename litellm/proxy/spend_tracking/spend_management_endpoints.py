@@ -312,17 +312,13 @@ async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
     for row in key_rows:
         token: Final[str | None] = row.model_dump().get("token")
         if token:
-            await _set_spend_counter_with_floor_and_broadcast(
-                counter_key=f"spend:key:{token}", value=0.0
-            )
+            await _set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:key:{token}", value=0.0)
 
     team_rows: Final = await _team_table(prisma_client).find_many(where={})
     for row in team_rows:
         team_id: Final[str | None] = row.model_dump().get("team_id")
         if team_id:
-            await _set_spend_counter_with_floor_and_broadcast(
-                counter_key=f"spend:team:{team_id}", value=0.0
-            )
+            await _set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:team:{team_id}", value=0.0)
 
 
 def _spend_logs_daily_summary_sql(
