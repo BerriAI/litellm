@@ -2387,13 +2387,18 @@ class LiteLLMCompletionResponsesConfig:
                     else _attribute_fields(provider_fields)
                 )
 
+        namespace: Final = getattr(tool_call_item, "namespace", None)
+        merged_provider_fields: Final = {
+            **(provider_specific_fields if isinstance(provider_specific_fields, dict) else {}),
+            **({"namespace": namespace} if isinstance(namespace, str) else {}),
+        }
         function_dict: Final[dict[str, object]] = {
             "name": item.name,
             "arguments": item.arguments,
         }
 
-        if provider_specific_fields:
-            function_dict["provider_specific_fields"] = provider_specific_fields
+        if merged_provider_fields:
+            function_dict["provider_specific_fields"] = merged_provider_fields
 
         tool_call_dict: Final[dict[str, object]] = {
             "id": LiteLLMCompletionResponsesConfig.tool_call_id_from_responses_item(
@@ -2405,8 +2410,8 @@ class LiteLLMCompletionResponsesConfig:
             "index": index,
         }
 
-        if provider_specific_fields:
-            tool_call_dict["provider_specific_fields"] = provider_specific_fields
+        if merged_provider_fields:
+            tool_call_dict["provider_specific_fields"] = merged_provider_fields
 
         return tool_call_dict
 

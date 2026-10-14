@@ -331,6 +331,103 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert choice.finish_reason is None
 
 
+def test_streamed_function_call_namespace_replays_on_next_turn():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    streamed = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call-ns",
+                "arguments": '{"city": "Paris"}',
+                "namespace": "get_weather",
+            },
+        }
+    )
+    tool_call = streamed.choices[0].delta.tool_calls[0].model_dump(exclude_none=True)
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ]
+    )
+
+    function_calls = [item for item in input_items if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
+def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    function_call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "get_weather",
+        "call_id": "call-ts",
+        "arguments": '{"city": "Paris"}',
+        "namespace": "get_weather",
+        "status": "completed",
+    }
+    tool_search_call = {
+        "type": "tool_search_call",
+        "id": "tsc_1",
+        "arguments": {"paths": ["get_weather"]},
+        "call_id": None,
+        "created_by": None,
+        "execution": "server",
+        "status": "completed",
+    }
+    tool_search_output = {
+        "type": "tool_search_output",
+        "id": "tso_1",
+        "call_id": None,
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+    reasoning = {"type": "reasoning", "id": "rs_1", "encrypted_content": "enc", "summary": []}
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks = [
+        iterator.chunk_parser({"type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "item": function_call}),
+        iterator.chunk_parser(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning, tool_search_call, tool_search_output, function_call],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+        ),
+    ]
+    user = {"role": "user", "content": "weather in Paris"}
+    message = litellm.stream_chunk_builder(chunks, messages=[user]).choices[0].message
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [user, message.model_dump(), {"role": "tool", "tool_call_id": "call-ts", "content": "sunny"}]
+    )
+
+    replayed = {item["type"]: item for item in input_items if isinstance(item, dict) and "type" in item}
+    assert replayed["reasoning"]["id"] == "rs_1"
+    assert replayed["tool_search_call"] == {key: value for key, value in tool_search_call.items() if value is not None}
+    assert replayed["function_call"]["namespace"] == "get_weather"
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock

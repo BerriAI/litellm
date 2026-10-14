@@ -2,7 +2,7 @@ import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
 
@@ -1324,6 +1324,13 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         setattr(usage, "cost", computed_cost)
 
 
+def _delta_reasoning_items(delta: object) -> Sequence[object]:
+    items: Final = (
+        delta.get("reasoning_items") if isinstance(delta, Mapping) else getattr(delta, "reasoning_items", None)
+    )
+    return items if isinstance(items, list) else ()
+
+
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
@@ -1503,6 +1510,14 @@ def stream_chunk_builder(
             response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
                 reasoning_chunks
             )
+
+        reasoning_items: Final = tuple(
+            chain.from_iterable(
+                _delta_reasoning_items(chunk["choices"][0]["delta"]) for chunk in chunks if chunk.get("choices")
+            )
+        )
+        if reasoning_items:
+            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 
         annotation_chunks: Final = [
             chunk

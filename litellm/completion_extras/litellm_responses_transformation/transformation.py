@@ -304,6 +304,50 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+_TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
+_TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
+
+
+def _tool_search_item(item: object) -> Mapping[str, object] | None:
+    raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
+    if not isinstance(raw, dict):
+        return None
+    fields: Final = cast(dict[str, object], raw)  # cast-ok: provider JSON item, keys forwarded verbatim
+    if fields.get("type") not in _TOOL_SEARCH_ITEM_TYPES:
+        return None
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _tool_search_items_from_output_items(output_items: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(item for item in (_tool_search_item(output_item) for output_item in output_items) if item is not None)
+
+
+def _tool_search_provider_fields(
+    items: Sequence[Mapping[str, object]],
+) -> dict[str, object] | None:  # mutable-ok: Message.provider_specific_fields is typed as a dict
+    return {_TOOL_SEARCH_ITEMS_KEY: [dict(item) for item in items]} if items else None
+
+
+def _tool_search_input_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
+    message_fields: Final = cast(Mapping[str, object], msg)  # cast-ok: message TypedDict union
+    provider_fields: Final[object] = message_fields.get("provider_specific_fields")
+    fields: Final = (
+        cast(Mapping[str, object], provider_fields)  # cast-ok: provider fields round-tripped from our own output
+        if isinstance(provider_fields, dict)
+        else {}
+    )
+    items: Final[object] = fields.get(_TOOL_SEARCH_ITEMS_KEY)
+    return (
+        _tool_search_items_from_output_items(cast(Sequence[object], items))  # cast-ok: entries re-validated per item
+        if isinstance(items, list)
+        else ()
+    )
+
+
+def _assistant_replay_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
+    return (*_reasoning_input_items(msg), *_tool_search_input_items(msg))
+
+
 def _as_chat_reasoning_items(
     reasoning_items: Sequence[_BuiltReasoningItem | ChatCompletionReasoningItem],
 ) -> list[ChatCompletionReasoningItem] | None:
@@ -346,6 +390,7 @@ def _fold_choices_into_one(
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
     trailing_reasoning_item: _BuiltReasoningItem | None,
+    tool_search_items: Sequence[Mapping[str, object]],
 ) -> "Choices":
     """Clients that only read choices[0] must still see every text and tool call."""
     from litellm.types.utils import Choices, Message
@@ -367,6 +412,7 @@ def _fold_choices_into_one(
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
+            provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         ),
         finish_reason="tool_calls" if tool_calls else "stop",
         index=0,
@@ -448,10 +494,25 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
         provider_specific_fields = vars(raw_provider_fields)
     else:
         provider_specific_fields = None
-    if provider_specific_fields:
-        tool_call_dict["provider_specific_fields"] = provider_specific_fields
-        function_chunk["provider_specific_fields"] = provider_specific_fields
+    namespace: Final = item.get("namespace")
+    merged_provider_fields: Final = {
+        **(provider_specific_fields or {}),
+        **({"namespace": namespace} if isinstance(namespace, str) else {}),
+    }
+    if merged_provider_fields:
+        tool_call_dict["provider_specific_fields"] = merged_provider_fields
+        function_chunk["provider_specific_fields"] = merged_provider_fields
     return tool_call_dict
+
+
+def _tool_call_namespace(tool_call: Mapping[str, object]) -> str | None:
+    function: Final = tool_call.get("function")
+    sources: Final = (
+        tool_call.get("provider_specific_fields"),
+        function.get("provider_specific_fields") if isinstance(function, dict) else None,
+    )
+    namespaces: Final = tuple(source.get("namespace") for source in sources if isinstance(source, dict))
+    return next((namespace for namespace in namespaces if isinstance(namespace, str)), None)
 
 
 def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFunctionParam | ToolChoiceCustomParam:
@@ -658,7 +719,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                input_items.extend(_reasoning_input_items(msg))
+                input_items.extend(_assistant_replay_items(msg))
                 if content:
                     input_items.append(
                         {
@@ -681,6 +742,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             input_tool_call["name"] = function["name"]
                         if "arguments" in function:
                             input_tool_call["arguments"] = function["arguments"]
+                        tool_call_fields: Final = cast(Mapping[str, object], tool_call)  # cast-ok: TypedDict union
+                        if (namespace := _tool_call_namespace(tool_call_fields)) is not None:
+                            input_tool_call["namespace"] = namespace
                         input_items.append(input_tool_call)
                     elif isinstance(custom, dict):
                         input_items.append(
@@ -695,7 +759,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    input_items.extend(_reasoning_input_items(msg))
+                    input_items.extend(_assistant_replay_items(msg))
                 input_items.append(
                     {
                         "type": "message",
@@ -706,7 +770,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant":
-                input_items.extend(_reasoning_input_items(msg))
+                input_items.extend(_assistant_replay_items(msg))
 
         return input_items, instructions
 
@@ -1032,6 +1096,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
                 trailing_reasoning_item=pending_reasoning_item,
+                tool_search_items=_tool_search_items_from_output_items(output_items),
             )
         ]
 
@@ -1711,14 +1776,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
-                tool_call_chunk: Final = ChatCompletionToolCallChunk(
+                tool_call_chunk: Final = _ChatToolCallDict(
                     id=converted["id"],
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,
+                    **({"provider_specific_fields": provider_specific_fields} if provider_specific_fields else {}),
                 )
-                if provider_specific_fields:
-                    tool_call_chunk.provider_specific_fields = provider_specific_fields
 
                 return ModelResponseStream(
                     choices=[
@@ -1869,6 +1933,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         delta=Delta(
                             content="",
                             reasoning_items=terminal_reasoning_items_typed,
+                            provider_specific_fields=_tool_search_provider_fields(
+                                _tool_search_items_from_output_items(output_items)
+                            ),
                         ),
                         finish_reason=finish_reason,
                     )
