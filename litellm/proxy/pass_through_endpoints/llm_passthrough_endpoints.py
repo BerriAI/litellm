@@ -1079,9 +1079,15 @@ def _guardrail_refusal_status(error: Exception) -> int | None:
             return None
 
 
+_BEDROCK_MODEL_OPERATION_PATH: Final = re.compile(rb"/model/[^/?]+/[^/?]+(?:$|\?)")
+
+
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
-    """Bedrock's own error response, for an error Bedrock answered with an AWS error type."""
+    """Bedrock's own error response, for an error a Bedrock model operation (``/model/<model>/<operation>``)
+    answered with an AWS error type."""
     if not isinstance(error, httpx.HTTPStatusError):
+        return None
+    if _BEDROCK_MODEL_OPERATION_PATH.search(error.request.url.raw_path) is None:
         return None
     upstream: Final = error.response
     if AWS_ERROR_TYPE_HEADER not in upstream.headers:

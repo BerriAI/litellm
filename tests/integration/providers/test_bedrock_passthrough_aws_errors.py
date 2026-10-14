@@ -35,6 +35,7 @@ POST_CALL: Final = "aws-errors-post-call"
 PRE_CALL: Final = "aws-errors-pre-call"
 BEDROCK: Final = "aws-errors-bedrock"
 VENDOR_DOWN: Final = "aws-errors-vendor-down"
+CATO: Final = "aws-errors-cato"
 UNGUARDED: Final = "unguarded"
 OVER_BUDGET: Final = "over-budget"
 ONE_RPM: Final = "one-rpm"
@@ -229,6 +230,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             )
         if request.target.startswith(f"/{VENDOR_DOWN}"):
             return Reply(status=500, body=b'{"detail":"vendor is down"}')
+        if request.target.startswith(f"/{CATO}/"):
+            return Reply(
+                status=THROTTLED.status, body=THROTTLED.body, headers={"x-amzn-errortype": THROTTLED.errortype}
+            )
         texts: Final = [str(text) for text in json.loads(request.body)["texts"]]
         if any(BLOCKED_WORD in text for text in texts):
             return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": BLOCK_REASON}).encode())
@@ -247,6 +252,16 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 _generic_guardrail(POST_CALL, "post_call", sink, streaming_buffer_until_moderated=True),
                 _generic_guardrail(PRE_CALL, "pre_call", sink),
                 _generic_guardrail(VENDOR_DOWN, "pre_call", sink),
+                {
+                    "guardrail_name": CATO,
+                    "litellm_params": {
+                        "guardrail": "cato_networks",
+                        "mode": "pre_call",
+                        "default_on": False,
+                        "api_base": f"{sink.url}/{CATO}",
+                        "api_key": "synthetic-cato-key",
+                    },
+                },
                 {
                     "guardrail_name": BEDROCK,
                     "litellm_params": {
@@ -291,7 +306,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                             ONE_RPM: scenario.key(rpm_limit=1),
                             **{
                                 name: scenario.key(guardrails=[name])
-                                for name in (POST_CALL, PRE_CALL, BEDROCK, VENDOR_DOWN)
+                                for name in (POST_CALL, PRE_CALL, BEDROCK, VENDOR_DOWN, CATO)
                             },
                         },
                     )
@@ -397,6 +412,13 @@ def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
     rig: Rig, guardrail: str, model: str, status: int
 ) -> None:
     assert_litellm_error(converse_with_key(rig, model, rig.keys[guardrail]), status)
+
+
+def test_guardrail_service_error_shaped_like_aws_keeps_the_litellm_error(rig: Rig) -> None:
+    response: Final = converse_with_key(rig, ROUTER_MODEL, rig.keys[CATO])
+    assert response.status_code == THROTTLED.status, response.text
+    assert "x-amzn-errortype" not in response.headers, dict(response.headers)
+    assert response.content != THROTTLED.body, response.text
 
 
 def test_unknown_key_keeps_the_litellm_error(rig: Rig) -> None:

@@ -1926,9 +1926,12 @@ _THROTTLE_BODY: Final = b'{"message":"Too many requests, please wait before tryi
 
 
 def _bedrock_status_error(
-    status_code: int, content: bytes, headers: Mapping[str, str] = MappingProxyType({})
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str] = MappingProxyType({}),
+    url: str = "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
 ) -> httpx.HTTPStatusError:
-    request: Final = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse")
+    request: Final = httpx.Request("POST", url)
     response: Final = httpx.Response(status_code, headers=dict(headers), content=content, request=request)
     return httpx.HTTPStatusError("bedrock error", request=request, response=response)
 
@@ -1988,16 +1991,54 @@ class TestBedrockPassthroughAwsErrors:
         assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
 
     @pytest.mark.asyncio
-    async def test_upstream_error_without_an_aws_error_type_keeps_the_litellm_error(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_arn_model_error_reaches_the_caller_as_bedrock_sent_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = _bedrock_status_error(
+            429,
+            _THROTTLE_BODY,
+            {"x-amzn-errortype": _THROTTLE_TYPE},
+            url="https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+            "arn%3Aaws%3Abedrock%3Aus-east-1%3A123%3Aapplication-inference-profile%2Fabc123/converse-stream?trace=a/b",
+        )
+
+        response: Final = await self._answer(error)
+
+        assert (response.status_code, response.body) == (429, _THROTTLE_BODY)
+        assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "status_code", "body"),
+        (
+            pytest.param(
+                _bedrock_status_error(502, b"<html>bad gateway</html>"),
+                502,
+                "<html>bad gateway</html>",
+                id="bedrock-without-error-type",
+            ),
+            pytest.param(
+                _bedrock_status_error(
+                    429,
+                    _THROTTLE_BODY,
+                    {"x-amzn-errortype": _THROTTLE_TYPE},
+                    url="https://guardrail.example/api/model/scan",
+                ),
+                429,
+                _THROTTLE_BODY.decode(),
+                id="guardrail-service-with-error-type",
+            ),
+        ),
+    )
+    async def test_upstream_error_not_from_a_bedrock_model_operation_keeps_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: httpx.HTTPStatusError, status_code: int, body: str
     ) -> None:
         monkeypatch.setattr(litellm, "callbacks", [])
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._answer(_bedrock_status_error(502, b"<html>bad gateway</html>"))
+            await self._answer(error)
 
-        assert exc_info.value.status_code == 502
-        assert exc_info.value.detail == {"error": "<html>bad gateway</html>"}
+        assert exc_info.value.status_code == status_code
+        assert exc_info.value.detail == {"error": body}
         assert "x-amzn-errortype" not in (exc_info.value.headers or {})
 
     @pytest.mark.asyncio
