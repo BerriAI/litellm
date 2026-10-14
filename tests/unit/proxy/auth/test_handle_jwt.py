@@ -295,6 +295,49 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
     assert "allowed_passthrough_routes" in exc_info.value.detail
 
 
+
+class _TeamClaims(set[str]):
+    def __init__(self, claim_order: tuple[str, ...]):
+        super().__init__(claim_order)
+        self.claim_order = claim_order
+
+    def __iter__(self):
+        return iter(self.claim_order)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claim_order", [("team-a", "team-b"), ("team-b", "team-a")])
+async def test_a_jwt_in_two_teams_resolves_the_same_team_in_any_claim_order(claim_order: tuple[str, ...]):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    teams = {team_id: LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"], metadata={}) for team_id in claim_order}
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=lambda team_id, **_: teams[team_id],
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids=_TeamClaims(claim_order),
+            requested_model="gpt-4",
+            route="/v1/rag/query",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "team-a"
+    assert team_obj == teams["team-a"]
+
 _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
     "test-uuid-1:subpath:/model-host/v1/extractor:GET,POST": {
         "endpoint_id": "test-uuid-1",

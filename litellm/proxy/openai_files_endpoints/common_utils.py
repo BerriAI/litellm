@@ -486,13 +486,21 @@ def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[
     )
 
 
+_CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
 _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 
 
-def _creation_time(created_at: object) -> datetime:
+def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
+    if model_info.get("db_model") is not True:
+        return _CONFIG_FILE_RANK, ""
+    created_at: Final = model_info.get("created_at")
     if not isinstance(created_at, datetime):
-        return _UNKNOWN_CREATION_TIME
-    return created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        return _UNKNOWN_CREATION_TIME, deployment_id
+    return (created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)), deployment_id
+
+
+def _by_team_deployment_rank(order: tuple[tuple[datetime, str], str]) -> tuple[datetime, str]:
+    return order[0]
 
 
 def get_team_provider_credentials(
@@ -569,7 +577,7 @@ def get_team_provider_credentials(
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    def _usable_team_deployment_order(deployment: dict) -> tuple[datetime, str] | None:
+    def _usable_team_deployment_order(deployment: dict) -> tuple[tuple[datetime, str], str] | None:
         model_info: Final[Mapping[str, object]] = deployment["model_info"]
         if model_info.get("team_id") != team_id:
             return None
@@ -578,16 +586,20 @@ def get_team_provider_credentials(
         deployment_id: Final = model_info.get("id")
         if not isinstance(deployment_id, str):
             return None
-        return _creation_time(model_info.get("created_at")), deployment_id
+        return _team_deployment_rank(model_info, deployment_id), deployment_id
 
-    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. The oldest one
-    #    wins, then the lowest id, so adding a deployment never moves the team off the one it
-    #    already uses, and every worker picks the same one in any load or edit order.
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. Config file
+    #    deployments win, kept in file order by the stable sort, then DB ones oldest first, then
+    #    by lowest id, so adding a deployment never moves the team off the one it already uses,
+    #    and every worker picks the same one in any DB load or edit order.
     if team_id is not None:
         team_deployment_orders: Final = sorted(
-            order
-            for deployment in llm_router.model_list or []
-            if (order := _usable_team_deployment_order(deployment)) is not None
+            (
+                order
+                for deployment in llm_router.model_list or []
+                if (order := _usable_team_deployment_order(deployment)) is not None
+            ),
+            key=_by_team_deployment_rank,
         )
         team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
         team_credentials: Final = next(

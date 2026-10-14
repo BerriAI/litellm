@@ -715,11 +715,13 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
     assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
 
 
-def _team_openai_deployment(deployment_id: str, api_key: str, created_at: datetime | None = None) -> dict[str, object]:
+def _team_openai_deployment(
+    deployment_id: str, api_key: str, created_at: datetime | None = None, db_model: bool = True
+) -> dict[str, object]:
     return {
         "model_name": f"team-gpt-{deployment_id}",
         "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
-        "model_info": {"id": deployment_id, "team_id": "team-a"}
+        "model_info": {"id": deployment_id, "team_id": "team-a", "db_model": db_model}
         | ({} if created_at is None else {"created_at": created_at}),
     }
 
@@ -758,3 +760,22 @@ def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_i
 
     assert credentials is not None
     assert credentials["api_key"] == "older-key"
+
+
+def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
+    db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
+    config_deployments: Final = tuple(
+        _team_openai_deployment(deployment_id, f"{deployment_id}-key", db_model=False)
+        for deployment_id in ("deployment-z", "deployment-b")
+    )
+    router: Final = Router(model_list=[db_deployment, *config_deployments])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-z-key"
