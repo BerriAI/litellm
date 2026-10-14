@@ -26135,7 +26135,7 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
-class _PrimingStream:
+class _FirstPullStream:
     """A stream whose first pull yields `first`, raises it, or ends (first=None)."""
 
     def __init__(self, first: object) -> None:
@@ -26155,9 +26155,9 @@ class _PrimingStream:
         return self._pull(StopAsyncIteration)
 
 
-def _priming_cases():
+def _first_chunk_cases():
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import _PrimedStream
+    from litellm.router import _FirstChunk
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
     chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="hi"))])
@@ -26170,61 +26170,61 @@ def _priming_cases():
         is_pre_first_chunk=True,
     )
     return [
-        pytest.param(chunk, _PrimedStream(first_chunk=chunk), None, id="first-chunk"),
-        pytest.param(None, _PrimedStream(first_chunk=None), None, id="empty-stream"),
+        pytest.param(chunk, _FirstChunk(chunk=chunk), None, id="first-chunk"),
+        pytest.param(None, _FirstChunk(chunk=None), None, id="empty-stream"),
         pytest.param(wrapped, None, provider_error, id="pre-content-failure"),
     ]
 
 
-@pytest.mark.parametrize("first, expected, raised", _priming_cases())
-def test_prime_stream_direct_call(first, expected, raised):
-    from litellm.router import _prime_stream
+@pytest.mark.parametrize("first, expected, raised", _first_chunk_cases())
+def test_read_first_chunk_direct_call(first, expected, raised):
+    from litellm.router import _read_first_chunk
 
     if raised is None:
-        assert _prime_stream(_PrimingStream(first)) == expected
+        assert _read_first_chunk(_FirstPullStream(first)) == expected
         return
     with pytest.raises(type(raised)) as caught:
-        _prime_stream(_PrimingStream(first))
+        _read_first_chunk(_FirstPullStream(first))
     assert caught.value is raised
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("first, expected, raised", _priming_cases())
-async def test_aprime_stream_direct_call(first, expected, raised):
-    from litellm.router import _aprime_stream
+@pytest.mark.parametrize("first, expected, raised", _first_chunk_cases())
+async def test_aread_first_chunk_direct_call(first, expected, raised):
+    from litellm.router import _aread_first_chunk
 
     if raised is None:
-        assert await _aprime_stream(_PrimingStream(first)) == expected
+        assert await _aread_first_chunk(_FirstPullStream(first)) == expected
         return
     with pytest.raises(type(raised)) as caught:
-        await _aprime_stream(_PrimingStream(first))
+        await _aread_first_chunk(_FirstPullStream(first))
     assert caught.value is raised
 
 
-def _primed_items_cases():
-    from litellm.router import _PrimedStream
+def _chunks_with_first_cases():
+    from litellm.router import _FirstChunk
 
     return [
-        pytest.param(None, ["a", "b"], ["a", "b"], id="unprimed-stream-as-is"),
-        pytest.param(_PrimedStream(first_chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
-        pytest.param(_PrimedStream(first_chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
+        pytest.param(None, ["a", "b"], ["a", "b"], id="nothing-read-stream-as-is"),
+        pytest.param(_FirstChunk(chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
+        pytest.param(_FirstChunk(chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
     ]
 
 
-@pytest.mark.parametrize("primed, rest, expected", _primed_items_cases())
-def test_primed_items_direct_call(primed, rest, expected):
-    from litellm.router import _primed_items
+@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
+def test_chunks_with_first_direct_call(taken, rest, expected):
+    from litellm.router import _chunks_with_first
 
-    assert list(_primed_items(iter(rest), primed)) == expected
+    assert list(_chunks_with_first(iter(rest), taken)) == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("primed, rest, expected", _primed_items_cases())
-async def test_aprimed_items_direct_call(primed, rest, expected):
-    from litellm.router import _aprimed_items
+@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
+async def test_achunks_with_first_direct_call(taken, rest, expected):
+    from litellm.router import _achunks_with_first
 
     async def stream():
         for item in rest:
             yield item
 
-    assert [item async for item in _aprimed_items(stream(), primed)] == expected
+    assert [item async for item in _achunks_with_first(stream(), taken)] == expected

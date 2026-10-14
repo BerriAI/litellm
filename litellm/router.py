@@ -693,13 +693,13 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
 
 
 @dataclass(frozen=True, slots=True)
-class _PrimedStream:
-    """The first chunk Router._acompletion / _completion already read; None means the provider closed the stream empty."""
+class _FirstChunk:
+    """The chunk Router._acompletion / _completion already read off a stream; None means the provider closed it empty."""
 
-    first_chunk: "ModelResponseStream | None"
+    chunk: "ModelResponseStream | None"
 
 
-async def _aprime_stream(stream: CustomStreamWrapper) -> _PrimedStream:
+async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
     """
     Read the first chunk while Router._acompletion still holds the request, so a
     stream that fails before any token raises there, inside async_function_with_retries
@@ -708,45 +708,47 @@ async def _aprime_stream(stream: CustomStreamWrapper) -> _PrimedStream:
     from litellm.exceptions import MidStreamFallbackError
 
     try:
-        return _PrimedStream(first_chunk=await stream.__anext__())
+        return _FirstChunk(chunk=await stream.__anext__())
     except StopAsyncIteration:
-        return _PrimedStream(first_chunk=None)
+        return _FirstChunk(chunk=None)
     except MidStreamFallbackError as e:
         raise _mid_stream_retry_trigger(e) from e
 
 
-def _prime_stream(stream: CustomStreamWrapper) -> _PrimedStream:
-    """Sync twin of _aprime_stream for Router._completion."""
+def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+    """Sync twin of _aread_first_chunk for Router._completion."""
     from litellm.exceptions import MidStreamFallbackError
 
     try:
-        return _PrimedStream(first_chunk=next(stream))
+        return _FirstChunk(chunk=next(stream))
     except StopIteration:
-        return _PrimedStream(first_chunk=None)
+        return _FirstChunk(chunk=None)
     except MidStreamFallbackError as e:
         raise _mid_stream_retry_trigger(e) from e
 
 
-def _primed_items(model_response: Iterable[object], primed: _PrimedStream | None) -> Iterator[object]:
-    """The stream's items with the chunk _prime_stream already read put back in front (no primed: the stream as is)."""
-    if primed is None:
+def _chunks_with_first(model_response: Iterable[object], taken: _FirstChunk | None) -> Iterator[object]:
+    """The stream with the chunk _read_first_chunk already read put back in front (None: the stream as is)."""
+    if taken is None:
         yield from model_response
         return
-    if primed.first_chunk is None:
+    if taken.chunk is None:
         return
-    yield primed.first_chunk
+    yield taken.chunk
     yield from model_response
 
 
-async def _aprimed_items(model_response: AsyncIterable[object], primed: _PrimedStream | None) -> AsyncIterator[object]:
-    """Async twin of _primed_items for _aprime_stream."""
-    if primed is None:
+async def _achunks_with_first(
+    model_response: AsyncIterable[object], taken: _FirstChunk | None
+) -> AsyncIterator[object]:
+    """Async twin of _chunks_with_first."""
+    if taken is None:
         async for item in model_response:
             yield item
         return
-    if primed.first_chunk is None:
+    if taken.chunk is None:
         return
-    yield primed.first_chunk
+    yield taken.chunk
     async for item in model_response:
         yield item
 
@@ -2851,7 +2853,7 @@ class Router:
                     model_response=response,
                     messages=messages,
                     initial_kwargs=input_kwargs_for_streaming_fallback,
-                    primed=_prime_stream(response),
+                    first_chunk=_read_first_chunk(response),
                 )
 
             return response
@@ -3111,7 +3113,7 @@ class Router:
         messages: list[dict[str, str]],
         initial_kwargs: dict,
         deployment_slot: contextlib.AsyncExitStack | None = None,
-        primed: _PrimedStream | None = None,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
@@ -3121,7 +3123,7 @@ class Router:
         `deployment_slot` holds the deployment's max_parallel_requests semaphore; it is
         released when the stream is exhausted, closed, or falls back to another deployment
 
-        `primed` carries the first chunk _acompletion already read (None: iterate from the start)
+        `first_chunk` carries the chunk _acompletion already read (None: iterate from the start)
         """
         from litellm.exceptions import MidStreamFallbackError
 
@@ -3166,7 +3168,7 @@ class Router:
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
             try:
-                async for item in _aprimed_items(model_response, primed):
+                async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 with anyio.CancelScope(shield=True):
@@ -3741,7 +3743,7 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
         initial_kwargs: dict,
-        primed: _PrimedStream | None = None,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Sync equivalent of _acompletion_streaming_iterator.
@@ -3777,7 +3779,7 @@ class Router:
         def stream_with_fallbacks():
             fallback_response = None
             try:
-                for item in _primed_items(model_response, primed):
+                for item in _chunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 if fallbacks_disabled_for_request(initial_kwargs) or (
@@ -4024,7 +4026,9 @@ class Router:
                     and response.make_call is not None
                 ):
                     await response.fetch_stream()
-                primed: Final = await _aprime_stream(response) if isinstance(response, CustomStreamWrapper) else None
+                first_chunk: Final = (
+                    await _aread_first_chunk(response) if isinstance(response, CustomStreamWrapper) else None
+                )
 
                 self.success_calls[model_name] += 1
                 verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4041,7 +4045,7 @@ class Router:
                         messages=messages,
                         initial_kwargs=input_kwargs_for_streaming_fallback,
                         deployment_slot=deployment_slot.pop_all(),
-                        primed=primed,
+                        first_chunk=first_chunk,
                     )
 
                 return response
