@@ -12,7 +12,7 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
         contents: object,
         system_instruction: Mapping[str, object] | None,
         tools: Sequence[Mapping[str, object]] | None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         return {
             "contents": contents,
             **({"systemInstruction": dict(system_instruction)} if system_instruction else {}),

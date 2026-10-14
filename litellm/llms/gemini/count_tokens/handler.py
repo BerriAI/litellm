@@ -77,7 +77,7 @@ class GoogleAIStudioTokenCounter:
         contents: object,
         system_instruction: Mapping[str, object] | None,
         tools: Sequence[Mapping[str, object]] | None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         if system_instruction is None and not tools:
             return {"contents": contents}
 
@@ -179,7 +179,7 @@ class GoogleAIStudioTokenCounter:
         )
 
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
+            response: Final = await async_httpx_client.post(url=url, headers=headers, json=dict(request_body))
 
             # Check for HTTP errors
             response.raise_for_status()
