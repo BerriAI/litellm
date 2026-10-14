@@ -18,7 +18,7 @@ use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
 use crate::hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
-use crate::{InvokeError, PythonBinding, missing_state};
+use crate::{Error, InvokeError, PythonBinding};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
@@ -158,9 +158,7 @@ where
         ExecutionStep::Open(head) => Execution::suspended(driver, options.lifecycle)
             .into_sync_stream(py, head)
             .map(Bound::unbind),
-        ExecutionStep::Await(_) | ExecutionStep::Yield(_) => {
-            Err(PyRuntimeError::new_err("sync call suspended"))
-        }
+        ExecutionStep::Await(_) | ExecutionStep::Yield(_) => Err(Error::SyncCallSuspended.into()),
     }
 }
 
@@ -254,7 +252,7 @@ where
                     Err(error) => self.hook_failed(py, error),
                 }
             }
-            _ => Err(missing_state()),
+            _ => Err(Error::MissingState.into()),
         }
     }
 
@@ -281,8 +279,8 @@ where
                         return self.failure(py, error, FailureOrigin::Call);
                     }
                 };
-                let start = self.start.take().ok_or_else(missing_state)?;
-                let arguments = self.arguments.as_ref().ok_or_else(missing_state)?;
+                let start = self.start.take().ok_or(Error::MissingState)?;
+                let arguments = self.arguments.as_ref().ok_or(Error::MissingState)?;
                 let machine = match start(py, arguments.bind(py), request) {
                     Ok(machine) => machine,
                     Err(error) => return self.failure(py, error, FailureOrigin::Host),
@@ -357,7 +355,7 @@ where
                         Stage::Failed(error) => {
                             Err(PyErr::from_value(error.bind(py).clone().into_any()))
                         }
-                        _ => Err(missing_state()),
+                        _ => Err(Error::MissingState.into()),
                     }
                 }
             },
@@ -365,7 +363,7 @@ where
     }
 
     fn begin(&mut self, py: Python<'_>) -> PyResult<ExecutionStep> {
-        let arguments = self.arguments.take().ok_or_else(missing_state)?;
+        let arguments = self.arguments.take().ok_or(Error::MissingState)?;
         match self.hooks.prepare_arguments(py, arguments, self.started_at) {
             Ok(step) => self.on_arguments(py, step),
             Err(error) => self.hook_failed(py, error),
