@@ -53,10 +53,10 @@ async def test_success_hook_fires_the_expected_number_of_times(
     recorder: Final = HookRecorder()
 
     with rebound(litellm, "callbacks", [recorder]):
-        await call(server)
+        response: Final = await call(server)
         await recorder.wait_for_async("async_log_success_event")
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert recorder.names.count(hook) == expected
 
 
@@ -104,9 +104,9 @@ async def test_failure_events_carry_the_error_raised_to_the_caller(server: Recor
 async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    await call(server, callbacks=[recorder])
+    response: Final = await call(server, callbacks=[recorder])
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
     assert isinstance(pre_call, dict)
     assert request_body(pre_call) == server.requests[0].body
@@ -118,9 +118,9 @@ async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) ->
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
             request_body(kwargs)["temperature"] = 0.25
 
-    await call(server, callbacks=[Edit()])
+    response: Final = await call(server, callbacks=[Edit()])
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert isinstance(server.requests[0].body, dict)
     assert server.requests[0].body["temperature"] == 0.25
 
@@ -185,9 +185,9 @@ async def test_pre_call_deployment_hooks_compose_the_wire_request_in_registratio
             }
 
     with rebound(litellm, "callbacks", [Rewrite("first"), Rewrite("-second")]):
-        await call(server, extra_headers={"x-deployment-hook": "caller-", "x-kept": "unchanged"})
+        response: Final = await call(server, extra_headers={"x-deployment-hook": "caller-", "x-kept": "unchanged"})
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert server.requests[0].headers["x-deployment-hook"] == "caller-first-second"
     assert server.requests[0].headers["x-kept"] == "unchanged"
 
@@ -226,14 +226,14 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
             return {name: value for name, value in kwargs.items() if name not in ("system", "extra_headers")}
 
     with rebound(litellm, "callbacks", [DropKeywords()]):
-        await call(
+        response: Final = await call(
             server,
             system="remove this instruction",
             extra_headers={"x-deleted": "remove this header"},
             headers={"x-kept": "keep this header"},
         )
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     sent: Final = server.requests[0]
     assert isinstance(sent.body, dict)
     assert "system" not in sent.body
@@ -255,7 +255,7 @@ async def test_post_call_success_deployment_hook_replaces_the_response(server: R
         response: Final = await call(server)
         success: Final = await recorder.wait_for_async("async_log_success_event")
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert response_id(response) == "replaced"
     assert len(success) == 1
     assert isinstance(success[0].response, ModelResponse)
@@ -304,7 +304,7 @@ async def test_concurrent_calls_keep_callback_context_metadata_and_responses_iso
         responses: Final = await asyncio.gather(invoke("first"), invoke("second"))
         success: Final = await recorder.wait_for_async("async_log_success_event", count=2)
 
-    assert_served_natively(server, count=2)
+    assert_served_natively(server, *responses)
     expected: Final = {"first": responses[0], "second": responses[1]}
     pre_call: Final = recorder.wait_for("log_pre_api_call", count=2)
     assert len(pre_call) == len(success) == 2
@@ -330,7 +330,7 @@ async def test_a_failing_logger_does_not_fail_the_call(server: RecordingServer) 
 
     response: Final = await call(server, callbacks=[Broken()])
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert response_id(response) == MESSAGES_RESPONSE["id"]
 
 
@@ -424,6 +424,6 @@ async def test_sync_call_returns_the_provider_message(server: RecordingServer) -
 
     response: Final = await call(server, asynchronous=False, callbacks=[recorder])
 
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert response_id(response) == MESSAGES_RESPONSE["id"]
     assert len(await recorder.wait_for_async("log_success_event")) == 1

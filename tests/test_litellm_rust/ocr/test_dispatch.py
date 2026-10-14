@@ -23,7 +23,7 @@ def test_public_ocr_uses_native_route_independently_of_flag(server: RecordingSer
 
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "native OCR response"
-    assert_served_natively(server)
+    assert_served_natively(server, response)
 
 
 @pytest.mark.asyncio

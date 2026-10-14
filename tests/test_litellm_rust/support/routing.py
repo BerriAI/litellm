@@ -9,6 +9,9 @@ from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.served import assert_served_natively
+
+__all__ = ["CALL_ID", "assert_served_natively", "call_natively", "native_route"]
 
 CALL_ID: Final = "callback-contract"
 
@@ -43,6 +46,3 @@ async def call_natively(
         return await asyncio.to_thread(create, **arguments)
 
 
-def assert_served_natively(server: RecordingServer, count: int = 1) -> None:
-    assert len(server.requests) == count
-    assert not any(request.headers.get("user-agent", "").startswith("python-httpx") for request in server.requests)

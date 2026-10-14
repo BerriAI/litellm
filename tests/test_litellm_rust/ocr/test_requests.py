@@ -44,7 +44,7 @@ async def test_ocr_contract_native_format_supported(
     assert response.get_provider_native_response() == payload
     assert len(server.requests) == 1
     if ocr_backend:
-        assert_served_natively(server)
+        assert_served_natively(server, response)
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_native_azure_ocr_uses_token_provider_result_as_bearer_token(
 
     assert calls == ["token"]
     assert response.pages[0].markdown == "native OCR response"
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert server.requests[0].headers["authorization"] == "Bearer callback-token"
 
 
@@ -100,7 +100,7 @@ def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(server
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert_served_natively(server)
+    assert_served_natively(server, response)
     assert server.requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
