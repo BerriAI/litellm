@@ -805,6 +805,7 @@ _FABRICATED_UNMANAGED_ID = "resp_fabricatedunmanagedidbbbbbbbbbbbbbbbb"
 _UNIT_TEST_SALT_KEY = "lit6837-unit-test-salt-key"
 _ADDRESSED_ID_FIELD_BY_CALL_TYPE = {
     "aresponses": "previous_response_id",
+    "acompact_responses": "previous_response_id",
     "aget_responses": "response_id",
     "adelete_responses": "response_id",
     "acancel_responses": "response_id",
@@ -864,6 +865,52 @@ class TestUnrecognizedResponseIdIsRejected:
         assert exc_info.value.status_code == 403
         assert "allow_unmanaged_response_ids" in exc_info.value.detail
         assert data[field] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_owner_gets_the_provider_id_on_every_route(self, mock_cache, salt_key_env, call_type):
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        hook = _hook()
+        owner = _auth()
+        data = {field: _issue_managed_id(hook, owner)}
+
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=mock_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+        assert result[field] == _FABRICATED_PROVIDER_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    @pytest.mark.parametrize(
+        ("caller_user_id", "caller_team_id", "detail"),
+        [
+            ("stranger-user", "owner-team", "not associated with the user"),
+            ("owner-user", "stranger-team", "not associated with the team"),
+        ],
+    )
+    async def test_other_user_or_team_is_rejected_on_every_route(
+        self, mock_cache, salt_key_env, call_type, caller_user_id, caller_team_id, detail
+    ):
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, _auth())
+        data = {field: issued_id}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await hook.async_pre_call_hook(
+                user_api_key_dict=_auth(user_id=caller_user_id, team_id=caller_team_id),
+                cache=mock_cache,
+                data=data,
+                call_type=call_type,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert detail in exc_info.value.detail
+        assert data[field] == issued_id
 
     @pytest.mark.asyncio
     async def test_owner_can_still_address_the_id_the_proxy_issued_it(self, mock_cache, salt_key_env):
