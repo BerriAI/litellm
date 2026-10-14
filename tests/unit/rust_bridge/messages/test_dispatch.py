@@ -86,12 +86,22 @@ async def test_messages_serves_each_call_from_the_expected_backend(
     assert_served_by(server, response, python=python)
 
 
+CONTAINER: Final = "container_positional"
+
+
 @pytest.mark.asyncio
-async def test_handler_with_the_is_async_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
-    pending: Final = ANTHROPIC_MESSAGES_HANDLER.run((), upstream(server, **call(CLAUDE), is_async=True), rules=RUST)
+async def test_handler_with_the_is_async_flag_binds_positional_arguments_by_the_sync_signature(
+    server: RecordingServer,
+) -> None:
+    positional: Final = (16, list(MESSAGES), CLAUDE, *(None,) * 10, CONTAINER)
+
+    pending: Final = ANTHROPIC_MESSAGES_HANDLER.run(positional, upstream(server, is_async=True), rules=RUST)
 
     assert asyncio.iscoroutine(pending)
     assert_served_by(server, await pending, python=False)
+    body: Final = server.requests[0].body
+    assert isinstance(body, dict)
+    assert body["container"] == CONTAINER
 
 
 @pytest.mark.asyncio

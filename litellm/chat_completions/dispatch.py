@@ -82,7 +82,7 @@ COMPLETION: Final = PublicRoute(
     context=_context,
     binding=NATIVE_COMPLETION,
     python=_PYTHON_COMPLETION,
-    asynchronous=AsyncVariant("acompletion", ACOMPLETION),
+    asynchronous=AsyncVariant("acompletion", NATIVE_ACOMPLETION),
 )
 
 

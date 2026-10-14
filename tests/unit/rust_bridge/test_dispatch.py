@@ -1,6 +1,6 @@
 import asyncio
 import dataclasses
-from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -12,7 +12,7 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
-from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
+from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementation, NoPythonImplementationError
 
 NativeT: Final = TypeVar("NativeT")
 
@@ -322,60 +322,108 @@ async def test_async_public_route_returns_the_backend_result_untouched(
 
 
 ASYNC_FLAG: Final = "is_async"
+FLAGGED: Final[Mapping[str, object]] = MappingProxyType({**KWARGS, ASYNC_FLAG: True})
 
 
-def sync_python_must_not_run(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
-    pytest.fail("a call carrying the async flag must not run the sync implementation")
-
-
-def flagged_route() -> PublicRoute[Request, object, object, object]:
-    async def native(request: Request) -> ServedByRust:
-        return ServedByRust(request)
-
-    async def python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
-        return ServedByPython(args, kwargs)
-
-    asynchronous: Final[AsyncPublicRoute[Request, object, object]] = AsyncPublicRoute(
-        route=ROUTE,
-        request=lambda args, kwargs: ANTHROPIC,
-        context=context,
-        binding=binding(Case(rules=()), native),
-        python=python,
-    )
-    return PublicRoute(
-        route=ROUTE,
-        request=lambda args, kwargs: ANTHROPIC,
-        context=context,
-        binding=binding(Case(rules=()), lambda _: pytest.fail("a flagged call must not use the sync binding")),
-        python=sync_python_must_not_run,
-        asynchronous=AsyncVariant(ASYNC_FLAG, asynchronous),
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("rules", "expected"),
-    (
-        pytest.param((), PYTHON, id="python"),
-        pytest.param((rule(Rollout.RUST_REQUIRED),), ServedByRust(ANTHROPIC), id="rust"),
-    ),
-)
-async def test_sync_call_with_the_async_flag_returns_the_async_route_coroutine_without_the_flag(
-    rules: Rules, expected: ServedByPython | ServedByRust
-) -> None:
-    pending: Final = flagged_route().run(ARGS, {**KWARGS, ASYNC_FLAG: True}, rules=rules)
-
-    assert asyncio.iscoroutine(pending)
-    assert await pending == expected
+@dataclass(frozen=True, slots=True)
+class FlaggedCase:
+    rules: Rules
+    native_available: bool = True
+    has_python: bool = True
+    legacy_returns_coroutine: bool = True
 
 
 def served_by_python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
     return ServedByPython(args, kwargs)
 
 
+async def deferred_python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
+    return ServedByPython(args, kwargs)
+
+
+def legacy_python(
+    case: FlaggedCase,
+) -> Callable[..., ServedByPython | Coroutine[object, object, ServedByPython]] | NoPythonImplementation:
+    if not case.has_python:
+        return NO_PYTHON
+    return deferred_python if case.legacy_returns_coroutine else served_by_python
+
+
+def flagged_route(case: FlaggedCase, projector: Projector) -> PublicRoute[Request, object, ServedByPython, object]:
+    async def native(request: Request) -> ServedByRust:
+        return ServedByRust(request)
+
+    return PublicRoute(
+        route=ROUTE,
+        request=projector,
+        context=context,
+        binding=binding(Case(rules=()), lambda _: pytest.fail("a flagged call must not use the sync binding")),
+        python=legacy_python(case),
+        asynchronous=AsyncVariant(ASYNC_FLAG, binding(Case(rules=(), native_available=case.native_available), native)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    (
+        pytest.param(FlaggedCase(rules=(rule(Rollout.RUST_REQUIRED),)), ServedByRust(ANTHROPIC), id="rust"),
+        pytest.param(
+            FlaggedCase(rules=(rule(Rollout.RUST_REQUIRED),), has_python=False),
+            ServedByRust(ANTHROPIC),
+            id="no-python-rust",
+        ),
+        pytest.param(
+            FlaggedCase(rules=(rule(Rollout.RUST_OPT_OUT),), native_available=False),
+            ServedByPython(ARGS, FLAGGED),
+            id="fallback-awaits-the-legacy-coroutine",
+        ),
+        pytest.param(
+            FlaggedCase(rules=(rule(Rollout.RUST_OPT_OUT),), native_available=False, legacy_returns_coroutine=False),
+            ServedByPython(ARGS, FLAGGED),
+            id="fallback-keeps-a-legacy-value",
+        ),
+    ),
+)
+async def test_flagged_sync_call_selected_for_rust_returns_a_coroutine_of_the_sync_projection(
+    case: FlaggedCase, expected: ServedByPython | ServedByRust
+) -> None:
+    projector: Final = Projector(ANTHROPIC)
+
+    pending: Final = flagged_route(case, projector).run(ARGS, FLAGGED, rules=case.rules)
+
+    assert asyncio.iscoroutine(pending)
+    assert await pending == expected
+    assert projector.seen == (ARGS, KWARGS)
+
+
+@pytest.mark.parametrize("legacy_returns_coroutine", (False, True), ids=("value", "coroutine"))
+@pytest.mark.parametrize(
+    "rules",
+    ((), (rule(Rollout.PYTHON_ONLY),), (rule(Rollout.RUST_REQUIRED, providers=frozenset({"openai"})),)),
+    ids=("no-rules", "python-only", "provider-miss"),
+)
+def test_flagged_sync_call_selected_for_python_returns_exactly_what_the_legacy_call_returns(
+    rules: Rules, legacy_returns_coroutine: bool
+) -> None:
+    route: Final = flagged_route(
+        FlaggedCase(rules=rules, legacy_returns_coroutine=legacy_returns_coroutine), Projector(ANTHROPIC)
+    )
+
+    served: Final = route.run(ARGS, FLAGGED, rules=rules)
+
+    if legacy_returns_coroutine:
+        assert asyncio.iscoroutine(served)
+        served.close()
+        return
+    assert served == ServedByPython(ARGS, FLAGGED)
+
+
 @pytest.mark.parametrize("flag", (False, None))
 def test_sync_call_without_a_true_async_flag_stays_synchronous(flag: bool | None) -> None:
-    route: Final = dataclasses.replace(flagged_route(), python=served_by_python)
+    route: Final = dataclasses.replace(
+        flagged_route(FlaggedCase(rules=()), Projector(ANTHROPIC)), python=served_by_python
+    )
 
     assert route.run(ARGS, {**KWARGS, ASYNC_FLAG: flag}, rules=()) == ServedByPython(ARGS, {**KWARGS, ASYNC_FLAG: flag})
 

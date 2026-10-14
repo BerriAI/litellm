@@ -70,7 +70,7 @@ OCR: Final[PublicRoute[NativeCall, OCRResponse, Never, OCRResponse]] = PublicRou
     context=_context,
     binding=NATIVE_OCR,
     python=runtime.NO_PYTHON,
-    asynchronous=AsyncVariant("aocr", AOCR),
+    asynchronous=AsyncVariant("aocr", NATIVE_AOCR),
 )
 
 

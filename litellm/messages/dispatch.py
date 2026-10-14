@@ -105,7 +105,7 @@ ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
     context=_context,
     binding=NATIVE_MESSAGES,
     python=_PYTHON_MESSAGES,
-    asynchronous=AsyncVariant("is_async", ANTHROPIC_MESSAGES),
+    asynchronous=AsyncVariant("is_async", NATIVE_AMESSAGES),
 )
 
 

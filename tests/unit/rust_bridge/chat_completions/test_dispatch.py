@@ -59,19 +59,18 @@ async def test_acompletion_reaches_native_from_positional_and_keyword_calls(
 
 
 @pytest.mark.asyncio
-async def test_completion_with_the_acompletion_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
+async def test_completion_with_the_acompletion_flag_binds_positional_arguments_by_the_sync_signature(
+    server: RecordingServer,
+) -> None:
     pending: Final = COMPLETION.run(
-        (),
-        {
-            "model": MESSAGES_MODEL,
-            "messages": list(MESSAGES),
-            "max_tokens": 16,
-            "api_key": "test-key",
-            "api_base": server.base_url,
-            "acompletion": True,
-        },
+        (MESSAGES_MODEL, list(MESSAGES), 30, 0.25),
+        {"max_tokens": 16, "api_key": "test-key", "api_base": server.base_url, "acompletion": True},
         rules=RUST,
     )
 
     assert asyncio.iscoroutine(pending)
     assert_served_natively_with_text(server, await pending)
+    body: Final = server.requests[0].body
+    assert isinstance(body, dict)
+    assert body["temperature"] == 0.25
+    assert "functions" not in body

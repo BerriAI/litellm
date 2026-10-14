@@ -60,7 +60,7 @@ EMBEDDING: Final = PublicRoute(
     context=_context,
     binding=NATIVE_EMBEDDING,
     python=_PYTHON_EMBEDDING,
-    asynchronous=AsyncVariant("aembedding", AEMBEDDING),
+    asynchronous=AsyncVariant("aembedding", NATIVE_AEMBEDDING),
 )
 
 

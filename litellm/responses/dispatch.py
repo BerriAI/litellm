@@ -80,7 +80,7 @@ RESPONSES: Final = PublicRoute(
     context=_context,
     binding=NATIVE_RESPONSES,
     python=_PYTHON_RESPONSES,
-    asynchronous=AsyncVariant("aresponses", ARESPONSES),
+    asynchronous=AsyncVariant("aresponses", NATIVE_ARESPONSES),
 )
 
 
