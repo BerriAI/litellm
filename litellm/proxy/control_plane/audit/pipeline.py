@@ -25,7 +25,12 @@ class Undelivered:
     settled: int = 0
 
 
-DeliveryResult: TypeAlias = Delivered | Undelivered
+@dataclass(frozen=True, slots=True)
+class Rejected:
+    reason: str
+
+
+DeliveryResult: TypeAlias = Delivered | Undelivered | Rejected
 
 
 class AuditSink(Protocol):
@@ -138,6 +143,8 @@ class SinkWorker:
             if not current_batch:
                 break
             await self.sleep(self.backoff.delay(self.failures - 1))
+        if isinstance(result, Rejected):
+            verbose_proxy_logger.error("control_plane.audit sink %s rejected batch (%s)", self.sink.name, result.reason)
         self.failures = 0
         self.inflight = None
 
