@@ -3873,6 +3873,57 @@ def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, i
     assert [item["type"] for item in replayed] == ["reasoning", "reasoning", "tool_search_call", "tool_search_output"]
 
 
+@pytest.mark.parametrize(
+    ("tools", "replayed_types"),
+    [
+        (
+            [{"type": "tool_search"}],
+            ["message", "tool_search_call", "tool_search_output", "function_call", "function_call_output"],
+        ),
+        (
+            [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            ["message", "function_call", "function_call_output"],
+        ),
+    ],
+    ids=["tool_search_requested", "tool_search_not_requested"],
+)
+def test_tool_search_items_replay_only_to_a_request_that_carries_tool_search(tools, replayed_types):
+    from unittest.mock import Mock
+
+    messages: Final = [
+        {"role": "user", "content": "weather in Paris"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+            "provider_specific_fields": {
+                "tool_search_items": [
+                    {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}},
+                    {"type": "tool_search_output", "id": "tso_1", "tools": [{"type": "function", "name": "get_weather"}]},
+                ]
+            },
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5-mini",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [item["type"] for item in request["input"]] == replayed_types
+
+
 def test_transform_response_incomplete_content_filter_maps_finish_reason():
     handler = LiteLLMResponsesTransformationHandler()
     raw_response = _make_incomplete_responses_api_response("content_filter", [_make_reasoning_only_output_item()])

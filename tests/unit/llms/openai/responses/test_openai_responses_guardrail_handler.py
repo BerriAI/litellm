@@ -88,6 +88,22 @@ class RecordingMaskingGuardrail(MockGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class ToolCallRecordingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[object] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls.extend(inputs.get("tool_calls", []))
+        return inputs
+
+
 class LastTextDroppingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -1095,6 +1111,39 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
         assert exc_info.value.status_code == 400
         assert "Response blocked by guardrail" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_namespaced_function_call_reaches_output_guardrails_in_the_unchanged_tool_call_shape(self):
+        guardrail: Final = ToolCallRecordingGuardrail(guardrail_name="recorder")
+        response: Final = ResponsesAPIResponse(
+            id="resp_namespaced",
+            created_at=1764901066,
+            model="gpt-5.5",
+            object="response",
+            status="completed",
+            output=[
+                ResponseFunctionToolCall(
+                    arguments='{"city":"Paris"}',
+                    call_id="call_namespaced",
+                    name="get_weather",
+                    namespace="weather_tools",
+                    type="function_call",
+                    id="fc_namespaced",
+                    status="completed",
+                )
+            ],
+        )
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            {
+                "id": "call_namespaced",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                "index": 0,
+            }
+        ]
 
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""

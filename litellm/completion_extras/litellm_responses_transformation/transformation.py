@@ -335,10 +335,45 @@ def _tool_search_provider_fields(
     return {_TOOL_SEARCH_ITEMS_KEY: [dict(item) for item in items]} if items else None
 
 
-def _tool_search_input_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
+def _tool_search_input_items(msg: object) -> tuple[Mapping[str, object], ...]:
     return _tool_search_items_from_output_items(
         _json_field(_json_field(msg, "provider_specific_fields"), _TOOL_SEARCH_ITEMS_KEY)
     )
+
+
+def _tool_definition_names(tool: object) -> tuple[str, ...]:
+    tool_type: Final = _json_field(tool, "type")
+    members: Final = _json_field(tool, "tools")
+    if tool_type == "namespace" and isinstance(members, list):
+        member_tools: Final = cast(Sequence[object], members)  # cast-ok: untyped JSON, each member re-checked
+        return tuple(chain.from_iterable(_tool_definition_names(member) for member in member_tools))
+    name: Final = _json_field(tool, "server_label" if tool_type == "mcp" else "name")
+    return (name,) if isinstance(name, str) else ()
+
+
+def _loaded_tools(item: Mapping[str, object]) -> Sequence[object]:
+    tools: Final = item.get("tools")
+    if item.get("type") != "tool_search_output" or not isinstance(tools, list):
+        return ()
+    return cast(Sequence[object], tools)  # cast-ok: untyped JSON, each tool re-checked
+
+
+def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
+    messages: Final = _json_field(request, "messages")
+    entries: Final = cast(Sequence[object], messages) if isinstance(messages, list) else ()  # cast-ok: untyped JSON
+    items: Final = chain.from_iterable(_tool_search_input_items(message) for message in entries)
+    loaded: Final = chain.from_iterable(_loaded_tools(item) for item in items)
+    return tuple(chain.from_iterable(_tool_definition_names(tool) for tool in loaded))
+
+
+def _requests_tool_search(request: object) -> bool:
+    tools: Final = _json_field(request, "tools")
+    entries: Final = cast(Sequence[object], tools) if isinstance(tools, list) else ()  # cast-ok: untyped JSON
+    return any(_json_field(tool, "type") == "tool_search" for tool in entries)
+
+
+def _without_tool_search_items(input_items: Sequence[object]) -> tuple[object, ...]:
+    return tuple(item for item in input_items if _json_field(item, "type") not in _TOOL_SEARCH_ITEM_TYPES)
 
 
 def _assistant_replay_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
@@ -462,7 +497,9 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
-def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
+def tool_call_dict_from_output_item(
+    item: Mapping[str, Any], index: int, *, include_namespace: bool = False
+) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
     string payload in ``input`` rather than ``arguments``; both map to
@@ -491,7 +528,7 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
         provider_specific_fields = vars(raw_provider_fields)
     else:
         provider_specific_fields = None
-    namespace: Final = item.get("namespace")
+    namespace: Final = item.get("namespace") if include_namespace else None
     merged_provider_fields: Final = {
         **(provider_specific_fields or {}),
         **({"namespace": namespace} if isinstance(namespace, str) else {}),
@@ -940,7 +977,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         request_data: Final = {
             "model": api_model,
-            "input": input_items,
+            "input": input_items
+            if _requests_tool_search(responses_api_request)
+            else list(_without_tool_search_items(input_items)),
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
             "client": client,
@@ -1072,7 +1111,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Tool calls accumulate into the single trailing tool_calls choice
                     # like the typed branches above; a choice per call would hide every
                     # call after choices[0] from chat clients
-                    accumulated_tool_calls.append(tool_call_dict_from_output_item(raw_item, tool_call_index))
+                    accumulated_tool_calls.append(
+                        tool_call_dict_from_output_item(raw_item, tool_call_index, include_namespace=True)
+                    )
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
@@ -1765,7 +1806,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") in ("function_call", "custom_tool_call"):
-                converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
+                converted: Final = tool_call_dict_from_output_item(
+                    output_item, parsed_chunk.get("output_index", 0), include_namespace=True
+                )
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
@@ -1840,7 +1883,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 delta=Delta(
                                     tool_calls=(
                                         tool_call_dict_from_output_item(
-                                            output_item, parsed_chunk.get("output_index", 0)
+                                            output_item, parsed_chunk.get("output_index", 0), include_namespace=True
                                         ),
                                     )
                                 ),
