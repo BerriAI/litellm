@@ -745,7 +745,7 @@ _JSON_SCHEMA_STREAM_KWARGS: Final = {
 
 
 def _wrapped_json_tool_stream(url: str, headers: Mapping[str, str], data: bytes) -> httpx.Response:
-    wrapper: Final = json.dumps({"$FUNCTION_NAME": "json_tool_call", "PARAMETER_VALUE": _RISK_ANSWER})
+    wrapper: Final = json.dumps({"$PARAMETER_NAME": _RISK_ANSWER})
     events: Final = (
         {
             "type": "message_start",
