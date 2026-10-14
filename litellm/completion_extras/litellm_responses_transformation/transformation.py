@@ -1082,8 +1082,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 pass  # don't fail request if item in list is not supported
 
         tool_search_items: Final = _tool_search_items_from_output_items(output_items)
-        if not choices and not accumulated_tool_calls and not tool_search_items:
-            return choices
+        if not choices and not accumulated_tool_calls:
+            if not tool_search_items:
+                return choices
+            return [
+                LiteLLMResponsesTransformationHandler._build_empty_choice(
+                    output_items, "stop", tool_search_items=tool_search_items
+                )
+            ]
         return [
             _fold_choices_into_one(
                 choices=choices,
@@ -1095,9 +1101,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         ]
 
     @staticmethod
-    def _build_empty_incomplete_choice(
+    def _build_empty_choice(
         output_items: Sequence[object],
-        finish_reason: Literal["length", "content_filter"],
+        finish_reason: Literal["stop", "length", "content_filter"],
+        tool_search_items: Sequence[Mapping[str, object]] = (),
     ) -> "Choices":
         from litellm.types.utils import Choices, Message
 
@@ -1112,6 +1119,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             content="",
             reasoning_content=reasoning_content if reasoning_content else None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
+            provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         )
         return Choices(message=message, finish_reason=finish_reason, index=0)
 
@@ -1235,7 +1243,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.incomplete_details.reason if raw_response.incomplete_details is not None else None
             )
             if len(choices) == 0:
-                choices.append(self._build_empty_incomplete_choice(output_items, incomplete_finish_reason))
+                choices.append(self._build_empty_choice(output_items, incomplete_finish_reason))
             else:
                 for choice in choices:
                     choice.finish_reason = incomplete_finish_reason
