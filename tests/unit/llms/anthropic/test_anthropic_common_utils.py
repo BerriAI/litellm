@@ -2020,6 +2020,39 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
+    @pytest.mark.parametrize(
+        ("thinking", "expected"),
+        (
+            ({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}, False),
+            ({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}, True),
+            ({"type": "adaptive"}, True),
+        ),
+        ids=("error", "drop_block", "unbound"),
+    )
+    def test_anthropic_messages_retry_honors_thinking_block_binding(self, thinking, expected):
+        import httpx
+
+        from litellm.llms.anthropic.pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx.Response(
+            400,
+            request=req,
+            text=(
+                '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: '
+                'Invalid `signature` in `thinking` block. The block is bound to a different conversation."}}'
+            ),
+        )
+        err = httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        should_retry = AnthropicMessagesConfig().should_retry_anthropic_messages_on_http_error(
+            err, {}, request_body={"model": "claude-opus-5-5", "thinking": thinking}
+        )
+
+        assert should_retry is expected
+
 
 class TestClaudeOpus48AdaptiveThinking:
     """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +

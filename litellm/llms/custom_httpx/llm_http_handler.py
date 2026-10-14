@@ -2113,7 +2113,7 @@ class BaseLLMHTTPHandler:
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
-                    e=e, litellm_params=litellm_params_dict
+                    e=e, litellm_params=litellm_params_dict, request_body=request_body
                 )
                 if should_retry and not hit_max_attempt:
                     if logging_obj.baseline_cache_context is not None:

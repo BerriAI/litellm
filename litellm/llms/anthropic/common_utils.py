@@ -8,7 +8,7 @@ import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, ClassVar, Final, Literal, TypeVar
+from typing import Any, ClassVar, Final, Literal, TypeVar, cast
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -1612,6 +1612,19 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     if "signature" in lower and ("invalid" in lower or "valid string" in lower):
         return True
     return "must contain thinking" in lower
+
+
+def anthropic_request_errors_on_thinking_binding_mismatch(request_body: Mapping[str, object]) -> bool:
+    """``thinking.block_binding.prefix_mismatch_behavior: error`` is the caller asking
+    for the 400, so a retry that strips thinking must not override it."""
+    thinking: Final = request_body.get("thinking")
+    if not isinstance(thinking, Mapping):
+        return False
+    binding: Final = cast(Mapping[str, object], thinking).get("block_binding")  # cast-ok: narrowed by isinstance
+    if not isinstance(binding, Mapping):
+        return False
+    behavior: Final = cast(Mapping[str, object], binding).get("prefix_mismatch_behavior")  # cast-ok: narrowed above
+    return behavior == "error"
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:
