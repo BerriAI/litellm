@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **model**: `tags` attribute on `litellm_model`, matching what `/model/new` and `/model/update` already accept under `litellm_params.tags`, for [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing)
 - **model**: Optional `display_name` argument on `litellm_model`, sent as `model_info.display_name` and returned as `display_name` by `/v1/models`, so client model pickers show a readable name; changes are persisted through `/model/{id}/update` since `/model/update` ignores `model_info`; also exported by the `litellm_model` and `litellm_models` data sources
 - **key**: Computed `server_metadata` attribute on `litellm_key` exposing every metadata entry the proxy stores, so metadata created outside Terraform is visible in state and drift on it shows on refresh, while `metadata` keeps tracking only the declared entries and updates keep preserving undeclared ones
 - **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them
