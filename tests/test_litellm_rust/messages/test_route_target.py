@@ -58,6 +58,7 @@ async def test_vertex_claude_is_served_natively(recording_server: RecordingServe
         api_key="test-token",
         vertex_project="test-project",
         vertex_location="us-central1",
+        extra_headers={"Authorization": "Bearer test-token"},
     )
 
     assert len(recording_server.requests) == 1
