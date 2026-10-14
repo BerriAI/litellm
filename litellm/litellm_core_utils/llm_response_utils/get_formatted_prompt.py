@@ -40,7 +40,9 @@ def get_formatted_prompt(
         if isinstance(data["input"], str):
             prompt = data["input"]
         elif isinstance(data["input"], list):
-            prompt = "".join(item for item in data["input"] if isinstance(item, str))
+            for item in data["input"]:
+                if isinstance(item, str):
+                    prompt += item
     elif call_type == "image_generation":
         prompt = data["prompt"]
     elif call_type == "audio_transcription":

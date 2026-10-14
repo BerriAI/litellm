@@ -147,7 +147,11 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     return True  # Found a highly similar substring
         return False  # No substring crossed the threshold
 
-    def _formatted_prompt(self, data: dict[str, object], call_type: CallTypesLiteral) -> str | None:
+    def _formatted_prompt(
+        self,
+        data: dict[str, object],  # mutable-ok: forwarded as-is to get_formatted_prompt, which takes the request dict
+        call_type: CallTypesLiteral,
+    ) -> str | None:
         if call_type in ("completion", "acompletion"):
             return get_formatted_prompt(data=data, call_type="completion")
         if call_type in ("text_completion", "atext_completion"):

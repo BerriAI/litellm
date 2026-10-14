@@ -22,3 +22,11 @@ def test_null_tool_calls_are_skipped(call_type: Literal["acompletion", "completi
     }
 
     assert get_formatted_prompt(data=data, call_type=call_type) == 'pingpong{"x":1}'
+
+
+@pytest.mark.parametrize("call_type", ["embedding", "moderation"])
+def test_non_string_list_input_is_skipped(call_type: Literal["embedding", "moderation"]) -> None:
+    """/v1/embeddings accepts token id arrays, so the input list is not always text."""
+    data: Final = {"input": ["scan me", 1234, ["nested"], "and me"]}
+
+    assert get_formatted_prompt(data=data, call_type=call_type) == "scan meand me"
