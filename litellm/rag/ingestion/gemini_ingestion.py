@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.llms.gemini.common_utils import GeminiModelInfo
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -101,10 +101,10 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         api_base: Final = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
 
         if not api_key:
-            raise RAGIngestBadRequestError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
 
         if not api_base:
-            raise RAGIngestBadRequestError("GEMINI_API_BASE is required")
+            raise ValueError("GEMINI_API_BASE is required")
 
         api_version: Final = "v1beta"
         base_url: Final = f"{api_base}/{api_version}"

@@ -1705,7 +1705,7 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
-        for team_id in sorted(team_ids):
+        for team_id in sorted(team_ids, key=str):
             try:
                 team_object = await get_team_object(
                     team_id=team_id,

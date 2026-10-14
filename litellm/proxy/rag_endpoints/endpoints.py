@@ -837,7 +837,7 @@ async def rag_query(
         if not isinstance(vector_store_id, str):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "retrieval_config must contain a string 'vector_store_id'"},
+                detail={"error": "vector_store_id must be a non-empty string"},
             )
         reject_caller_embedding_selection_params(payload=retrieval_config, source="retrieval_config")
         resolved_stores: Final = await _authorize_nested_vector_store_ids(
@@ -867,24 +867,24 @@ async def rag_query(
                 {key: value for key, value in retrieval_config.items() if key not in _EXPLICIT_CREDENTIAL_KEYS}
             )
         )
-        team_credentials: Final = _team_provider_credentials(
-            effective_vector_store_config,
-            llm_router,
-            user_api_key_dict,
-        )
-        vector_store_params: Final = (
-            {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials
-        )
-
-        # Add litellm data
-        request_data: dict[str, object] = {}
-        request_data = await add_litellm_data_to_request(
-            data=request_data,
+        request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
+            data={},
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
+        )
+        forwarded_credentials: Final = _without_blank_credentials(
+            {key: value for key, value in request_data.items() if key in _EXPLICIT_CREDENTIAL_KEYS}
+        )
+        team_credentials: Final = _team_provider_credentials(
+            {**effective_vector_store_config, **forwarded_credentials},
+            llm_router,
+            user_api_key_dict,
+        )
+        vector_store_params: Final = (
+            {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials
         )
 
         verbose_proxy_logger.debug(

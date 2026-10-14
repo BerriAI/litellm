@@ -385,6 +385,7 @@ def _post_rag_query(
     retrieval_config: Mapping[str, object],
     managed_stores: Sequence[LiteLLM_ManagedVectorStore],
     router: Router,
+    headers: Mapping[str, str] | None = None,
 ) -> httpx.Response:
     with (
         patch.object(  # test-quality-ok: seeds the real managed-store registry the query path reads
@@ -402,6 +403,7 @@ def _post_rag_query(
                 "messages": [{"role": "user", "content": "hello"}],
                 "retrieval_config": dict(retrieval_config),
             },
+            headers=dict(headers or {}),
         )
 
 
@@ -686,6 +688,32 @@ def test_rag_query_without_a_team_deployment_keeps_the_environment_openai_creden
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_ENVIRONMENT_OPENAI_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_search_uses_the_forwarded_provider_key_over_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forwarded_provider_key: Final = "sk-forwarded-provider-key"
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": forwarded_provider_key},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {forwarded_provider_key}"
 
 
 @pytest.mark.usefixtures("httpx_transport")
