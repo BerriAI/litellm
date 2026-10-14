@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast  # noqa: TID251  # Any for basedpyright; cast is validated
 
 from pydantic import TypeAdapter
 
@@ -295,6 +295,60 @@ def filter_web_search_deployments(
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
+
+
+# Providers that natively speak the OpenAI chat-completions wire protocol, so an
+# OpenAI-format tool-calling contract reaches them without cross-protocol
+# translation. Same family litellm uses for OpenAI-protocol param handling in
+# `add_provider_specific_params_to_optional_params` (litellm/utils.py).
+_OPENAI_NATIVE_PROTOCOL_PROVIDERS: Final = frozenset(
+    ["openai", "azure", "text-completion-openai"]
+    + cast("list[str]", litellm.openai_compatible_providers)  # cast-ok: provider names are strings
+)
+
+
+def _deployment_speaks_openai_protocol(deployment: dict[str, Any]) -> bool:  # mutable-ok: read-only, never mutated
+    litellm_params: Final[dict[str, Any]] = deployment.get("litellm_params") or {}  # mutable-ok: read-only
+    provider: Final = provider_for_generic_call(litellm_params)
+    if provider is None:
+        return True
+    return provider in _OPENAI_NATIVE_PROTOCOL_PROVIDERS
+
+
+def filter_tool_protocol_deployments(
+    healthy_deployments: list[dict[str, Any]] | dict[str, Any],  # mutable-ok: router candidate type
+    request_kwargs: dict[str, Any] | None = None,  # mutable-ok: OptionalParams dict
+) -> list[dict[str, Any]] | dict[str, Any]:  # mutable-ok: returns input or narrowed list
+    """
+    Keep only OpenAI-protocol deployments for OpenAI-format tool-calling requests.
+
+    In a mixed-protocol model group (e.g. an `openai/...` and an `anthropic/...`
+    deployment behind one model name), sending OpenAI-format `tools` to a
+    non-OpenAI-protocol deployment forces a cross-protocol translation of the
+    tool contract that third-party upstreams can reject, causing intermittent
+    tool-calling failures (BerriAI/litellm#43685).
+
+    The tool shape identifies the inbound protocol: only
+    `{"type": "function", "function": {...}}` triggers filtering, so
+    Anthropic-protocol inbound requests (proxy `/v1/messages`) are unaffected.
+
+    When no deployment speaks the OpenAI protocol, candidates are left
+    untouched so requests that succeed today via provider translation keep
+    working; filtering only narrows selection when a same-protocol alternative
+    exists. Deployments whose provider cannot be resolved are kept.
+    """
+    if request_kwargs is None or isinstance(healthy_deployments, dict):
+        return healthy_deployments
+    tools: Final[list[dict[str, Any]]] = request_kwargs.get("tools") or []  # mutable-ok: read-only
+    is_openai_tool_request: Final = any(
+        tool.get("type") == "function" and isinstance(tool.get("function"), dict) for tool in tools
+    )
+    if not is_openai_tool_request:
+        return healthy_deployments
+    compatible: Final = [d for d in healthy_deployments if _deployment_speaks_openai_protocol(d)]
+    if not compatible:
+        return healthy_deployments
+    return compatible
 
 
 # Credential params that only one provider family reads, paired with the providers
