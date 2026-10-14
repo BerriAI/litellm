@@ -33,6 +33,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftServicePrincipalTeam,
     TeamMappings,
 )
+from tests._master_key import MASTER_KEY
 
 _SSO_PROVIDER_ENV_VARS = (
     "DISABLE_ADMIN_UI",
@@ -2269,7 +2270,7 @@ class TestUISSO_FunctionsExistence:
         assert SSOAuthenticationHandler is not None
 
         # Check that the new _get_cli_state method exists
-        assert hasattr(SSOAuthenticationHandler, "_get_cli_state")
+        assert hasattr(SSOAuthenticationHandler, "get_cli_state")
         assert callable(SSOAuthenticationHandler._get_cli_state)
 
 
@@ -3027,7 +3028,7 @@ class TestCLIKeyRegenerationFlow:
                     return_value="https://proxy.example.com/sso/callback",
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_cli_state",
                     return_value=None,
                 ) as mock_get_cli_state,
             ):
@@ -8160,7 +8161,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_pkce_token_exchange",
+                "pkce_token_exchange",
                 AsyncMock(
                     return_value={
                         "access_token": "tok",
@@ -8172,7 +8173,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_delete_pkce_verifier",
+                "delete_pkce_verifier",
                 AsyncMock(),
             ),
             patch("fastapi_sso.sso.base.DiscoveryDocument"),
@@ -8525,7 +8526,7 @@ async def _render_legacy_login_page(env_overrides, general_settings):
     with (
         # snapshot os.environ so the mutations below are reverted on exit
         patch.dict(os.environ, {}, clear=False),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
@@ -8656,7 +8657,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
         "litellm.proxy.proxy_server.premium_user", False
     ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-1234"
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
     ), patch(
         "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
         new=_fake_handle_acs,
@@ -8823,7 +8824,7 @@ async def test_pkce_arm_captures_sso_assertion():
         ),
         patch.object(
             SSOAuthenticationHandler,
-            "_pkce_token_exchange",
+            "pkce_token_exchange",
             AsyncMock(
                 return_value={
                     "access_token": "tok",
@@ -8834,7 +8835,7 @@ async def test_pkce_arm_captures_sso_assertion():
                 }
             ),
         ),
-        patch.object(SSOAuthenticationHandler, "_delete_pkce_verifier", AsyncMock()),
+        patch.object(SSOAuthenticationHandler, "delete_pkce_verifier", AsyncMock()),
         patch("fastapi_sso.sso.base.DiscoveryDocument"),
         patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
         patch.dict(
@@ -8911,6 +8912,143 @@ async def test_verify_and_process_arm_captures_sso_assertion():
     assert sso_assertion.id_token.get_secret_value() == id_token
     assert sso_assertion.refresh_token is not None
     assert sso_assertion.refresh_token.get_secret_value() == "rt_from_idp"
+
+
+_GENERIC_SSO_CALLBACK_ENV = {
+    "GENERIC_CLIENT_SECRET": "test_secret",
+    "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/auth",
+    "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+    "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+    "GENERIC_CLIENT_USE_PKCE": "",
+}
+
+
+def _generic_sso_callback_request() -> Request:
+    from starlette.requests import Request as StarletteRequest
+
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/callback",
+            "query_string": b"code=abc",
+            "headers": [],
+        }
+    )
+
+
+def _generic_sso_jwt_handler() -> MagicMock:
+    jwt_handler = MagicMock(spec=JWTHandler)
+    jwt_handler.get_team_ids_from_jwt.return_value = []
+    return jwt_handler
+
+
+@pytest.mark.asyncio
+async def test_non_json_userinfo_falls_back_to_id_token_claims():
+    """A userinfo endpoint answering with a non-JSON body (ADFS 401, Content-Length 0)
+    must fall back to id_token claims on the non-PKCE arm instead of surfacing a 500."""
+    import jwt as pyjwt
+
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    id_token = pyjwt.encode(
+        {"sub": "u-adfs", "preferred_username": "u-adfs", "email": "adfs@example.com"},
+        "test-idp-signing-key-32-bytes-long-xxxx",
+        algorithm="HS256",
+    )
+    request = _generic_sso_callback_request()
+
+    with (
+        respx.mock,
+        patch.dict(os.environ, _GENERIC_SSO_CALLBACK_ENV),
+    ):
+        respx.post("https://auth.example.com/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "at", "token_type": "Bearer", "id_token": id_token})
+        )
+        userinfo_route = respx.get("https://auth.example.com/userinfo").mock(
+            return_value=httpx.Response(401, content=b"", headers={"content-type": "text/html"})
+        )
+        result, received_response, _, _ = await get_generic_sso_response(
+            request=request,
+            jwt_handler=_generic_sso_jwt_handler(),
+            generic_client_id="test_client_id",
+            redirect_url="https://proxy.example.com/sso/callback",
+            sso_jwt_handler=None,
+        )
+
+    assert result.email == "adfs@example.com"
+    assert result.id == "u-adfs"
+    assert received_response is not None
+    assert received_response["email"] == "adfs@example.com"
+    assert received_response["sub"] == "u-adfs"
+    assert "id_token" not in received_response
+    assert "access_token" not in received_response
+    assert userinfo_route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_non_json_userinfo_without_id_token_raises_401():
+    """Same unreadable userinfo but no decodable id_token in the token response:
+    the login must fail closed with a 401 ProxyException naming the userinfo endpoint."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    request = _generic_sso_callback_request()
+
+    with (
+        respx.mock,
+        patch.dict(os.environ, _GENERIC_SSO_CALLBACK_ENV),
+    ):
+        respx.post("https://auth.example.com/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "at", "token_type": "Bearer"})
+        )
+        respx.get("https://auth.example.com/userinfo").mock(
+            return_value=httpx.Response(401, content=b"", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            await get_generic_sso_response(
+                request=request,
+                jwt_handler=_generic_sso_jwt_handler(),
+                generic_client_id="test_client_id",
+                redirect_url="https://proxy.example.com/sso/callback",
+                sso_jwt_handler=None,
+            )
+
+    assert str(exc_info.value.code) == "401"
+    assert "https://auth.example.com/userinfo" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_non_json_token_response_is_not_swallowed_by_userinfo_fallback():
+    """A non-JSON TOKEN endpoint response must keep the old behaviour (raw JSONDecodeError
+    through _handle_generic_sso_error): no access token was parsed, so the id_token
+    fallback must not fire and userinfo must never be called."""
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    request = _generic_sso_callback_request()
+
+    with (
+        respx.mock,
+        patch.dict(os.environ, _GENERIC_SSO_CALLBACK_ENV),
+    ):
+        respx.post("https://auth.example.com/token").mock(
+            return_value=httpx.Response(200, content=b"", headers={"content-type": "text/html"})
+        )
+        userinfo_route = respx.get("https://auth.example.com/userinfo").mock(
+            return_value=httpx.Response(200, json={"sub": "unused"})
+        )
+        with pytest.raises(json.JSONDecodeError):
+            await get_generic_sso_response(
+                request=request,
+                jwt_handler=_generic_sso_jwt_handler(),
+                generic_client_id="test_client_id",
+                redirect_url="https://proxy.example.com/sso/callback",
+                sso_jwt_handler=None,
+            )
+
+    assert not userinfo_route.called
 
 
 @pytest.mark.asyncio
@@ -9697,7 +9835,7 @@ async def _sso_key_generate_on_ui_disabled_node(*, source, key, google_sso_confi
         patch.dict(os.environ, env, clear=True),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.cli_sso_session_cache", cli_cache),

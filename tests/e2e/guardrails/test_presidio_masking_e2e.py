@@ -40,6 +40,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from e2e_config import unique_marker
 from e2e_http import Result, StreamingResponse, Success
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import GuardrailMode, GuardrailsClient, PiiAction, PiiEntity, PresidioParamsBody
 from lifecycle import ResourceManager
 from models import (
@@ -248,6 +249,15 @@ class TestPresidioPreCallMasking:
         "guardrail.presidio.pre_call.masks",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pre_call_masks_pii_on_chat_completions(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -266,6 +276,15 @@ class TestPresidioPreCallMasking:
     @pytest.mark.covers(
         "guardrail.presidio.pre_call.masks",
         exercised_on=["messages"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_pre_call_masks_pii_on_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -311,6 +330,14 @@ class TestPresidioPostCallMasking:
     @pytest.mark.covers(
         "guardrail.presidio.post_call.masks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_post_call_masks_pii_in_model_output(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -393,6 +420,15 @@ class TestPresidioCreditCardOutputMasking:
         "guardrail.presidio.post_call.masks_generated_output",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_ui_default_scope_masks_a_card_number_the_model_generates_on_chat_completions(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -420,6 +456,15 @@ class TestPresidioCreditCardOutputMasking:
     @pytest.mark.covers(
         "guardrail.presidio.post_call.masks_generated_output",
         exercised_on=["chat_completions_stream"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
     )
     def test_ui_default_scope_masks_a_card_number_the_model_generates_on_streaming_chat_completions(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -452,6 +497,15 @@ class TestPresidioCreditCardOutputMasking:
     @pytest.mark.covers(
         "guardrail.presidio.post_call.masks_generated_output",
         exercised_on=["anthropic_messages_stream"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
     )
     def test_ui_default_scope_masks_a_card_number_the_model_generates_on_streaming_anthropic_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -571,6 +625,15 @@ class TestPresidioSpendLogStoresMaskedOutput:
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_spend_log_stores_masked_output_on_chat_completions(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -585,6 +648,15 @@ class TestPresidioSpendLogStoresMaskedOutput:
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["chat_completions_stream"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_spend_log_stores_masked_output_on_streaming_chat_completions(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -599,6 +671,15 @@ class TestPresidioSpendLogStoresMaskedOutput:
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_spend_log_stores_masked_output_on_anthropic_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -613,6 +694,15 @@ class TestPresidioSpendLogStoresMaskedOutput:
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["anthropic_messages_stream"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_spend_log_stores_masked_output_on_streaming_anthropic_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -627,6 +717,15 @@ class TestPresidioSpendLogStoresMaskedOutput:
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_spend_log_stores_masked_output_on_responses(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -672,6 +771,14 @@ class TestPresidioSpendLogRecord:
     @pytest.mark.covers(
         "guardrail.presidio.pre_call.logs_masked_entities",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_masking_run_is_recorded_on_the_spend_log(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str

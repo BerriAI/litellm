@@ -10,7 +10,7 @@ import pytest
 import litellm
 from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
-from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
+from litellm.llms.bedrock.common_utils import get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
@@ -90,7 +90,7 @@ class TestBedrockRegionInModelPath:
 
         _region_from_model = None
         _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+        if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
             _region_from_model = _potential_region
             _stripped = _stripped.split("/", 1)[1]
             _model_for_id = _stripped
@@ -127,7 +127,7 @@ class TestBedrockRegionInModelPath:
         _stripped = model
         _region_from_model = None
         _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+        if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
             _region_from_model = _potential_region
             _stripped = _stripped.split("/", 1)[1]
             _model_for_id = _stripped

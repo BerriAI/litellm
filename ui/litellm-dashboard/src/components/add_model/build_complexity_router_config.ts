@@ -5,6 +5,7 @@ import {
   type FuseSettings,
 } from "./forecast_classifier_config";
 import type { ModelGroup } from "../llm_calls/fetch_models";
+import { isHeuristicChain, type LocalHeuristic } from "./classifier_types";
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type JevClassifierConfig,
@@ -22,7 +23,8 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
-import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
+import { type CustomDimension, type CustomDimensionRow } from "./custom_dimensions";
+import { scorerKnobPayload } from "./heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -47,7 +49,6 @@ import {
   TierBoundaries,
   TokenThresholds,
   effectiveTierLabel,
-  heuristicScoringRoleFor,
   usesLlmClassifier,
   usesClassifierContext,
 } from "./ComplexityRouterConfig";
@@ -103,45 +104,6 @@ export const normalizeClassifierLlmConfig = ({
         ...(vision && { vision }),
       };
 
-interface ScorerKnobInputs {
-  classifierType: ClassifierType;
-  classifierFallback: ClassifierFallback | undefined;
-  tierBoundaries: TierBoundaries | undefined;
-  tokenThresholds: TokenThresholds | undefined;
-  dimensionWeights: DimensionWeights | undefined;
-  customDimensions: CustomDimensionRow[] | undefined;
-  reasoningOverrideMinScore: number | undefined;
-}
-
-/**
- * The scorer knobs to persist, which is none of them on a router that never scores: an LLM classifier
- * falling back to the default model would otherwise carry settings that can only mislead the next reader.
- * Each is omitted while untouched, so the router keeps tracking the backend defaults.
- */
-const scorerKnobPayload = ({
-  classifierType,
-  classifierFallback,
-  tierBoundaries,
-  tokenThresholds,
-  dimensionWeights,
-  customDimensions,
-  reasoningOverrideMinScore,
-}: ScorerKnobInputs) => {
-  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
-  return role === "never"
-    ? {}
-    : {
-        ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
-        ...(tokenThresholds && { token_thresholds: tokenThresholds }),
-        ...(dimensionWeights && { dimension_weights: dimensionWeights }),
-        // Only a scorer that decides accepts these; the backend rejects them on every other
-        // classifier, so a fallback-only router must not carry rows a switch left behind.
-        ...(role === "decides" &&
-          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
-        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
-      };
-};
-
 export interface StoredComplexityRouterConfig {
   tiers?: Record<string, unknown>;
   enable_non_reasoning_tier?: boolean;
@@ -154,6 +116,7 @@ export interface StoredComplexityRouterConfig {
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType | "oss_classifier";
+  local_heuristic?: unknown;
   heuristic_v2_success_threshold?: unknown;
   capability_classifier_config?: unknown;
   llm_v2_config?: unknown;
@@ -209,6 +172,7 @@ export interface BuildComplexityRouterConfigParams {
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
+  localHeuristic?: LocalHeuristic;
   heuristicV2SuccessThreshold?: number;
   capabilityClassifierConfig?: CapabilitySettings;
   llmV2Config?: FuseSettings;
@@ -291,6 +255,7 @@ export interface ComplexityRouterConfigPayload {
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType | "oss_classifier";
+  local_heuristic?: LocalHeuristic;
   heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
@@ -665,6 +630,7 @@ export const buildComplexityRouterConfig = ({
   planModeMinTier,
   tierLabels,
   classifierType,
+  localHeuristic,
   heuristicV2SuccessThreshold,
   capabilityClassifierConfig,
   llmV2Config,
@@ -732,6 +698,7 @@ export const buildComplexityRouterConfig = ({
   const cleanedTierLabels = serializeTierLabels(tierLabels);
   const scorerInputs = {
     classifierType,
+    localHeuristic,
     classifierFallback,
     tierBoundaries,
     tokenThresholds,
@@ -795,6 +762,7 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType === "jev" ? "oss_classifier" : classifierType,
+    ...(isHeuristicChain(effectiveType) && localHeuristic !== undefined && { local_heuristic: localHeuristic }),
     ...(effectiveType === "jev" && { opensource_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...(heuristicV2SuccessThreshold !== undefined && {
       heuristic_v2_success_threshold: heuristicV2SuccessThreshold,
