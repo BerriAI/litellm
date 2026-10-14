@@ -3321,32 +3321,35 @@ def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> 
         litellm.get_model_info.cache_clear()
 
 
-@pytest.mark.parametrize("base_location", ("model_info", "litellm_params", None))
-@pytest.mark.parametrize("explicit_limit", (None, 4096))
-def test_bedrock_router_capacity_uses_explicit_base_model(
-    monkeypatch: pytest.MonkeyPatch, base_location: str | None, explicit_limit: int | None
-) -> None:
-    route: Final = "bedrock/converse/global.anthropic.claude-router-capacity-test"
-    base: Final = "bedrock/anthropic.claude-router-capacity-test@global:us-east-1"
-    metadata: Final = {
-        "litellm_provider": "bedrock",
+_CAPACITY_TEST_DEPLOYMENTS: Final = (
+    (
+        "bedrock",
+        "bedrock/converse/global.anthropic.claude-router-capacity-test",
+        "bedrock/anthropic.claude-router-capacity-test@global:us-east-1",
+    ),
+    (
+        "bedrock_mantle",
+        "bedrock_mantle/openai.router-capacity-test-route",
+        "bedrock_mantle/openai.router-capacity-test-base",
+    ),
+    ("openai", "openai/router-capacity-test-route", "openai/router-capacity-test-base"),
+)
+
+
+def _capacity_test_metadata(provider: str, max_input_tokens: int) -> dict[str, object]:
+    return {
+        "litellm_provider": provider,
         "mode": "chat",
+        "max_input_tokens": max_input_tokens,
         "max_output_tokens": 512,
         "max_tokens": 512,
         "input_cost_per_token": 0,
         "output_cost_per_token": 0,
     }
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            **litellm.model_cost,
-            route: {**metadata, "max_input_tokens": 1024},
-            base: {**metadata, "max_input_tokens": 8192},
-        },
-    )
-    _invalidate_model_cost_lowercase_map()
-    router: Final = Router(
+
+
+def _capacity_test_router(route: str, base: str, base_location: str | None, explicit_limit: int | None) -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "capacity-test",
@@ -3363,6 +3366,30 @@ def test_bedrock_router_capacity_uses_explicit_base_model(
         ],
         enable_pre_call_checks=True,
     )
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+@pytest.mark.parametrize("base_location", ("model_info", "litellm_params", None))
+@pytest.mark.parametrize("explicit_limit", (None, 4096))
+def test_router_capacity_uses_explicit_base_model(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    route: str,
+    base: str,
+    base_location: str | None,
+    explicit_limit: int | None,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            route: _capacity_test_metadata(provider, 1024),
+            base: _capacity_test_metadata(provider, 8192),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
     effective: Final = router.get_router_model_info(
         id="capacity-test", deployment=None, received_model_name="capacity-test"
     )
@@ -3384,4 +3411,25 @@ def test_bedrock_router_capacity_uses_explicit_base_model(
             input_token_count=2048,
         )
         assert len(allowed) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+def test_router_capacity_keeps_route_limits_when_base_model_is_unmapped(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, route: _capacity_test_metadata(provider, 1024)})
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, f"{base}-unmapped", "model_info", None)
+    effective: Final = router.get_router_model_info(
+        id="capacity-test", deployment=None, received_model_name="capacity-test"
+    )
+    assert effective["max_input_tokens"] == 1024
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="capacity-test",
+            healthy_deployments=router.model_list,
+            input="synthetic input",
+            input_token_count=2048,
+        )
     _invalidate_model_cost_lowercase_map()

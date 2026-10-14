@@ -356,6 +356,7 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
+    is_generalized_model_info,
     is_region_allowed,
     provider_rejectable_params,
     set_live_deployment_replay,
@@ -890,6 +891,19 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _maps_to_exact_model_info(base_model: str, custom_llm_provider: str) -> bool:
+    if "*" in base_model:
+        return False
+    lookup_name: Final = (
+        base_model if base_model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{base_model}"
+    )
+    try:
+        model_info: Final = litellm.get_model_info(model=lookup_name)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return False
+    return not is_generalized_model_info(model_info)
 
 
 class Router:
@@ -11157,6 +11171,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
+        For every other provider, a concrete base_model with its own cost-map entry wins over `model:`.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11221,7 +11236,7 @@ class Router:
                     _model,
                 )
         elif custom_llm_provider != "azure" and not (
-            custom_llm_provider in ("bedrock", "bedrock_converse") and base_model is not None and "*" not in base_model
+            isinstance(base_model, str) and _maps_to_exact_model_info(base_model, custom_llm_provider)
         ):
             model = _model
 
