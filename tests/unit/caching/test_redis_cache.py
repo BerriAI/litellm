@@ -1011,6 +1011,37 @@ async def test_breaker_metrics_track_state_and_failure_class():
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
 
 
+def test_breaker_metrics_wait_for_prometheus_logging_and_carry_the_closed_count(monkeypatch):
+    """No breaker series until a prometheus callback is on, then the gauge starts from the breakers already closed."""
+    from prometheus_client import CollectorRegistry
+
+    from litellm.caching.redis_cache import _BreakerMetrics
+
+    for name in ("callbacks", "success_callback", "failure_callback", "service_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    registry: Final = CollectorRegistry()
+    metrics: Final = _BreakerMetrics(registry)
+    metrics.record_state_change(None, "closed")
+    metrics.record_failure("timeout")
+    assert registry.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) is None
+
+    monkeypatch.setattr(litellm, "callbacks", ["prometheus"])
+    metrics.record_state_change("closed", "open")
+    metrics.record_transition("open")
+    metrics.record_failure("connectivity")
+    metrics.publish()
+    assert registry.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == 0
+    assert registry.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "open"}) == 1
+    assert registry.get_sample_value("litellm_redis_circuit_breaker_transitions_total", {"state": "open"}) == 1
+    assert (
+        registry.get_sample_value("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"}) is None
+    )
+    assert (
+        registry.get_sample_value("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"})
+        == 1
+    )
+
+
 def test_sync_guard_counts_a_timeout_as_a_timeout():
     from redis.exceptions import TimeoutError as RedisTimeoutError
 

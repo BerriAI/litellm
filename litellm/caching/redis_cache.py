@@ -51,6 +51,7 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prometheus_client import CollectorRegistry as _PromRegistry
     from prometheus_client import Counter as _PromCounter
     from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
@@ -459,7 +460,8 @@ class _BreakerMetrics:
     Held in the module-level ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, registry: "_PromRegistry | None" = None) -> None:
+        self._registry = registry
         self._state_gauge: _PromGauge | None = None
         self._transitions: _PromCounter | None = None
         self._failures: _PromCounter | None = None
@@ -470,26 +472,30 @@ class _BreakerMetrics:
         if self._state_gauge is not None or self._client_missing:
             return
         try:
+            from prometheus_client import REGISTRY, Gauge
             from prometheus_client import Counter as PromCounter
-            from prometheus_client import Gauge
         except ImportError:
             self._client_missing = True
             return
+        registry: Final = self._registry if self._registry is not None else REGISTRY
         self._state_gauge = Gauge(
             "litellm_redis_circuit_breaker_state",
             "Number of Redis circuit breakers currently in each state",
             labelnames=("state",),
             multiprocess_mode="livesum",
+            registry=registry,
         )
         self._transitions = PromCounter(
             "litellm_redis_circuit_breaker_transitions",
             "Redis circuit breaker state transitions",
             labelnames=("state",),
+            registry=registry,
         )
         self._failures = PromCounter(
             "litellm_redis_circuit_breaker_failures",
             "Redis health failures counted by the circuit breaker",
             labelnames=("failure_class",),
+            registry=registry,
         )
         for state, count in self._states.items():
             self._state_gauge.labels(state).inc(count)
