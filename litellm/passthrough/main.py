@@ -149,9 +149,10 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             )
 
     async def wait_for_spend_flush(self) -> None:
-        """Wait until the spend-tracking flush scheduled when the stream ended or was closed has finished."""
+        """Wait until the spend-tracking flush scheduled when the stream ended or was closed has finished. Cancelling
+        the wait leaves the flush running."""
         if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(*self._background_tasks, return_exceptions=True))
 
     def __aiter__(self) -> AsyncPassthroughStreamingResponse:
         return self

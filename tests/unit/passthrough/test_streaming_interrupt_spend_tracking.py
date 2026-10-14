@@ -160,6 +160,44 @@ async def test_asyncpassthroughstreamingresponse_wait_for_spend_flush_returns_on
 
 
 @pytest.mark.asyncio
+async def test_asyncpassthroughstreamingresponse_spend_flush_survives_a_cancelled_wait():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+    mock_response = _make_streaming_response([b"chunk-1", b"chunk-2"])
+
+    async def response_coro():
+        return mock_response
+
+    release = asyncio.Event()
+    flushed: List[bytes] = []
+
+    async def flush(collector: _RecordingCollector) -> None:
+        await release.wait()
+        flushed.append(collector.build_logged_response(litellm_logging_obj=MagicMock()))
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_flush_passthrough_collected_chunks = flush
+    gen = AsyncPassthroughStreamingResponse(
+        response=response_coro(),
+        litellm_logging_obj=mock_logging_obj,
+        provider_config=_provider_config(_RecordingCollector()),
+    )
+
+    await gen.__anext__()
+    await gen.aclose()
+    waiter = asyncio.create_task(gen.wait_for_spend_flush())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await gen.wait_for_spend_flush()
+
+    assert flushed == [b"chunk-1"]
+
+
+@pytest.mark.asyncio
 async def test_asyncpassthroughstreamingresponse_does_not_flush_on_4xx():
     from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
