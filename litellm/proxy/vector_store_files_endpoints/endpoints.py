@@ -564,11 +564,11 @@ async def vector_store_file_create(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -578,7 +578,7 @@ async def vector_store_file_create(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
@@ -644,7 +644,7 @@ async def vector_store_file_create(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -751,7 +751,7 @@ async def vector_store_file_list(
             user_api_key_dict=user_api_key_dict,
         )
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -858,7 +858,7 @@ async def vector_store_file_retrieve(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -968,7 +968,7 @@ async def vector_store_file_content(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -996,11 +996,11 @@ async def vector_store_file_update(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -1010,7 +1010,7 @@ async def vector_store_file_update(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
@@ -1075,7 +1075,7 @@ async def vector_store_file_update(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1182,7 +1182,7 @@ async def vector_store_file_delete(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

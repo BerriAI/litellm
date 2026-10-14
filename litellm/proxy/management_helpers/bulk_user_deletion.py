@@ -36,8 +36,9 @@ from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventH
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -267,7 +268,7 @@ async def _remove_members_from_team(
         await _user_tx_db(tx).update(where=_eq_filter("user_id", row.user_id), data=teams_data)
     await _membership_tx_db(tx).delete_many(where=_team_users_filter(team_id, cleanup_ids))
     if keys:
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
@@ -398,7 +399,7 @@ async def _delete_user_rows(
         prisma_client=prisma_client,
     )
     if keys:
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,

@@ -43,7 +43,7 @@ def classify(category: str, changed: list[str]) -> str:
 DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
 CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
-CI = [".github/workflows/test-litellm-ui-unit.yml"]
+CI = [".github/workflows/test-unit.yml"]
 
 
 @pytest.mark.parametrize(
@@ -59,21 +59,7 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("mcp-dependencies", [".circleci/scripts/classify_changes.sh"], "run"),
         ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
         ("mcp-dependencies", DOCS + CLIENT, "skip"),
-        ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
-        ("provider-harness", ["tests/e2e/conftest.py"], "run"),
-        ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),
-        ("provider-harness", ["tests/code_coverage_tests/test_provider_cache.py"], "run"),
-        ("provider-harness", ["tests/code_coverage_tests/test_provider_replay_harness.py"], "run"),
-        ("provider-harness", [".circleci/config.yml"], "run"),
-        ("provider-harness", [".circleci/scripts/classify_changes.sh"], "run"),
-        ("provider-harness", ["pyproject.toml"], "run"),
-        ("provider-harness", ["uv.lock"], "run"),
-        ("provider-harness", ["tests/e2e/PROVIDER_CACHE.md"], "skip"),
-        ("provider-harness", ["tests/e2e/ui/test_example.py"], "skip"),
-        ("provider-harness", ["tests/e2e/quota_management/test_quota.py"], "skip"),
-        ("provider-harness", ["litellm/main.py"], "skip"),
-        ("provider-harness", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
-        ("windows-release", ["litellm-rust/crates/core/src/lib.rs"], "run"),
+        ("windows-release", ["litellm-rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
         ("windows-release", ["rust-toolchain.toml"], "run"),
         ("windows-release", ["pyproject.toml"], "run"),
@@ -113,11 +99,6 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
         (
             "cost-map-only",
-            ["model_prices_and_context_window.json", "tests/test_litellm/test_x.py"],
-            "run",
-        ),
-        (
-            "cost-map-only",
             ["model_prices_and_context_window.json", "tests/unit/proxy/test_y.py"],
             "run",
         ),
@@ -126,7 +107,7 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
             ["model_prices_and_context_window.json", "litellm/utils.py"],
             "skip",
         ),
-        ("cost-map-only", ["tests/test_litellm/test_x.py"], "skip"),
+        ("cost-map-only", ["tests/unit/proxy/test_y.py"], "skip"),
         ("cost-map-only", ["model_prices_and_context_window.json", "docs/pricing.md"], "skip"),
         ("cost-map-only", ["model_prices_and_context_window.json", "docs/foo.mdx"], "skip"),
         ("cost-map-only", [], "skip"),
@@ -142,8 +123,11 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
     (
         ("litellm/caching/redis_cache.py", "run"),
         ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
-        (".circleci/config.yml", "run"),
+        ("tests/integration/sdk/test_redis_cluster_iam_auth.py", "run"),
+        (".github/workflows/test-unit.yml", "run"),
+        ("tests/integration/run.py", "run"),
         ("uv.lock", "run"),
+        (".circleci/config.yml", "skip"),
         ("litellm/router.py", "skip"),
         ("docs/my-website/redis.md", "skip"),
     ),
@@ -204,7 +188,7 @@ def _pr_repo(tmp_path: Path, feature_files: dict[str, str]) -> Path:
     _git(work, "config", "user.email", "t@t")
     _git(work, "config", "user.name", "t")
     _git(work, "remote", "add", "origin", str(remote))
-    (work / "litellm_core.py").write_text("x\n")
+    (work / "litellm_inference.py").write_text("x\n")
     _git(work, "add", ".")
     _git(work, "commit", "-qm", "base")
     _git(work, "push", "-q", "origin", "main")
