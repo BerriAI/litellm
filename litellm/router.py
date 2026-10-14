@@ -901,7 +901,7 @@ class Router:
     def _routing_groups(self, value: dict[str, RoutingGroup]) -> None:
         self.routing_groups = value
 
-    model_names: set = set()
+    model_names: set[str] = set()
     cache_responses: bool | None = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -12001,7 +12001,9 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None:
+    def resolve_model_name_from_model_id(
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Resolve model_name from model_id.
 
@@ -12011,11 +12013,14 @@ class Router:
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
-        3. Return the model_name if found, None otherwise
+        3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard
+           whose deployment serves `custom_llm_provider`)
+        4. Return the model_name if found, None otherwise
 
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
+            custom_llm_provider: The provider extracted from the same id
 
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
@@ -12055,8 +12060,21 @@ class Router:
                 if model_name:
                     return model_name
 
-        # No match found
+        if self.is_recognized_model(model_id):
+            return model_id
+        if custom_llm_provider is not None and self.pattern_router.routes_to_provider(model_id, custom_llm_provider):
+            return model_id
         return None
+
+    def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
+        """
+        `served_model` when `model_name` routes to it (the alias target, the routing group member, or the name
+        itself), so a request can return to the group that served an earlier one, else `model_name`.
+        """
+        target: Final = self.get_model_from_alias(model_name) or model_name
+        routing_group: Final = self.get_routing_group(target)
+        members: Final = routing_group.models if routing_group is not None else ()
+        return served_model if served_model == target or served_model in members else model_name
 
     def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
         """

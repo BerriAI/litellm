@@ -2526,6 +2526,21 @@ def test_resolve_model_name_from_model_id():
     assert result == "bedrock-batch-model"
 
 
+@pytest.mark.parametrize(
+    ("model_id", "custom_llm_provider", "expected"),
+    [
+        ("sora-2", "openai", "sora-2"),
+        ("fal-ai/veo3", "fal_ai", None),
+        ("veo-3.0-generate-001", "gemini", None),
+        ("sora-2", None, None),
+    ],
+)
+def test_resolve_model_name_from_model_id_keeps_a_wildcard_name_only_for_the_ids_provider(
+    model_id, custom_llm_provider, expected
+):
+    router = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}}])
+    assert router.resolve_model_name_from_model_id(model_id, custom_llm_provider) == expected
+
 def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""
 

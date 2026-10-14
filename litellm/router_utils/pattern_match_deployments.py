@@ -7,8 +7,20 @@ import re
 from re import Match
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.types.router import LiteLLM_Params
+
+
+class _RoutedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    litellm_params: LiteLLM_Params
+
+
+_ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 
 
 class PatternUtils:
@@ -159,6 +171,14 @@ class PatternMatchRouter:
             verbose_router_logger.debug("Error in PatternMatchRouter.route: %s", e)
 
         return None  # No matching pattern found
+
+    def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:
+        deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.route(request) or ())
+        return any(
+            (deployment.litellm_params.custom_llm_provider or inferred_provider(deployment.litellm_params.model))
+            == custom_llm_provider
+            for deployment in deployments
+        )
 
     @staticmethod
     def set_deployment_model_name(
