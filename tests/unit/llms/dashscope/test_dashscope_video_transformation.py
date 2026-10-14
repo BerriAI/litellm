@@ -27,6 +27,7 @@ from litellm.llms.dashscope.videos.transformation import (
 )
 from litellm.proxy.auth.auth_checks import _can_object_call_model
 from litellm.proxy.auth.auth_utils import _resolve_model_id_with_router
+from litellm.proxy.video_endpoints.utils import resolve_video_model_name
 from litellm.router import Router
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import (
@@ -559,7 +560,11 @@ BEIJING_HOST = "https://wan3-beijing.example"
 SINGAPORE_HOST = "https://wan3-singapore.example"
 
 
-def _two_region_router(singapore_model: str, routing_groups: list[dict[str, object]] | None = None) -> Router:
+def _two_region_router(
+    singapore_model: str,
+    routing_groups: list[dict[str, object]] | None = None,
+    model_group_alias: dict[str, str] | None = None,
+) -> Router:
     return Router(
         model_list=[
             {
@@ -572,6 +577,7 @@ def _two_region_router(singapore_model: str, routing_groups: list[dict[str, obje
             },
         ],
         routing_groups=routing_groups,
+        model_group_alias=model_group_alias,
     )
 
 
@@ -595,7 +601,7 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
 
     created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof", metadata=caller_metadata)
 
-    resolved = router.resolve_model_name_from_model_id(decode_video_id_with_provider(created.id)["model_id"])
+    resolved = resolve_video_model_name(router, decode_video_id_with_provider(created.id))
     assert resolved == "wan3-beijing"
 
     router.video_status(model=resolved, video_id=created.id)
@@ -603,15 +609,21 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
     assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
 
 
+@pytest.mark.parametrize("requested", ["wan3", "video-alias"])
 @respx.mock
-def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_created_it():
-    """The routing group spans both regions, so an id carrying the group's name load-balanced its polls, and
-    about half of them left for the other region's host and key with a task id that region never issued."""
+def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_created_it_by_a_key_scoped_to_it(
+    requested: str,
+):
+    """The routing group spans both regions, so an id carrying only the group's name, or an alias pointing at it,
+    load-balanced its polls, and about half of them left for the other region's host and key with a task id that
+    region never issued. An id carrying only the member that served the task refused the poll to a key scoped to
+    the group or the alias."""
     router = _two_region_router(
         "qwencloud/wan3.0-video",
         routing_groups=[
             {"group_name": "wan3", "models": ["wan3-singapore", "wan3-beijing"], "routing_strategy": "simple-shuffle"}
         ],
+        model_group_alias={"video-alias": "wan3"},
     )
     for host in (BEIJING_HOST, SINGAPORE_HOST):
         respx.post(f"{host}/api/v1/services/aigc/video-generation/video-synthesis").mock(
@@ -622,12 +634,30 @@ def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_cr
         )
 
     for _ in range(8):
-        created = router.video_generation(model="wan3", prompt="a cat on a roof")
-        model_id = decode_video_id_with_provider(created.id)["model_id"]
-        router.video_status(model=router.resolve_model_name_from_model_id(model_id), video_id=created.id)
+        created = router.video_generation(model=requested, prompt="a cat on a roof")
+        decoded = decode_video_id_with_provider(created.id)
+        checked = _resolve_model_id_with_router(decoded["model_id"], router)
+        assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
+        polled = router.video_status(model=resolve_video_model_name(router, decoded), video_id=created.id)
+        assert polled.id == created.id
 
     hosts = [call.request.url.host for call in respx.calls]
     assert hosts[1::2] == hosts[0::2]
+
+
+@respx.mock
+def test_an_id_naming_a_served_model_its_requested_name_does_not_route_to_is_polled_by_the_requested_name():
+    """The served model in an id only picks among what the requested name already routes to, so an edited id
+    cannot send a key allowed only `wan3-beijing` to the Singapore deployment and its key."""
+    router = _two_region_router("qwencloud/wan3.0-video")
+    task_get = respx.get(f"{BEIJING_HOST}/api/v1/tasks/{TASK_ID}").mock(
+        return_value=httpx.Response(200, json=_succeeded_task_payload())
+    )
+    edited = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3-beijing", served_model="wan3-singapore")
+
+    router.video_status(model=resolve_video_model_name(router, decode_video_id_with_provider(edited)), video_id=edited)
+
+    assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
 
 
 @pytest.mark.parametrize(
@@ -666,7 +696,9 @@ def test_a_key_scoped_to_the_requested_alias_or_wildcard_name_can_poll_its_video
     checked = _resolve_model_id_with_router(model_id, router)
     assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
 
-    router.video_status(model=router.resolve_model_name_from_model_id(model_id), video_id=created.id)
+    router.video_status(
+        model=resolve_video_model_name(router, decode_video_id_with_provider(created.id)), video_id=created.id
+    )
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == [f"Bearer {api_key}"]
 

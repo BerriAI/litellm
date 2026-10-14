@@ -13,6 +13,7 @@ from litellm.types.utils import SpecialEnums
 from litellm.types.videos.main import DecodedVideoId
 
 VIDEO_ID_PREFIX: Final = "video_"
+VIDEO_ID_SERVED_MODEL_PREFIX: Final = "served_model:"
 CHARACTER_ID_PREFIX: Final = "character_"
 CHARACTER_ID_TEMPLATE: Final = "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
 
@@ -35,7 +36,9 @@ def _add_base64_padding(value: str) -> str:
     return value
 
 
-def encode_video_id_with_provider(video_id: str, provider: str, model_id: str | None = None) -> str:
+def encode_video_id_with_provider(
+    video_id: str, provider: str, model_id: str | None = None, served_model: str | None = None
+) -> str:
     """Encode provider and model_id into video_id using base64."""
     if not provider or not video_id:
         return video_id
@@ -50,8 +53,9 @@ def encode_video_id_with_provider(video_id: str, provider: str, model_id: str | 
 
     # ID is not encoded (even if it starts with video_), so encode it
     assembled_id = str(SpecialEnums.LITELLM_MANAGED_VIDEO_COMPLETE_STR.value).format(provider, model_id or "", video_id)
+    served_part: Final = f";{VIDEO_ID_SERVED_MODEL_PREFIX}{served_model}" if served_model else ""
 
-    base64_encoded_id: Final[str] = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
+    base64_encoded_id: Final[str] = base64.b64encode((assembled_id + served_part).encode("utf-8")).decode("utf-8")
 
     return f"{VIDEO_ID_PREFIX}{base64_encoded_id}"
 
@@ -99,10 +103,17 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
             model_id = model_id_part.replace("model_id:", "")
             decoded_video_id = video_id_part.replace("video_id:", "")
 
+        served_model: Final = (
+            parts[3].removeprefix(VIDEO_ID_SERVED_MODEL_PREFIX) or None
+            if len(parts) >= 4 and parts[3].startswith(VIDEO_ID_SERVED_MODEL_PREFIX)
+            else None
+        )
+
         return DecodedVideoId(
             custom_llm_provider=custom_llm_provider,
             model_id=model_id,
             video_id=decoded_video_id,
+            served_model=served_model,
         )
     except Exception as e:
         verbose_logger.debug("Error decoding video_id '%s': %s", encoded_video_id, e)

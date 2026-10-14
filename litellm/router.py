@@ -12058,6 +12058,16 @@ class Router:
 
         return model_id if self.is_recognized_model(model_id) or self.pattern_router.route(model_id) else None
 
+    def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
+        """
+        `served_model` when `model_name` routes to it (the alias target, the routing group member, or the name
+        itself), so a request can return to the group that served an earlier one, else `model_name`.
+        """
+        target: Final = self.get_model_from_alias(model_name) or model_name
+        routing_group: Final = self.get_routing_group(target)
+        members: Final = routing_group.models if routing_group is not None else ()
+        return served_model if served_model == target or served_model in members else model_name
+
     def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
         """
         Check if team_model_name resolves to team-specific deployments.

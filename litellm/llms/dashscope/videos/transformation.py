@@ -566,41 +566,41 @@ def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
         return _EMPTY_PARAMS
 
 
-def _polled_model_id(logging_obj: object) -> str | None:
+def _polled_models(logging_obj: object) -> tuple[str | None, str | None]:
     """
-    The deployment the proxy routes by is the model encoded in the polled id, so it must survive into the returned id.
+    The proxy routes by the models encoded in the polled id, so they must survive into the returned id.
     """
     video_id: Final = _logged_litellm_params(logging_obj).get("video_id")
     if not isinstance(video_id, str):
-        return None
-    return decode_video_id_with_provider(video_id).get("model_id") or None
+        return None, None
+    decoded: Final = decode_video_id_with_provider(video_id)
+    return decoded.get("model_id") or None, decoded.get("served_model")
 
 
-def _poll_model_name(logging_obj: object) -> str | None:
+def _poll_models(logging_obj: object) -> tuple[str, str | None] | None:
     """
-    A later status or content request routes by the model encoded in the id, and the key's model access is
-    checked against it too. DashScope serves the same model name from several regional hosts, so the served
-    model cannot tell regional deployments apart, and the served group drops the alias or wildcard name a
-    key may be scoped to. The id carries the name the router was asked for on this hop, which routes back to
-    the same group, unless that name is a routing group spanning several groups, where it carries the member
-    that served the task. The router stamps both into litellm_metadata, and metadata carries a copy only when
-    the caller sent none.
+    A later status or content request checks the key's model access against the model encoded in the id, and
+    routes by it. DashScope serves the same model name from several regional hosts, so only the group that
+    served the task can send its polls back to the region that created it, while a key may be scoped to the
+    alias, routing group or wildcard name it asked for instead. The id carries both names: the one the router
+    was asked for on this hop, and the group that served it when that differs and is not a wildcard. The router
+    stamps both into litellm_metadata, and metadata carries a copy only when the caller sent none.
     """
     params: Final = _logged_litellm_params(logging_obj)
-    names: Final = (_stamped_poll_model_name(params.get(key)) for key in ("litellm_metadata", "metadata"))
-    return next((name for name in names if name), None)
+    stamped: Final = (_stamped_poll_models(params.get(key)) for key in ("litellm_metadata", "metadata"))
+    return next((models for models in stamped if models), None)
 
 
-def _stamped_poll_model_name(metadata: object) -> str | None:
+def _stamped_poll_models(metadata: object) -> tuple[str, str | None] | None:
     try:
         fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
     except ValidationError:
         return None
     requested: Final = _id_safe_name(fields.get("model_group"))
     served: Final = _id_safe_name(fields.get("deployment_model_name"))
-    if requested is None or served is None or requested == fields.get("model_group_alias") or "*" in served:
-        return requested
-    return served
+    if requested is None:
+        return None
+    return requested, None if served is None or served == requested or "*" in served else served
 
 
 def _id_safe_name(name: object) -> str | None:
@@ -820,8 +820,10 @@ class DashScopeVideoConfig(BaseVideoConfig):
         requested: Final = self._requested_parameters(request_data)
         video_obj: Final = _video_object_from_task(task, raw_response, model=model, requested=requested)
         if custom_llm_provider and video_obj.id:
-            poll_model: Final = _poll_model_name(logging_obj) or model
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, poll_model)
+            requested_model, served_model = _poll_models(logging_obj) or (model, None)
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, requested_model, served_model
+            )
         return video_obj
 
     @staticmethod
@@ -864,10 +866,10 @@ class DashScopeVideoConfig(BaseVideoConfig):
         client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         task: Final = _parse_task_response(raw_response)
-        model: Final = _polled_model_id(logging_obj)
+        model, served_model = _polled_models(logging_obj)
         video_obj: Final = _video_object_from_task(task, raw_response, model=model)
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model, served_model)
         return video_obj
 
     def transform_video_content_request(

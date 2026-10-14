@@ -1,8 +1,12 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import orjson
 
+from litellm.types.videos.main import DecodedVideoId
 from litellm.types.videos.utils import encode_character_id_with_provider
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
@@ -64,3 +68,11 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
             model_id=model_id,
         )
     return response
+
+
+def resolve_video_model_name(llm_router: "Router", decoded: DecodedVideoId) -> str | None:
+    model_name: Final = llm_router.resolve_model_name_from_model_id(decoded.get("model_id"))
+    served_model: Final = decoded.get("served_model")
+    if model_name is None or served_model is None:
+        return model_name
+    return llm_router.resolve_served_model_name(model_name, served_model)
