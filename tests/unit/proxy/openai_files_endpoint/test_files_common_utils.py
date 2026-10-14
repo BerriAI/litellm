@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -714,11 +715,12 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
     assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
 
 
-def _team_openai_deployment(deployment_id: str, api_key: str) -> dict:
+def _team_openai_deployment(deployment_id: str, api_key: str, created_at: datetime | None = None) -> dict[str, object]:
     return {
         "model_name": f"team-gpt-{deployment_id}",
         "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
-        "model_info": {"id": deployment_id, "team_id": "team-a"},
+        "model_info": {"id": deployment_id, "team_id": "team-a"}
+        | ({} if created_at is None else {"created_at": created_at}),
     }
 
 
@@ -739,3 +741,20 @@ def test_a_team_with_two_openai_deployments_resolves_the_same_one_in_any_router_
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-a-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_id(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "older-key"

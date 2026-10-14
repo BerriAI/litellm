@@ -4,6 +4,7 @@ import mimetypes
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -485,6 +486,15 @@ def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[
     )
 
 
+_UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _creation_time(created_at: object) -> datetime:
+    if not isinstance(created_at, datetime):
+        return _UNKNOWN_CREATION_TIME
+    return created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+
+
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -548,33 +558,38 @@ def get_team_provider_credentials(
         else ()
     )
 
-    def _key_may_use(public_model_name: str | None) -> bool:
+    def _key_may_use(public_model_name: object) -> bool:
         if not key_model_allowlist:
             return True
-        return public_model_name is not None and _key_allowlist_covers(public_model_name, key_model_allowlist)
+        return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
-    def _provider_credentials(model_id: str) -> dict | None:
+    def _provider_credentials(model_id: str) -> dict[str, object] | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    def _usable_team_deployment_id(deployment: dict) -> str | None:
-        model_info: Final = deployment.get("model_info") or {}
+    def _usable_team_deployment_order(deployment: dict) -> tuple[datetime, str] | None:
+        model_info: Final[Mapping[str, object]] = deployment["model_info"]
         if model_info.get("team_id") != team_id:
             return None
         if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
             return None
-        return model_info.get("id")
+        deployment_id: Final = model_info.get("id")
+        if not isinstance(deployment_id, str):
+            return None
+        return _creation_time(model_info.get("created_at")), deployment_id
 
-    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. The lowest
-    #    deployment id wins so every worker picks the same one in any load or edit order.
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. The oldest one
+    #    wins, then the lowest id, so adding a deployment never moves the team off the one it
+    #    already uses, and every worker picks the same one in any load or edit order.
     if team_id is not None:
-        team_deployment_ids: Final = sorted(
-            deployment_id
+        team_deployment_orders: Final = sorted(
+            order
             for deployment in llm_router.model_list or []
-            if (deployment_id := _usable_team_deployment_id(deployment)) is not None
+            if (order := _usable_team_deployment_order(deployment)) is not None
         )
+        team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
         team_credentials: Final = next(
             (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
             None,

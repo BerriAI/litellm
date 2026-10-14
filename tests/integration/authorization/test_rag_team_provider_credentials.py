@@ -398,14 +398,23 @@ def _provider_environment(upstream: str) -> Mapping[str, str]:
 
 
 def _deployment(
-    gateway: Gateway, scenario: Scenario, *, name: str, model: str, api_key: str, api_base: str, team_id: str | None
+    gateway: Gateway,
+    scenario: Scenario,
+    *,
+    name: str,
+    model: str,
+    api_key: str,
+    api_base: str,
+    team_id: str | None,
+    model_id: str | None = None,
 ) -> str:
     created: Final = gateway.post(
         "/model/new",
         {
             "model_name": name,
             "litellm_params": {"model": model, "api_key": api_key, "api_base": api_base},
-            "model_info": {} if team_id is None else {"team_id": team_id},
+            "model_info": ({} if team_id is None else {"team_id": team_id})
+            | ({} if model_id is None else {"id": model_id}),
         },
     )
     model_id: Final = string_value(object_value(created["model_info"])["id"])
@@ -1295,7 +1304,7 @@ def _ingests_after_editing(
     return tuple(_ingest_and_drain(gateway, scenario, key, upstream) for _ in range(4))
 
 
-def test_a_team_with_two_openai_deployments_ingests_through_the_same_one_after_either_is_edited(
+def test_a_team_with_two_openai_deployments_keeps_ingesting_through_the_older_one_after_either_is_edited(
     tmp_path: Path,
 ) -> None:
     with (
@@ -1315,6 +1324,7 @@ def test_a_team_with_two_openai_deployments_ingests_through_the_same_one_after_e
                 api_key=TEAM_API_KEY,
                 api_base=f"{upstream.url}/team/v1",
                 team_id=team_id,
+                model_id=f"z-{uuid.uuid4().hex}",
             ),
             "team",
             TEAM_API_KEY,
@@ -1328,11 +1338,12 @@ def test_a_team_with_two_openai_deployments_ingests_through_the_same_one_after_e
                 api_key=WILDCARD_API_KEY,
                 api_base=f"{upstream.url}/wildcard/v1",
                 team_id=team_id,
+                model_id=f"a-{uuid.uuid4().hex}",
             ),
             "wildcard",
             WILDCARD_API_KEY,
         )
-        (picked_id, picked_prefix, picked_key), (other_id, _, _) = sorted((team_deployment, wildcard_deployment))
+        (picked_id, picked_prefix, picked_key), (other_id, _, _) = team_deployment, wildcard_deployment
         key: Final = scenario.key(team_id=team_id)
         with (
             owned_proxy(
