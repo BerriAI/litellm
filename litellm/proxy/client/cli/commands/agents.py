@@ -27,6 +27,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
+from .config import get_config_file_path, load_config, normalize_base_url, save_config
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
@@ -764,8 +765,45 @@ def resolve_api_key(ctx: click.Context) -> str:
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
-def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+def _save_base_url(base_url: str) -> OSError | None:
+    try:
+        save_config({**load_config(), "base_url": base_url})
+    except OSError as error:
+        return error
+    return None
+
+
+def with_prompted_gateway(ctx: click.Context, ctx_obj: CliContextObj) -> tuple[click.Context, CliContextObj]:
+    """Ask a terminal user for the gateway URL when none came from a flag, env var, or `lite config`."""
+    if ctx_obj.get("base_url_explicit", True) or not _is_interactive():
+        return ctx, ctx_obj
+    base_url: Final[str] = click.prompt(
+        "LiteLLM gateway URL", default=ctx_obj["base_url"], value_proc=normalize_base_url
+    )
+    save_error: Final = _save_base_url(base_url)
+    click.echo(
+        f"Saved base_url to {get_config_file_path()}, change it with `lite config set base_url <url>`"
+        if save_error is None
+        else f"Could not save base_url to {get_config_file_path()} ({save_error}), using it for this run only",
+        err=save_error is not None,
+    )
+    api_key: Final = (
+        get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
+        if ctx_obj.get("api_key_from_token_file")
+        else ctx_obj.get("api_key")
+    )
+    settings: Final[CliContextObj] = {
+        **ctx_obj,
+        "base_url": base_url,
+        "base_url_explicit": True,
+        "api_key": api_key,
+    }
+    return click.Context(ctx.command, parent=ctx.parent, obj=settings), settings
+
+
+def _launch(parent_ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
+    parent_obj: Final[CliContextObj] = parent_ctx.obj
+    ctx, ctx_obj = with_prompted_gateway(parent_ctx, parent_obj)
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
@@ -800,7 +838,7 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
 
     _command.help = (
         f"Run {display_name} routed through your LiteLLM proxy.\n\n"
-        f"Logs in with LiteLLM if needed, verifies your key against the proxy, "
+        f"Asks for the gateway URL if none is set, logs in with LiteLLM if needed, verifies your key against the proxy, "
         f"exports the env vars {binary} reads, then hands off. Any arguments are "
         f"forwarded to `{binary}`."
     )
@@ -827,4 +865,5 @@ __all__ = [
     "resolve_api_key",
     "run_agent",
     "verify_proxy_key",
+    "with_prompted_gateway",
 ]
