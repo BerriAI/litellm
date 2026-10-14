@@ -2583,6 +2583,74 @@ def test_validate_effort_for_model_centralises_per_model_gating(model, effort, e
         assert err is None
 
 
+_UNMAPPED_ADAPTIVE_CLAUDE: Final = (
+    ("claude-opus-9-9", "anthropic"),
+    ("claude-newfamily-9", "anthropic"),
+    ("claude-opus-9-9", "azure_ai"),
+    ("us.anthropic.claude-opus-9-9", "bedrock"),
+    ("global.anthropic.claude-sonnet-8-1", "bedrock_converse"),
+    ("claude-opus-9-9", "vertex_ai-anthropic_models"),
+)
+
+
+@pytest.mark.parametrize("model,provider", _UNMAPPED_ADAPTIVE_CLAUDE)
+def test_unmapped_adaptive_claude_accepts_every_effort_level(local_model_cost_map, model, provider):
+    """An id known only through the adaptive fallback rule accepts effort at every level, so the provider decides."""
+    assert AnthropicConfig.is_adaptive_thinking_model(model, provider)
+    assert AnthropicConfig.model_supports_effort_param(model, provider)
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_output_config"] is True
+    assert all(
+        AnthropicConfig.validate_effort_for_model(model, effort, provider) is None
+        for effort in ("low", "medium", "high", "xhigh", "max")
+    )
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("claude-sonnet-4-6", "anthropic"),
+        ("anthropic/claude-sonnet-4-6", "anthropic"),
+        ("CLAUDE-SONNET-4-6", "anthropic"),
+        ("us.anthropic.claude-sonnet-4-6", "bedrock"),
+        ("claude-sonnet-4-6", "vertex_ai"),
+    ],
+)
+def test_mapped_adaptive_claude_without_xhigh_still_rejects_xhigh(local_model_cost_map, model, provider):
+    """A mapped adaptive model keeps the strict per-level gate even though the fallback rule also matches it."""
+    assert AnthropicConfig.is_adaptive_thinking_model(model, provider)
+    assert AnthropicConfig.validate_effort_for_model(model, "xhigh", provider) is not None
+
+
+@pytest.mark.parametrize(
+    "config,model",
+    [
+        (AnthropicConfig(), "claude-opus-9-9"),
+        (AzureAnthropicConfig(), "claude-opus-9-9"),
+        (AmazonAnthropicClaudeConfig(), "invoke/us.anthropic.claude-opus-9-9"),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_unmapped_adaptive_claude_forwards_xhigh_effort(local_model_cost_map, monkeypatch, config, model, drop_params):
+    """``reasoning_effort='xhigh'`` on a launch-day Claude reaches the provider instead of a local 400 or a silent drop."""
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model=model,
+        drop_params=drop_params,
+    )
+
+    result = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"] == {"effort": "xhigh"}
+
+
 def test_transform_request_injects_dummy_tool_without_tools_param():
     """
     Anthropic rejects messages that contain tool turns when ``tools`` is omitted.

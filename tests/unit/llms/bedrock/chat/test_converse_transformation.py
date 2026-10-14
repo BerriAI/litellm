@@ -1381,6 +1381,29 @@ def test_output_config_effort_normalized_for_bedrock_converse_opus(
     assert additional.get("output_config") == {"effort": expected_effort}
 
 
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_output_config_xhigh_forwarded_for_unmapped_adaptive_claude_converse(
+    local_model_cost_map, monkeypatch, drop_params
+):
+    """A launch-day Claude on Converse forwards ``xhigh`` for Bedrock to judge instead of a local 400."""
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    model = "bedrock/converse/us.anthropic.claude-opus-9-9"
+
+    result = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["output_config"] == {"effort": "xhigh"}
+
+
 @pytest.mark.parametrize(
     "effort",
     ["disabled", "invalid", ""],

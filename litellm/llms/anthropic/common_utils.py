@@ -877,6 +877,37 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return cls._is_adaptive_thinking_model(model, custom_llm_provider)
 
     @staticmethod
+    def _has_model_map_entry(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` resolves to a real cost-map entry rather than only a fallback rule."""
+        from litellm.utils import (
+            get_bundled_model_cost_map,
+            get_model_info_helper,
+            is_generalized_model_info,
+        )
+
+        candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
+        if any(
+            any(cand in model_cost for cand in candidates)
+            for model_cost in (litellm.model_cost, get_bundled_model_cost_map())
+        ):
+            return True
+        try:
+            resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            model_info: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
+        except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
+            return False
+        return not is_generalized_model_info(model_info)
+
+    @staticmethod
+    def _is_unmapped_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
+        """Adaptive only through the fallback rule, so no map entry knows which effort levels it accepts."""
+        return AnthropicModelInfo._is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ) and not AnthropicModelInfo._has_model_map_entry(model, custom_llm_provider)
+
+    @staticmethod
     def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
         (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an

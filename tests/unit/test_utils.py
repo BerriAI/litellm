@@ -6458,6 +6458,24 @@ class TestDefaultReasoningEffortHydration:
         assert model_info.get("default_reasoning_effort") is None
 
 
+def test_every_declared_capability_flag_survives_model_info_hydration(local_model_cost_map, monkeypatch):
+    """A ``supports_*`` flag that hydration drops is invisible to every capability check and fallback rule."""
+    from litellm.types.utils import ModelInfoBase
+    from litellm.utils import get_model_info_helper
+
+    flags: Final = tuple(name for name in ModelInfoBase.__annotations__ if name.startswith("supports_"))
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "capability-hydration-probe",
+        {"litellm_provider": "openai", "mode": "chat", **dict.fromkeys(flags, True)},
+    )
+
+    model_info: Final = get_model_info_helper(model="capability-hydration-probe", custom_llm_provider="openai")
+
+    assert "supports_output_config" in flags
+    assert tuple(flag for flag in flags if model_info.get(flag) is not True) == ()
+
+
 class TestHuggingFaceConfigFetch:
     """The Hugging Face config.json fetch runs on background logging threads during cost
     calculation, so an unbounded request can hang a whole test job; the timeout is the fix."""

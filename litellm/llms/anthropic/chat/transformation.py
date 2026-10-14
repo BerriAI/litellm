@@ -435,7 +435,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or AnthropicConfig._supports_effort_level(model, "max", custom_llm_provider)
         ):
             return f"effort='max' is not supported by this model. Got model: {model}"
-        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider):
+        if effort == "xhigh" and not (
+            AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider)
+            or AnthropicConfig._is_unmapped_adaptive_thinking_model(model, custom_llm_provider)
+        ):
             return f"effort='xhigh' is not supported by this model. Got model: {model}"
         return None
 
