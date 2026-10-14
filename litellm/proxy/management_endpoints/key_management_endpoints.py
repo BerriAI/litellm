@@ -2760,7 +2760,7 @@ async def _write_prepared_key_update_object_permission(
 
     await ObjectPermissionRepository(prisma_client).table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
-        data={"create": upsert.record, "update": upsert.record},
+        data={"create": upsert.record, "update": upsert.update_record},
     )
     return MappingProxyType({**data_json, "object_permission_id": upsert.object_permission_id})
 

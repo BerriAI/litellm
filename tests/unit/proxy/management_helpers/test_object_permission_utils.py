@@ -1,5 +1,6 @@
+import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _resolve_team_allowed_mcp_servers,
     set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
+    handle_update_object_permission_common,
     prepare_object_permission_upsert,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
@@ -1588,6 +1590,103 @@ async def test_prepare_object_permission_upsert_preserves_unsent_grants_on_updat
         "mcp_tool_permissions": json.dumps(existing_row.mcp_tool_permissions),
         "mcp_toolsets": permission.mcp_toolsets,
     }
+
+
+@pytest.mark.asyncio
+async def test_permission_update_patch_keeps_false_and_empty_grants_without_changing_id() -> None:
+    original: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-id",
+        mcp_servers=["existing-server"],
+        mcp_tool_permissions={"solo-id": ["read"]},
+        mcp_toolsets=["existing-toolset"],
+        mcp_tool_search_enabled=True,
+    )
+    prisma_client: Final = _make_ambiguity_prisma(existing_row_override=original)
+
+    upsert: Final = await prepare_object_permission_upsert(
+        new_object_permission={
+            "object_permission_id": "other-id",
+            "mcp_servers": None,
+            "mcp_tool_permissions": {},
+            "mcp_toolsets": [],
+            "mcp_tool_search_enabled": False,
+        },
+        existing_object_permission_id=original.object_permission_id,
+        prisma_client=prisma_client,
+    )
+
+    assert upsert.record == {
+        "object_permission_id": original.object_permission_id,
+        "mcp_servers": original.mcp_servers,
+        "mcp_tool_permissions": "{}",
+        "mcp_toolsets": [],
+        "mcp_tool_search_enabled": False,
+    }
+    assert upsert.update_record == {
+        "mcp_tool_permissions": "{}",
+        "mcp_toolsets": [],
+        "mcp_tool_search_enabled": False,
+    }
+
+
+class _InterleavedPermissionTable:
+    def __init__(self, row: LiteLLM_ObjectPermissionTable) -> None:
+        self.row = row
+        self.read_count = 0
+        self.reads_completed = asyncio.Event()
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_ObjectPermissionTable:
+        snapshot: Final = self.row
+        self.read_count += 1
+        if self.read_count == 2:
+            self.reads_completed.set()
+        await self.reads_completed.wait()
+        return snapshot
+
+    async def upsert(
+        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]
+    ) -> LiteLLM_ObjectPermissionTable:
+        self.row = LiteLLM_ObjectPermissionTable.model_validate({**self.row.model_dump(), **data["update"]})
+        return self.row
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("toolsets_first", (False, True))
+async def test_partial_permission_updates_preserve_concurrently_changed_unsent_grants(toolsets_first: bool) -> None:
+    original: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-id",
+        mcp_servers=["old-server"],
+        mcp_access_groups=["existing-group"],
+        mcp_toolsets=["old-toolset"],
+        mcp_tool_search_enabled=False,
+        skills=["existing-skill"],
+    )
+    table: Final = _InterleavedPermissionTable(original)
+    prisma_client: Final = MagicMock()
+    prisma_client.configure_mock(
+        **{
+            "db.litellm_objectpermissiontable.find_unique": AsyncMock(side_effect=table.find_unique),
+            "db.litellm_objectpermissiontable.upsert": AsyncMock(side_effect=table.upsert),
+        }
+    )
+    server_patch: Final = {"mcp_servers": ["new-server"]}
+    toolset_patch: Final = {"mcp_toolsets": ["new-toolset"]}
+    patches: Final = (toolset_patch, server_patch) if toolsets_first else (server_patch, toolset_patch)
+
+    await asyncio.gather(
+        *(
+            handle_update_object_permission_common(
+                data_json={"object_permission": permission},
+                existing_object_permission_id=original.object_permission_id,
+                prisma_client=prisma_client,
+            )
+            for permission in patches
+        )
+    )
+
+    assert table.row == original.model_copy(
+        update={"mcp_servers": ["new-server"], "mcp_toolsets": ["new-toolset"]}
+    )
 
 
 @pytest.mark.asyncio

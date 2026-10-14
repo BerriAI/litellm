@@ -1135,7 +1135,7 @@ async def test_key_update_prepares_existing_object_permission_without_writing():
     assert result == {"user_id": "user123", "object_permission_id": "existing_perm_id_123"}
     permission_upsert.assert_awaited_once_with(
         where={"object_permission_id": "existing_perm_id_123"},
-        data={"create": upsert.record, "update": upsert.record},
+        data={"create": upsert.record, "update": {"vector_stores": ["new_store"]}},
     )
 
 
@@ -1179,7 +1179,7 @@ async def test_key_update_prepares_json_object_permission_and_upserts_new_row():
     assert result["object_permission_id"] == upsert.object_permission_id
     permission_upsert.assert_awaited_once_with(
         where={"object_permission_id": upsert.object_permission_id},
-        data={"create": upsert.record, "update": upsert.record},
+        data={"create": upsert.record, "update": {"vector_stores": ["brand_new_store"]}},
     )
 
 
@@ -1222,7 +1222,7 @@ async def test_key_update_recreates_missing_object_permission_with_existing_id()
     )
     permission_upsert.assert_awaited_once_with(
         where={"object_permission_id": "missing_perm_id_789"},
-        data={"create": upsert.record, "update": upsert.record},
+        data={"create": upsert.record, "update": {"vector_stores": ["recreated_store"]}},
     )
 
 

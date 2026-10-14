@@ -1019,7 +1019,7 @@ def test_customer_update_creates_partial_toolset_permission(
             "object_permission_id": where["object_permission_id"],
             "mcp_toolsets": ["toolset-id"],
         }
-        assert data["update"] == data["create"]
+        assert data["update"] == {"mcp_toolsets": ["toolset-id"]}
         return LiteLLM_ObjectPermissionTable.model_validate(data["create"])
 
     mock_prisma_client.configure_mock(
