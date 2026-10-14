@@ -288,9 +288,7 @@ def _outbound_ssl_ciphers() -> str:
 
     if is_fips_mode():
         if os.getenv("LITELLM_SSL_CIPHERS"):
-            verbose_logger.warning(
-                "LITELLM_SSL_CIPHERS override ignored in FIPS mode; using FIPS_SSL_CIPHERS"
-            )
+            verbose_logger.warning("LITELLM_SSL_CIPHERS override ignored in FIPS mode; using FIPS_SSL_CIPHERS")
         return FIPS_SSL_CIPHERS
     return DEFAULT_SSL_CIPHERS
 
