@@ -5,10 +5,12 @@ import itertools
 import json
 import threading
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import anthropic
@@ -61,6 +63,7 @@ from integration.providers._gemini_long_decode_support import (
     hop_reply,
     items_of,
     number,
+    output_text,
     payloads,
     post,
     received,
@@ -84,11 +87,15 @@ from pydantic import BaseModel, JsonValue
 Client = Literal["sdk_sync", "sdk_async", "httpx"]
 Failure = Literal["400", "500", "drop", "notjson", "errorframe"]
 Dropped = Literal["first", "continued"]
+Unread = Literal["dropped", "empty", "unfinished", "silent"]
+DeploymentTimeout = Literal["timeout", "stream_timeout"]
 Absent = Literal["missing", "null", "empty"]
 Respond: TypeAlias = Callable[[Request], Reply]
 
 _CLIENTS: Final[tuple[Client, ...]] = ("sdk_sync", "sdk_async", "httpx")
 _FAILURES: Final[tuple[Failure, ...]] = ("400", "500", "drop", "notjson", "errorframe")
+_UNREAD: Final[tuple[Unread, ...]] = ("dropped", "empty", "unfinished", "silent")
+_DEPLOYMENT_TIMEOUTS: Final[tuple[DeploymentTimeout, ...]] = ("timeout", "stream_timeout")
 _JOINED: Final = FIRST_HALF.text + SECOND_HALF.text
 _CHAIN_USAGE: Final = summed(FIRST_HALF, SECOND_HALF)
 _CHAT_MESSAGES: Final = ({"role": "user", "content": PROMPT},)
@@ -718,6 +725,61 @@ def test_streamed_continuation_request_left_unanswered_ends_the_stream_with_the_
         assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
 
 
+@pytest.mark.parametrize(
+    ("provider", "endpoint", "setting"),
+    tuple(itertools.product(PROVIDERS, ENDPOINTS, _DEPLOYMENT_TIMEOUTS)),
+)
+def test_streamed_continuation_request_left_unanswered_ends_at_the_deployments_timeout_with_the_answer_so_far(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, setting: DeploymentTimeout
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    release: Final = threading.Event()
+    with (
+        wire_server(upstream(answers(first_id, FIRST_HALF), _silent(release))) as wire,
+        contextlib.ExitStack() as cleanup,
+        gateway.scenario() as scenario,
+    ):
+        cleanup.callback(release.set)
+        model: Final = register(gateway, scenario, provider, wire, settings={setting: _SILENCE_SECONDS})
+        response: Final = post(gateway, endpoint, request_body(endpoint, model, True, NO_CACHE))
+        observed: Final = answered(endpoint, True, response)
+        assert ends_cleanly(endpoint, response.text), response.text
+        assert (observed.answer, observed.finishes) == (FIRST_HALF.text, (cut_off(endpoint),)), observed
+        assert (observed.usage, observed.errors) == (FIRST_HALF.usage, ()), observed
+        assert observed.tokens == ((HOP_TOKEN,) if carries_token(endpoint, True) else ()), observed
+        assert_one_id(endpoint, True, observed, first_id)
+        opening, continuing = received(wire, provider, True, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
+        assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream"), _cells(PROVIDERS, ENDPOINTS))
+def test_third_request_left_unanswered_returns_both_earlier_parts_and_the_second_token_at_the_callers_timeout(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    so_far: Final = FIRST_HALF.text + _MIDDLE.text
+    usage: Final = summed(FIRST_HALF, _MIDDLE)
+    release: Final = threading.Event()
+    with (
+        wire_server(_in_three_requests(first_id, _silent(release))) as wire,
+        contextlib.ExitStack() as cleanup,
+        gateway.scenario() as scenario,
+    ):
+        cleanup.callback(release.set)
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body(endpoint, model, stream, {**NO_CACHE, "timeout": _SILENCE_SECONDS})
+        response: Final = post(gateway, endpoint, body)
+        observed: Final = answered(endpoint, stream, response)
+        assert not stream or ends_cleanly(endpoint, response.text), response.text
+        assert (observed.answer, observed.streamed) == (so_far, so_far), observed
+        assert (observed.finishes, observed.usage, observed.errors) == ((cut_off(endpoint),), usage, ()), observed
+        assert observed.tokens == ((_SECOND_TOKEN,) if carries_token(endpoint, stream) else ()), observed
+        assert_one_id(endpoint, stream, observed, first_id)
+        _assert_each_request_sent_the_token_before_it(wire, provider, stream)
+        assert_billed(model, endpoint, usage, _identities(observed, first_id))
+
+
 def _dropping(dropped: Dropped) -> Callable[[Request], Reply]:
     if dropped == "first":
         return upstream(drops_mid_body(f"dropped-{uuid.uuid4().hex}", PLAIN))
@@ -783,6 +845,49 @@ def test_stream_that_ends_on_an_unfinished_frame_is_still_continued_into_one_joi
         opening, continuing = received(wire, provider, True, (False, True))
         assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
         assert_billed(model, endpoint, _CHAIN_USAGE, _identities(observed, first_id))
+
+
+def _opens_with_no_readable_frame(unread: Unread) -> Answer:
+    match unread:
+        case "dropped":
+            return lambda stream: hop_reply(f"dropped-{uuid.uuid4().hex}", SECOND_HALF, stream, abort_after=0)
+        case "empty":
+            return lambda _stream: Reply(content_type="text/event-stream", chunks=())
+        case "unfinished":
+            return lambda _stream: Reply(content_type="text/event-stream", chunks=(_UNFINISHED_FRAME,))
+        case "silent":
+            return lambda _stream: Reply(
+                content_type="text/event-stream", chunks=(b"\n",), gate_after_first=threading.Event()
+            )
+
+
+def _unread_cells() -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(provider, endpoint, unread, id=f"{provider}-{endpoint}-{unread}")
+        for provider, endpoint, unread in itertools.product(PROVIDERS, ENDPOINTS, _UNREAD)
+    )
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "unread"), _unread_cells())
+def test_continuation_stream_that_opens_but_never_sends_a_readable_frame_ends_with_the_answer_so_far_and_its_token(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, unread: Unread
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    respond: Final = upstream(answers(first_id, FIRST_HALF), _opens_with_no_readable_frame(unread))
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body(endpoint, model, True, {**NO_CACHE, "timeout": _SILENCE_SECONDS})
+        response: Final = post(gateway, endpoint, body)
+        observed: Final = answered(endpoint, True, response)
+        assert ends_cleanly(endpoint, response.text), response.text
+        assert (observed.answer, observed.streamed) == (FIRST_HALF.text, FIRST_HALF.text), observed
+        assert (observed.finishes, observed.usage) == ((cut_off(endpoint),), FIRST_HALF.usage), observed
+        assert observed.tokens == ((HOP_TOKEN,) if carries_token(endpoint, True) else ()), observed
+        assert observed.errors == () and CHECKPOINT not in response.text, response.text
+        assert_one_id(endpoint, True, observed, first_id)
+        opening, continuing = received(wire, provider, True, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
+        assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
 
 
 _MALFORMED: Final[tuple[ParameterSet, ...]] = (
@@ -1189,6 +1294,319 @@ def test_google_searches_across_a_continued_answer_are_all_counted_and_billed_as
         search_fee: Final = number(twin_row["spend"]) - cost_of(PLAIN.usage)
         assert search_fee > 0, twin_row
         assert number(chain_row["spend"]) == pytest.approx(cost_of(_CHAIN_USAGE) + search_fee), (chain_row, twin_row)
+
+
+Spelling = Literal["citations", "citationSources"]
+Earlier = Literal["multibyte", "thought"]
+
+_SPELLINGS: Final[tuple[Spelling, ...]] = ("citations", "citationSources")
+_EARLIER: Final[tuple[Earlier, ...]] = ("multibyte", "thought")
+_CITED_OPENING: Final = Hop(("Grüße aus 東京 🌸, ", "wo der Fuji steht, "), "CONTINUATION", HOP_TOKEN, 20, 7)
+_CITED_CLOSING: Final = Hop(("dann der ", "zweite Teil über Zürich."), "STOP", None, 27, 5)
+_CITED_WHOLE: Final = Hop((_CITED_OPENING.text, _CITED_CLOSING.text), "STOP", None, 20, 12)
+_THOUGHT: Final = "Ich plane die Antwort über 東京 zuerst."
+
+
+@dataclass(frozen=True, slots=True)
+class _Source:
+    phrase: str
+    uri: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Carried:
+    answer: str
+    annotations: tuple[str, ...]
+    citations: tuple[str, ...]
+    retrieved: tuple[str, ...]
+
+
+_OPENING_SOURCE: Final = _Source("der Fuji", "https://example.com/fuji")
+_CLOSING_SOURCE: Final = _Source("über Zürich", "https://example.com/zurich")
+
+
+def _byte_span(text: str, phrase: str) -> dict[str, JsonValue]:
+    # Google measures citation and grounding segment offsets in UTF-8 bytes (ai.google.dev/api/generate-content,
+    # Segment and CitationSource, read 2026-10-14)
+    start: Final = text.encode().index(phrase.encode())
+    return {"startIndex": start, "endIndex": start + len(phrase.encode())}
+
+
+def _cited_metadata(text: str, sources: Sequence[_Source], spelling: Spelling) -> dict[str, JsonValue]:
+    return {
+        "citationMetadata": {spelling: [{**_byte_span(text, source.phrase), "uri": source.uri} for source in sources]},
+        "urlContextMetadata": {
+            "urlMetadata": [
+                {"retrievedUrl": source.uri, "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"} for source in sources
+            ]
+        },
+        "groundingMetadata": {
+            "groundingChunks": [{"web": {"uri": source.uri, "title": source.phrase}} for source in sources],
+            "groundingSupports": [
+                {
+                    "segment": {**_byte_span(text, source.phrase), "text": source.phrase},
+                    "groundingChunkIndices": [index],
+                }
+                for index, source in enumerate(sources)
+            ],
+        },
+    }
+
+
+def _opening_metadata(spelling: Spelling) -> dict[str, JsonValue]:
+    return _cited_metadata(_CITED_OPENING.text, (_OPENING_SOURCE,), spelling)
+
+
+def _decorated(
+    reply: dict[str, JsonValue], thought: str | None, metadata: Mapping[str, JsonValue]
+) -> dict[str, JsonValue]:
+    candidate: Final = at(reply, "candidates", 0)
+    assert isinstance(candidate, dict), reply
+    thoughts: Final[tuple[JsonValue, ...]] = ({"text": thought, "thought": True},) if thought else ()
+    content: Final[dict[str, JsonValue]] = {
+        "role": "model",
+        "parts": [*thoughts, *items_of(at(candidate, "content", "parts"))],
+    }
+    return {**reply, "candidates": [{**candidate, "content": content, **metadata}]}
+
+
+def _citing(response_id: str, hop: Hop, metadata: Mapping[str, JsonValue], thought: str | None) -> Answer:
+    def reply(stream: bool) -> Reply:
+        if stream:
+            opening, closing = stream_frames(response_id, hop)
+            return sse((_decorated(opening, thought, NOTHING_EXTRA), _decorated(closing, None, metadata)))
+        whole: Final = frame(response_id, hop.text, hop.usage, hop.finish, hop.token)
+        return Reply(body=json.dumps(_decorated(whole, thought, metadata)).encode())
+
+    return reply
+
+
+def _canonical(values: Iterable[JsonValue]) -> tuple[str, ...]:
+    return tuple(sorted(json.dumps(value, sort_keys=True) for value in values))
+
+
+def _entries(listed: JsonValue, *keys: str) -> Iterator[JsonValue]:
+    return itertools.chain.from_iterable(
+        items_of(at(entry, key)) for entry, key in itertools.product(items_of(listed), keys)
+    )
+
+
+def _chat_carried(payloads_seen: Sequence[dict[str, JsonValue]], message: str) -> _Carried:
+    return _Carried(
+        answer="".join(text_of(at(payload, "choices", 0, message, "content")) for payload in payloads_seen),
+        annotations=_canonical(
+            itertools.chain.from_iterable(
+                items_of(at(payload, "choices", 0, message, "annotations")) for payload in payloads_seen
+            )
+        ),
+        citations=_canonical(
+            itertools.chain.from_iterable(
+                _entries(payload.get("vertex_ai_citation_metadata"), "citations", "citationSources")
+                for payload in payloads_seen
+            )
+        ),
+        retrieved=_canonical(
+            itertools.chain.from_iterable(
+                _entries(payload.get("vertex_ai_url_context_metadata"), "urlMetadata") for payload in payloads_seen
+            )
+        ),
+    )
+
+
+def _output_parts(response: JsonValue) -> Iterator[JsonValue]:
+    messages: Final = (item for item in items_of(at(response, "output")) if at(item, "type") == "message")
+    return itertools.chain.from_iterable(items_of(at(item, "content")) for item in messages)
+
+
+def _responses_carried(response: JsonValue) -> _Carried:
+    return _Carried(
+        answer=output_text(response),
+        annotations=_canonical(
+            itertools.chain.from_iterable(items_of(at(part, "annotations")) for part in _output_parts(response))
+        ),
+        citations=(),
+        retrieved=(),
+    )
+
+
+def _completed(events: Sequence[dict[str, JsonValue]]) -> JsonValue:
+    (completed,) = (event.get("response") for event in events if event.get("type") == "response.completed")
+    return completed
+
+
+def _carried(endpoint: Endpoint, stream: bool, response: httpx.Response) -> _Carried:
+    assert response.status_code == 200, response.text
+    seen_payloads: Final = payloads(response.text, stream)
+    match (endpoint, stream):
+        case ("chat", False):
+            return _chat_carried(seen_payloads, "message")
+        case ("chat", True):
+            return _chat_carried(seen_payloads, "delta")
+        case ("responses", False):
+            return _responses_carried(seen_payloads[0])
+        case ("responses", True):
+            return _responses_carried(_completed(seen_payloads))
+        case _:
+            raise AssertionError(f"No citations are read from {endpoint}")
+
+
+def _citation_cells() -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(
+            provider,
+            endpoint,
+            stream,
+            spelling,
+            earlier,
+            id=f"{provider}-{endpoint}-{_mode(stream)}-{spelling}-{earlier}",
+        )
+        for provider, endpoint, stream, spelling, earlier in itertools.product(
+            PROVIDERS, ("chat", "responses"), (False, True), _SPELLINGS, _EARLIER
+        )
+    )
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream", "spelling", "earlier"), _citation_cells())
+def test_citations_and_url_context_of_a_continued_answer_match_what_one_request_for_the_whole_answer_returns(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool, spelling: Spelling, earlier: Earlier
+) -> None:
+    thought: Final = _THOUGHT if earlier == "thought" else None
+    chained: Final = upstream(
+        _citing(f"first-{uuid.uuid4().hex}", _CITED_OPENING, _opening_metadata(spelling), thought),
+        _citing(
+            f"second-{uuid.uuid4().hex}",
+            _CITED_CLOSING,
+            _cited_metadata(_CITED_CLOSING.text, (_CLOSING_SOURCE,), spelling),
+            None,
+        ),
+    )
+    in_one_request: Final = upstream(
+        _citing(
+            f"plain-{uuid.uuid4().hex}",
+            _CITED_WHOLE,
+            _cited_metadata(_CITED_WHOLE.text, (_OPENING_SOURCE, _CLOSING_SOURCE), spelling),
+            thought,
+        )
+    )
+    with wire_server(chained) as wire, wire_server(in_one_request) as twin_wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        twin: Final = register(gateway, scenario, provider, twin_wire)
+        continued: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, model, stream)))
+        alone: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, twin, stream)))
+        assert alone.answer == _CITED_WHOLE.text and len(alone.annotations) == 2, alone
+        assert endpoint != "chat" or (len(alone.citations), len(alone.retrieved)) == (2, 2), alone
+        assert continued == alone, (continued, alone)
+        assert len(wire.drain()) == 2
+
+
+def _unplaced_cells() -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(provider, endpoint, stream, spelling, id=f"{provider}-{endpoint}-{_mode(stream)}-{spelling}")
+        for provider, endpoint, stream, spelling in itertools.product(
+            PROVIDERS, ("chat", "responses"), (False, True), _SPELLINGS
+        )
+    )
+
+
+def _cited_uris(carried: _Carried) -> frozenset[JsonValue]:
+    return frozenset(JSON_OBJECT.validate_json(cited).get("uri") for cited in carried.citations)
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream", "spelling"), _unplaced_cells())
+def test_later_request_citing_a_source_with_no_offsets_returns_what_one_request_for_the_whole_answer_returns(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool, spelling: Spelling
+) -> None:
+    # Google marks every CitationSource field optional, endIndex included (ai.google.dev/api/generate-content,
+    # CitationSource, read 2026-10-14)
+    unplaced: Final[JsonValue] = {"uri": _CLOSING_SOURCE.uri}
+    placed: Final[JsonValue] = {**_byte_span(_CITED_OPENING.text, _OPENING_SOURCE.phrase), "uri": _OPENING_SOURCE.uri}
+    chained: Final = upstream(
+        _citing(f"first-{uuid.uuid4().hex}", _CITED_OPENING, {"citationMetadata": {spelling: [placed]}}, None),
+        _citing(f"second-{uuid.uuid4().hex}", _CITED_CLOSING, {"citationMetadata": {spelling: [unplaced]}}, None),
+    )
+    in_one_request: Final = upstream(
+        _citing(f"plain-{uuid.uuid4().hex}", _CITED_WHOLE, {"citationMetadata": {spelling: [placed, unplaced]}}, None)
+    )
+    with wire_server(chained) as wire, wire_server(in_one_request) as twin_wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        twin: Final = register(gateway, scenario, provider, twin_wire)
+        continued: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, model, stream)))
+        alone: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, twin, stream)))
+        assert alone.answer == continued.answer == _CITED_WHOLE.text, (continued, alone)
+        assert stream or endpoint != "chat" or _OPENING_SOURCE.uri in _cited_uris(alone), alone
+        assert _cited_uris(continued) == _cited_uris(alone), (continued, alone)
+        assert len(wire.drain()) == 2
+
+
+OddMetadata = Literal["citations_null", "citations_empty", "url_context_null", "url_context_empty", "both_missing"]
+
+_ODD_METADATA: Final[Mapping[OddMetadata, Mapping[str, JsonValue]]] = MappingProxyType(
+    {
+        "citations_null": {"citationMetadata": None},
+        "citations_empty": {"citationMetadata": {}},
+        "url_context_null": {"urlContextMetadata": None},
+        "url_context_empty": {"urlContextMetadata": {}},
+        "both_missing": NOTHING_EXTRA,
+    }
+)
+_OLDER_BACKEND: Final = "gemini-3.8-flash"
+_ODD_ANSWERS: Final[tuple[tuple[str, tuple[Hop, ...]], ...]] = (
+    (BACKEND, (PLAIN,)),
+    (BACKEND, (FIRST_HALF, SECOND_HALF)),
+    (_OLDER_BACKEND, (PLAIN,)),
+    (_OLDER_BACKEND, (FIRST_HALF, SECOND_HALF)),
+)
+
+
+def _odd(response_id: str, hop: Hop, backend: str, metadata: Mapping[str, JsonValue]) -> Answer:
+    def reply(stream: bool) -> Reply:
+        frames: Final = (
+            stream_frames(response_id, hop)
+            if stream
+            else (frame(response_id, hop.text, hop.usage, hop.finish, hop.token),)
+        )
+        odd: Final = tuple({**_decorated(item, None, metadata), "modelVersion": backend} for item in frames)
+        return sse(odd) if stream else Reply(body=json.dumps(odd[0]).encode())
+
+    return reply
+
+
+def _odd_cells() -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(
+            provider,
+            endpoint,
+            stream,
+            backend,
+            hops,
+            odd,
+            id=f"{provider}-{endpoint}-{_mode(stream)}-{backend}-{len(hops)}-requests-{odd}",
+        )
+        for provider, endpoint, stream, (backend, hops), odd in itertools.product(
+            PROVIDERS, ENDPOINTS, (False, True), _ODD_ANSWERS, _ODD_METADATA
+        )
+    )
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream", "backend", "hops", "odd"), _odd_cells())
+def test_null_empty_or_missing_citation_and_url_context_metadata_still_returns_the_whole_answer(
+    gateway: Gateway,
+    provider: Provider,
+    endpoint: Endpoint,
+    stream: bool,
+    backend: str,
+    hops: tuple[Hop, ...],
+    odd: OddMetadata,
+) -> None:
+    replies: Final = tuple(_odd(f"odd-{uuid.uuid4().hex}", hop, backend, _ODD_METADATA[odd]) for hop in hops)
+    with wire_server(upstream(*replies)) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire, backend=backend)
+        response: Final = post(gateway, endpoint, request_body(endpoint, model, stream))
+        observed: Final = answered(endpoint, stream, response)
+        assert not stream or ends_cleanly(endpoint, response.text), response.text
+        assert observed.answer == "".join(hop.text for hop in hops) and observed.errors == (), observed
+        assert observed.finishes == (complete(endpoint),), observed
+        assert len(wire.drain()) == len(hops)
 
 
 _OTHER_BODY: Final[Mapping[str, JsonValue]] = {

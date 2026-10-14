@@ -145,7 +145,7 @@ def sum_usage_metadata(first: UsageMetadata, *rest: UsageMetadata) -> UsageMetad
 
 def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     content: Final = candidate.get("content")
-    return content.get("parts", ()) if content is not None else ()
+    return (content.get("parts") or ()) if content is not None else ()
 
 
 def per_hop(metadata: _Metadata | tuple[_Metadata, ...]) -> tuple[_Metadata, ...]:
@@ -157,20 +157,24 @@ def _candidate_grounding(candidate: Candidates) -> tuple[GroundingMetadata, ...]
     return () if grounding is None else per_hop(grounding)
 
 
-def _answer_bytes(candidate: Candidates) -> int:
-    return sum(
-        len(part["text"].encode()) for part in _candidate_parts(candidate) if "text" in part and not part.get("thought")
-    )
+def _answer_text(part: HttpxPartType) -> str:
+    text: Final = part.get("text")
+    return text if isinstance(text, str) and not part.get("thought") else ""
+
+
+def answer_bytes(candidate: Candidates) -> int:
+    return sum(len(text.encode()) for text in map(_answer_text, _candidate_parts(candidate)))
 
 
 def _shifted_support(support: GroundingSupport, offset: int) -> GroundingSupport:
     segment: Final = support.get("segment")
-    if segment is None:
+    end: Final = None if segment is None else _int_or_none(segment.get("endIndex"))
+    if segment is None or end is None:
         return support
     shifted: Final[GroundingSegment] = {
         **segment,
         "startIndex": (segment.get("startIndex") or 0) + offset,
-        "endIndex": segment.get("endIndex", 0) + offset,
+        "endIndex": end + offset,
     }
     return {**support, "segment": shifted}
 
@@ -189,11 +193,10 @@ def _hop_grounding(candidate: Candidates, offset: int) -> tuple[GroundingMetadat
 
 
 def _shifted_citation(citation: Citation, offset: int) -> Citation:
-    return {
-        **citation,
-        "startIndex": (citation.get("startIndex") or 0) + offset,
-        "endIndex": citation["endIndex"] + offset,
-    }
+    end: Final = _int_or_none(citation.get("endIndex"))
+    if end is None:
+        return citation
+    return {**citation, "startIndex": (citation.get("startIndex") or 0) + offset, "endIndex": end + offset}
 
 
 def _shifted_citation_metadata(metadata: CitationMetadata, offset: int) -> CitationMetadata:
@@ -218,13 +221,22 @@ def _hop_citations(candidate: Candidates, offset: int) -> tuple[CitationMetadata
     return tuple(_shifted_citation_metadata(item, offset) for item in per_hop(metadata))
 
 
+def with_spans_shifted(candidate: Candidates, offset: int) -> Candidates:
+    if not offset:
+        return candidate
+    grounding: Final = _hop_grounding(candidate, offset)
+    citations: Final = _hop_citations(candidate, offset)
+    with_grounding: Final[Candidates] = {**candidate, "groundingMetadata": grounding} if grounding else candidate
+    return {**with_grounding, "citationMetadata": citations} if citations else with_grounding
+
+
 def _hop_url_context(candidate: Candidates) -> tuple[UrlContextMetadata, ...]:
     url_context: Final = candidate.get("urlContextMetadata")
     return () if url_context is None else per_hop(url_context)
 
 
 def _with_hop_metadata(candidate: Candidates, hop_candidates: Sequence[Candidates]) -> Candidates:
-    offsets: Final = tuple(accumulate(map(_answer_bytes, hop_candidates[:-1]), initial=0))
+    offsets: Final = tuple(accumulate(map(answer_bytes, hop_candidates[:-1]), initial=0))
     grounding: Final = tuple(chain.from_iterable(map(_hop_grounding, hop_candidates, offsets)))
     with_grounding: Final[Candidates] = {**candidate, "groundingMetadata": grounding} if grounding else candidate
     citations: Final = tuple(chain.from_iterable(map(_hop_citations, hop_candidates, offsets)))

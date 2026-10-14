@@ -151,10 +151,18 @@ def upstream(first: Answer, continued: Answer | None = None) -> Callable[[Reques
     return respond
 
 
-def register_vertex(scenario: Scenario, wire: Wire, token_url: str, *, extra_headers: JsonValue = None) -> str:
+def register_vertex(
+    scenario: Scenario,
+    wire: Wire,
+    token_url: str,
+    *,
+    extra_headers: JsonValue = None,
+    backend: str = BACKEND,
+    settings: Mapping[str, JsonValue] = NOTHING_EXTRA,
+) -> str:
     return scenario.model(
-        model=f"vertex_ai/{BACKEND}",
-        api_base=f"{wire.url}{MODEL_PATH}",
+        model=f"vertex_ai/{backend}",
+        api_base=f"{wire.url}{MODEL_PATH.removesuffix(BACKEND)}{backend}",
         api_key=None,
         vertex_project=PROJECT,
         vertex_location=LOCATION,
@@ -162,19 +170,31 @@ def register_vertex(scenario: Scenario, wire: Wire, token_url: str, *, extra_hea
         input_cost_per_token=INPUT_COST,
         output_cost_per_token=OUTPUT_COST,
         extra_headers=extra_headers,
+        model_info=None,
+        **settings,
     )
 
 
-def register(gateway: Gateway, scenario: Scenario, provider: Provider, wire: Wire) -> str:
+def register(
+    gateway: Gateway,
+    scenario: Scenario,
+    provider: Provider,
+    wire: Wire,
+    *,
+    backend: str = BACKEND,
+    settings: Mapping[str, JsonValue] = NOTHING_EXTRA,
+) -> str:
     if provider == "gemini":
         return scenario.model(
-            model=f"gemini/{BACKEND}",
+            model=f"gemini/{backend}",
             api_base=wire.url,
             api_key=API_KEY,
             input_cost_per_token=INPUT_COST,
             output_cost_per_token=OUTPUT_COST,
+            model_info=None,
+            **settings,
         )
-    return register_vertex(scenario, wire, gateway.upstream_url.rstrip("/"))
+    return register_vertex(scenario, wire, gateway.upstream_url.rstrip("/"), backend=backend, settings=settings)
 
 
 def target(provider: Provider, stream: bool, continued: bool = False) -> str:

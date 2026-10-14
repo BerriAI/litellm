@@ -255,20 +255,17 @@ def _citing(
     return {**body, "candidates": [{**candidates[0], "content": {"role": "model", "parts": list(parts)}, **metadata}]}
 
 
-def _hops_citing_sources(citation_key: str) -> tuple[httpx.Response, httpx.Response]:
+def _hops_citing_sources(citation_key: str, stream: bool = False) -> tuple[httpx.Response, httpx.Response]:
+    thought: Final = {"text": "Planning the report", "thought": True}
     hop_1_text: Final = HOP_1_GROUNDED + HOP_1_CITED
-    hop_1: Final = _citing(
-        HOP_1,
-        [{"text": "Planning the report", "thought": True}, {"text": hop_1_text}],
-        {
-            "groundingMetadata": {
-                "groundingChunks": [{"web": {"uri": "https://example.com/arboretum", "title": "arboretum"}}],
-                "groundingSupports": [_support(hop_1_text, HOP_1_GROUNDED)],
-            },
-            "citationMetadata": {citation_key: [_citation(hop_1_text, HOP_1_CITED.strip())]},
-            "urlContextMetadata": URL_CONTEXT,
+    hop_1_metadata: Final = {
+        "groundingMetadata": {
+            "groundingChunks": [{"web": {"uri": "https://example.com/arboretum", "title": "arboretum"}}],
+            "groundingSupports": [_support(hop_1_text, HOP_1_GROUNDED)],
         },
-    )
+        "citationMetadata": {citation_key: [_citation(hop_1_text, HOP_1_CITED.strip())]},
+        "urlContextMetadata": URL_CONTEXT,
+    }
     hop_2: Final = _citing(
         HOP_2,
         [{"text": HOP_2_GROUNDED}],
@@ -280,6 +277,10 @@ def _hops_citing_sources(citation_key: str) -> tuple[httpx.Response, httpx.Respo
             "citationMetadata": {citation_key: [_citation(HOP_2_GROUNDED, "1826")]},
         },
     )
+    if stream:
+        opening: Final = {"candidates": [{"content": {"role": "model", "parts": [thought, {"text": HOP_1_GROUNDED}]}}]}
+        return _sse(opening, _citing(HOP_1, [{"text": HOP_1_CITED}], hop_1_metadata)), _sse(hop_2)
+    hop_1: Final = _citing(HOP_1, [thought, {"text": hop_1_text}], hop_1_metadata)
     return httpx.Response(200, json=hop_1), httpx.Response(200, json=hop_2)
 
 
@@ -379,11 +380,8 @@ async def test_unary_long_decode_keeps_earlier_citations_and_url_context_when_a_
     ]
 
 
-@pytest.mark.asyncio
-async def test_unary_long_decode_counts_a_follow_ups_null_start_index_from_the_start_of_its_text():
-    sent: Final[list[dict[str, object]]] = []
-    span: Final = {"startIndex": None, "endIndex": len(" wo")}
-    hop_2: Final = _carrying(
+def _hop_2_spanning(span: Mapping[str, object]) -> dict[str, object]:
+    return _carrying(
         HOP_2,
         {
             "groundingMetadata": {
@@ -394,12 +392,63 @@ async def test_unary_long_decode_counts_a_follow_ups_null_start_index_from_the_s
         },
     )
 
+
+def _chunk_metadata(chunks: Sequence[object], field: str) -> list[Mapping[str, object]]:
+    return list(chain.from_iterable(getattr(chunk, field, None) or () for chunk in chunks))
+
+
+async def _answer_with_spans(
+    stream: bool, hop_2: Mapping[str, object], sent: list[dict[str, object]]
+) -> tuple[str, list[Mapping[str, object]], list[Mapping[str, object]]]:
+    if stream:
+        chunks: Final = await _collect_stream(True, (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(hop_2)), sent)
+        return (
+            _stream_text(chunks),
+            _supported_spans(_chunk_metadata(chunks, "vertex_ai_grounding_metadata")),
+            _cited_spans(_chunk_metadata(chunks, "vertex_ai_citation_metadata"), "citations"),
+        )
     response: Final = await _answer((httpx.Response(200, json=HOP_1), httpx.Response(200, json=hop_2)), sent)
-    answer: Final = response.choices[0].message.content
+    return (
+        response.choices[0].message.content,
+        _supported_spans(response.vertex_ai_grounding_metadata),
+        _cited_spans(response.vertex_ai_citation_metadata, "citations"),
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_long_decode_counts_a_follow_ups_null_start_index_from_the_start_of_its_text(stream: bool):
+    sent: Final[list[dict[str, object]]] = []
+
+    answer, supported, cited = await _answer_with_spans(
+        stream, _hop_2_spanning({"startIndex": None, "endIndex": len(" wo")}), sent
+    )
 
     assert answer == "hello world"
-    assert [_bytes_at(answer, s) for s in _supported_spans(response.vertex_ai_grounding_metadata)] == [" wo"]
-    assert [_bytes_at(answer, s) for s in _cited_spans(response.vertex_ai_citation_metadata, "citations")] == [" wo"]
+    assert [_bytes_at(answer, s) for s in supported] == [" wo"]
+    assert [_bytes_at(answer, s) for s in cited] == [" wo"]
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        pytest.param({}, id="no_offsets"),
+        pytest.param({"startIndex": 1}, id="missing_end"),
+        pytest.param({"startIndex": 1, "endIndex": None}, id="null_end"),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_long_decode_returns_a_follow_ups_span_with_no_end_index_as_google_sent_it(
+    stream: bool, span: Mapping[str, object]
+):
+    sent: Final[list[dict[str, object]]] = []
+
+    answer, supported, cited = await _answer_with_spans(stream, _hop_2_spanning(span), sent)
+
+    assert answer == "hello world"
+    assert supported == [{**span, "text": " wo"}]
+    assert cited == [{**span, "uri": "https://example.com/world"}]
 
 
 @pytest.mark.parametrize(
@@ -643,6 +692,26 @@ async def test_streamed_answer_whose_chunks_carry_no_citations_or_url_context_is
     assert len(sent) == len(hop_chunks)
     assert _stream_text(chunks) == answer
     assert _stream_finish_reasons(chunks) == ["stop"]
+
+
+@pytest.mark.parametrize("citation_key", ["citations", "citationSources"])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_points_every_hops_citations_into_the_whole_answer(
+    is_async: bool, citation_key: str
+):
+    sent: Final[list[dict[str, object]]] = []
+
+    chunks: Final = await _collect_stream(is_async, _hops_citing_sources(citation_key, stream=True), sent)
+    answer: Final = _stream_text(chunks)
+    supported: Final = _supported_spans(_chunk_metadata(chunks, "vertex_ai_grounding_metadata"))
+    cited: Final = _cited_spans(_chunk_metadata(chunks, "vertex_ai_citation_metadata"), citation_key)
+
+    assert len(sent) == 2
+    assert answer == HOP_1_GROUNDED + HOP_1_CITED + HOP_2_GROUNDED
+    assert [span["text"] for span in supported] == [HOP_1_GROUNDED, HOP_2_GROUNDED]
+    assert [_bytes_at(answer, span) for span in supported] == [HOP_1_GROUNDED, HOP_2_GROUNDED]
+    assert [_bytes_at(answer, span) for span in cited] == [HOP_1_CITED.strip(), "1826"]
 
 
 @pytest.mark.parametrize("next_request_fails", [False, True])

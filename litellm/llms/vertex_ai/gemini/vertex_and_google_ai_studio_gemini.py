@@ -103,6 +103,7 @@ from .long_decode import (
     LongDecodeHops,
     StreamResume,
     SyncStreamResume,
+    answer_bytes,
     client_continuation_token,
     collect_hops_async,
     collect_hops_sync,
@@ -119,6 +120,7 @@ from .long_decode import (
     sum_usage_metadata,
     url_for,
     with_initial_prompt_tokens,
+    with_spans_shifted,
 )
 from .transformation import (
     async_transform_request_body,
@@ -3425,6 +3427,8 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        self._answer_offset: int = 0
+        self._hop_answer_bytes: int = 0
 
     @property
     def accumulated_json(self) -> str:
@@ -3590,7 +3594,9 @@ class ModelResponseIterator:
 
             from litellm.types.utils import ModelResponseStream
 
-            processed_chunk: Final = self._with_usage_offset(GenerateContentResponseBody(**chunk))
+            processed_chunk: Final = self._with_answer_offset(
+                self._with_usage_offset(GenerateContentResponseBody(**chunk))
+            )
             response_id: Final = self._first_response_id or processed_chunk.get("responseId")
             served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
@@ -3643,6 +3649,15 @@ class ModelResponseIterator:
             return chunk
         return {**chunk, "usageMetadata": sum_usage_metadata(self._usage_offset, self._hop_usage)}
 
+    def _with_answer_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
+        candidates: Final = chunk.get("candidates")
+        if self._output_cap is None or not candidates:
+            return chunk
+        self._hop_answer_bytes += answer_bytes(candidates[0])
+        if not self._answer_offset:
+            return chunk
+        return {**chunk, "candidates": [with_spans_shifted(candidates[0], self._answer_offset), *candidates[1:]]}
+
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
             return
@@ -3670,6 +3685,8 @@ class ModelResponseIterator:
         self._hop_usage = UsageMetadata()
         self._grounding_offset = (*self._grounding_offset, *self._hop_grounding)
         self._hop_grounding = ()
+        self._answer_offset += self._hop_answer_bytes
+        self._hop_answer_bytes = 0
         self._json_buffer = JSONFragmentAccumulator()
         self._unanswered_hop_token = token
         self.response = response
