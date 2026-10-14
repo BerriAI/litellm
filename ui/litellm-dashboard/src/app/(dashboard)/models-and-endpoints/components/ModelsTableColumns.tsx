@@ -1,6 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import { CredentialIdentity } from "@/components/shared/CredentialIdentity";
 import { Copy, Info, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
@@ -160,7 +161,7 @@ function CredentialsHeader() {
   );
 }
 
-function CredentialsCell({ credentialName }: { credentialName: string | undefined }) {
+function CredentialsCell({ credentialName, label }: { credentialName: string | undefined; label: string | undefined }) {
   if (!credentialName) {
     return (
       <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
@@ -171,10 +172,12 @@ function CredentialsCell({ credentialName }: { credentialName: string | undefine
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-info" title={credentialName}>
-      <RefreshCw className="size-3 shrink-0" />
-      <span className="truncate">{credentialName}</span>
-    </span>
+    <CredentialIdentity
+      credentialName={credentialName}
+      label={label}
+      icon={<RefreshCw className="size-3 shrink-0" />}
+      className="text-xs font-medium text-info"
+    />
   );
 }
 
@@ -364,6 +367,7 @@ export interface ModelsTableColumnDeps {
   onDeleteClick?: (modelId: string) => void;
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
   pausingModelId?: string | null;
+  credentialLabels?: ReadonlyMap<string, string>;
 }
 
 export const getModelsTableColumns = ({
@@ -375,6 +379,7 @@ export const getModelsTableColumns = ({
   onDeleteClick,
   onTogglePauseClick,
   pausingModelId,
+  credentialLabels,
 }: ModelsTableColumnDeps): ColumnDef<ModelData>[] => [
   {
     id: MODEL_ID_COLUMN_ID,
@@ -412,7 +417,15 @@ export const getModelsTableColumns = ({
     enableSorting: false,
     size: 180,
     minSize: 110,
-    cell: ({ row }) => <CredentialsCell credentialName={row.original.litellm_params?.litellm_credential_name} />,
+    cell: ({ row }) => {
+      const credentialName = row.original.litellm_params?.litellm_credential_name;
+      return (
+        <CredentialsCell
+          credentialName={credentialName}
+          label={credentialName ? credentialLabels?.get(credentialName) : undefined}
+        />
+      );
+    },
   },
   {
     id: CREATED_BY_COLUMN_ID,

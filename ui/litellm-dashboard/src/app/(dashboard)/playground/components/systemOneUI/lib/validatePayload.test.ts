@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SYSTEM_ONE_EXAMPLE } from "./example";
-import { validateSystemOnePayload } from "./validatePayload";
+import { validateOpenAIDecisionsPayload, validateSystemOnePayload } from "./validatePayload";
 
 const requestWith = (fields: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -329,5 +329,47 @@ describe("validateSystemOnePayload", () => {
 
   it("accepts the built-in example without issues", () => {
     expect(validateSystemOnePayload(JSON.stringify(SYSTEM_ONE_EXAMPLE))).toMatchObject({ isValid: true, issues: [] });
+  });
+});
+
+describe("blank context", () => {
+  const question = { type: "choice", instructions: "Pick one", criteria: { a: "", b: "" } };
+
+  it.each(["", "   "])("rejects /v1/systemone with state %j even when the schema passes", (state) => {
+    const result = validateSystemOnePayload(JSON.stringify({ state, questions: { q: question } }), "/v1/systemone");
+    expect(result).toMatchObject({ isValid: false, payload: expect.anything() });
+    expect(result.issues.map((issue) => issue.path)).toEqual(["state"]);
+  });
+
+  it("reports only the missing state while the blank question is still invalid", () => {
+    const raw = JSON.stringify({ state: "", questions: { "": { type: "choice", instructions: "", criteria: {} } } });
+    expect(validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.path)).toEqual(["state"]);
+    const filled = validateSystemOnePayload(raw.replace('"state":""', '"state":"A ticket"'), "/v1/systemone");
+    expect(filled.isValid).toBe(false);
+    expect(filled.issues).toContainEqual({
+      path: "questions",
+      message: "Give every question a name.",
+      severity: "error",
+    });
+  });
+
+  it("accepts /v1/systemone once the state carries text", () => {
+    const raw = JSON.stringify({ state: "A customer wrote in", questions: { q: question } });
+    expect(validateSystemOnePayload(raw, "/v1/systemone")).toMatchObject({ isValid: true, issues: [] });
+  });
+
+  it.each(["", "  ", []])("rejects /v1/decisions with %j input even when the schema passes", (input) => {
+    const raw = JSON.stringify({ input, questions: [{ type: "predicate", name: "q", instructions: "Is it?" }] });
+    const result = validateOpenAIDecisionsPayload(raw);
+    expect(result.isValid).toBe(false);
+    expect(result.issues.map((issue) => issue.path)).toEqual(["input"]);
+  });
+
+  it("accepts /v1/decisions once the input carries text", () => {
+    const raw = JSON.stringify({
+      input: "Ship it?",
+      questions: [{ type: "predicate", name: "q", instructions: "Is it?" }],
+    });
+    expect(validateOpenAIDecisionsPayload(raw)).toMatchObject({ isValid: true, issues: [] });
   });
 });
