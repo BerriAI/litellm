@@ -533,6 +533,94 @@ def test_completion_drops_unanswered_claude_tool_search_calls_before_the_respons
     ]
 
 
+def _openai_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    return tuple(call["function"]["name"] for message in messages for call in message.get("tool_calls") or ())
+
+
+def _converse_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    blocks: Final = tuple(block for message in messages for block in message["content"])
+    return tuple(block["toolUse"]["name"] for block in blocks if "toolUse" in block)
+
+
+def _gemini_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    contents: Final = body["contents"]
+    assert isinstance(contents, list)
+    parts: Final = tuple(part for content in contents for part in content["parts"])
+    return tuple(part["function_call"]["name"] for part in parts if "function_call" in part)
+
+
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-turn2",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "18C"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "route_kwargs", "url_pattern", "reply", "called_names", "sent_names"),
+    [
+        pytest.param(
+            "azure/gpt-4o",
+            {"api_base": "https://turn2.openai.azure.com", "api_key": "fake", "api_version": "2024-10-21"},
+            r"https://turn2\.openai\.azure\.com/openai/deployments/gpt-4o/chat/completions.*",
+            _OPENAI_CHAT_REPLY,
+            _openai_called_names,
+            ("get_weather",),
+            id="azure-openai-strips",
+        ),
+        pytest.param(
+            "bedrock/us.anthropic.claude-opus-5-5",
+            {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"},
+            r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "18C"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            _converse_called_names,
+            ("get_weather",),
+            id="bedrock-converse-strips",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            {"api_key": "fake"},
+            r"https://generativelanguage\.googleapis\.com/.*:generateContent.*",
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "18C"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            _gemini_called_names,
+            ("tool_search_tool_regex", "get_weather"),
+            id="gemini-keeps",
+        ),
+    ],
+)
+def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes_that_reject_it(
+    respx_mock: respx.MockRouter, model, route_kwargs, url_pattern, reply, called_names, sent_names
+):
+    route: Final = respx_mock.post(url__regex=url_pattern).respond(json=reply)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        **route_kwargs,
+    )
+
+    assert called_names(json.loads(route.calls.last.request.content)) == sent_names
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):

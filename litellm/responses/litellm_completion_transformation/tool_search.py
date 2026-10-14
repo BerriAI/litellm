@@ -21,6 +21,7 @@ __all__ = [
     "build_tool_search_call",
     "chat_config_builds_anthropic_request",
     "chat_messages_without_tool_search_calls",
+    "chat_route_rejects_unanswered_tool_calls",
     "has_server_tool_search",
     "holds_tool_search_use",
     "is_anthropic_tool_search_chat_tool",
@@ -87,6 +88,17 @@ def chat_config_builds_anthropic_request(chat_config: object) -> bool:
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
+
+
+_PROVIDERS_REJECTING_UNANSWERED_TOOL_CALLS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
+
+
+def chat_route_rejects_unanswered_tool_calls(custom_llm_provider: str | None, chat_config: object) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    return custom_llm_provider in _PROVIDERS_REJECTING_UNANSWERED_TOOL_CALLS or isinstance(
+        chat_config, AmazonConverseConfig
+    )
 
 
 class CompletionRoute(LiteLLMBaseModel):

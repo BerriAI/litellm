@@ -1090,15 +1090,15 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
 
 
 def _history_without_unanswered_tool_search_calls(
-    messages: Sequence[object], provider_config: BaseConfig
+    messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
 ) -> tuple[object, ...] | None:
     from litellm.responses.litellm_completion_transformation.tool_search import (
-        chat_config_builds_anthropic_request,
         chat_messages_without_tool_search_calls,
+        chat_route_rejects_unanswered_tool_calls,
         unanswered_tool_search_call_ids,
     )
 
-    if chat_config_builds_anthropic_request(provider_config):
+    if not chat_route_rejects_unanswered_tool_calls(custom_llm_provider, provider_config):
         return None
     unanswered_search_call_ids: Final = unanswered_tool_search_call_ids(messages)
     if not unanswered_search_call_ids:
@@ -5575,7 +5575,7 @@ def completion(
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
-                translated_messages, provider_config
+                translated_messages, custom_llm_provider, provider_config
             )
             messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
                 translated_messages if history_for_route is None else list(history_for_route)
