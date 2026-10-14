@@ -7649,8 +7649,15 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        rejected_client_side: Final = isinstance(e, litellm.UnsupportedParamsError) and not self.fallback_on_unsupported_params
-        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e) or rejected_client_side:
+        rejected_client_side: Final = (
+            isinstance(e, litellm.UnsupportedParamsError) and not self.fallback_on_unsupported_params
+        )
+        if (
+            disable_fallbacks is True
+            or original_model_group is None
+            or is_guardrail_intervention(e)
+            or rejected_client_side
+        ):
             raise e
 
         input_kwargs: Final = {
