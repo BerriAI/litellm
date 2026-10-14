@@ -276,3 +276,8 @@ def test_init_options_defaults() -> None:
     assert options["traces_sample_rate"] == 1.0
     assert options["sample_rate"] == 1.0
     assert options["environment"] == "production"
+
+
+@pytest.mark.parametrize("env", ({}, {"SENTRY_SEND_DEFAULT_PII": "true"}), ids=("default", "pii-opt-in"))
+def test_init_options_never_attach_request_bodies(env: Mapping[str, str]) -> None:
+    assert build_sentry_init_options(env)["max_request_body_size"] == "never"

@@ -85,6 +85,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
+    initialize_sentry,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4885,6 +4886,17 @@ def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
+def sentry_is_configured(general_settings: Mapping[str, object]) -> bool:
+    alerting: Final = general_settings.get("alerting")
+    configured: Final = (
+        *litellm.callbacks,
+        *litellm.success_callback,
+        *litellm.failure_callback,
+        *(alerting if isinstance(alerting, list) else ()),
+    )
+    return any(item == "sentry" for item in configured if isinstance(item, str))
+
+
 def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
@@ -6831,6 +6843,9 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if sentry_is_configured(general_settings):
+            initialize_sentry()
 
         typed_general_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
         ConfigGeneralSettings.model_validate(

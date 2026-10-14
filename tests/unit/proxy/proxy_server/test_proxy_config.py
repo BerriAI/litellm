@@ -186,6 +186,38 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config_text",
+    (
+        "model_list: []\nlitellm_settings:\n  failure_callback:\n    - sentry\n",
+        "model_list: []\ngeneral_settings:\n  alerting:\n    - sentry\n",
+    ),
+    ids=("failure_callback", "alerting"),
+)
+async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(tmp_path, monkeypatch, config_text) -> None:
+    import sentry_sdk
+
+    from litellm.litellm_core_utils import litellm_logging
+
+    init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config_file: Final = tmp_path / "sentry.yaml"
+    config_file.write_text(config_text)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    init.assert_called_once()
+    assert init.call_args.kwargs["max_request_body_size"] == "never"
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
