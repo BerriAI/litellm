@@ -3877,6 +3877,25 @@ async def test_aspeech_stream_closed_mid_clip_marks_the_spend_row_as_a_client_di
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_leaves_the_callers_metadata_untouched(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spend_rows: Final = _SpendRowLogger()
+    monkeypatch.setattr(litellm, "callbacks", [spend_rows])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+    caller_metadata: Final = {"user_api_key": "hashed-key"}
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata=caller_metadata)
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    await asyncio.wait_for(spend_rows.rows.get(), timeout=5)
+
+    assert caller_metadata == {"user_api_key": "hashed-key"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("stream", [1, "true"])
 async def test_aspeech_stream_other_than_true_buffers_the_audio(
     respx_mock: respx.MockRouter, speech_logger: _SpeechLogger, stream: object

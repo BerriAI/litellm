@@ -1420,17 +1420,16 @@ def _mark_speech_stream_closed_early(logging_obj: LiteLLMLoggingObject) -> None:
     if not isinstance(litellm_params, dict):
         return
     request_metadata: Final = tuple(
-        metadata for metadata in map(litellm_params.get, ("metadata", "litellm_metadata")) if isinstance(metadata, dict)
+        (key, metadata)
+        for key in ("metadata", "litellm_metadata")
+        if isinstance(metadata := litellm_params.get(key), dict)
     )
-    if not request_metadata:
-        litellm_params["metadata"] = {
+    for key, existing in request_metadata or (("metadata", {}),):
+        litellm_params[key] = {
+            **existing,
             "client_disconnected": True,
             "error_information": dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION),
         }
-        return
-    for metadata in request_metadata:
-        metadata["client_disconnected"] = True
-        metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
 
 def _async_speech_end_logger(
