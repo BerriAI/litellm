@@ -2322,7 +2322,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if setup_model_rewriter is None:
         return text_data
     try:
-        message: Final = json.loads(text_data)
+        message: Final[object] = json.loads(text_data)
     except json.JSONDecodeError:
         return text_data
     if not isinstance(message, dict):
@@ -2357,7 +2357,7 @@ def _resolved_vertex_live_setup(
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        decoded: Final[object] = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2844,9 +2844,16 @@ async def websocket_passthrough_request(
             await websocket.close()
 
 
+def _content_type_header(response: httpx.Response) -> str:
+    try:
+        return response.headers["content-type"]
+    except KeyError:
+        return ""
+
+
 def _is_streaming_response(response: httpx.Response) -> bool:
-    _content_type: Final = response.headers.get("content-type")
-    if _content_type is not None and "text/event-stream" in _content_type:
+    _content_type: Final[str] = _content_type_header(response)
+    if "text/event-stream" in _content_type:
         return True
     return False
 
@@ -2894,7 +2901,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     if response.status_code >= 400:
         return True
-    content_type_header: Final[str] = response.headers.get("content-type", "")
+    content_type_header: Final[str] = _content_type_header(response)
     media_type: Final = content_type_header.split(";")[0].strip().lower()
     return (
         media_type in ("", "application/json")

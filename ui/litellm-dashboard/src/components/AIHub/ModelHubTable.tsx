@@ -44,7 +44,14 @@ import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_MODE,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  displayMode,
+  isDecisionMode,
+} from "@/lib/decisionModels";
+import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -52,10 +59,27 @@ interface ModelHubTableProps {
   premiumUser: boolean;
   userRole: string | null;
   canOpenPlayground: boolean;
+  canAddModels: boolean;
 }
 
 function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
   return isLoading || servers === null;
+}
+
+function modelTableEmptyState(
+  models: readonly ModelHubData[],
+  showsDecisionGarden: boolean,
+  selectedMode: string,
+): { title: string; body: string } {
+  if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
+    return {
+      title: "No model on this proxy uses the decisions mode",
+      body: "The decision models LiteLLM supports are listed below.",
+    };
+  }
+  return models.length > 0
+    ? { title: "No matching models", body: "Adjust the filters to see more models." }
+    : { title: "No models yet", body: "Models added to this proxy will appear here." };
 }
 
 function HubEmptyState({ title, body }: { title: string; body: string }) {
@@ -76,6 +100,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   premiumUser,
   userRole,
   canOpenPlayground,
+  canAddModels,
 }) => {
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
@@ -88,6 +113,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
+  const [selectedMode, setSelectedMode] = useState<string>("");
+  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -479,7 +506,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters
+                    modelHubData={modelHubData || []}
+                    onFilteredDataChange={handleFilteredDataChange}
+                    extraModes={publicPage ? [] : [DECISIONS_MODE]}
+                    onModeChange={setSelectedMode}
+                  />
 
                   {/* Model Table */}
                   <DataTable
@@ -493,14 +525,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
-                      <HubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models yet"}
-                        body={
-                          modelHubData?.length
-                            ? "Adjust the filters to see more models."
-                            : "Models added to this proxy will appear here."
-                        }
-                      />
+                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
                     }
                     size="compact"
                   />
@@ -511,6 +536,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     Showing {filteredData.length} of {modelHubData?.length || 0} models
                   </p>
                 </div>
+
+                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
@@ -672,7 +699,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode || "Not specified"}</p>
+                    <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
