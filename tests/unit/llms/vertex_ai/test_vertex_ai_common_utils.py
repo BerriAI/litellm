@@ -1,11 +1,15 @@
 import time
 from collections.abc import Iterator
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
     convert_anyof_null_to_nullable,
@@ -19,6 +23,7 @@ from litellm.llms.vertex_ai.common_utils import (
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 
 
 @pytest.mark.asyncio
@@ -1475,6 +1480,49 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
         assert result is not None
         assert isinstance(result, TokenCountResponse)
         assert result.total_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_tokens_uses_request_system_over_deployment_system_instruction() -> None:
+    class VertexCountTokensPeer:
+        def __init__(self) -> None:
+            self.request_body: dict[str, JsonValue] | None = None
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            self.request_body = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+            return httpx.Response(200, json={"totalTokens": 37}, request=request)
+
+    peer: Final = VertexCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with (
+        patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(
+            vertex_count_tokens_handler.VertexAITokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "system_instruction": {"parts": [{"text": "deployment-level"}]},
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            system="You are terse.",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 37
+    assert peer.request_body is not None
+    assert peer.request_body["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
 
 
 @pytest.mark.asyncio

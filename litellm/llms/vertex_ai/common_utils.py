@@ -1380,7 +1380,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 {
                     key: value
                     for key, value in token_count_settings.items()
-                    if key not in {"api_key", "api_base", "timeout", "model", "contents", "tools"}
+                    if key not in {"api_key", "api_base", "timeout", "model", "contents", "tools", "system_instruction"}
                 }
             )
             api_key_value: Final = token_count_settings.get("api_key")
