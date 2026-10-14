@@ -85,21 +85,21 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
+        (self.status(), Json(self.openai_body())).into_response()
+    }
+
+    pub(crate) fn openai_body(&self) -> Value {
         let status = self.status();
-        let message = match &self {
+        let message = match self {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
             _ => self.to_string(),
         };
-        (
-            status,
-            Json(json!({"error": {
-                "message": message,
-                "type": error_type(status),
-                "param": null,
-                "code": status.as_u16(),
-            }})),
-        )
-            .into_response()
+        json!({"error": {
+            "message": message,
+            "type": error_type(status),
+            "param": null,
+            "code": status.as_u16(),
+        }})
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
