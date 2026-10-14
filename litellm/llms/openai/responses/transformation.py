@@ -408,9 +408,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             else validated_input
         )
         mapped_tools: Final = (
-            tools_with_anthropic_tool_search_mapped(tools)
-            if self.custom_llm_provider == LlmProviders.OPENAI
-            else tools
+            tools_with_anthropic_tool_search_mapped(tools) if self.custom_llm_provider == LlmProviders.OPENAI else tools
         )
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=marked_input, tools=mapped_tools
