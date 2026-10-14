@@ -274,7 +274,7 @@ describe("Navbar", () => {
     const logoImg = screen.getByAltText("LiteLLM Brand");
     expect(logoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
     const darkLogoImg = Array.from(document.querySelectorAll("img")).find(
-      (img) => img.getAttribute("aria-hidden") === "true"
+      (img) => img.getAttribute("aria-hidden") === "true",
     );
     expect(darkLogoImg).toBeDefined();
     expect(darkLogoImg).toHaveAttribute("src", "https://example.com/custom-logo-dark.png");
@@ -289,7 +289,7 @@ describe("Navbar", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
     const darkLogoImg = Array.from(document.querySelectorAll("img")).find(
-      (img) => img.getAttribute("aria-hidden") === "true"
+      (img) => img.getAttribute("aria-hidden") === "true",
     );
     expect(darkLogoImg).toBeDefined();
     expect(darkLogoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
