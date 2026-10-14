@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useFormState } from "react-hook-form";
 
 import { toast } from "@/lib/toast";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -31,11 +32,13 @@ const toFormValues = (accessGroup: AccessGroupResponse): AccessGroupFormValues =
   description: accessGroup.description ?? "",
   modelIds: accessGroup.access_model_names ?? [],
   mcpServerIds: accessGroup.access_mcp_server_ids ?? [],
+  mcpToolPermissions: accessGroup.mcp_tool_permissions ?? {},
   agentIds: accessGroup.access_agent_ids ?? [],
 });
 
 function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGroupEditModalProps, "visible">) {
   const form = useZodForm(accessGroupFormSchema, { defaultValues: toFormValues(accessGroup) });
+  const { dirtyFields } = useFormState({ control: form.control });
   const editMutation = useEditAccessGroup();
   const [activeTab, setActiveTab] = useState(GENERAL_TAB);
   const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<string>>(new Set([GENERAL_TAB]));
@@ -52,6 +55,7 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
         description: values.description,
         access_model_names: visitedTabs.has(MODELS_TAB) ? values.modelIds : undefined,
         access_mcp_server_ids: visitedTabs.has(MCP_SERVERS_TAB) ? values.mcpServerIds : undefined,
+        ...(dirtyFields.mcpToolPermissions && { mcp_tool_permissions: values.mcpToolPermissions }),
         access_agent_ids: visitedTabs.has(AGENTS_TAB) ? values.agentIds : undefined,
       };
 
@@ -71,7 +75,12 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
 
   return (
     <form onSubmit={(event) => event.preventDefault()}>
-      <AccessGroupBaseForm form={form} activeTab={activeTab} onTabChange={handleTabChange} />
+      <AccessGroupBaseForm
+        form={form}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        initialServerIds={accessGroup.access_mcp_server_ids ?? []}
+      />
 
       <div className="mt-6 flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={editMutation.isPending}>

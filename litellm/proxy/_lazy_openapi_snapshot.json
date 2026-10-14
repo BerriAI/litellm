@@ -686,6 +686,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -867,6 +884,23 @@
               ],
               "title": "Description"
             },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
+            },
             "updated_at": {
               "format": "date-time",
               "title": "Updated At",
@@ -995,6 +1029,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",

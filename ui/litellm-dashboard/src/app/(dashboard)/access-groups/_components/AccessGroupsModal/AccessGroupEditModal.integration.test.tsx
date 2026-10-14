@@ -3,6 +3,7 @@ import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event"
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../../tests/test-utils";
 import { AccessGroupEditModal } from "./AccessGroupEditModal";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import * as networking from "@/components/networking";
 
 const mutate = vi.fn();
 
@@ -31,6 +32,8 @@ vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ),
 }));
 
+vi.mock("@/components/networking");
+
 vi.mock("@/lib/toast", () => ({
   toast: { success: vi.fn(), fromError: vi.fn(), error: vi.fn() },
 }));
@@ -44,6 +47,7 @@ const accessGroup: AccessGroupResponse = {
   description: "Engineers",
   access_model_names: ["gpt-4"],
   access_mcp_server_ids: ["srv-1"],
+  mcp_tool_permissions: { "srv-1": ["read_file"] },
   access_agent_ids: ["agent-1"],
   assigned_team_ids: [],
   assigned_key_ids: [],
@@ -67,6 +71,18 @@ const variables = () => mutate.mock.calls.at(-1)?.[0] as { accessGroupId: string
 describe("AccessGroupEditModal submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: "srv-1", server_name: "Files", alias: "Files" },
+    ]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({
+      tools: [
+        { name: "read_file", description: "Read a file" },
+        { name: "write_file", description: "Write a file" },
+      ],
+      error: false,
+    });
   });
 
   it("sends exactly the antd payload for an untouched save", async () => {
@@ -167,6 +183,20 @@ describe("AccessGroupEditModal submit payload", () => {
     await user.type(nameInput, "{Enter}");
 
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("sends the edited tool checklist as mcp_tool_permissions, an emptied one as an explicit []", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    await user.click(await screen.findByRole("radio", { name: "Flat List" }));
+    await user.click(await screen.findByRole("checkbox", { name: "read_file" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.mcp_tool_permissions).toStrictEqual({ "srv-1": [] });
   });
 
   it("renders each selected MCP server as its own removable chip and drops one on remove", async () => {

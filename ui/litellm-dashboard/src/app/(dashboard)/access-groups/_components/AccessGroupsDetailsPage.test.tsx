@@ -1,6 +1,6 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -335,6 +335,34 @@ describe("AccessGroupDetail", () => {
       await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
 
       expect(screen.getByText("No MCP servers assigned to this group")).toBeInTheDocument();
+    });
+
+    it("should list the allowed tools per server, with deny-all and unrestricted servers spelled out", async () => {
+      const user = userEvent.setup();
+      renderWith({
+        access_mcp_servers: [
+          { id: "mcp-1", name: "GitHub MCP" },
+          { id: "mcp-2", name: "Jira MCP" },
+          { id: "mcp-3", name: "Slack MCP" },
+        ],
+        mcp_tool_permissions: { "mcp-1": ["list_issues", "create_issue"], "mcp-2": [] },
+      });
+
+      await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
+
+      const list = screen.getByRole("region", { name: "MCP tool permissions" });
+      expect(within(list).getByText("list_issues, create_issue")).toBeInTheDocument();
+      expect(within(list).getByText("No tools")).toBeInTheDocument();
+      expect(within(list).getByText("All tools")).toBeInTheDocument();
+    });
+
+    it("should not render a tool permission list when the group has none", async () => {
+      const user = userEvent.setup();
+      renderWith({ mcp_tool_permissions: null });
+
+      await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
+
+      expect(screen.queryByRole("region", { name: "MCP tool permissions" })).not.toBeInTheDocument();
     });
   });
 
