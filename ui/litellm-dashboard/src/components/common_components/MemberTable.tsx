@@ -260,6 +260,7 @@ export default function MemberTable({
         data={members}
         columns={columns}
         getRowId={memberRowId}
+        paginationMode="client"
         sortingMode="client"
         defaultSorting={[{ id: "user_alias", desc: false }]}
         filterMode="client"
