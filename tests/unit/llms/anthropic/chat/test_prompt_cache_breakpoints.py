@@ -171,6 +171,97 @@ def test_tools_already_mapped_to_the_anthropic_shape_still_arm_the_cap() -> None
     )
 
 
+def _tool_result_with_two_marked_parts() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [_text("rules", prompt_cache_breakpoint=EXPLICIT)]},
+        {"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT)]},
+        {"role": "assistant", "content": "", "tool_calls": [_call("call_1")]},
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                _text("sunny", prompt_cache_breakpoint=EXPLICIT),
+                _text("warm", prompt_cache_breakpoint=EXPLICIT),
+            ],
+        },
+        {"role": "user", "content": "done", "prompt_cache_breakpoint": EXPLICIT},
+    ]
+
+
+def test_a_tool_result_with_two_marked_parts_takes_one_converse_slot_and_two_anthropic_slots() -> None:
+    messages: Final = _tool_result_with_two_marked_parts()
+
+    converse: Final = claude_cache_marks(
+        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
+    )
+
+    assert converse == ClaudeCacheMarks(
+        messages=(
+            {"role": "system", "content": [_text("rules", cache_control=EPHEMERAL)]},
+            {"role": "user", "content": [_text("hi", cache_control=EPHEMERAL)]},
+            {"role": "assistant", "content": "", "tool_calls": [_call("call_1")]},
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [_text("sunny", cache_control=EPHEMERAL), _text("warm", cache_control=EPHEMERAL)],
+            },
+            {"role": "user", "content": "done", "cache_control": EPHEMERAL},
+        ),
+        tools=(),
+    )
+    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
+        CacheBreakpointCapExceeded(found=5)
+    )
+
+
+def test_dropping_a_converse_tool_result_slot_clears_every_mark_on_that_message() -> None:
+    messages: Final = [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                _text("sunny", prompt_cache_breakpoint=EXPLICIT),
+                _text("warm", prompt_cache_breakpoint=EXPLICIT),
+            ],
+            "prompt_cache_breakpoint": EXPLICIT,
+        },
+        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
+    ]
+
+    marks: Final = claude_cache_marks(
+        messages, None, automatic_breakpoint=False, drop_params=True, wire="bedrock_converse"
+    )
+
+    assert marks == ClaudeCacheMarks(
+        messages=(
+            {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny"), _text("warm")]},
+            {"role": "user", "content": [_text(f"part {index}", cache_control=EPHEMERAL) for index in range(4)]},
+        ),
+        tools=(),
+    )
+
+
+def test_a_function_level_cache_control_takes_no_converse_slot() -> None:
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {}, "cache_control": EPHEMERAL}}]
+    messages: Final = [
+        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]}
+    ]
+
+    converse: Final = claude_cache_marks(
+        messages, tools, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
+    )
+
+    assert converse == ClaudeCacheMarks(
+        messages=(
+            {"role": "user", "content": [_text(f"part {index}", cache_control=EPHEMERAL) for index in range(4)]},
+        ),
+        tools=(tools[0],),
+    )
+    assert claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=False) == (
+        CacheBreakpointCapExceeded(found=5)
+    )
+
+
 def test_the_cap_error_is_a_public_bad_request_naming_drop_params() -> None:
     with pytest.raises(litellm.BadRequestError) as caught:
         resolved_claude_cache_marks(CacheBreakpointCapExceeded(found=6), model=MODEL, llm_provider="anthropic")

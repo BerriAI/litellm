@@ -216,7 +216,7 @@ class ImageUrl(BaseModel):
     url: str
 
 
-class PromptCacheBreakpoint(BaseModel):
+class PromptCacheBreakpoint(BaseModel, frozen=True):
     """OpenAI's explicit cache marker on a content part, message, tool definition or tool call."""
 
     mode: Literal["explicit"] = "explicit"

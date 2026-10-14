@@ -13,6 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    message_fields,
     message_without_cache_control_marks,
     messages_with_prompt_cache_breakpoints_as_cache_control,
     tools_with_prompt_cache_breakpoints_as_cache_control,
@@ -20,7 +21,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.types.llms.openai import AllMessageValues
 
 PROMPT_CACHE_BREAKPOINT_ON_TOOLS: Final = "_litellm_prompt_cache_breakpoint_on_tools"
-_Site: TypeAlias = tuple[Literal["tool", "message", "part", "tool_call"], int, int]
+_Site: TypeAlias = tuple[Literal["tool", "message", "part", "tool_call", "tool_message"], int, int]
+ClaudeWire: TypeAlias = Literal["anthropic", "bedrock_converse"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,11 +77,24 @@ def _message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
             yield ("tool_call", index, position)
 
 
-def _sites(messages: Sequence[object], tools: Sequence[object], key: str) -> tuple[_Site, ...]:
-    """Every block carrying ``key`` in wire order: tool definitions first, then the messages as listed."""
+def _converse_message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
+    """Converse emits a single ``cachePoint`` per tool message, however many of its blocks carry a mark."""
+    fields: Final = _as_mapping(message)
+    if fields is None or fields.get("role") != "tool":
+        yield from _message_sites(index, message, key)
+        return
+    if fields.get(key) is not None or any(_carries(part, key) for part in _as_blocks(fields.get("content")) or ()):
+        yield ("tool_message", index, -1)
+
+
+def _sites(messages: Sequence[object], tools: Sequence[object], key: str, wire: ClaudeWire) -> tuple[_Site, ...]:
+    """Every mark of ``key`` the ``wire`` renders, in wire order: tool definitions first, then the messages as
+    listed. Converse reads only a tool definition's top-level mark."""
+    tool_carries: Final = _carries if wire == "bedrock_converse" else _tool_carries
+    message_sites: Final = _converse_message_sites if wire == "bedrock_converse" else _message_sites
     return (
-        *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
-        *chain.from_iterable(_message_sites(index, message, key) for index, message in enumerate(messages)),
+        *(("tool", index, -1) for index, tool in enumerate(tools) if tool_carries(tool, key)),
+        *chain.from_iterable(message_sites(index, message, key) for index, message in enumerate(messages)),
     )
 
 
@@ -105,6 +120,11 @@ def _dropped_positions(dropped: frozenset[_Site], kind: str, index: int) -> froz
 
 
 def _message_without(index: int, message: AllMessageValues, dropped: frozenset[_Site]) -> AllMessageValues:
+    if ("tool_message", index, -1) in dropped:
+        content: Final = _as_blocks(message_fields(message).get("content")) or ()
+        return message_without_cache_control_marks(
+            message, message_mark=True, parts=frozenset(range(len(content))), tool_calls=frozenset()
+        )
     return message_without_cache_control_marks(
         message,
         message_mark=("message", index, -1) in dropped,
@@ -120,6 +140,7 @@ def claude_cache_marks(
     automatic_breakpoint: bool,
     drop_params: bool,
     tools_carried_breakpoint: bool = False,
+    wire: ClaudeWire = "anthropic",
 ) -> ClaudeCacheMarks | CacheBreakpointCapExceeded:
     """The request's ``prompt_cache_breakpoint`` marks renamed to ``cache_control`` and, when it carried any, held to
     Claude's cap: ``drop_params`` keeps the latest four in wire order, otherwise the excess is reported. A request
@@ -127,13 +148,14 @@ def claude_cache_marks(
 
     ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's automatic caching), which takes one
     slot of its own and is never dropped. ``tools_carried_breakpoint`` covers tools already mapped to Anthropic's
-    shape, where the mark was renamed before this census ran."""
+    shape, where the mark was renamed before this census ran. ``wire`` is the body the marks are rendered into, so
+    the count matches the breakpoints the provider receives."""
     listed_tools: Final = _as_blocks(tools) or ()
-    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint"):
+    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", "anthropic"):
         return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
     renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages)
     renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools)
-    sites: Final = _sites(renamed_messages, renamed_tools, "cache_control")
+    sites: Final = _sites(renamed_messages, renamed_tools, "cache_control", wire)
     found: Final = len(sites) + int(automatic_breakpoint)
     if found <= MAX_CACHE_CONTROL_BLOCKS:
         return ClaudeCacheMarks(renamed_messages, renamed_tools)

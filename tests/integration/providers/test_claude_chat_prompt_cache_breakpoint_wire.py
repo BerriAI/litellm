@@ -256,6 +256,22 @@ def test_a_client_cache_control_on_the_same_block_wins_over_the_breakpoint(gatew
     assert b"prompt_cache_breakpoint" not in request.body, request.body
 
 
+@pytest.mark.parametrize("provider", _PROVIDERS)
+def test_a_block_carrying_both_keys_keeps_one_cache_mark_and_loses_the_breakpoint(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marked(("user_part",), {"cache_control": EPHEMERAL, "prompt_cache_breakpoint": _EXPLICIT_30M})
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert _labels(provider, request) == [_expected(provider, "user_part", marker)]
+    assert b"prompt_cache_breakpoint" not in request.body, request.body
+    assert b"30m" not in request.body, request.body
+
+
 @pytest.mark.parametrize("source", ("deployment", "request"))
 @pytest.mark.parametrize("provider", _PROVIDERS)
 def test_five_breakpoints_keep_the_latest_four_under_drop_params(
@@ -285,6 +301,25 @@ def test_five_breakpoints_are_a_400_before_any_provider_call_without_drop_params
     assert _CAP_HINT in text, text
     assert "drop_params" in text, text
     assert received == (), [request.target for request in received]
+
+
+def test_a_tool_result_with_two_marked_parts_is_one_converse_cache_point_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    marked_tool_result: Final[dict[str, JsonValue]] = {
+        "role": "tool",
+        "tool_call_id": call_id(_CITY),
+        "content": [{"type": "text", "text": text, **_BREAKPOINT} for text in (_TOOL_RESULT_TEXT, "warm.")],
+    }
+    messages: Final = _messages(marker, _marked(("system", "user_part", "string_message")))
+    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, "bedrock_converse")
+        status, _, text = post_chat(gateway, chat_body(model, [*messages[:3], marked_tool_result, *messages[4:]]))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert bedrock_labels(request) == [
+        _expected("bedrock_converse", site, marker)
+        for site in ("system", "user_part", "tool_result_part", "string_message")
+    ]
 
 
 def test_injection_points_stand_down_behind_the_latest_four_breakpoints(gateway: Gateway) -> None:

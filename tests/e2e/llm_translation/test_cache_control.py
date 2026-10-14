@@ -33,8 +33,9 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
 
 - Claude (claude-haiku-5-5 on anthropic, Bedrock Converse and Bedrock Invoke,
   claude-sonnet-5-5 on Vertex, which serves no haiku-5-5): OpenAI's ``prompt_cache_breakpoint`` on a system part, a string
-  system message, a user part, a tool result, a tool call or a tool definition
-  must write the cache on the first call and read it on the second. On
+  system message, a user part, a tool result, a tool call or a tool definition,
+  or beside a ``cache_control`` on the same system part, must write the cache
+  on the first call and read it on the second. On
   anthropic and Converse, a 30m breakpoint, five breakpoints and
   ``prompt_cache_options`` under drop_params must still cache.
 
@@ -776,6 +777,28 @@ class TestPromptCacheBreakpointOnClaude:
             prompt_cache_options=PromptCacheOptions(mode="explicit"),
             messages=[
                 ChatMessage(role="system", content=[_marked(_cacheable_prefix())]),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+        )
+        _assert_claude_writes_then_reads_cache(client, scoped_key, body)
+
+    @pytest.mark.parametrize(
+        "route", [_claude_route_param(route) for route in ("anthropic", "bedrock_converse", "bedrock_invoke", "vertex")]
+    )
+    def test_a_block_carrying_both_keys_still_caches(
+        self, client: PassthroughClient, resources: ResourceManager, scoped_key: str, route: ClaudeRoute
+    ) -> None:
+        model: Final = _register_claude(client, resources, route)
+        both_keys: Final = TextContentPart(
+            text=_cacheable_prefix(),
+            cache_control=CacheControl(),
+            prompt_cache_breakpoint=PromptCacheBreakpoint(ttl="30m"),
+        )
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(role="system", content=[both_keys]),
                 ChatMessage(role="user", content="Reply with one word."),
             ],
         )

@@ -10362,3 +10362,85 @@ def test_five_native_cache_control_marks_are_forwarded_as_written_past_the_cap()
             "content": [block for index in range(5) for block in ({"text": f"part {index}"}, _CACHE_POINT)],
         }
     ]
+
+
+async def _breakpoint_converse_request(
+    sync_mode: bool, model: str, messages: list[dict[str, object]], **params: dict[str, object]
+) -> dict[str, object]:
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = params.get("optional_params", {})
+    litellm_params: Final = params.get("litellm_params", {})
+    if sync_mode:
+        return config._transform_request(
+            model=model, messages=messages, optional_params=optional_params, litellm_params=litellm_params, headers={}
+        )
+    return await config._async_transform_request(
+        model=model, messages=messages, optional_params=optional_params, litellm_params=litellm_params, headers={}
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop-params"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_tool_result_with_two_marked_parts_is_one_cache_point_within_the_cap(
+    sync_mode: bool, drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT}]},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _EXPLICIT}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                {"type": "text", "text": "sunny", "prompt_cache_breakpoint": _EXPLICIT},
+                {"type": "text", "text": "warm", "prompt_cache_breakpoint": _EXPLICIT},
+            ],
+        },
+        {"role": "user", "content": "done", "prompt_cache_breakpoint": _EXPLICIT},
+    ]
+
+    result: Final = await _breakpoint_converse_request(
+        sync_mode,
+        _BREAKPOINT_MODEL,
+        messages,
+        optional_params={"tools": [_LOOKUP_TOOL]},
+        litellm_params={"drop_params": drop_params},
+    )
+
+    assert result["system"] == [{"text": "rules"}, _CACHE_POINT]
+    assert result["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}, _CACHE_POINT]},
+        {"role": "assistant", "content": [{"toolUse": {"toolUseId": "call_1", "name": "lookup", "input": {}}}]},
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"content": [{"text": "sunny"}, {"text": "warm"}], "toolUseId": "call_1"}},
+                _CACHE_POINT,
+                {"text": "done"},
+                _CACHE_POINT,
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_prompt_cache_options_on_a_non_claude_converse_model_are_forwarded_as_before(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = await _breakpoint_converse_request(
+        sync_mode,
+        "us.amazon.nova-pro-v1:0",
+        [{"role": "user", "content": "hi"}],
+        optional_params={"prompt_cache_options": {"mode": "implicit"}},
+    )
+
+    assert result["additionalModelRequestFields"] == {"prompt_cache_options": {"mode": "implicit"}}

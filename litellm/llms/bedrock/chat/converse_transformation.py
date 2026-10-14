@@ -2025,13 +2025,12 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict[str, object],  # mutable-ok: the request body is built from this out-param
         litellm_params: Mapping[str, object],
     ) -> tuple[AllMessageValues, ...]:
-        """OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits ``cachePoint`` blocks,
-        held to the provider's cap, with ``prompt_cache_options`` rejected or dropped. Models that never emit
-        ``cachePoint`` blocks keep their marks as written, but a Claude model among them still has
-        ``prompt_cache_options`` rejected or dropped."""
-        emits_cache_points: Final = bedrock_model_accepts_cache_points(model)
-        if not emits_cache_points and BaseAWSLLM.get_bedrock_invoke_provider(model) != "anthropic":
+        """On Claude, OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits
+        ``cachePoint`` blocks, held to Claude's cap, with ``prompt_cache_options`` rejected or dropped. A Claude model
+        that never emits ``cachePoint`` blocks keeps its marks as written. Other models are left as they are."""
+        if BaseAWSLLM.get_bedrock_invoke_provider(model) != "anthropic":
             return tuple(messages)
+        emits_cache_points: Final = bedrock_model_accepts_cache_points(model)
         drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         reject_prompt_cache_options(
             model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
@@ -2044,6 +2043,7 @@ class AmazonConverseConfig(BaseConfig):
                 tools=optional_params.get("tools"),
                 automatic_breakpoint=optional_params.get("cache_control") is not None,
                 drop_params=drop_params,
+                wire="bedrock_converse",
             ),
             model=model,
             llm_provider=self.custom_llm_provider or "bedrock",
