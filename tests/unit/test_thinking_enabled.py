@@ -50,6 +50,7 @@ class TestIsThinkingEnabled:
             ({"thinking": None}, False),
             # thinking={'type': 'enabled'} returns True
             ({"thinking": {"type": "enabled"}}, True),
+            ({"thinking": {"type": "adaptive"}}, True),
             # thinking key missing returns False
             ({}, False),
             # thinking={} returns False

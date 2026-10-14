@@ -760,6 +760,31 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
+def test_bedrock_chat_invoke_adaptive_thinking_with_tool_based_response_format_avoids_forced_tool_choice(
+    local_model_cost_map,
+):
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model="us.anthropic.claude-opus-5",
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert "tool_choice" not in result
+    assert result["thinking"] == {"type": "adaptive"}
+
+
 def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):
     """Regression: the tool-based ``response_format`` path swaps in a Claude 3 stub
     model before the shared Anthropic mapping, which hid the adaptive-only model
