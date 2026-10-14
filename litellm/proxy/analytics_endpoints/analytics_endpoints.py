@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.cache_activity import CacheActivityResponse, get_cache_activity
+from litellm.proxy.auth.authorization import resolve_spend_log_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router: Final = APIRouter()
@@ -30,6 +32,8 @@ def _parse_date(value: str, param_name: str) -> datetime:
     include_in_schema=False,
 )
 async def get_global_activity(
+    log_team_lookup: LogTeamLookupDependency,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: Annotated[str, fastapi.Query(description="Time from which to start viewing spend")],
     end_date: Annotated[str, fastapi.Query(description="Time till which to view spend")],
     key_aliases: Annotated[
@@ -41,6 +45,9 @@ async def get_global_activity(
     Cache activity for the Admin UI cache dashboard, aggregated per call_type:
     cache hits vs successful LLM API requests vs failed requests, plus totals
     for the stat cards and the available key-alias/model filter options.
+
+    Admin callers see proxy-wide activity; all other callers see only their own
+    spend logs and those of teams they may view, exactly like ``/spend/logs/ui``.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -54,6 +61,7 @@ async def get_global_activity(
 
     return await get_cache_activity(
         prisma_client=prisma_client,
+        read_scope=await resolve_spend_log_read_scope(user_api_key_dict, log_team_lookup),
         start_date=_parse_date(start_date, "start_date"),
         end_date=_parse_date(end_date, "end_date"),
         key_aliases=key_aliases or [],
