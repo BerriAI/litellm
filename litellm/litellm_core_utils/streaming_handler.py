@@ -1,6 +1,7 @@
 import asyncio
 import collections.abc
 import datetime
+import inspect
 import json
 import logging
 import threading
@@ -234,6 +235,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._closed = False
         self._stream_created_time: float = time.time()
 
         litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
@@ -328,6 +330,18 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
+    def __enter__(self) -> "CustomStreamWrapper":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "CustomStreamWrapper":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
     def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
         """Restore trace_id/session_id in the *consuming* thread/task/context.
 
@@ -392,11 +406,26 @@ class CustomStreamWrapper:
         """
         self._restore_consumer_correlation_context(guarded=True)
 
+    def close(self) -> None:
+        stream_to_close: Final = self.completion_stream
+        self.completion_stream = None
+        self._closed = True
+        close_stream: Final = getattr(stream_to_close, "close", None)
+        if callable(close_stream):
+            try:
+                result: Final = close_stream()
+                if inspect.iscoroutine(result):
+                    result.close()
+            except Exception as e:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+                verbose_logger.debug("CustomStreamWrapper.close: error closing completion_stream: %s", e)
+        self._restore_consumer_correlation_context()
+
     async def aclose(self):
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
         # carry this closing stream's own trace_id/session_id.
+        self._closed = True
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -1780,6 +1809,8 @@ class CustomStreamWrapper:
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
+        if self._closed:
+            raise StopIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -1950,7 +1981,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
-                self._restore_consumer_correlation_context()
+                self.close()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -2005,6 +2036,8 @@ class CustomStreamWrapper:
         return self.completion_stream
 
     async def __anext__(self) -> "ModelResponseStream":
+        if self._closed:
+            raise StopAsyncIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -2224,7 +2257,7 @@ class CustomStreamWrapper:
                     )
                 )
 
-            self._restore_consumer_correlation_context()
+            await self.aclose()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
