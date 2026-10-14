@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Final
 from pydantic import ConfigDict, ValidationError
 
 import litellm
+from litellm.exceptions import BadRequestError
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelInfo
 
@@ -100,3 +102,21 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+def validate_anthropic_tool_choice(tool_choice: AnthropicMessagesToolChoice) -> None:
+    if "type" not in tool_choice:
+        raise BadRequestError(
+            message="tool_choice.type: Field required",
+            model="",
+            llm_provider="anthropic",
+        )
+    if tool_choice["type"] not in ("auto", "any", "tool", "none"):
+        raise BadRequestError(
+            message=(
+                f"tool_choice: Input tag {tool_choice['type']!r} found using 'type' "
+                "does not match any of the expected tags: 'auto', 'any', 'tool', 'none'"
+            ),
+            model="",
+            llm_provider="anthropic",
+        )
