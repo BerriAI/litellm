@@ -2440,6 +2440,35 @@ def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_
         litellm.models_by_provider["vertex_ai"].discard(model_name)
 
 
+def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    deployment_id: Final = "priced-deployment-id-regression"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-gemini",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {"id": deployment_id, "litellm_provider": "gemini", "mode": "chat"},
+            },
+            {"model_name": "gemini/*", "litellm_params": {"model": "gemini/*", "api_key": "fake-key"}},
+        ]
+    )
+
+    router.completion(model="priced-gemini", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+    listed: Final = get_known_models_from_wildcard("gemini/*")
+
+    assert "gemini/gemini-2.5-flash" in listed
+    assert f"gemini/{deployment_id}" not in listed
+    assert deployment_id not in litellm.models_by_provider["gemini"]
+    assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
+
+
 def test_reasoning_content_preserved_in_text_completion_wrapper():
     """Ensure reasoning_content is copied from delta to text_choices."""
     chunk = ModelResponseStream(

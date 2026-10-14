@@ -10523,6 +10523,7 @@ class Router:
                 persist_across_reloads=False,
                 warning_display_name=model,
                 custom_llm_provider=custom_llm_provider,
+                add_to_provider_model_sets=False,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes

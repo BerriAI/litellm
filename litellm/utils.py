@@ -3361,6 +3361,7 @@ def register_model(
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
     custom_llm_provider: str | None = None,
+    add_to_provider_model_sets: bool = True,
 ):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -3389,6 +3390,10 @@ def register_model(
     ``custom_llm_provider`` scopes the built-in cost-map match to entries for
     that provider, so a deployment id that happens to equal another provider's
     catalog key stays its own provider-less entry instead of merging into it.
+
+    ``add_to_provider_model_sets`` adds the keys to the per-provider model sets
+    behind provider resolution and wildcard model listing. Pass False when the
+    keys are opaque ids rather than model names (e.g. router deployment ids).
     """
 
     loaded_model_cost = {}
@@ -3474,9 +3479,10 @@ def register_model(
         _invalidate_model_cost_lowercase_map()
 
         verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", model_cost_key, model_cost_key)
-        if value.get("litellm_provider") == "openrouter":
+        if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
             litellm.openrouter_models.add(_key_str.split("/", 1)[-1])
-    litellm.add_known_models(loaded_model_cost)
+    if add_to_provider_model_sets:
+        litellm.add_known_models(loaded_model_cost)
     return model_cost
 
 
