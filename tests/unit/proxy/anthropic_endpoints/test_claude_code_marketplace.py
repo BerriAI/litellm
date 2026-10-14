@@ -568,6 +568,24 @@ def test_plugin_request_rejects_both_preference_spellings(build_request):
         )
 
 
+@pytest.mark.parametrize(
+    "build_request",
+    [
+        lambda body: RegisterPluginRequest.model_validate({"name": "s3-skill", **body}),
+        UpdatePluginRequest.model_validate,
+    ],
+    ids=["register", "update"],
+)
+@pytest.mark.parametrize(
+    "null_key, value_key",
+    [("installation_preference", "installationPreference"), ("installationPreference", "installation_preference")],
+)
+def test_plugin_request_reads_the_spelling_that_carries_a_value(build_request, null_key, value_key):
+    request = build_request({"source": _ARCHIVE_SOURCE, null_key: None, value_key: "auto_install"})
+
+    assert request.installation_preference == "auto_install"
+
+
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""

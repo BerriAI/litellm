@@ -13,10 +13,6 @@ _BOTH_PREFERENCE_SPELLINGS: Final = frozenset({"installation_preference", "insta
 _REQUEST_KEYS: Final = TypeAdapter(dict[str, object])
 
 
-def _request_keys(data: object) -> frozenset[str]:
-    return frozenset(_REQUEST_KEYS.validate_python(data)) if isinstance(data, dict) else frozenset()
-
-
 class PluginAuthor(LiteLLMBaseModel):
     """Plugin author information."""
 
@@ -67,9 +63,16 @@ class PluginSpec(LiteLLMBaseModel):
     @model_validator(mode="before")
     @classmethod
     def reject_both_preference_spellings(cls, data: object) -> object:
-        if _BOTH_PREFERENCE_SPELLINGS.issubset(_request_keys(data)):
+        if not isinstance(data, dict):
+            return data
+        fields: Final = _REQUEST_KEYS.validate_python(data)
+        if not _BOTH_PREFERENCE_SPELLINGS.issubset(fields):
+            return fields
+        if all(fields[key] is not None for key in _BOTH_PREFERENCE_SPELLINGS):
             raise ValueError("send installation_preference or installationPreference, not both")
-        return data
+        return {
+            key: value for key, value in fields.items() if key not in _BOTH_PREFERENCE_SPELLINGS or value is not None
+        }
 
 
 class RegisterPluginRequest(PluginSpec):
