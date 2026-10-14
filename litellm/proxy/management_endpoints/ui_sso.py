@@ -989,6 +989,67 @@ def _merge_sso_token_claims(
     )
 
 
+def _id_token_claims_for_unreadable_userinfo(
+    id_token: str | None, userinfo_endpoint: str | None, error: json.JSONDecodeError
+) -> Mapping[str, object]:
+    claims: Final = _decode_sso_token_claims(id_token)
+    if not claims:
+        raise ProxyException(
+            message=(
+                f"SSO user info unavailable: userinfo endpoint {userinfo_endpoint} returned a non-JSON "
+                "response and the token response had no decodable id_token"
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param="userinfo",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+    verbose_proxy_logger.warning(
+        "Userinfo endpoint %s returned a non-JSON response (%s), falling back to id_token claims",
+        userinfo_endpoint,
+        error,
+    )
+    return claims
+
+
+class _UserinfoFallbackCapableSSO(Protocol):
+    @property
+    def access_token(self) -> str | None: ...
+
+    @property
+    def id_token(self) -> str | None: ...
+
+    async def verify_and_process(
+        self,
+        request: Request,
+        *,
+        params: dict[str, object] | None = None,  # mutable-ok: fastapi-sso verify_and_process requires dict params
+        headers: dict[str, str] | None = None,  # mutable-ok: fastapi-sso verify_and_process requires dict headers
+    ) -> CustomOpenID | None: ...
+
+
+async def _verify_generic_sso_or_fall_back_to_id_token(
+    generic_sso: _UserinfoFallbackCapableSSO,
+    request: Request,
+    token_exchange_params: dict[str, object],  # mutable-ok: fastapi-sso verify_and_process requires dict params
+    additional_headers: dict[str, str],  # mutable-ok: fastapi-sso verify_and_process requires dict headers
+    userinfo_endpoint: str | None,
+    response_convertor: Callable[[Mapping[str, object], object], CustomOpenID],
+) -> CustomOpenID | None:
+    try:
+        return await generic_sso.verify_and_process(
+            request,
+            params=token_exchange_params,
+            headers=additional_headers,
+        )
+    except json.JSONDecodeError as userinfo_error:
+        if generic_sso.access_token is None:
+            raise
+        return response_convertor(
+            _id_token_claims_for_unreadable_userinfo(generic_sso.id_token, userinfo_endpoint, userinfo_error),
+            generic_sso,
+        )
+
+
 async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
     """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
     if premium_user is True:
@@ -1655,10 +1716,15 @@ async def get_generic_sso_response(
             # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
             access_token_str: str | None = combined_response.get("access_token")
         else:
-            result = await generic_sso.verify_and_process(
-                request,
-                params=token_exchange_params,
-                headers=additional_generic_sso_headers_dict,
+            result = await _verify_generic_sso_or_fall_back_to_id_token(
+                generic_sso=cast(  # cast-ok: fastapi-sso builds the provider class dynamically via create_provider
+                    _UserinfoFallbackCapableSSO, generic_sso
+                ),
+                request=request,
+                token_exchange_params=token_exchange_params,
+                additional_headers=additional_generic_sso_headers_dict,
+                userinfo_endpoint=generic_userinfo_endpoint,
+                response_convertor=response_convertor,
             )
             access_token_str = generic_sso.access_token
             sso_assertion = assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
