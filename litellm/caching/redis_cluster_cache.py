@@ -126,6 +126,18 @@ class RedisClusterCache(RedisCache):
             return call()
         return self._connection_gate.run(call, self._get_async_client_cache_key())
 
+    def node_name_for(self, key: str) -> str:
+        """Master that owns ``key``, or empty until redis-py has fetched the slot map (first flush of a worker)."""
+        from redis.asyncio import RedisCluster
+
+        client: Final = self.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis-py clients are untyped generics
+        if not isinstance(client, RedisCluster) or not client.nodes_manager.slots_cache:
+            return ""
+        try:
+            return client.nodes_manager.get_node_from_slot(client.keyslot(self.check_and_fix_namespace(key=key))).name
+        except KeyError:  # slot not covered while the map is being refreshed
+            return ""
+
     def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py

@@ -25,7 +25,7 @@ from litellm.caching.redis_cache import (
     RedisCircuitBreaker,
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
 )
-from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.caching.redis_cluster_cache import ClusterConnectionGate, RedisClusterCache
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
 SHA = hashlib.sha1(SCRIPT.encode()).hexdigest()  # noqa: S324
@@ -46,6 +46,14 @@ class FakePipeline:
 
     def mget(self, keys: Sequence[str]) -> FakePipeline:
         self.commands.append(("MGET", *keys))
+        return self
+
+    def get(self, name: str) -> FakePipeline:
+        self.commands.append(("GET", name))
+        return self
+
+    def execute_command(self, *args: object) -> FakePipeline:
+        self.commands.append(tuple(args))
         return self
 
     def evalsha(self, sha: str, numkeys: int, *keys_and_args: object) -> FakePipeline:
@@ -126,14 +134,23 @@ class FakeRedisCache(RedisCache):
 
 
 class FakeClusterCache(RedisClusterCache, FakeRedisCache):
-    def __init__(self, client: FakeClient) -> None:  # super().__init__ needs a server
+    def __init__(self, client: FakeClient, gate: ClusterConnectionGate | None = None) -> None:  # no server
         FakeRedisCache.__init__(self, client)
+        self.gate = gate
+
+    def _admit_async_call(self, call: Callable[[], Awaitable[object]]) -> Awaitable[object]:
+        return call() if self.gate is None else self.gate.run(call, "fake-client")
+
+    def node_name_for(self, key: str) -> str:  # two masters: even key lengths on node-0, odd on node-1
+        return f"node-{len(key) % 2}"
 
 
 def replies(command: tuple[Any, ...]) -> Any:
     match command[0]:
         case "MGET":
             return [json.dumps({"k": key}) if key.endswith("hit") else None for key in command[1:]]
+        case "GET":
+            return json.dumps({"k": command[1]}) if command[1].endswith("hit") else None
         case "EVALSHA":
             return [1, 2]
         case "INCRBYFLOAT":
@@ -289,17 +306,22 @@ async def test_noscript_reply_reruns_that_script_through_the_registered_executor
 
 
 @pytest.mark.asyncio
-async def test_cluster_cache_runs_each_operation_on_its_own_path() -> None:
+async def test_cluster_cache_sends_the_batch_as_one_pipeline_of_single_key_commands() -> None:
+    """redis-py's cluster pipeline groups commands per node and blocks MGET, so on a cluster the
+    batch rides one pipeline with a GET per key instead of running every op on its own connection."""
     client = FakeClient(replies)
     cache = FakeClusterCache(client)
-    cache.store["a"] = 4
     batch = RedisBatch(cache)
-    got = batch.mget(["a", "b"])
+    got = batch.mget(["a-hit", "b"])
     incr = batch.increment("cnt", 2)
-    assert await got == {"a": 4, "b": None}
-    assert await incr == 2.0
-    assert client.pipelines == []
-    assert cache.alone == [("MGET", ("a", "b")), ("INCRBYFLOAT", "cnt", 2)]
+    script = batch.script(SCRIPT, run_alone_script, ["w"], [7])
+    assert await got == {"a-hit": {"k": "a-hit"}, "b": None}
+    assert await incr == 3.5
+    assert await script == [1, 2]
+    assert cache.alone == []
+    assert [pipe.commands for pipe in client.pipelines] == [
+        [("GET", "a-hit"), ("GET", "b"), ("INCRBYFLOAT", "cnt", 2), ("EVALSHA", SHA, 1, "w", 7)]
+    ]
 
 
 @pytest.mark.asyncio
@@ -370,16 +392,65 @@ async def test_a_delete_rides_the_pipeline_under_the_namespace_and_reads_as_miss
     assert cache.alone == []
 
 
+class SlowPipeline(FakePipeline):
+    in_flight = 0
+    peak = 0
+
+    async def execute(self, raise_on_error: bool = True) -> list[Any]:
+        SlowPipeline.in_flight += 1
+        SlowPipeline.peak = max(SlowPipeline.peak, SlowPipeline.in_flight)
+        await asyncio.sleep(0.2 if any(str(command[1]).endswith("slow") for command in self.commands) else 0.02)
+        SlowPipeline.in_flight -= 1
+        return await super().execute(raise_on_error)
+
+
+class SlowClient(FakeClient):
+    def pipeline(self, transaction: bool = True) -> FakePipeline:
+        pipe = SlowPipeline(self.reply_for, self.fail)
+        self.pipelines.append(pipe)
+        return pipe
+
+
 @pytest.mark.asyncio
-async def test_a_delete_on_a_cluster_cache_runs_as_its_own_del() -> None:
+async def test_cluster_pipelines_take_a_connection_slot_like_every_other_guarded_command() -> None:
+    """A flush holds one connection per node, so it has to queue on the cache's pool gate like a
+    single command does, or a burst of flushes exhausts the pool the gate exists to protect."""
+    SlowPipeline.peak = 0
+    cache = FakeClusterCache(SlowClient(replies), ClusterConnectionGate(limit=1, wait_timeout=5.0))
+
+    results = await asyncio.gather(*(RedisBatch(cache).mget([f"k{i}"]) for i in range(4)))
+
+    assert results == [{f"k{i}": None} for i in range(4)]
+    assert SlowPipeline.peak == 1
+
+
+@pytest.mark.asyncio
+async def test_cluster_ops_are_pipelined_per_node_and_a_slow_node_delays_only_its_own_ops() -> None:
+    SlowPipeline.peak = 0
+    client = SlowClient(replies)
+    cache = FakeClusterCache(client)
+    batch = RedisBatch(cache)
+
+    slow = batch.mget(["a-slow"])
+    fast = batch.set("bbb", "v", 10)
+
+    assert await asyncio.wait_for(fast, timeout=0.1) is None
+    assert not slow.done
+    assert await slow == {"a-slow": None}
+    assert sorted(pipe.commands for pipe in client.pipelines) == [
+        [("GET", "a-slow")],
+        [("SET", "bbb", json.dumps("v"), 10)],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_delete_on_a_cluster_cache_rides_the_pipeline() -> None:
     client = FakeClient(replies)
     cache = FakeClusterCache(client)
-    cache.store["team_alias:x"] = "stale"
     batch = RedisBatch(cache)
     assert await batch.delete("team_alias:x") is None
-    assert cache.alone == [("DEL", "team_alias:x")]
-    assert "team_alias:x" not in cache.store
-    assert client.pipelines == []
+    assert cache.alone == []
+    assert [pipe.commands for pipe in client.pipelines] == [[("DEL", "team_alias:x")]]
 
 
 @pytest.mark.asyncio
@@ -416,32 +487,31 @@ async def test_an_operation_retried_alone_keeps_the_target_it_was_declared_under
     assert current_service_target() is None
 
 
-class CallerRecordingClusterCache(FakeClusterCache):
-    def __init__(self, client: FakeClient) -> None:
-        super().__init__(client)
-        self.callers: list[str] = []
-
-    async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleMethodOverride]  # records what the service hook would report
-        self.callers.append(_get_call_stack_info())
-        return await super().async_batch_get_cache(key_list, **kwargs)
-
-
-def _prefetch_auth_objects(batch: RedisBatch) -> Awaitable[Sequence[Any]]:
-    return batch.mget(["team", "user"])
+def _declare_rate_limit_script(batch: RedisBatch, run: Callable[..., Awaitable[object]]) -> Awaitable[object]:
+    return batch.script(SCRIPT, run, ["w"], [])
 
 
 @pytest.mark.asyncio
-async def test_a_cluster_op_names_the_code_that_declared_it_not_its_wrappers() -> None:
-    """On a cluster client every op runs alone, in a task driven by the flush, so above its
+async def test_a_cluster_op_retried_alone_names_the_code_that_declared_it_not_its_wrappers() -> None:
+    """A NOSCRIPT reply sends the op back out alone in a task driven by the flush, so above its
     wrappers there is only the event loop. Production reported ``_run_under_circuit_breaker <-
     wrapper``; the op carries the chain captured where it was declared and reports that."""
-    cache = CallerRecordingClusterCache(FakeClient(replies))
+    seen: list[str] = []
+
+    async def record_caller(keys: Sequence[str], args: Sequence[Any]) -> object:
+        seen.append(_get_call_stack_info())
+        return ["alone", *keys]
+
+    def reply_for(command: tuple[Any, ...]) -> Any:
+        return NoScriptError("NOSCRIPT") if command[0] == "EVALSHA" else replies(command)
+
+    cache = FakeClusterCache(FakeClient(reply_for))
     batch = RedisBatch(cache)
-    with service_target("auth_objects"):
-        pending = _prefetch_auth_objects(batch)
-    assert await pending == {"team": None, "user": None}
-    assert cache.callers == [
-        "_prefetch_auth_objects <- test_a_cluster_op_names_the_code_that_declared_it_not_its_wrappers"
+    with service_target("rate_limits"):
+        pending = _declare_rate_limit_script(batch, record_caller)
+    assert await pending == ["alone", "w"]
+    assert seen == [
+        "_declare_rate_limit_script <- test_a_cluster_op_retried_alone_names_the_code_that_declared_it_not_its_wrappers"
     ]
 
 
