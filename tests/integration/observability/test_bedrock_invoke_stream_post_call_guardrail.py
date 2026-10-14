@@ -16,7 +16,9 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Final
 from urllib.parse import unquote
@@ -49,6 +51,8 @@ CODE: Final = "invoke-code"
 BEDROCK: Final = "invoke-bedrock"
 BEDROCK_MESSAGE: Final = "invoke-bedrock-message"
 UNGUARDED: Final = "invoke-unguarded"
+OUTAGE: Final = "invoke-outage"
+RELEASE_ON_SCAN: Final = "invoke-release-on-scan"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 BEDROCK_BLOCK_MESSAGE: Final = "Sorry, the model cannot answer this question."
@@ -205,6 +209,7 @@ class Rig:
     sink: Wire
     scripts: dict[str, Reply]
     keys: Mapping[str, str]
+    outage: threading.Event
 
     def scans(self, guardrail: str, marker: str) -> tuple[tuple[str, ...], ...]:
         return tuple(
@@ -321,6 +326,7 @@ def _marker(request: Request) -> str:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     scripts: Final[dict[str, Reply]] = {}
+    outage: Final = threading.Event()
 
     def provider(request: Request) -> Reply:
         assert unquote(request.target) in (
@@ -332,7 +338,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         return scripts[_marker(request)]
 
     def vendor(request: Request) -> Reply:
-        if request.target.startswith((f"/{BEDROCK}/", f"/{BEDROCK_MESSAGE}/")):
+        if outage.is_set() and request.target.startswith(f"/{OUTAGE}/"):
+            return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
+        if request.target.startswith((f"/{BEDROCK}/", f"/{BEDROCK_MESSAGE}/", f"/{RELEASE_ON_SCAN}/")):
             return bedrock_verdict(request)
         return verdict(request)
 
@@ -349,8 +357,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 _guardrail(SAMPLED, sink),
                 _guardrail(HELD, sink, streaming_buffer_until_moderated=True),
                 _guardrail(END_ONLY, sink, streaming_end_of_stream_only=True),
+                _guardrail(OUTAGE, sink),
                 _bedrock_guardrail(BEDROCK, sink),
                 _bedrock_guardrail(BEDROCK_MESSAGE, sink, disable_exception_on_block=True),
+                _bedrock_guardrail(RELEASE_ON_SCAN, sink, streaming_buffer_release_on_scan=True),
                 {
                     "guardrail_name": CODE,
                     "litellm_params": {
@@ -376,7 +386,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config_path.write_text(yaml.safe_dump(config))
             with owned_proxy_process(root, directory, {}, config=config_path, workers=2) as owned:
                 with owned.gateway.scenario() as scenario:
-                    guarded: Final = (SAMPLED, HELD, END_ONLY, CODE, BEDROCK, BEDROCK_MESSAGE)
+                    guarded: Final = (SAMPLED, HELD, END_ONLY, CODE, BEDROCK, BEDROCK_MESSAGE, OUTAGE, RELEASE_ON_SCAN)
                     yield Rig(
                         owned.gateway,
                         scenario,
@@ -387,6 +397,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                             **{name: scenario.key(guardrails=[name]) for name in guarded},
                             UNGUARDED: scenario.key(),
                         },
+                        outage,
                     )
 
 
@@ -613,6 +624,61 @@ def test_invoke_stream_without_a_guardrail_is_relayed_as_received(rig: Rig) -> N
     status, content_type, body = _stream(rig, UNGUARDED, marker)
     assert (status, content_type) == (200, EVENT_STREAM), body
     assert body == b"".join(frames), decode(body)
+
+
+def test_guardrail_that_releases_a_held_stream_on_scan_leaves_the_invoke_stream_unscanned(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    frames: Final = claude_frames(f"Release {marker} ", BLOCKED_WORD, " end")
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    status, content_type, body = _stream(rig, RELEASE_ON_SCAN, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert body == b"".join(frames), decode(body)
+    assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ()
+
+
+def test_upstream_exception_mid_stream_reaches_the_caller_after_the_scanned_frames(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    upstream_error: Final = aws_event_stream_frame(
+        {
+            ":exception-type": "modelStreamErrorException",
+            ":content-type": "application/json",
+            ":message-type": "exception",
+        },
+        json.dumps({"message": "upstream stream broke"}).encode(),
+    )
+    frames: Final = claude_frames(f"Partial {marker} ", "answer")
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=(*frames[:3], upstream_error))
+    status, content_type, body = _stream(rig, SAMPLED, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert body == b"".join((*frames[:3], upstream_error)), decode(body)
+    assert _exception(decode(body)) == ("modelStreamErrorException", "upstream stream broke")
+    assert rig.scans(SAMPLED, marker) == ((f"Partial {marker} ",),)
+
+
+def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: Rig) -> None:
+    def burst(count: int) -> list[tuple[str, tuple[int, str, bytes, str]]]:
+        markers = [f"invoke-{uuid.uuid4().hex}" for _ in range(count)]
+        for marker in markers:
+            rig.scripts[marker] = Reply(
+                content_type=EVENT_STREAM, chunks=claude_frames(f"Outage {marker} ", "one", " two", " three")
+            )
+        with ThreadPoolExecutor(max_workers=count) as pool:
+            return list(zip(markers, pool.map(partial(_stream_with_call_id, rig, OUTAGE), markers)))
+
+    rig.outage.set()
+    try:
+        during: Final = burst(8)
+    finally:
+        rig.outage.clear()
+    after: Final = burst(8)
+    for marker, (status, _, body, _) in during:
+        exception = _exception(decode(body))
+        assert status == 200 and exception is not None and exception[0] == "internalServerException", (marker, body)
+    for marker, (status, _, body, _) in after:
+        assert status == 200 and _exception(decode(body)) is None, (marker, body)
+        assert body == b"".join(rig.scripts[marker].chunks or ()), (marker, decode(body))
+    for marker, (_, _, _, call_id) in (*during, *after):
+        assert _spend_statuses(call_id, 1).count("success") == 1, marker
 
 
 def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:
