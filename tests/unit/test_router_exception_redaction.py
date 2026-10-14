@@ -405,11 +405,25 @@ async def test_flag_on_masks_fallback_credentials(monkeypatch: pytest.MonkeyPatc
             messages=[{"role": "user", "content": "hi"}],
         )
     msg = excinfo.value.message
-    # The raw credential must never appear, even though debug exposure is on
     assert _FALLBACK_CREDENTIAL not in msg, msg
-    # The fallback wiring is still shown (masking preserves structure, it does
-    # not drop the whole message), so the api_key key name survives
-    assert "api_key" in msg, msg
+    assert "Fallback to gpt-4o also failed: " in msg, msg
+    assert "api_key" not in msg, msg
+
+
+@pytest.mark.asyncio
+async def test_flag_on_names_only_the_model_of_client_side_fallback_dicts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    fallback_prompt = "Patient Jane Doe, SSN 123-45-6789"
+    router = _router_with_rate_limit_failure()
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            fallbacks=[{"model": "missing-fallback-model", "messages": [{"role": "user", "content": fallback_prompt}]}],
+        )
+    msg = excinfo.value.message
+    assert "Fallback to missing-fallback-model also failed: " in msg, msg
+    assert fallback_prompt not in msg, msg
 
 
 @pytest.mark.asyncio
