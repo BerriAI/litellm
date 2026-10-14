@@ -25,7 +25,6 @@ __all__ = [
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
     "is_server_tool_search_tool",
-    "is_tool_search_tool",
     "provider_builds_anthropic_request",
     "tool_search_call_ids",
     "tools_with_anthropic_tool_search_mapped",
@@ -77,10 +76,6 @@ def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
 
 def _is_openai_tool_search_tool(tool: object) -> bool:
     return _tool_type(tool) == "tool_search"
-
-
-def is_tool_search_tool(tool: object) -> bool:
-    return is_anthropic_tool_search_chat_tool(tool) or _is_openai_tool_search_tool(tool)
 
 
 def tools_with_anthropic_tool_search_mapped(

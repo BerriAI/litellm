@@ -1372,25 +1372,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self, tools: list[dict[str, object]]
     ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
-        from litellm.responses.litellm_completion_transformation.tool_search import is_tool_search_tool
-
-        keeps_deferred_tools: Final = any(is_tool_search_tool(tool) for tool in tools)
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
             if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
                 function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
-                responses_function_tool = FunctionToolParam(
-                    name=function_tool["name"],
-                    parameters=function_tool.get("parameters"),
-                    strict=function_tool.get("strict"),
-                    type="function",
-                    description=function_tool.get("description"),
-                )
                 responses_tools.append(
-                    {**responses_function_tool, "defer_loading": True}
-                    if keeps_deferred_tools and tool.get("defer_loading") is True
-                    else responses_function_tool
+                    FunctionToolParam(
+                        name=function_tool["name"],
+                        parameters=function_tool.get("parameters"),
+                        strict=function_tool.get("strict"),
+                        type="function",
+                        description=function_tool.get("description"),
+                    )
                 )
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (

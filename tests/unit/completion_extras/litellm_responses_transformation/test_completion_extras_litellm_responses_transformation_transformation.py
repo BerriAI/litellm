@@ -34,18 +34,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 
-_DEFERRED_WEATHER_CHAT_TOOL: Final = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the weather",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-    },
-    "defer_loading": True,
-}
-
-
-def _responses_request_tools_for(chat_tools: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
     response_body: Final = {
         "id": "resp_tool_search_bridge",
         "object": "response",
@@ -63,6 +52,18 @@ def _responses_request_tools_for(chat_tools: Sequence[Mapping[str, object]]) -> 
         ],
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
+    tools: Final = [
+        {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            "defer_loading": True,
+        },
+    ]
 
     with respx.mock(assert_all_called=True) as router:
         upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
@@ -72,39 +73,13 @@ def _responses_request_tools_for(chat_tools: Sequence[Mapping[str, object]]) -> 
         litellm.completion(
             model="openai/responses/gpt-5.5",
             messages=[{"role": "user", "content": "Find a tool"}],
-            tools=[dict(tool) for tool in chat_tools],
+            tools=tools,
             api_key="sk-test",
             cache={"no-cache": True},
         )
 
-    return json.loads(upstream.calls[0].request.content)["tools"]
-
-
-@pytest.mark.parametrize(
-    ("search_tool", "expected_search_tool"),
-    [
-        (
-            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
-            {"type": "tool_search", "execution": "server"},
-        ),
-        ({"type": "tool_search"}, {"type": "tool_search"}),
-    ],
-)
-def test_completion_over_responses_sends_tool_search_with_its_deferred_tools(
-    search_tool: Mapping[str, object], expected_search_tool: Mapping[str, object]
-) -> None:
-    request_tools: Final = _responses_request_tools_for([search_tool, _DEFERRED_WEATHER_CHAT_TOOL])
-
-    assert request_tools[0] == expected_search_tool
-    assert request_tools[1]["name"] == "get_weather"
-    assert request_tools[1]["defer_loading"] is True
-
-
-def test_completion_over_responses_drops_defer_loading_without_a_tool_search() -> None:
-    request_tools: Final = _responses_request_tools_for([_DEFERRED_WEATHER_CHAT_TOOL])
-
-    assert request_tools[0]["name"] == "get_weather"
-    assert "defer_loading" not in request_tools[0]
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
