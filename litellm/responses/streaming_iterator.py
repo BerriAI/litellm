@@ -947,9 +947,7 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         finally:
-            await asyncio.to_thread(
-                self.logging_obj.failure_handler, exception, traceback_exception, self.start_time, end_time
-            )
+            self._submit_sync_failure_handler(exception, traceback_exception, end_time)
 
     def _submit_sync_failure_handler(self, exception: Exception, traceback_exception: str, end_time: datetime) -> None:
         try:

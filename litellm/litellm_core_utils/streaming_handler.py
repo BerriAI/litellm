@@ -2153,19 +2153,22 @@ class CustomStreamWrapper:
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            await self._log_failure_before_fallback(e, traceback_exception)
+            if self.logging_obj is not None:
+                self._record_partial_usage_for_failure()
+                ## LOGGING
+                asyncio.create_task(
+                    self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
+                )
             await self.aclose()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
-                await self._log_failure_before_fallback(e, traceback.format_exc())
                 await self.aclose()
-                self._handle_stream_fallback_error(e)
+                self._log_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            await self._log_failure_before_fallback(e, traceback.format_exc())
             await self.aclose()
-            self._handle_stream_fallback_error(e)
+            self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2281,16 +2284,15 @@ class CustomStreamWrapper:
             # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
-    async def _log_failure_before_fallback(self, e: Exception, traceback_exception: str) -> None:
-        if self.logging_obj is None:
-            return
-        self._record_partial_usage_for_failure()
-        failure_logging: Final = asyncio.create_task(
-            self.logging_obj.dispatch_failure_handlers(
-                e, traceback_exception, prefer_async_handlers=True, wait_for_sync_handlers=True
+    def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+        traceback_exception: Final = traceback.format_exc()
+        if self.logging_obj is not None:
+            self._record_partial_usage_for_failure()
+            ## LOGGING
+            asyncio.create_task(
+                self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
-        )
-        await asyncio.wait((failure_logging,))
+        self._handle_stream_fallback_error(e)
 
     def _record_partial_usage_for_failure(self) -> None:
         """

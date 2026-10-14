@@ -1,7 +1,6 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-import asyncio
 import copy
 import datetime
 import functools
@@ -2266,7 +2265,6 @@ class Logging(LiteLLMLoggingBaseClass):
         exception: Exception,
         traceback_exception: str,
         prefer_async_handlers: bool = False,
-        wait_for_sync_handlers: bool = False,
     ) -> None:
         """Route failure logging to async and/or sync handlers for this request.
 
@@ -2290,10 +2288,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                if wait_for_sync_handlers:
-                    await asyncio.to_thread(self.failure_handler, exception, traceback_exception)
-                else:
-                    executor.submit(self.failure_handler, exception, traceback_exception)
+                executor.submit(self.failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
