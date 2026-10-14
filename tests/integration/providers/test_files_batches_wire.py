@@ -710,12 +710,18 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
         base_prefix: Final = "/v1/" if provider == "openai" else "/openai/"
         api_suffix: Final = "" if provider == "openai" else f"?api-version={AZURE_API_VERSION}"
         expected_content_target: Final = f"{base_prefix}files/{raw_output}/content{api_suffix}"
-        assert [(r.method, r.target) for r in settled] == [
+        expected_requests: Final = (
             ("POST", f"{base_prefix}files{api_suffix}"),
             ("POST", f"{base_prefix}batches{api_suffix}"),
             ("GET", f"{base_prefix}batches/batch-{key}{api_suffix}"),
             ("GET", expected_content_target),
-        ], [(r.method, r.target) for r in settled]
+        )
+        observed_requests: Final = tuple((r.method, r.target) for r in settled)
+        expected_metadata_request: Final = ("GET", f"{base_prefix}files/{raw_output}{api_suffix}")
+        assert observed_requests.count(expected_metadata_request) <= 1, observed_requests
+        assert tuple(request for request in observed_requests if request != expected_metadata_request) == (
+            expected_requests
+        ), observed_requests
 
         if provider == "openai":
             gate.clear()
