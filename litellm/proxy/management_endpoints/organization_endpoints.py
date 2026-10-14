@@ -988,7 +988,7 @@ async def update_organization_v2(
                 where={"object_permission_id": object_permission_upsert.object_permission_id},
                 data={
                     "create": object_permission_upsert.record,
-                    "update": object_permission_upsert.record,
+                    "update": object_permission_upsert.update_record,
                 },
             )
         if budget_updates:
