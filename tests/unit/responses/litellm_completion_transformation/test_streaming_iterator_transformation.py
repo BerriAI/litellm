@@ -1326,3 +1326,75 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+def _serialized_sequence_numbers(events) -> list[int]:
+    payloads = [json.loads(event.model_dump_json()) for event in events]
+    assert all("sequence_number" in payload for payload in payloads), [
+        payload["type"] for payload in payloads if "sequence_number" not in payload
+    ]
+    return [payload["sequence_number"] for payload in payloads]
+
+
+def _assert_consecutive(sequence_numbers: list[int]) -> None:
+    assert sequence_numbers == list(range(sequence_numbers[0], sequence_numbers[0] + len(sequence_numbers)))
+
+
+def test_sync_stream_events_serialize_increasing_sequence_numbers():
+    """Every event, including output_item.done, serializes a strictly increasing sequence_number."""
+    events = list(_build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")]))
+
+    sequence_numbers = _serialized_sequence_numbers(events)
+    _assert_consecutive(sequence_numbers)
+    done = [e for e in events if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    assert len(done) == 1
+    assert json.loads(done[0].model_dump_json())["sequence_number"] > 1
+
+
+@pytest.mark.asyncio
+async def test_async_stream_events_serialize_increasing_sequence_numbers():
+    events = [event async for event in _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])]
+
+    _assert_consecutive(_serialized_sequence_numbers(events))
+
+
+def test_long_stream_sequence_numbers_stay_unique_and_ordered():
+    """Stress: many chunks never produce duplicate or out-of-order sequence numbers."""
+    chunks = [_chunk(f"word{i} ") for i in range(300)] + [_chunk("end", finish_reason="stop")]
+    events = list(_build_iterator(chunks))
+
+    sequence_numbers = _serialized_sequence_numbers(events)
+    assert len(events) > 300
+    _assert_consecutive(sequence_numbers)
+    assert len(set(sequence_numbers)) == len(sequence_numbers)
+
+
+def test_tool_call_stream_sequence_numbers_are_serialized_and_increasing():
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": '{"x": "' + "a" * 55 + '"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    events = list(_build_iterator([chunk, _chunk("", finish_reason="tool_calls")]))
+
+    sequence_numbers = _serialized_sequence_numbers(events)
+    _assert_consecutive(sequence_numbers)
+    assert any(e.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA for e in events)

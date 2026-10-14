@@ -148,6 +148,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_output_index: int = 0
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
+        self._emitted_sequence_number: int = 0
         self._cached_reasoning_item_id: str | None = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
@@ -1016,7 +1017,24 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queue_message_item_added_events()
         return
 
+    def _stamp_sequence_number(self, event: Any) -> Any:
+        """
+        Give every emitted event a serialized, strictly increasing sequence_number.
+
+        Writing to ``event.__dict__`` skips pydantic's extra-field storage, so those
+        values never reach ``model_dump()``/``model_dump_json()``. Setting the
+        attribute stores it correctly (declared field or allowed extra).
+        """
+        self._emitted_sequence_number += 1
+        event.sequence_number = self._emitted_sequence_number
+        return event
+
     async def __anext__(
+        self,
+    ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
+        return self._stamp_sequence_number(await self._anext_event())
+
+    async def _anext_event(
         self,
     ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
         try:
@@ -1127,6 +1145,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return self
 
     def __next__(
+        self,
+    ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
+        return self._stamp_sequence_number(self._next_event())
+
+    def _next_event(
         self,
     ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
         try:
