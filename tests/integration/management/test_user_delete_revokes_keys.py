@@ -275,10 +275,34 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
     ):
         model: Final = scenario.model()
         user_id: Final = _new_user(gateway)
+        remaining_user_id: Final = _new_user(gateway)
+        scenario.cleanups.callback(gateway.request, "POST", "/user/delete", {"user_ids": [remaining_user_id]})
         ui_token: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
             LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
         )
-        team_id: Final = scenario.team(members_with_roles=[{"role": "user", "user_id": user_id}])
+        team_id: Final = scenario.team(
+            members_with_roles=[
+                {"role": "user", "user_id": user_id},
+                {"role": "user", "user_id": remaining_user_id},
+            ]
+        )
+        initial_team_rows: Final = read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id=%s',
+            (team_id,),
+        )
+        assert len(initial_team_rows) == 1, initial_team_rows
+        initial_members: Final = initial_team_rows[0]["members_with_roles"]
+        assert isinstance(initial_members, list), initial_team_rows
+        initial_member_id_roles: Final = tuple(
+            (
+                string_value(object_value(member)["user_id"]),
+                string_value(object_value(member)["role"]),
+            )
+            for member in initial_members
+        )
+        assert (user_id, "user") in initial_member_id_roles, initial_team_rows
+        assert (remaining_user_id, "user") in initial_member_id_roles, initial_team_rows
+        expected_remaining_members: Final = tuple(member for member in initial_member_id_roles if member[0] != user_id)
         organization_id: Final = scenario.organization()
         membership: Final = gateway.request(
             "POST",
@@ -340,7 +364,14 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
         assert len(team_rows) == 1, team_rows
         members: Final = team_rows[0]["members_with_roles"]
         assert isinstance(members, list), team_rows
-        assert all(object_value(member)["user_id"] != user_id for member in members), team_rows
+        member_id_roles: Final = tuple(
+            (
+                string_value(object_value(member)["user_id"]),
+                string_value(object_value(member)["role"]),
+            )
+            for member in members
+        )
+        assert member_id_roles == expected_remaining_members, team_rows
         assert (
             read_rows(
                 'SELECT user_id FROM "LiteLLM_OrganizationMembership" WHERE organization_id=%s',

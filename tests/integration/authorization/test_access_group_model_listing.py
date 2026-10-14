@@ -178,7 +178,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         assert removed_team.status_code == 200, removed_team.text
         assert _team_groups(team_id) == [{"access_group_ids": []}]
         _assert_denied(_chat(gateway, model, team_key, "denied"), model, "team_model_access_denied")
-        _observed(upstream)
+        assert _observed(upstream) == []
         still_granted: Final = f"still granted {uuid.uuid4().hex}"
         _assert_served(_chat(gateway, model, assigned_key, still_granted))
         assert _observed(upstream) == [_observation(still_granted)]
@@ -195,7 +195,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
             {"assigned_team_ids": [team_id], "assigned_key_ids": [hashed_key]},
         )
         assert restored.status_code == 200, restored.text
-        _observed(upstream)
+        assert _observed(upstream) == []
         regranted: Final = []
         for key in (team_key, assigned_key):
             text = f"re-granted {uuid.uuid4().hex}"
@@ -214,7 +214,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         )
         for key, denied_type in denied_pairs:
             _assert_denied(_chat(gateway, model, key, "deleted"), model, denied_type)
-        _observed(upstream)
+        assert _observed(upstream) == []
         for key, denied_type in denied_pairs:
             _assert_denied(_chat(gateway, model, key, "deleted"), model, denied_type)
         assert _observed(upstream) == []
