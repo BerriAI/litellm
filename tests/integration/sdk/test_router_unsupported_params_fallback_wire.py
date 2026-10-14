@@ -36,6 +36,30 @@ _UPSTREAM_400: Final = Reply(
     status=400,
     body=json.dumps({"error": {"message": "Unsupported value: temperature", "type": "invalid_request_error"}}).encode(),
 )
+_UPSTREAM_CONTEXT_WINDOW: Final = Reply(
+    status=400,
+    body=json.dumps(
+        {
+            "error": {
+                "message": "This model's maximum context length is 8192 tokens",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            }
+        }
+    ).encode(),
+)
+_UPSTREAM_CONTENT_POLICY: Final = Reply(
+    status=400,
+    body=json.dumps(
+        {
+            "error": {
+                "message": "Your request was rejected",
+                "type": "invalid_request_error",
+                "code": "content_policy_violation",
+            }
+        }
+    ).encode(),
+)
 _BACKUP_ANSWERS: Final = _answers("answered by the backup")
 
 
@@ -70,10 +94,9 @@ def _router(wire: Wire, **settings: object) -> Router:
                 },
             },
         ],
-        fallbacks=_PRIMARY_TO_BACKUP,
         num_retries=0,
         disable_cooldowns=True,
-        **settings,
+        **{"fallbacks": _PRIMARY_TO_BACKUP, **settings},
     )
 
 
@@ -121,6 +144,26 @@ def test_client_side_param_rejection_still_falls_back_by_default(client: str) ->
 def test_upstream_500_still_falls_back_when_bad_requests_raise(client: str) -> None:
     with wire_server(_peer({"primary": _UPSTREAM_500, "backup": _BACKUP_ANSWERS})) as wire:
         router: Final = _router(wire, fallback_on_unsupported_params=False)
+        assert _complete(client, router) == "answered by the backup"
+        assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_context_window_error_still_uses_its_own_fallbacks_when_bad_requests_raise(client: str) -> None:
+    with wire_server(_peer({"primary": _UPSTREAM_CONTEXT_WINDOW, "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(
+            wire, fallback_on_unsupported_params=False, fallbacks=None, context_window_fallbacks=_PRIMARY_TO_BACKUP
+        )
+        assert _complete(client, router) == "answered by the backup"
+        assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_content_policy_error_still_uses_its_own_fallbacks_when_bad_requests_raise(client: str) -> None:
+    with wire_server(_peer({"primary": _UPSTREAM_CONTENT_POLICY, "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(
+            wire, fallback_on_unsupported_params=False, fallbacks=None, content_policy_fallbacks=_PRIMARY_TO_BACKUP
+        )
         assert _complete(client, router) == "answered by the backup"
         assert _deployments_hit(wire) == ("primary", "backup")
 

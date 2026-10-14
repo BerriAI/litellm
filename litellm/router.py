@@ -7652,6 +7652,7 @@ class Router:
 
         unsupported_params_without_fallback: Final = (
             isinstance(e, BadRequestError)
+            and e.status_code == 400
             and not isinstance(e, (ContextWindowExceededError, ContentPolicyViolationError))
             and not self.fallback_on_unsupported_params
         )
