@@ -21,9 +21,7 @@ def _normalize_wildcard_segments(expr: str) -> tuple[str, ...]:
     nested-wildcard expression is silently dropped and skips the
     guardrail (#46302).
     """
-    segments: Final = tuple(
-        segment for segment in expr.replace("[*]", ".[*]").split(".") if segment
-    )
+    segments: Final = tuple(segment for segment in expr.replace("[*]", ".[*]").split(".") if segment)
     return segments
 
 
