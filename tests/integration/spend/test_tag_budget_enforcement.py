@@ -12,21 +12,29 @@ from pydantic import JsonValue
 from redis import Redis
 
 
+def _untracked_tag(tag: str) -> str:
+    return f"{tag}-untracked"
+
+
 def _tagged_request(
     gateway: Gateway,
     model: str,
     tag: str,
-    tag_source: Literal["body", "header", "key"],
+    tag_source: Literal["body", "header", "root", "key"],
     text: str,
     *,
     key: str | None = None,
 ) -> httpx.Response:
+    tags: Final[list[JsonValue]] = [_untracked_tag(tag), tag]
     body: Final[dict[str, JsonValue]] = {
         "model": model,
         "messages": [{"role": "user", "content": text}],
-        **({"metadata": {"tags": [tag]}} if tag_source == "body" else {}),
+        **({"metadata": {"tags": tags}} if tag_source == "body" else {}),
+        **({"tags": tags} if tag_source == "root" else {}),
     }
-    headers: Final[dict[str, str]] = {"x-litellm-tags": tag} if tag_source == "header" else {}
+    headers: Final[dict[str, str]] = (
+        {"x-litellm-tags": f"{_untracked_tag(tag)}, {tag}"} if tag_source == "header" else {}
+    )
     request_key: Final[str | None] = key if tag_source == "key" else None
     return gateway.request(
         "POST",
@@ -35,6 +43,10 @@ def _tagged_request(
         key=request_key,
         headers=headers,
     )
+
+
+_TAG_SOURCES: Final = ("body", "header", "root", "key")
+_TAG_SOURCE_IDS: Final = ("metadata-tag-list", "comma-separated-tag-header", "root-tag-list", "key-tag-list")
 
 
 def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) -> None:
@@ -344,10 +356,10 @@ def test_tag_budget_duration_resets_spend_and_unblocks_the_tag(gateway: Gateway,
         assert recovered == 200, recovered
 
 
-@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+@pytest.mark.parametrize("tag_source", _TAG_SOURCES, ids=_TAG_SOURCE_IDS)
 def test_tag_budget_update_invalidates_blocked_request(
     gateway: Gateway,
-    tag_source: Literal["body", "header", "key"],
+    tag_source: Literal["body", "header", "root", "key"],
 ) -> None:
     tag: Final = f"tag-budget-update-{uuid.uuid4().hex}"
 
@@ -356,7 +368,7 @@ def test_tag_budget_update_invalidates_blocked_request(
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
-        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        tag_key: Final = scenario.key(metadata={"tags": [_untracked_tag(tag), tag]}) if tag_source == "key" else None
         gateway.post("/tag/new", {"name": tag, "max_budget": 0.0001})
         scenario.cleanups.callback(delete_tag)
         first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag budget update {tag}", key=tag_key)
@@ -374,10 +386,10 @@ def test_tag_budget_update_invalidates_blocked_request(
         assert restored.status_code == 200, restored.text
 
 
-@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+@pytest.mark.parametrize("tag_source", _TAG_SOURCES, ids=_TAG_SOURCE_IDS)
 def test_tag_rpm_update_invalidates_cached_limit(
     gateway: Gateway,
-    tag_source: Literal["body", "header", "key"],
+    tag_source: Literal["body", "header", "root", "key"],
 ) -> None:
     tag: Final = f"tag-rpm-update-{uuid.uuid4().hex}"
 
@@ -386,7 +398,7 @@ def test_tag_rpm_update_invalidates_cached_limit(
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
-        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        tag_key: Final = scenario.key(metadata={"tags": [_untracked_tag(tag), tag]}) if tag_source == "key" else None
         gateway.post("/tag/new", {"name": tag, "rpm_limit": 100})
         scenario.cleanups.callback(delete_tag)
         first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm first {tag}", key=tag_key)
@@ -450,10 +462,10 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
         ], budget_rows
 
 
-@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+@pytest.mark.parametrize("tag_source", _TAG_SOURCES, ids=_TAG_SOURCE_IDS)
 def test_tag_delete_evicts_blocked_limit(
     gateway: Gateway,
-    tag_source: Literal["body", "header", "key"],
+    tag_source: Literal["body", "header", "root", "key"],
 ) -> None:
     tag: Final = f"tag-delete-cache-{uuid.uuid4().hex}"
 
@@ -462,7 +474,7 @@ def test_tag_delete_evicts_blocked_limit(
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
-        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        tag_key: Final = scenario.key(metadata={"tags": [_untracked_tag(tag), tag]}) if tag_source == "key" else None
         created: Final = gateway.request("POST", "/tag/new", {"name": tag, "rpm_limit": 1})
         assert created.status_code == 200, created.text
         scenario.cleanups.callback(delete_tag)

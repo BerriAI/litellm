@@ -10,6 +10,9 @@ from litellm.types.memory_management import LiteLLM_MemoryRow, MemoryDeleteRespo
 
 _MEMORY_ROUTE: Final = ["/v1/memory"]
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_CREATE_METADATA: Final[dict[str, JsonValue]] = {"source": "create", "labels": ["alpha", "beta"], "depth": 2}
+_PUT_METADATA: Final[dict[str, JsonValue]] = {"source": "put", "nested": {"enabled": True, "weights": [0.5, 1]}}
+_UPDATED_METADATA: Final[dict[str, JsonValue]] = {"source": "update", "labels": []}
 
 
 def _admin_only_error(route: str, user_id: str) -> dict[str, JsonValue]:
@@ -46,6 +49,17 @@ def _memory_create_rows(key: str) -> list[dict[str, JsonValue]]:
     )
 
 
+def _memory_metadata(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT metadata FROM "LiteLLM_MemoryTable" WHERE key = %s', (key,))
+
+
+def _prefix_listing(gateway: Gateway, prefix: str, caller: str) -> tuple[int, list[str]]:
+    response: Final = gateway.request("GET", "/v1/memory", key=caller, params={"key_prefix": prefix})
+    assert response.status_code == 200, response.text
+    listing: Final = MemoryListResponse.model_validate_json(response.content)
+    return listing.total, sorted(row.key for row in listing.memories)
+
+
 def _memory_request(
     gateway: Gateway,
     method: str,
@@ -77,7 +91,7 @@ def test_memory_create_enforces_personal_and_team_scope(gateway: Gateway) -> Non
         own_response: Final = gateway.request(
             "POST",
             "/v1/memory",
-            {"key": own_key, "value": "own"},
+            {"key": own_key, "value": "own", "metadata": _CREATE_METADATA},
             key=key_a,
         )
         assert own_response.status_code == 200, own_response.text
@@ -90,14 +104,14 @@ def test_memory_create_enforces_personal_and_team_scope(gateway: Gateway) -> Non
             own.team_id,
             own.created_by,
             own.updated_by,
-        ) == (own_key, "own", None, member_a, team, member_a, member_a), own_response.text
+        ) == (own_key, "own", _CREATE_METADATA, member_a, team, member_a, member_a), own_response.text
         assert own.created_at is not None and own.updated_at is not None, own_response.text
         assert _memory_create_rows(own_key) == [
             {
                 "memory_id": own.memory_id,
                 "key": own_key,
                 "value": "own",
-                "metadata": None,
+                "metadata": _CREATE_METADATA,
                 "user_id": member_a,
                 "team_id": team,
                 "created_by": member_a,
@@ -195,7 +209,7 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
             "PUT",
             personal_key,
             caller=key_a,
-            body={"value": "a1"},
+            body={"value": "a1", "metadata": _PUT_METADATA},
         )
         assert created.status_code == 200, created.text
         _register_memory_cleanup(scenario, personal_key)
@@ -206,6 +220,8 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
             member_a,
             team,
         ), created.text
+        assert created_row.metadata == _PUT_METADATA, created.text
+        assert _memory_metadata(personal_key) == [{"metadata": _PUT_METADATA}]
         assert _memory_rows(personal_key) == [
             {
                 "key": personal_key,
@@ -263,6 +279,19 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
         )
         assert overwritten.status_code == 200, overwritten.text
         assert LiteLLM_MemoryRow.model_validate_json(overwritten.content).value == "a2", overwritten.text
+        assert _memory_metadata(personal_key) == [{"metadata": _PUT_METADATA}]
+        metadata_updated: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=key_a,
+            body={"metadata": _UPDATED_METADATA},
+        )
+        assert metadata_updated.status_code == 200, metadata_updated.text
+        assert LiteLLM_MemoryRow.model_validate_json(metadata_updated.content).model_dump(
+            include={"value", "metadata"}
+        ) == {"value": "a2", "metadata": _UPDATED_METADATA}, metadata_updated.text
+        assert _memory_metadata(personal_key) == [{"metadata": _UPDATED_METADATA}]
         assert _memory_rows(personal_key) == [
             {
                 "key": personal_key,
@@ -309,6 +338,31 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
         ), member_list.text
         outsider_team_read: Final = _memory_request(gateway, "GET", team_only_key, caller=outsider_key)
         assert outsider_team_read.status_code == 404, outsider_team_read.text
+
+        team_prefix: Final = f"agent/{team}-"
+        outsider_prefixed_key: Final = f"{team_prefix}outsider"
+        member_unprefixed_key: Final = f"notes/{team}-{member_a}"
+        outsider_prefixed: Final = _memory_request(
+            gateway,
+            "PUT",
+            outsider_prefixed_key,
+            caller=outsider_key,
+            body={"value": "outsider value"},
+        )
+        assert outsider_prefixed.status_code == 200, outsider_prefixed.text
+        _register_memory_cleanup(scenario, outsider_prefixed_key)
+        member_unprefixed: Final = _memory_request(
+            gateway,
+            "PUT",
+            member_unprefixed_key,
+            caller=key_a,
+            body={"value": "notes value"},
+        )
+        assert member_unprefixed.status_code == 200, member_unprefixed.text
+        _register_memory_cleanup(scenario, member_unprefixed_key)
+        assert _prefix_listing(gateway, team_prefix, key_b) == (2, sorted((personal_key, team_only_key)))
+        assert _prefix_listing(gateway, team_prefix, outsider_key) == (1, [outsider_prefixed_key])
+        assert _prefix_listing(gateway, "notes/", outsider_key) == (0, [])
 
         member_team_write: Final = _memory_request(
             gateway,
