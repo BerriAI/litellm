@@ -20,7 +20,7 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
@@ -61,6 +61,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.utils import get_prompt_cache_min_tokens
 
+_OWNED_PROXY_TIMEOUT: Final = 2 * graceful_stop_seconds() + 120
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LANE_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _CLIENT_MARKED: Final = client_marked()
@@ -515,7 +516,7 @@ def test_responses_bridge_points_skip_injection_when_function_call_marks_fill_th
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(_OWNED_PROXY_TIMEOUT)
 def test_response_cache_serves_the_capped_request_once(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, uncapped_gateway.scenario() as scenario:
@@ -863,7 +864,7 @@ def _cache_hit_rows(response_id: str) -> list[dict[str, JsonValue]]:
     )
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(_OWNED_PROXY_TIMEOUT)
 def test_response_cache_hit_records_the_injection_on_the_first_row_only(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
     unmarked: Final = [tool_call(city) for city in CITIES]
@@ -881,7 +882,7 @@ def test_response_cache_hit_records_the_injection_on_the_first_row_only(uncapped
     assert hit_rows[0]["injected"] is None, hit_rows
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(_OWNED_PROXY_TIMEOUT)
 @pytest.mark.parametrize("path", ("/v1/messages", "/v1/responses"))
 def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(
     uncapped_gateway: Gateway, path: str
