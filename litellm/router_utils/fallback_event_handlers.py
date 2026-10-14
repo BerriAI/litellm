@@ -222,6 +222,16 @@ def has_unattempted_fallback_target(
     return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
 
 
+def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupported_params: bool) -> bool:
+    if fallback_on_unsupported_params or not isinstance(exception, litellm.BadRequestError):
+        return False
+    if isinstance(exception, litellm.UnsupportedParamsError):
+        return True
+    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+        return False
+    return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
@@ -514,7 +524,7 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
 
 
 def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
 ) -> bool:
     resolved, generic_idx = result
@@ -524,7 +534,7 @@ def _resolved_a_specific_chain(
 
 
 def get_fallback_model_group_for_lookup_groups(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
@@ -538,7 +548,10 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
-def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
+def get_fallback_model_group(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    model_group: str,
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
