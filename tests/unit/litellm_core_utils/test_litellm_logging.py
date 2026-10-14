@@ -9149,12 +9149,120 @@ def _completed_responses_event(usage: ResponseAPIUsage) -> ResponseCompletedEven
     )
 
 
+def _responses_event_with_marker(marker: str) -> ResponseCompletedEvent:
+    return ResponseCompletedEvent(
+        type="response.completed",
+        response=ResponsesAPIResponse(
+            id="resp-served-output",
+            created_at=1,
+            object="response",
+            status="completed",
+            model="gpt-4o-mini",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-served-output",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": f"answer {marker}", "annotations": []}],
+                },
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc-served-output",
+                    "call_id": "call-served-output",
+                    "name": "execute",
+                    "input": f"echo {marker}",
+                    "status": "completed",
+                },
+            ],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        ),
+    )
+
+
 def _responses_stream_logging_obj() -> LitellmLogging:
     logging_obj = _make_logging_obj(stream=True)
     logging_obj.update_environment_variables(
         model="openai/codex-mini-latest", user="", optional_params={}, litellm_params={"api_base": ""}
     )
     return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_logs_the_responses_event_served_after_guardrails() -> None:
+    events: Final = asyncio.Queue()
+    hook_results: Final[list[object]] = []
+
+    class SuccessRecorder(CustomLogger):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            hook_results.append(result)
+            return kwargs, result
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.put_nowait((kwargs, response_obj))
+
+    original_marker: Final = "provider-output-marker"
+    served_marker: Final = "<REDACTED>"
+    original_event: Final = _responses_event_with_marker(original_marker)
+    served_event: Final = _responses_event_with_marker(served_marker)
+    now: Final = datetime.datetime.now()
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=now,
+        litellm_call_id="served-responses-output",
+        function_id="served-responses-output",
+        dynamic_async_success_callbacks=[SuccessRecorder()],
+    )
+    logging_obj.update_environment_variables(
+        model="openai/gpt-4o-mini",
+        user=None,
+        optional_params={},
+        litellm_params={"metadata": {}, "proxy_server_request": {}, "aresponses": True},
+        custom_llm_provider="openai",
+    )
+    logging_obj.record_served_responses_terminal_event(served_event)
+
+    await logging_obj.async_success_handler(
+        result=original_event,
+        start_time=now,
+        end_time=now,
+        cache_hit=False,
+    )
+
+    kwargs, response_obj = await asyncio.wait_for(events.get(), timeout=10)
+    callback_json: Final = response_obj.model_dump_json()
+    payload_json: Final = json.dumps(kwargs["standard_logging_object"], default=str)
+    hook_json: Final = hook_results[0].model_dump_json()
+    assert served_marker in callback_json
+    assert served_marker in payload_json
+    assert served_marker in hook_json
+    assert original_marker not in callback_json
+    assert original_marker not in payload_json
+    assert original_marker not in hook_json
+    assert response_obj.id == "resp-served-output"
+    assert len(hook_results) == 1
+    assert events.empty()
+
+
+def test_sync_success_handler_logs_the_responses_event_served_after_guardrails() -> None:
+    original_marker: Final = "provider-sync-marker"
+    served_marker: Final = "<REDACTED_SYNC>"
+    original_event: Final = _responses_event_with_marker(original_marker)
+    served_event: Final = _responses_event_with_marker(served_marker)
+    logging_obj: Final = _responses_stream_logging_obj()
+    logging_obj.record_served_responses_terminal_event(served_event)
+    now: Final = datetime.datetime.now()
+
+    logging_obj.success_handler(result=original_event, start_time=now, end_time=now, cache_hit=False)
+
+    logged_response: Final = logging_obj.model_call_details["complete_streaming_response"]
+    payload_json: Final = json.dumps(logging_obj.model_call_details["standard_logging_object"], default=str)
+    assert logged_response is served_event.response
+    assert served_marker in payload_json
+    assert original_marker not in payload_json
 
 
 def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost():
