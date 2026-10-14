@@ -503,6 +503,34 @@ def test_a_marked_part_list_tool_output_caches_its_tool_result_on_claude(
     assert _cache_marks(body) == [("user:tool_result:call_1", _EPHEMERAL)]
 
 
+_ONE_HOUR: Final = {"type": "ephemeral", "ttl": "1h"}
+
+
+@pytest.mark.parametrize(
+    ("tool_output", "expected"),
+    (
+        (_tool_output([_input_text("cloudy", _CACHE_CONTROL), _input_text("sunny")]), _EPHEMERAL),
+        (
+            _tool_output(
+                [_input_text("cloudy", {"cache_control": _ONE_HOUR}), _input_text("sunny", _CACHE_CONTROL)]
+            ),
+            _EPHEMERAL,
+        ),
+        (
+            _tool_output([_input_text("cloudy"), _input_text("sunny", _CACHE_CONTROL)], {"cache_control": _ONE_HOUR}),
+            _ONE_HOUR,
+        ),
+    ),
+    ids=("only-an-earlier-part-is-marked", "the-last-marked-part-wins", "the-item-mark-beats-a-part-mark"),
+)
+def test_a_tool_output_with_several_marks_caches_its_tool_result_with_the_one_closest_to_the_item(
+    respx_mock: respx.MockRouter, tool_output: Mapping[str, object], expected: Mapping[str, str]
+) -> None:
+    body: Final = _responses_to_claude(respx_mock, [*_history()[:3], tool_output])
+
+    assert _cache_marks(body) == [("user:tool_result:call_1", expected)]
+
+
 def test_a_responses_request_without_marks_reaches_claude_without_cache_control(respx_mock: respx.MockRouter) -> None:
     assert b"cache_control" not in _responses_to_claude(respx_mock, _history())
 

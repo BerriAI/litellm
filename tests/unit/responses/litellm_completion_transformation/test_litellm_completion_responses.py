@@ -4433,6 +4433,8 @@ class TestCacheControlPreservation:
         (
             ("claude-haiku-5-5", "anthropic", True),
             ("us.anthropic.claude-haiku-5-5", "bedrock", True),
+            ("databricks-claude-opus-5", "databricks", True),
+            ("databricks-meta-llama-3-3-70b-instruct", "databricks", False),
             ("mistral-large-latest", "mistral", False),
             ("gemini-2.5-pro", "gemini", False),
         ),
