@@ -276,3 +276,25 @@ def test_drop_params_keeps_a_cache_control_only_request_byte_identical(monkeypat
     with_drop: Final = _transform(*_cache_control_only_request(), GenericLiteLLMParams(drop_params=True))
 
     assert json.dumps(with_drop) == json.dumps(without_drop)
+
+
+def _document_message(*, breakpoint: bool) -> Mapping[str, object]:
+    marked: Final = {"prompt_cache_breakpoint": _BREAKPOINT} if breakpoint else {}
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "content", "content": [{"type": "text", "text": "chunk", **marked}]},
+                **marked,
+            }
+        ],
+    }
+
+
+def test_drop_params_strips_prompt_cache_breakpoint_inside_a_document_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    result: Final = _transform([_document_message(breakpoint=True)], {"max_tokens": 64}, GenericLiteLLMParams())
+
+    assert result["messages"] == [_document_message(breakpoint=False)]

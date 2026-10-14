@@ -10,15 +10,19 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
+    LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.messages.transformation import messages_request_for_claude
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
@@ -531,12 +535,24 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        translatable_request: Final = (
+            messages_request_for_claude(
+                request_data,
+                drop_params=normalize_drop_params(litellm.drop_params) is True
+                or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
+            )
+            if LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model)
+            else request_data
+        )
+        if isinstance(translatable_request, UnsupportedParamsError):
+            raise translatable_request
+
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
-            request_data,
+            dict(translatable_request),
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
         )
 
