@@ -13,7 +13,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 # anthropic SDK ``lib/_parse/_transform.py`` SupportedStringFormats, checked 2026-10-13
-SUPPORTED_STRING_FORMATS: Final = frozenset(
+_SUPPORTED_STRING_FORMATS: Final = frozenset(
     {"date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"}
 )
 
@@ -114,7 +114,7 @@ def _constraint_notes(schema: Mapping[str, object]) -> Iterator[str]:
 
 def _unsupported_format(schema: Mapping[str, object]) -> str | None:
     value: Final = schema.get("format")
-    if isinstance(value, str) and value not in SUPPORTED_STRING_FORMATS:
+    if isinstance(value, str) and value not in _SUPPORTED_STRING_FORMATS:
         return value
     return None
 

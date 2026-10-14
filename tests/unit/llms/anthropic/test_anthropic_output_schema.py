@@ -5,7 +5,6 @@ import copy
 import pytest
 
 from litellm.llms.anthropic.output_schema import (
-    SUPPORTED_STRING_FORMATS,
     shape_claude_output_format,
     shape_claude_output_schema,
 )
@@ -41,9 +40,36 @@ def test_shaping_does_not_mutate_the_input():
     assert _MESSY_SCHEMA == before
 
 
-@pytest.mark.parametrize("fmt", sorted(SUPPORTED_STRING_FORMATS))
-def test_supported_string_format_is_kept(fmt):
+# Claude-supported formats per the anthropic SDK ``lib/_parse/_transform.py`` SupportedStringFormats, checked 2026-10-13
+@pytest.mark.parametrize("fmt", ["date-time", "date", "email", "uri", "uuid"])
+def test_supported_string_format_is_kept(fmt: str):
     assert shape_claude_output_schema({"type": "string", "format": fmt}) == {"type": "string", "format": fmt}
+
+
+_BOUNDED = {"type": "number", "minimum": 0}
+_BOUNDED_SHAPED = {"type": "number", "description": "Note: minimum value: 0."}
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ({"$defs": {"X": _BOUNDED}}, {"$defs": {"X": _BOUNDED_SHAPED}}),
+        ({"definitions": {"X": _BOUNDED}}, {"definitions": {"X": _BOUNDED_SHAPED}}),
+        ({"allOf": [_BOUNDED]}, {"allOf": [_BOUNDED_SHAPED]}),
+    ],
+    ids=["$defs", "definitions", "allOf"],
+)
+def test_shapes_schemas_nested_under_definitions_and_all_of(schema: dict[str, object], expected: dict[str, object]):
+    assert shape_claude_output_schema(schema) == expected
+
+
+@pytest.mark.parametrize("composition", ["anyOf", "oneOf", "allOf", "$ref"])
+def test_untyped_node_with_properties_and_composition_is_not_forced_to_object(composition: str):
+    value = "#/$defs/X" if composition == "$ref" else [{"type": "object", "properties": {}}]
+    result = shape_claude_output_schema({"properties": {"a": {"type": "string"}}, composition: value})
+
+    assert "type" not in result
+    assert "additionalProperties" not in result
 
 
 def test_output_format_block_shapes_only_its_schema():
