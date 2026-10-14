@@ -1,5 +1,5 @@
-use litellm_host::hooks::CallHooks;
-use litellm_host_python::{PythonOwned, PythonRuntime};
+use litellm_host::hooks::{ArgumentHooks, OutcomeHooks, ProviderHooks, ResponseHooks};
+use litellm_host_python::{Awaiter, PythonOwned, PythonSurface};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -33,21 +33,32 @@ impl PythonPreflight {
 #[cfg(test)]
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.json");
 
+/// The SDK's request policy as one argument group: inherited credentials are written into
+/// the keyword view and a call over its limits is rejected before any provider work.
 pub(crate) struct SdkPolicy;
 
-impl CallHooks<PythonRuntime> for SdkPolicy {
-    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+impl ArgumentHooks<PythonSurface> for SdkPolicy {
+    async fn prepare<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
+        arguments: Py<PyDict>,
+        _: f64,
+    ) -> PyResult<Py<PyDict>> {
         Python::attach(|py| {
             inherit_credentials(py, arguments.bind(py), || {
                 Ok(PythonPreflight::CredentialList
                     .call(py, ())?
                     .cast_into::<PyList>()?)
             })?;
-            PythonPreflight::CheckLimits.call(py, (arguments,))?;
-            Ok(())
+            PythonPreflight::CheckLimits.call(py, (&arguments,))?;
+            Ok(arguments)
         })
     }
 }
+
+impl ProviderHooks<PythonSurface> for SdkPolicy {}
+impl ResponseHooks<PythonSurface> for SdkPolicy {}
+impl OutcomeHooks<PythonSurface> for SdkPolicy {}
 
 impl PythonOwned for SdkPolicy {
     fn close(&mut self, _: Python<'_>) {}
@@ -108,7 +119,11 @@ fn inherit_credentials<'py>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::pin::pin;
     use std::sync::Mutex;
+    use std::task::{Context, Poll, Waker};
+
+    use futures_util::future::BoxFuture;
 
     use super::*;
     use strum::VariantArray;
@@ -427,9 +442,7 @@ preflight.credential_list = lambda: [Credential(), Credential()]
 arguments = {'litellm_credential_name': 'missing'}
 ",
             );
-            SdkPolicy
-                .arguments_prepared(&argument_dict(&locals).unbind())
-                .unwrap();
+            prepared(&argument_dict(&locals).unbind()).unwrap();
             py.run(
                 c"
 assert arguments == {'litellm_credential_name': 'missing'}, arguments
@@ -465,9 +478,7 @@ preflight.check_limits = check_limits
 arguments = {'litellm_credential_name': 'ocr-test'}
 ",
             );
-            let error = SdkPolicy
-                .arguments_prepared(&argument_dict(&locals).unbind())
-                .unwrap_err();
+            let error = prepared(&argument_dict(&locals).unbind()).unwrap_err();
             assert!(
                 error
                     .value(py)
@@ -483,6 +494,25 @@ assert arguments['api_key'] == 'inherited'
             )
             .unwrap();
         });
+    }
+
+    /// Runs the policy over `arguments`. It never awaits, so the task is never asked.
+    fn prepared(arguments: &Py<PyDict>) -> PyResult<Py<PyDict>> {
+        struct NeverAwaited;
+        impl Awaiter for NeverAwaited {
+            fn awaited(&self, _: Py<PyAny>) -> BoxFuture<'_, PyResult<Py<PyAny>>> {
+                unreachable!("the SDK policy never awaits")
+            }
+        }
+        let arguments = Python::attach(|py| arguments.clone_ref(py));
+        let mut prepare = pin!(SdkPolicy.prepare(&NeverAwaited, arguments, 0.0));
+        match prepare
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(result) => result,
+            Poll::Pending => unreachable!("the SDK policy never suspends"),
+        }
     }
 
     fn argument_dict<'py>(locals: &Bound<'py, PyDict>) -> Bound<'py, PyDict> {

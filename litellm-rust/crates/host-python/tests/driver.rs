@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use litellm_host::{
-    hooks::CallHooks,
+    hooks::{ArgumentHooks, OutcomeHooks, ProviderHooks, ResponseHooks},
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin},
     machine::CallMachine,
     observation::observation_channel,
 };
-use litellm_host_python::{CallOptions, HookChain, PythonOwned, PythonRuntime, run_call};
+use litellm_host_python::{CallOptions, Hooks, PythonOwned, PythonSurface, run_call};
 use pyo3::{
     exceptions::{
         PyBaseException, PyException, PyLookupError, PyRuntimeError, PyStopIteration, PyTypeError,
@@ -79,10 +79,19 @@ fn composed_hooks_share_prepared_arguments_and_one_execution(
 ) {
     Python::attach(|py| {
         let log = Log::default();
-        let chain = HookChain::new()
-            .with(hooks(&log, HookScript::ObserveArguments))
-            .with(hooks(&log, HookScript::RewriteArguments))
-            .with(hooks(&log, HookScript::ReplaceResponse));
+        let chain = Hooks::new()
+            .with(PythonSurface::group(hooks(
+                &log,
+                HookScript::ObserveArguments,
+            )))
+            .with(PythonSurface::group(hooks(
+                &log,
+                HookScript::RewriteArguments,
+            )))
+            .with(PythonSurface::group(hooks(
+                &log,
+                HookScript::ReplaceResponse,
+            )));
         let result = handed(
             py,
             run_call(
@@ -183,7 +192,6 @@ fn observation_delivery_preserves_callback_order_and_response(
 #[case::preparation(HookScript::FailBegin, false, 1)]
 #[case::transformation(HookScript::FailAfterSuccess, false, 1)]
 #[case::terminal_cancellation(HookScript::CancelTerminal, true, 0)]
-#[case::terminal_failure(HookScript::FailTerminal, false, 0)]
 fn a_terminal_hook_failure_is_reported_once_and_never_replays_callbacks(
     #[from(interpreter)] _python: Interpreter,
     #[case] script: HookScript,
@@ -242,6 +250,51 @@ fn a_terminal_hook_failure_is_reported_once_and_never_replays_callbacks(
             !log.iter()
                 .any(|entry| entry.starts_with("succeeded:") || entry == "cancelled")
         );
+    });
+}
+
+#[rstest]
+fn an_ordinary_terminal_hook_error_is_reported_and_the_call_still_succeeds(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let unraisable = PyDict::new(py);
+        py.run(
+            c"import sys\nseen = []\nsys.unraisablehook = lambda event: seen.append(event.exc_value)",
+            Some(&unraisable),
+            Some(&unraisable),
+        )
+        .unwrap();
+        let (options, mut events) = observed(4);
+        let log = Log::default();
+        let (result, log) = run_composed(
+            py,
+            success_machine(),
+            binding(&log, OpScript::Answer),
+            hooks(&log, HookScript::FailTerminal),
+            std::convert::identity,
+            CallOptions {
+                asynchronous,
+                ..options
+            },
+        );
+        assert_eq!(
+            result.unwrap().extract::<String>(py).unwrap(),
+            "project:1|sign|rewritten"
+        );
+        assert!(matches!(events().last(), Some(CallEvent::Succeeded { .. })));
+        assert!(!log.iter().any(|entry| entry.starts_with("failed:")));
+        let seen: Vec<String> = unraisable
+            .get_item("seen")
+            .unwrap()
+            .unwrap()
+            .extract::<Vec<Bound<'_, PyAny>>>()
+            .unwrap()
+            .iter()
+            .map(|error| error.to_string())
+            .collect();
+        assert_eq!(seen, ["callback failed"]);
     });
 }
 
@@ -534,14 +587,18 @@ enum ArgumentPolicy {
     Reject(Py<PyBaseException>),
 }
 
-impl CallHooks<PythonRuntime> for ArgumentPolicy {
-    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+impl ArgumentHooks<PythonSurface> for ArgumentPolicy {
+    fn prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         Python::attach(|py| match self {
             Self::Inherit => arguments.bind(py).set_item("api_key", "inherited"),
             Self::Reject(error) => Err(PyErr::from_value(error.bind(py).clone().into_any())),
         })
     }
 }
+
+impl ProviderHooks<PythonSurface> for ArgumentPolicy {}
+impl ResponseHooks<PythonSurface> for ArgumentPolicy {}
+impl OutcomeHooks<PythonSurface> for ArgumentPolicy {}
 
 impl PythonOwned for ArgumentPolicy {
     fn close(&mut self, _: Python<'_>) {}
@@ -581,9 +638,12 @@ fn resource_setup_uses_prepared_arguments_and_failures_are_terminal(
                     Ok(success_machine()(request))
                 },
                 binding(&log, OpScript::Answer),
-                HookChain::new()
-                    .with(hooks(&log, HookScript::RewriteArguments))
-                    .with(ArgumentPolicy::Inherit),
+                Hooks::new()
+                    .with(PythonSurface::group(hooks(
+                        &log,
+                        HookScript::RewriteArguments,
+                    )))
+                    .with(PythonSurface::group(ArgumentPolicy::Inherit)),
                 arguments.clone().unbind(),
                 call_options(asynchronous),
             ),
@@ -675,9 +735,11 @@ fn an_argument_policy_rejection_is_the_callers_error_and_the_machine_never_start
             binding(&log, OpScript::Answer),
             hooks(&log, HookScript::Plain),
             |hooks| {
-                HookChain::new()
-                    .with(hooks)
-                    .with(ArgumentPolicy::Reject(raised.clone_ref(py)))
+                Hooks::new()
+                    .with(PythonSurface::group(hooks))
+                    .with(PythonSurface::group(ArgumentPolicy::Reject(
+                        raised.clone_ref(py),
+                    )))
             },
             call_options(asynchronous),
         );
@@ -707,7 +769,11 @@ fn the_host_projects_from_the_keyword_view_the_argument_policy_rewrote(
             success_machine(),
             binding(&log, OpScript::Answer),
             hooks(&log, HookScript::Plain),
-            |hooks| HookChain::new().with(hooks).with(ArgumentPolicy::Inherit),
+            |hooks| {
+                Hooks::new()
+                    .with(PythonSurface::group(hooks))
+                    .with(PythonSurface::group(ArgumentPolicy::Inherit))
+            },
             call_options(asynchronous),
         );
         assert_eq!(

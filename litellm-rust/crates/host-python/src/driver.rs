@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use parking_lot::{Mutex, MutexGuard};
-use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
+use pyo3::exceptions::{PyBaseException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -11,6 +11,8 @@ use pyo3::types::PyDict;
 use litellm_coroutine::{Coroutine, CoroutineState};
 use litellm_host::{
     call::HostedCompletion,
+    hooks::Cancelled,
+    interceptors::RawResponse,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
     observation::ObservationSender,
@@ -20,7 +22,7 @@ use litellm_host::{
 use crate::PythonHostCalls;
 use crate::caller::{Answer, PythonCaller, Yielded};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, StepTypes};
-use crate::hooks::{PythonCallEvent, PythonCallHooks};
+use crate::hooks::{PythonGroup, is_cancellation};
 use crate::native::{NativeMachine, NativePoll};
 use crate::{Error, InvokeError, PythonBinding};
 
@@ -34,6 +36,8 @@ type StartMachine<P, M> = Box<
         + Sync,
 >;
 type Body = Coroutine<Yielded, PyResult<Py<PyAny>>>;
+/// The call's events as the observers see them, borrowing the Python values the call holds.
+type PythonCallEvent<'a> = CallEvent<&'a Py<PyAny>, &'a Py<PyBaseException>, &'a RawResponse>;
 
 pub struct CallOptions {
     pub asynchronous: bool,
@@ -49,10 +53,6 @@ impl CallOptions {
             observers: None,
         }
     }
-}
-
-fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
-    !error.is_instance_of::<PyException>(py)
 }
 
 struct Observation {
@@ -148,7 +148,7 @@ where
 
 impl<H, M, L> CallBody<H, M, L>
 where
-    L: PythonCallHooks + 'static,
+    L: PythonGroup + 'static,
     H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
@@ -188,9 +188,9 @@ where
             parts.observation.emit(&started);
         }
         self.hooks()
-            .on_event(&self.caller, started)
+            .started(&self.caller, started_at)
             .await
-            .map_err(Setup::Host)?;
+            .map_err(|Cancelled(error)| Setup::Host(error))?;
         let arguments = self
             .parts()
             .arguments
@@ -198,12 +198,10 @@ where
             .ok_or_else(|| Setup::Host(Error::MissingState.into()))?;
         let prepared = self
             .hooks()
-            .prepare_arguments(&self.caller, arguments, started_at)
+            .prepare(&self.caller, arguments, started_at)
             .await
             .map_err(Setup::Host)?;
-        self.hooks()
-            .arguments_prepared(&prepared)
-            .map_err(Setup::Host)?;
+        self.hooks().prepared(&prepared).map_err(Setup::Host)?;
         let decoded = Python::attach(|py| self.binding().decode_request(py, prepared.bind(py)));
         self.parts().arguments = Some(prepared);
         let request = decoded.map_err(Setup::Decode)?;
@@ -289,40 +287,39 @@ where
                 Ok(())
             }
             HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
-                self.notify(PythonCallEvent::Execution(ExecutionEvent::ResultReady {
-                    facts,
-                }))
-                .await?;
+                self.parts()
+                    .observation
+                    .emit(&CallEvent::Execution(ExecutionEvent::ResultReady {
+                        facts: facts.clone(),
+                    }));
+                self.hooks().result_ready(&self.caller, &facts).await?;
                 reply.send(());
                 Ok(())
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
-                self.notify(PythonCallEvent::Execution(
+                self.parts().observation.emit(&CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: &raw },
-                ))
-                .await?;
+                ));
+                self.hooks()
+                    .after_provider_response(&self.caller, &raw)
+                    .await?;
                 reply.send(());
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 self.streaming = true;
                 let head = Python::attach(|py| self.binding().encode_stream_head(py, head))?;
-                self.hooks().on_stream_open(&head)?;
+                self.hooks().stream_opened(&head)?;
                 reply.send(self.caller.open_stream(head).await);
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                 let chunk = Python::attach(|py| self.binding().encode_chunk(py, chunk))?;
-                self.hooks().on_stream_chunk(&chunk)?;
+                self.hooks().stream_chunk(&chunk)?;
                 reply.send(self.caller.yield_chunk(chunk).await);
                 Ok(())
             }
         }
-    }
-
-    async fn notify(&self, event: PythonCallEvent<'_>) -> PyResult<()> {
-        self.parts().observation.emit(&event);
-        self.hooks().on_event(&self.caller, event).await
     }
 
     async fn completed(
@@ -345,11 +342,7 @@ where
             return self.succeeded(public).await;
         }
         let timing = self.parts().observation.timing();
-        match self
-            .hooks()
-            .transform_response(&self.caller, public, timing)
-            .await
-        {
+        match self.hooks().transform(&self.caller, public, timing).await {
             Ok(response) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }
@@ -379,11 +372,14 @@ where
             parts.observation.retain_terminal(&event);
             parts.selected = Some(Selected::Response(Arc::clone(&response)));
         }
-        let notified = self.hooks().on_event(&self.caller, event).await;
+        let notified = self
+            .hooks()
+            .succeeded(&self.caller, timing, &response)
+            .await;
         {
             let mut parts = self.parts();
             parts.selected = None;
-            notified?;
+            notified.map_err(|Cancelled(error)| error)?;
             parts.observation.finish();
         }
         Arc::into_inner(response).ok_or_else(|| Error::MissingState.into())
@@ -411,11 +407,14 @@ where
             parts.observation.retain_terminal(&event);
             parts.selected = Some(Selected::Exception(Arc::clone(&exception)));
         }
-        let notified = self.hooks().on_event(&self.caller, event).await;
+        let notified = self
+            .hooks()
+            .failed(&self.caller, timing, origin, &exception)
+            .await;
         {
             let mut parts = self.parts();
             parts.selected = None;
-            notified?;
+            notified.map_err(|Cancelled(error)| error)?;
             parts.observation.finish();
         }
         let exception = Arc::into_inner(exception).ok_or(Error::MissingState)?;
@@ -428,7 +427,7 @@ where
 struct CallDriver<H, L>
 where
     H: PythonBinding,
-    L: PythonCallHooks,
+    L: PythonGroup,
 {
     body: Mutex<Body>,
     reply: Option<Reply<Answer>>,
@@ -438,7 +437,7 @@ where
 impl<H, L> CallDriver<H, L>
 where
     H: PythonBinding + 'static,
-    L: PythonCallHooks + 'static,
+    L: PythonGroup + 'static,
 {
     /// A failure the body raised past its terminal hooks, or a cancellation, is the last
     /// thing the observers hear about the call.
@@ -469,7 +468,7 @@ where
 impl<H, L> ExecutionBody for CallDriver<H, L>
 where
     H: PythonBinding + 'static,
-    L: PythonCallHooks + 'static,
+    L: PythonGroup + 'static,
 {
     fn resume(&mut self, answer: Option<Answer>) -> PyResult<ExecutionStep> {
         match (self.reply.take(), answer) {
@@ -521,7 +520,7 @@ where
 impl<H, L> Drop for CallDriver<H, L>
 where
     H: PythonBinding,
-    L: PythonCallHooks,
+    L: PythonGroup,
 {
     fn drop(&mut self) {
         self.body.get_mut().cancel();
@@ -563,7 +562,7 @@ pub fn run_call<H, M, L>(
     options: CallOptions,
 ) -> PyResult<Py<PyAny>>
 where
-    L: PythonCallHooks + 'static,
+    L: PythonGroup + 'static,
     H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,

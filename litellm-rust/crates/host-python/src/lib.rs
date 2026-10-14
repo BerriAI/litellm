@@ -1,6 +1,6 @@
 //! The CPython runtime adapter: value marshalling, interpreter detachment, the tokio and
 //! asyncio glue, and the driver that runs a native [`Machine`](litellm_host::machine::Machine)
-//! against a Python binding, host services and active call hooks. Everything here is Python-specific by
+//! against a Python binding, host services and the mounted hook groups. Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
 mod argument;
@@ -29,7 +29,7 @@ pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep, StepTypes, Suspension};
-pub use hooks::{Awaiter, HookChain, PythonCallEvent, PythonCallHooks, PythonRuntime};
+pub use hooks::{Awaiter, Hooks, PythonGroup, PythonSurface, report_unless_cancelled};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
 };

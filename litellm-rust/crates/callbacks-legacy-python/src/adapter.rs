@@ -9,7 +9,7 @@ use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{Awaiter, Error as HostError, from_py, to_py};
+use litellm_host_python::{Error as HostError, from_py, to_py};
 use parking_lot::Mutex;
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -64,7 +64,7 @@ fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
     PyDateTime::from_timestamp(py, epoch_seconds, None).map(|value| value.into_any().unbind())
 }
 
-fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
+pub(crate) fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
 }
 
@@ -74,14 +74,6 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
 pub(crate) enum FailureStage {
     DeploymentHook(Py<PyAny>),
     Handlers(Option<Py<PyAny>>),
-}
-
-/// An awaited failure handler ends the call however it ends, unless it was cancelled.
-fn async_failure_result(result: PyResult<Py<PyAny>>) -> PyResult<()> {
-    match result {
-        Err(error) if Python::attach(|py| is_cancellation(py, &error)) => Err(error),
-        _ => Ok(()),
-    }
 }
 
 impl LegacyLogging {
@@ -158,14 +150,14 @@ impl LegacyLogging {
 
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
     /// dict is left as the hook returned it, carrying the logger as `@client` injects it.
-    fn prepare(&mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+    pub(crate) fn prepare(&mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let prepared = self.call.kwargs().bind(py).copy()?;
         prepared.set_item("litellm_logging_obj", self.logger()?.object(py))?;
         self.call.set_kwargs(prepared.unbind());
         Ok(self.call.kwargs().clone_ref(py))
     }
 
-    fn finalize(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn finalize(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         finalize(
             py,
             &self.response,
@@ -290,7 +282,7 @@ impl LegacyLogging {
     /// The sync failure handler, then the async one for async calls. Ordinary handler
     /// errors never replace the selected failure or suppress the other family; a
     /// cancellation does end the call.
-    fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+    pub(crate) fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let (Some(logger), Some(error)) = (&self.logger, &self.error) else {
             return Ok(None);
         };
@@ -314,7 +306,7 @@ impl LegacyLogging {
 }
 
 impl LegacyLogging {
-    fn adopt_hooked_arguments(
+    pub(crate) fn adopt_hooked_arguments(
         &mut self,
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
@@ -324,7 +316,7 @@ impl LegacyLogging {
         Ok(())
     }
 
-    fn adopt_hooked_response(&mut self, result: PyResult<Py<PyAny>>) -> PyResult<()> {
+    pub(crate) fn adopt_hooked_response(&mut self, result: PyResult<Py<PyAny>>) -> PyResult<()> {
         self.response = Some(result?);
         Ok(())
     }
@@ -332,7 +324,7 @@ impl LegacyLogging {
 
 impl LegacyLogging {
     /// Sets the call up, returning the deployment pre-call hook to await when it runs.
-    fn begin_call(
+    pub(crate) fn begin_call(
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
@@ -405,7 +397,7 @@ impl LegacyLogging {
 
     /// Takes the public response, returning the deployment post-call hook to await when
     /// it runs.
-    fn respond(
+    pub(crate) fn respond(
         &mut self,
         py: Python<'_>,
         response: Py<PyAny>,
@@ -489,7 +481,7 @@ impl LegacyLogging {
         }
     }
 
-    fn failed(
+    pub(crate) fn failed(
         &mut self,
         py: Python<'_>,
         timing: Timing,
@@ -536,99 +528,15 @@ impl LegacyLogging {
 
 /// [`LegacyLogging`] as the call's hooks. The state is locked only around Python work and
 /// never across an await, so the call's handle can traverse it while a hook is suspended.
-pub struct LegacyHooks(Mutex<LegacyLogging>);
+pub struct LegacyHooks(pub(crate) Mutex<LegacyLogging>);
 
 impl LegacyHooks {
     pub fn new(logging: LegacyLogging) -> Self {
         Self(Mutex::new(logging))
     }
 
-    fn with<T>(&self, step: impl FnOnce(&mut LegacyLogging, Python<'_>) -> T) -> T {
+    pub(crate) fn with<T>(&self, step: impl FnOnce(&mut LegacyLogging, Python<'_>) -> T) -> T {
         Python::attach(|py| step(&mut self.0.lock(), py))
-    }
-
-    pub(crate) async fn prepare_call(
-        &self,
-        task: &dyn Awaiter,
-        arguments: Py<PyDict>,
-        started_at: f64,
-    ) -> PyResult<Py<PyDict>> {
-        let hook = self.with(|logging, py| logging.begin_call(py, arguments, started_at))?;
-        if let Some(hook) = hook {
-            let hooked = task.awaited(hook).await;
-            self.with(|logging, py| logging.adopt_hooked_arguments(py, hooked))?;
-        }
-        self.with(|logging, py| logging.prepare(py))
-    }
-
-    pub(crate) fn adopt_arguments(&self, arguments: &Py<PyDict>) {
-        self.with(|logging, py| logging.adopt_arguments(py, arguments));
-    }
-
-    pub(crate) fn pre_call(
-        &self,
-        wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> PyResult<Box<WireRequest>> {
-        self.with(|logging, py| logging.pre_call(py, wire, context))
-    }
-
-    pub(crate) async fn transform_public_response(
-        &self,
-        task: &dyn Awaiter,
-        response: Py<PyAny>,
-        timing: Timing,
-    ) -> PyResult<Py<PyAny>> {
-        let hook = self.with(|logging, py| logging.respond(py, response, timing))?;
-        if let Some(hook) = hook {
-            let hooked = task.awaited(hook).await;
-            self.with(|logging, _| logging.adopt_hooked_response(hooked))?;
-        }
-        self.with(|logging, py| logging.finalize(py))
-    }
-
-    pub(crate) fn result_ready(
-        &self,
-        facts: &litellm_host::interceptors::ExecutionFacts,
-    ) -> PyResult<()> {
-        self.with(|logging, py| logging.result_ready(py, facts))
-    }
-
-    pub(crate) fn post_call(&self, raw: &RawResponse) -> PyResult<()> {
-        self.with(|logging, py| logging.post_call(py, raw))
-    }
-
-    pub(crate) fn succeeded(&self, timing: Timing, response: &Py<PyAny>) -> PyResult<()> {
-        self.with(|logging, py| logging.succeeded(py, timing, response))
-    }
-
-    pub(crate) async fn failed(
-        &self,
-        task: &dyn Awaiter,
-        timing: Timing,
-        origin: FailureOrigin,
-        error: &Py<PyBaseException>,
-    ) -> PyResult<()> {
-        let stage = self.with(|logging, py| logging.failed(py, timing, origin, error))?;
-        let handler = match stage {
-            FailureStage::DeploymentHook(hook) => {
-                drop(task.awaited(hook).await);
-                self.with(|logging, py| logging.dispatch_failure(py))?
-            }
-            FailureStage::Handlers(handler) => handler,
-        };
-        match handler {
-            Some(handler) => async_failure_result(task.awaited(handler).await),
-            None => Ok(()),
-        }
-    }
-
-    pub(crate) fn stream_opened(&self, head: &Py<PyAny>) -> PyResult<()> {
-        self.with(|logging, py| logging.stream_opened(py, head))
-    }
-
-    pub(crate) fn stream_chunk(&self, chunk: &Py<PyAny>) -> PyResult<()> {
-        self.with(|logging, py| logging.stream_chunk(py, chunk))
     }
 }
 
@@ -680,9 +588,8 @@ impl PythonOwned for LegacyLogging {
 mod deployment_hooks_tests {
     use std::ffi::CStr;
 
-    use litellm_host::hooks::CallHooks;
+    use litellm_host::hooks::{ArgumentHooks, OutcomeHooks, ResponseHooks};
     use litellm_host::lifecycle::{FailureOrigin, Timing};
-    use litellm_host_python::PythonCallEvent;
     use pyo3::exceptions::asyncio::CancelledError;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
@@ -718,7 +625,7 @@ kwargs = {'logger': logger, 'document': document}
         task: &Scripted,
     ) -> (LegacyHooks, PyResult<Py<PyDict>>) {
         let hooks = hooks(legacy_call(py, locals, asynchronous));
-        let prepared = finish(hooks.prepare_arguments(task, kwargs(locals), 0.0));
+        let prepared = finish(hooks.prepare(task, kwargs(locals), 0.0));
         (hooks, prepared)
     }
 
@@ -744,7 +651,7 @@ kwargs = {'logger': logger, 'document': document}
                 ..legacy_call(py, &locals, asynchronous)
             });
             let task = Scripted::answering([Ok(kwargs(&locals).into_any())]);
-            finish(hooks.prepare_arguments(&task, kwargs(&locals), 0.0)).unwrap();
+            finish(hooks.prepare(&task, kwargs(&locals), 0.0)).unwrap();
             assert_eq!(task.count() == 1, asynchronous);
             locals.set_item("expected", expected).unwrap();
             locals.set_item("asynchronous", asynchronous).unwrap();
@@ -859,12 +766,9 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
             ]);
             let (hooks, prepared) = begin(py, &locals, true, &task);
             prepared.unwrap();
-            let returned = finish(hooks.transform_response(
-                &task,
-                local(&locals, "response").unbind(),
-                TIMING,
-            ))
-            .unwrap();
+            let returned =
+                finish(hooks.transform(&task, local(&locals, "response").unbind(), TIMING))
+                    .unwrap();
             assert_eq!(task.count(), 2);
             assert!(returned.bind(py).is(local(&locals, "replacement")));
             run(
@@ -896,7 +800,7 @@ assert finalized is replacement
             let (hooks, prepared) = begin(py, &locals, true, &task);
             let error = if post_call {
                 prepared.unwrap();
-                finish(hooks.transform_response(&task, local(&locals, "response").unbind(), TIMING))
+                finish(hooks.transform(&task, local(&locals, "response").unbind(), TIMING))
                     .unwrap_err()
             } else {
                 prepared.unwrap_err()
@@ -934,12 +838,7 @@ assert finalized is replacement
             let (hooks, prepared) = begin(py, &locals, true, &task);
             prepared.unwrap();
             let failure = failure(&locals);
-            let failed = PythonCallEvent::Failed {
-                timing: TIMING,
-                origin: FailureOrigin::Call,
-                error: &failure,
-            };
-            finish(hooks.on_event(&task, failed)).unwrap();
+            finish(hooks.failed(&task, TIMING, FailureOrigin::Call, &failure)).unwrap();
             assert_eq!(task.count(), 3);
             run(
                 py,
@@ -1718,9 +1617,9 @@ def check():
 mod terminal_tests {
     use std::ffi::CStr;
 
-    use litellm_host::hooks::CallHooks;
-    use litellm_host::lifecycle::{FailureOrigin, Timing};
-    use litellm_host_python::{PythonCallEvent, PythonOwned};
+    use litellm_host::hooks::{Cancelled, OutcomeHooks, ResponseHooks};
+    use litellm_host::lifecycle::{CallEvent, FailureOrigin, Timing};
+    use litellm_host_python::PythonOwned;
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::exceptions::asyncio::CancelledError;
     use pyo3::prelude::*;
@@ -1750,28 +1649,15 @@ mod terminal_tests {
     fn succeed(locals: &Bound<'_, PyDict>, hooks: &LegacyHooks) -> usize {
         let response = local(locals, "response").unbind();
         let task = Scripted::default();
-        finish(hooks.on_event(
-            &task,
-            PythonCallEvent::Succeeded {
-                timing: TIMING,
-                response: &response,
-            },
-        ))
-        .unwrap();
+        finish(hooks.succeeded(&task, TIMING, &response)).unwrap();
         task.count()
     }
 
     /// Reports the call's `failure`, answering any awaited handler from `task`.
     fn fail(locals: &Bound<'_, PyDict>, hooks: &LegacyHooks, task: &Scripted) -> PyResult<()> {
         let failure = failure(locals);
-        finish(hooks.on_event(
-            task,
-            PythonCallEvent::Failed {
-                timing: TIMING,
-                origin: FailureOrigin::Host,
-                error: &failure,
-            },
-        ))
+        finish(hooks.failed(task, TIMING, FailureOrigin::Host, &failure))
+            .map_err(|Cancelled(error)| error)
     }
 
     #[rstest]
@@ -1821,17 +1707,16 @@ assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_asy
             );
             let hooks = hooks(logged(py, &locals, true));
             let response = local(&locals, "response").unbind();
-            let event = PythonCallEvent::Succeeded {
-                timing: TIMING,
-                response: &response,
-            };
             let (sender, receiver) = litellm_host::observation::observation_channel(
                 std::num::NonZeroUsize::new(1).unwrap(),
             );
             drop(receiver);
-            sender.emit(event.snapshot());
+            sender.emit(CallEvent::Succeeded {
+                timing: TIMING,
+                response: (),
+            });
             let task = Scripted::default();
-            finish(hooks.on_event(&task, event)).unwrap();
+            finish(hooks.succeeded(&task, TIMING, &response)).unwrap();
             assert_eq!(task.count(), 0);
             assert_eq!(sender.dropped_events(), 1);
             run(py, &locals, c"
@@ -1855,13 +1740,13 @@ assert logger.calls[1][1] is response
                 ..logged(py, &locals, true)
             });
             hooks
-                .on_stream_open(&local(&locals, "head").unbind())
+                .stream_opened(&local(&locals, "head").unbind())
                 .unwrap();
             hooks
-                .on_stream_chunk(&local(&locals, "first").unbind())
+                .stream_chunk(&local(&locals, "first").unbind())
                 .unwrap();
             hooks
-                .on_stream_chunk(&local(&locals, "last").unbind())
+                .stream_chunk(&local(&locals, "last").unbind())
                 .unwrap();
             assert_eq!(succeed(&locals, &hooks), 0);
             run(

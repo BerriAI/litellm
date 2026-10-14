@@ -1,133 +1,175 @@
-use super::{CallHooks, DynCallHooks, HookRuntime, RuntimeCallEvent};
+use super::{
+    AnyGroup, ArgumentHooks, Cancelled, OutcomeHooks, ProviderHooks, ResponseHooks, Surface,
+};
 use crate::{
-    interceptors::{RequestContext, WireRequest},
-    lifecycle::{CallEvent, Timing},
+    interceptors::{ExecutionFacts, RawResponse, RequestContext, WireRequest},
+    lifecycle::{FailureOrigin, Timing},
 };
 
-pub trait ChainRuntime: HookRuntime + Sized + 'static {
-    type Group: DynCallHooks<Self> + ?Sized;
-
-    /// `Ok` lets the next group receive the terminal event, `Err` stops the chain.
-    fn terminal_notification_failed(error: Self::Error) -> Result<(), Self::Error>;
+/// The groups mounted on a call, run as one group of each facet. Request-side stages run
+/// in mount order, response-side and terminal stages unwind in reverse, like layers.
+pub struct Hooks<S: Surface> {
+    groups: Vec<Box<S::Group>>,
 }
 
-pub trait HookGroupAdapter<H>: ChainRuntime {
-    fn adapt_group(hooks: H) -> Box<Self::Group>;
-}
-
-pub struct HookChain<R: ChainRuntime> {
-    hooks: Vec<Box<R::Group>>,
-}
-
-impl<R: ChainRuntime> HookChain<R> {
-    pub fn groups(&self) -> impl Iterator<Item = &R::Group> {
-        self.hooks.iter().map(Box::as_ref)
-    }
-
-    pub fn groups_mut(&mut self) -> impl Iterator<Item = &mut R::Group> {
-        self.hooks.iter_mut().map(Box::as_mut)
-    }
-
+impl<S: Surface> Hooks<S> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn with<H>(mut self, hooks: H) -> Self
-    where
-        R: HookGroupAdapter<H>,
-    {
-        self.hooks.push(R::adapt_group(hooks));
+    pub fn with(mut self, group: Box<S::Group>) -> Self {
+        self.groups.push(group);
         self
+    }
+
+    pub fn groups(&self) -> impl Iterator<Item = &S::Group> {
+        self.groups.iter().map(Box::as_ref)
+    }
+
+    pub fn groups_mut(&mut self) -> impl Iterator<Item = &mut S::Group> {
+        self.groups.iter_mut().map(Box::as_mut)
     }
 }
 
-impl<R: ChainRuntime> CallHooks<R> for HookChain<R>
-where
-    for<'a> R::Context<'a>: Copy,
-{
-    async fn prepare_arguments<'a>(
+impl<S: Surface> Default for Hooks<S> {
+    fn default() -> Self {
+        Self { groups: Vec::new() }
+    }
+}
+
+impl<S: Surface> ArgumentHooks<S> for Hooks<S> {
+    async fn prepare<'a>(
         &'a self,
-        runtime: R::Context<'a>,
-        arguments: R::Arguments,
+        task: S::Task<'a>,
+        arguments: S::Arguments,
         started_at: f64,
-    ) -> Result<R::Arguments, R::Error> {
+    ) -> Result<S::Arguments, S::Error> {
         let mut arguments = arguments;
-        for hooks in &self.hooks {
-            arguments = hooks
-                .prepare_arguments(runtime, arguments, started_at)
-                .await?;
+        for group in &self.groups {
+            arguments = group.prepare(task, arguments, started_at).await?;
         }
         Ok(arguments)
     }
 
-    fn arguments_prepared(&self, arguments: &R::Arguments) -> Result<(), R::Error> {
-        self.hooks
+    fn prepared(&self, arguments: &S::Arguments) -> Result<(), S::Error> {
+        self.groups
             .iter()
-            .try_for_each(|hooks| hooks.arguments_prepared(arguments))
+            .try_for_each(|group| group.prepared(arguments))
     }
+}
 
+impl<S: Surface> ProviderHooks<S> for Hooks<S> {
     async fn before_provider_request<'a>(
         &'a self,
-        runtime: R::Context<'a>,
+        task: S::Task<'a>,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> Result<Box<WireRequest>, R::Error> {
+    ) -> Result<Box<WireRequest>, S::Error> {
         let mut wire = wire;
-        for hooks in &self.hooks {
-            wire = hooks
-                .before_provider_request(runtime, wire, context)
-                .await?;
+        for group in &self.groups {
+            wire = group.before_provider_request(task, wire, context).await?;
         }
         Ok(wire)
     }
 
-    async fn transform_response<'a>(
+    async fn after_provider_response<'a>(
         &'a self,
-        runtime: R::Context<'a>,
-        response: R::Response,
-        timing: Timing,
-    ) -> Result<R::Response, R::Error> {
-        let mut response = response;
-        for hooks in &self.hooks {
-            response = hooks.transform_response(runtime, response, timing).await?;
-        }
-        Ok(response)
-    }
-
-    async fn on_event<'a>(
-        &'a self,
-        runtime: R::Context<'a>,
-        event: RuntimeCallEvent<'_, R>,
-    ) -> Result<(), R::Error> {
-        let terminal = matches!(
-            event,
-            CallEvent::Succeeded { .. } | CallEvent::Failed { .. }
-        );
-        for hooks in &self.hooks {
-            match hooks.on_event(runtime, event.clone()).await {
-                Err(error) if terminal => R::terminal_notification_failed(error)?,
-                result => result?,
-            }
+        task: S::Task<'a>,
+        raw: &RawResponse,
+    ) -> Result<(), S::Error> {
+        for group in &self.groups {
+            group.after_provider_response(task, raw).await?;
         }
         Ok(())
     }
 
-    fn on_stream_open(&self, head: &R::Response) -> Result<(), R::Error> {
-        self.hooks
-            .iter()
-            .try_for_each(|hooks| hooks.on_stream_open(head))
-    }
-
-    fn on_stream_chunk(&self, chunk: &R::Chunk) -> Result<(), R::Error> {
-        self.hooks
-            .iter()
-            .try_for_each(|hooks| hooks.on_stream_chunk(chunk))
+    async fn result_ready<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        facts: &ExecutionFacts,
+    ) -> Result<(), S::Error> {
+        for group in &self.groups {
+            group.result_ready(task, facts).await?;
+        }
+        Ok(())
     }
 }
 
-impl<R: ChainRuntime> Default for HookChain<R> {
-    fn default() -> Self {
-        Self { hooks: Vec::new() }
+impl<S: Surface> ResponseHooks<S> for Hooks<S> {
+    async fn transform<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        response: S::Response,
+        timing: Timing,
+    ) -> Result<S::Response, S::Error> {
+        let mut response = response;
+        for group in self.groups.iter().rev() {
+            response = group.transform(task, response, timing).await?;
+        }
+        Ok(response)
+    }
+
+    fn stream_opened(&self, head: &S::Response) -> Result<(), S::Error> {
+        self.groups
+            .iter()
+            .rev()
+            .try_for_each(|group| group.stream_opened(head))
+    }
+
+    fn stream_chunk(&self, chunk: &S::Chunk) -> Result<(), S::Error> {
+        self.groups
+            .iter()
+            .rev()
+            .try_for_each(|group| group.stream_chunk(chunk))
+    }
+}
+
+impl<S: Surface> OutcomeHooks<S> for Hooks<S> {
+    async fn started<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        start_time: f64,
+    ) -> Result<(), Cancelled<S::Error>> {
+        for group in &self.groups {
+            group.started(task, start_time).await?;
+        }
+        Ok(())
+    }
+
+    async fn succeeded<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        timing: Timing,
+        response: &S::Response,
+    ) -> Result<(), Cancelled<S::Error>> {
+        for group in self.groups.iter().rev() {
+            group.succeeded(task, timing, response).await?;
+        }
+        Ok(())
+    }
+
+    async fn failed<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        timing: Timing,
+        origin: FailureOrigin,
+        error: &S::Failure,
+    ) -> Result<(), Cancelled<S::Error>> {
+        for group in self.groups.iter().rev() {
+            group.failed(task, timing, origin, error).await?;
+        }
+        Ok(())
+    }
+
+    async fn cancelled<'a>(
+        &'a self,
+        task: S::Task<'a>,
+        timing: Timing,
+    ) -> Result<(), Cancelled<S::Error>> {
+        for group in self.groups.iter().rev() {
+            group.cancelled(task, timing).await?;
+        }
+        Ok(())
     }
 }
 
@@ -138,36 +180,21 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::lifecycle::FailureOrigin;
 
-    struct TestRuntime;
+    struct TestSurface;
 
-    impl HookRuntime for TestRuntime {
-        type Context<'a> = &'a Mutex<Vec<String>>;
+    impl Surface for TestSurface {
+        type Task<'a> = &'a Mutex<Vec<String>>;
         type Arguments = String;
         type Response = String;
         type Chunk = u32;
         type Error = &'static str;
         type Failure = &'static str;
+        type Group = dyn AnyGroup<Self>;
     }
 
-    impl ChainRuntime for TestRuntime {
-        type Group = dyn DynCallHooks<Self>;
-
-        fn terminal_notification_failed(error: &'static str) -> Result<(), &'static str> {
-            match error {
-                "cancelled" => Err(error),
-                _ => Ok(()),
-            }
-        }
-    }
-
-    impl<H: CallHooks<TestRuntime> + 'static> HookGroupAdapter<H> for TestRuntime {
-        fn adapt_group(hooks: H) -> Box<Self::Group> {
-            Box::new(hooks)
-        }
-    }
-
+    /// A group that tags every value it transforms with its name, logs every stage it
+    /// runs, and fails one stage when told to.
     struct Group {
         name: &'static str,
         suspensions: u8,
@@ -175,6 +202,10 @@ mod tests {
     }
 
     impl Group {
+        fn mounted(self) -> Box<dyn AnyGroup<TestSurface>> {
+            Box::new(self)
+        }
+
         async fn value(
             &self,
             trace: &Mutex<Vec<String>>,
@@ -192,8 +223,8 @@ mod tests {
         }
     }
 
-    impl CallHooks<TestRuntime> for Group {
-        async fn prepare_arguments<'a>(
+    impl ArgumentHooks<TestSurface> for Group {
+        async fn prepare<'a>(
             &'a self,
             trace: &'a Mutex<Vec<String>>,
             arguments: String,
@@ -201,7 +232,9 @@ mod tests {
         ) -> Result<String, &'static str> {
             self.value(trace, "prepare", arguments).await
         }
+    }
 
+    impl ProviderHooks<TestSurface> for Group {
         async fn before_provider_request<'a>(
             &'a self,
             trace: &'a Mutex<Vec<String>>,
@@ -211,8 +244,10 @@ mod tests {
             let url = self.value(trace, "wire", wire.url.clone()).await?;
             Ok(Box::new(WireRequest { url, ..*wire }))
         }
+    }
 
-        async fn transform_response<'a>(
+    impl ResponseHooks<TestSurface> for Group {
+        async fn transform<'a>(
             &'a self,
             trace: &'a Mutex<Vec<String>>,
             response: String,
@@ -220,18 +255,43 @@ mod tests {
         ) -> Result<String, &'static str> {
             self.value(trace, "response", response).await
         }
+    }
 
-        async fn on_event<'a>(
+    impl OutcomeHooks<TestSurface> for Group {
+        async fn started<'a>(
             &'a self,
             trace: &'a Mutex<Vec<String>>,
-            event: RuntimeCallEvent<'_, TestRuntime>,
-        ) -> Result<(), &'static str> {
-            let label = match event {
-                CallEvent::Succeeded { response, .. } => response.as_str(),
-                CallEvent::Failed { error, .. } => *error,
-                _ => "event",
-            };
-            self.value(trace, label, String::new()).await.map(|_| ())
+            _: f64,
+        ) -> Result<(), Cancelled<&'static str>> {
+            self.value(trace, "started", String::new())
+                .await
+                .map(drop)
+                .map_err(Cancelled)
+        }
+
+        async fn succeeded<'a>(
+            &'a self,
+            trace: &'a Mutex<Vec<String>>,
+            _: Timing,
+            response: &String,
+        ) -> Result<(), Cancelled<&'static str>> {
+            self.value(trace, response, String::new())
+                .await
+                .map(drop)
+                .map_err(Cancelled)
+        }
+
+        async fn failed<'a>(
+            &'a self,
+            trace: &'a Mutex<Vec<String>>,
+            _: Timing,
+            _: FailureOrigin,
+            error: &&'static str,
+        ) -> Result<(), Cancelled<&'static str>> {
+            self.value(trace, error, String::new())
+                .await
+                .map(drop)
+                .map_err(Cancelled)
         }
     }
 
@@ -259,147 +319,128 @@ mod tests {
         }
     }
 
+    fn chain(
+        suspensions: u8,
+        rejecting: Option<(&'static str, &'static str)>,
+    ) -> Hooks<TestSurface> {
+        ["a", "b", "c"]
+            .into_iter()
+            .fold(Hooks::new(), |hooks, name| {
+                hooks.with(
+                    Group {
+                        name,
+                        suspensions,
+                        reject: rejecting
+                            .filter(|(group, _)| *group == name)
+                            .map(|(_, error)| error),
+                    }
+                    .mounted(),
+                )
+            })
+    }
+
     #[rstest]
     #[tokio::test]
-    async fn groups_compose_without_python(
+    async fn request_stages_run_in_mount_order_and_response_stages_unwind(
         trace: Mutex<Vec<String>>,
         timing: Timing,
         context: RequestContext,
         #[values(0, 1, 2)] suspensions: u8,
     ) {
-        let hooks = HookChain::<TestRuntime>::new()
-            .with(Group {
-                name: "a",
-                suspensions,
-                reject: None,
-            })
-            .with(Group {
-                name: "b",
-                suspensions,
-                reject: None,
-            });
-        let arguments = CallHooks::prepare_arguments(&hooks, &trace, "input".into(), 0.0)
+        let hooks = chain(suspensions, None);
+        OutcomeHooks::started(&hooks, &trace, 0.0).await.unwrap();
+        let arguments = ArgumentHooks::prepare(&hooks, &trace, "input".into(), 0.0)
             .await
             .unwrap();
-        assert_eq!(arguments, "inputab");
+        assert_eq!(arguments, "inputabc");
         let wire = Box::new(WireRequest {
             url: "url".into(),
             headers: Vec::new(),
             body: serde_json::Value::Null,
         });
-        let rewritten = CallHooks::before_provider_request(&hooks, &trace, wire, &context)
+        let rewritten = ProviderHooks::before_provider_request(&hooks, &trace, wire, &context)
             .await
             .unwrap();
-        assert_eq!(rewritten.url, "urlab");
-        let response = CallHooks::transform_response(&hooks, &trace, "output".into(), timing)
+        assert_eq!(rewritten.url, "urlabc");
+        let response = ResponseHooks::transform(&hooks, &trace, "output".into(), timing)
             .await
             .unwrap();
-        assert_eq!(response, "outputab");
-        CallHooks::on_event(
-            &hooks,
-            &trace,
-            CallEvent::Succeeded {
-                timing,
-                response: &response,
-            },
-        )
-        .await
-        .unwrap();
+        assert_eq!(response, "outputcba");
+        OutcomeHooks::succeeded(&hooks, &trace, timing, &response)
+            .await
+            .unwrap();
         assert_eq!(
             *trace.lock().unwrap(),
             [
+                "started:a",
+                "started:b",
+                "started:c",
                 "prepare:a",
                 "prepare:b",
+                "prepare:c",
                 "wire:a",
                 "wire:b",
-                "response:a",
+                "wire:c",
+                "response:c",
                 "response:b",
-                "outputab:a",
-                "outputab:b",
+                "response:a",
+                "outputcba:c",
+                "outputcba:b",
+                "outputcba:a",
             ]
         );
     }
 
-    fn rejecting_chain(suspensions: u8, error: &'static str) -> HookChain<TestRuntime> {
-        ["a", "b", "c"]
-            .into_iter()
-            .fold(HookChain::new(), |hooks, name| {
-                hooks.with(Group {
-                    name,
-                    suspensions,
-                    reject: (name == "b").then_some(error),
-                })
-            })
-    }
-
     #[rstest]
     #[tokio::test]
-    async fn transformation_failure_stops_later_groups(
+    async fn a_transformation_error_stops_later_groups(
         trace: Mutex<Vec<String>>,
         #[values(0, 2)] suspensions: u8,
     ) {
-        let hooks = rejecting_chain(suspensions, "rejected");
-        let result = CallHooks::prepare_arguments(&hooks, &trace, String::new(), 0.0).await;
+        let hooks = chain(suspensions, Some(("b", "rejected")));
+        let result = ArgumentHooks::prepare(&hooks, &trace, String::new(), 0.0).await;
         assert_eq!(result, Err("rejected"));
         assert_eq!(*trace.lock().unwrap(), ["prepare:a", "prepare:b"]);
     }
 
     #[rstest]
-    #[case::success_reaches_every_group(true, "rejected", Ok(()), &["selected:a", "selected:b", "selected:c"])]
-    #[case::failure_reaches_every_group(false, "rejected", Ok(()), &["failed:a", "failed:b", "failed:c"])]
-    #[case::cancellation_stops_success(true, "cancelled", Err("cancelled"), &["selected:a", "selected:b"])]
-    #[case::cancellation_stops_failure(false, "cancelled", Err("cancelled"), &["failed:a", "failed:b"])]
+    #[case::success(true)]
+    #[case::failure(false)]
     #[tokio::test]
-    async fn terminal_notification_errors_follow_the_runtime(
+    async fn a_cancelled_outcome_stops_the_groups_mounted_before_it(
         trace: Mutex<Vec<String>>,
         timing: Timing,
         #[values(0, 2)] suspensions: u8,
         #[case] succeeded: bool,
-        #[case] error: &'static str,
-        #[case] expected: Result<(), &'static str>,
-        #[case] reached: &[&str],
     ) {
-        let hooks = rejecting_chain(suspensions, error);
+        let hooks = chain(suspensions, Some(("b", "cancelled")));
         let response = "selected".to_owned();
-        let event = if succeeded {
-            CallEvent::Succeeded {
-                timing,
-                response: &response,
-            }
+        let result = if succeeded {
+            OutcomeHooks::succeeded(&hooks, &trace, timing, &response).await
         } else {
-            CallEvent::Failed {
-                timing,
-                origin: FailureOrigin::Host,
-                error: &"failed",
-            }
+            OutcomeHooks::failed(&hooks, &trace, timing, FailureOrigin::Host, &"failed").await
         };
-        let result = CallHooks::on_event(&hooks, &trace, event).await;
-        assert_eq!(result, expected);
+        assert_eq!(result, Err(Cancelled("cancelled")));
+        let reached = if succeeded {
+            ["selected:c", "selected:b"]
+        } else {
+            ["failed:c", "failed:b"]
+        };
         assert_eq!(*trace.lock().unwrap(), reached);
     }
 
     #[rstest]
     #[tokio::test]
-    async fn non_terminal_notification_error_stops_later_groups(trace: Mutex<Vec<String>>) {
-        let hooks = rejecting_chain(0, "rejected");
-        let result =
-            CallHooks::on_event(&hooks, &trace, CallEvent::Started { start_time: 0.0 }).await;
-        assert_eq!(result, Err("rejected"));
-        assert_eq!(*trace.lock().unwrap(), ["event:a", "event:b"]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn empty_chain_preserves_values(trace: Mutex<Vec<String>>, timing: Timing) {
-        let hooks = HookChain::<TestRuntime>::new();
+    async fn an_empty_chain_preserves_values(trace: Mutex<Vec<String>>, timing: Timing) {
+        let hooks = Hooks::<TestSurface>::new();
         assert_eq!(
-            CallHooks::prepare_arguments(&hooks, &trace, "input".into(), 0.0)
+            ArgumentHooks::prepare(&hooks, &trace, "input".into(), 0.0)
                 .await
                 .unwrap(),
             "input"
         );
         assert_eq!(
-            CallHooks::transform_response(&hooks, &trace, "output".into(), timing)
+            ResponseHooks::transform(&hooks, &trace, "output".into(), timing)
                 .await
                 .unwrap(),
             "output"

@@ -11,10 +11,11 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyHooks, LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{Error as HostError, present};
 use litellm_host_python::{
-    CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    CallOptions, Hooks, PythonBinding, PythonGroup, PythonHostCalls, PythonSurface,
+    effective_py_args,
 };
+use litellm_host_python::{Error as HostError, present};
 use parking_lot::Mutex;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -119,7 +120,7 @@ fn call_hooks(
     operation: LoggingOperation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+) -> PyResult<(Py<PyDict>, impl PythonGroup + use<>)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((
@@ -144,7 +145,7 @@ fn run_public_call<H, M>(
     + Sync
     + 'static,
     host: H,
-    hooks: impl PythonCallHooks + 'static,
+    hooks: impl PythonGroup + 'static,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
@@ -158,9 +159,9 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new()
-            .with(hooks)
-            .with(crate::preflight::SdkPolicy),
+        Hooks::new()
+            .with(PythonSurface::group(hooks))
+            .with(PythonSurface::group(crate::preflight::SdkPolicy)),
         arguments,
         CallOptions::new(asynchronous, execution_steps),
     )

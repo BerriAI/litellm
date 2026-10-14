@@ -1,9 +1,12 @@
 mod support;
 
-use litellm_host::{hooks::CallHooks, lifecycle::Timing};
+use litellm_host::{
+    hooks::{ArgumentHooks, Cancelled, OutcomeHooks, ProviderHooks, ResponseHooks},
+    lifecycle::{FailureOrigin, Timing},
+};
 use litellm_host_python::{
-    Awaiter, Execution, ExecutionBody, ExecutionStep, PythonCallEvent, PythonOwned, PythonRuntime,
-    Suspension, run_call,
+    Awaiter, Execution, ExecutionBody, ExecutionStep, PythonOwned, PythonSurface, Suspension,
+    report_unless_cancelled, run_call,
 };
 use parking_lot::Mutex;
 use pyo3::{
@@ -120,8 +123,22 @@ struct PausingHooks {
     holder: Holder,
 }
 
-impl CallHooks<PythonRuntime> for PausingHooks {
-    async fn transform_response<'a>(
+impl PausingHooks {
+    /// Pauses the call on the test's awaitable, once, at the stage the holder names.
+    async fn pause_at(&self, task: &dyn Awaiter, here: bool) -> Result<(), Cancelled<PyErr>> {
+        let pause = self.pause.lock().take_if(|_| here);
+        match pause {
+            Some(pause) => report_unless_cancelled(task.awaited(pause).await.map(drop)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ArgumentHooks<PythonSurface> for PausingHooks {}
+impl ProviderHooks<PythonSurface> for PausingHooks {}
+
+impl ResponseHooks<PythonSurface> for PausingHooks {
+    async fn transform<'a>(
         &'a self,
         _: &'a dyn Awaiter,
         response: Py<PyAny>,
@@ -136,22 +153,33 @@ impl CallHooks<PythonRuntime> for PausingHooks {
             })),
         }
     }
+}
 
-    async fn on_event<'a>(
+impl OutcomeHooks<PythonSurface> for PausingHooks {
+    async fn started<'a>(&'a self, task: &'a dyn Awaiter, _: f64) -> Result<(), Cancelled<PyErr>> {
+        self.pause_at(task, matches!(self.holder, Holder::Hooks))
+            .await
+    }
+
+    async fn succeeded<'a>(
         &'a self,
         task: &'a dyn Awaiter,
-        event: PythonCallEvent<'_>,
-    ) -> PyResult<()> {
-        let pauses_here = match self.holder {
-            Holder::Hooks => true,
-            Holder::Response => matches!(event, PythonCallEvent::Succeeded { .. }),
-            Holder::Exception => matches!(event, PythonCallEvent::Failed { .. }),
-        };
-        let pause = self.pause.lock().take_if(|_| pauses_here);
-        if let Some(pause) = pause {
-            task.awaited(pause).await?;
-        }
-        Ok(())
+        _: Timing,
+        _: &Py<PyAny>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.pause_at(task, matches!(self.holder, Holder::Response))
+            .await
+    }
+
+    async fn failed<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
+        _: Timing,
+        _: FailureOrigin,
+        _: &Py<PyBaseException>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.pause_at(task, matches!(self.holder, Holder::Exception))
+            .await
     }
 }
 

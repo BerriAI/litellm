@@ -4,14 +4,15 @@ use std::future::{Future, ready};
 
 use futures_util::{FutureExt, future::BoxFuture};
 use litellm_host::{
-    hooks::CallHooks,
+    hooks::{ArgumentHooks, Cancelled, OutcomeHooks, ProviderHooks, ResponseHooks},
     interceptors::{RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing},
 };
 use litellm_host_python::{
-    Awaiter, HookChain, PythonCallEvent, PythonOwned, PythonRuntime, run_call,
+    Awaiter, Hooks, PythonGroup, PythonOwned, PythonSurface, report_unless_cancelled, run_call,
 };
 use pyo3::{
+    exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
@@ -59,8 +60,28 @@ impl PythonOwned for ScriptHooks {
     }
 }
 
-impl CallHooks<PythonRuntime> for ScriptHooks {
-    async fn prepare_arguments<'a>(
+impl ScriptHooks {
+    async fn event(
+        &self,
+        task: &dyn Awaiter,
+        name: &str,
+        value: impl FnOnce(Python<'_>) -> Py<PyAny>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        let result = self
+            .invoke(task, "event", |py| {
+                Ok(
+                    PyTuple::new(py, [name.into_pyobject(py)?.into_any().unbind(), value(py)])?
+                        .into_any()
+                        .unbind(),
+                )
+            })
+            .await;
+        report_unless_cancelled(result.map(drop))
+    }
+}
+
+impl ArgumentHooks<PythonSurface> for ScriptHooks {
+    async fn prepare<'a>(
         &'a self,
         task: &'a dyn Awaiter,
         arguments: Py<PyDict>,
@@ -72,11 +93,13 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         Python::attach(|py| Ok(value.into_bound(py).cast_into::<PyDict>()?.unbind()))
     }
 
-    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+    fn prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         Python::attach(|py| self.object.call_method1(py, "adopt", (arguments,)))?;
         Ok(())
     }
+}
 
+impl ProviderHooks<PythonSurface> for ScriptHooks {
     async fn before_provider_request<'a>(
         &'a self,
         task: &'a dyn Awaiter,
@@ -94,8 +117,10 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
             ..*wire
         }))
     }
+}
 
-    async fn transform_response<'a>(
+impl ResponseHooks<PythonSurface> for ScriptHooks {
+    async fn transform<'a>(
         &'a self,
         task: &'a dyn Awaiter,
         response: Py<PyAny>,
@@ -104,39 +129,41 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         self.invoke(task, "transform", |_| Ok(response)).await
     }
 
-    async fn on_event<'a>(
-        &'a self,
-        task: &'a dyn Awaiter,
-        event: PythonCallEvent<'_>,
-    ) -> PyResult<()> {
-        self.invoke(task, "event", |py| {
-            let (name, value) = match event {
-                PythonCallEvent::Succeeded { response, .. } => ("success", response.clone_ref(py)),
-                PythonCallEvent::Failed { error, .. } => {
-                    ("failure", error.clone_ref(py).into_any())
-                }
-                PythonCallEvent::Started { .. } => ("started", py.None()),
-                PythonCallEvent::Cancelled { .. } => ("cancelled", py.None()),
-                PythonCallEvent::Execution(_) => ("provider", py.None()),
-            };
-            Ok(
-                PyTuple::new(py, [name.into_pyobject(py)?.into_any().unbind(), value])?
-                    .into_any()
-                    .unbind(),
-            )
-        })
-        .await
-        .map(drop)
-    }
-
-    fn on_stream_open(&self, _head: &Py<PyAny>) -> PyResult<()> {
+    fn stream_opened(&self, _head: &Py<PyAny>) -> PyResult<()> {
         Python::attach(|py| self.object.call_method1(py, "stream", (py.None(),)))?;
         Ok(())
     }
 
-    fn on_stream_chunk(&self, chunk: &Py<PyAny>) -> PyResult<()> {
+    fn stream_chunk(&self, chunk: &Py<PyAny>) -> PyResult<()> {
         Python::attach(|py| self.object.call_method1(py, "stream", (chunk,)))?;
         Ok(())
+    }
+}
+
+impl OutcomeHooks<PythonSurface> for ScriptHooks {
+    async fn started<'a>(&'a self, task: &'a dyn Awaiter, _: f64) -> Result<(), Cancelled<PyErr>> {
+        self.event(task, "started", |py| py.None()).await
+    }
+
+    async fn succeeded<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
+        _: Timing,
+        response: &Py<PyAny>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.event(task, "success", |py| response.clone_ref(py))
+            .await
+    }
+
+    async fn failed<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
+        _: Timing,
+        _: FailureOrigin,
+        error: &Py<PyBaseException>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.event(task, "failure", |py| error.clone_ref(py).into_any())
+            .await
     }
 }
 
@@ -154,7 +181,7 @@ impl Awaiter for RunToCompletion {
     }
 }
 
-fn finish<T>(hook: impl Future<Output = PyResult<T>>) -> PyResult<T> {
+fn finish<T>(hook: impl Future<Output = T>) -> T {
     hook.now_or_never()
         .expect("every awaitable runs to completion inline")
 }
@@ -209,12 +236,33 @@ fourth = Hooks('d')
     })
 }
 
-fn chain(py: Python<'_>, scripts: &Py<PyDict>, asynchronous: bool) -> HookChain {
-    let hook = |name| ScriptHooks {
+fn script_hooks(
+    py: Python<'_>,
+    scripts: &Py<PyDict>,
+    name: &str,
+    asynchronous: bool,
+) -> ScriptHooks {
+    ScriptHooks {
         object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
         asynchronous,
-    };
-    HookChain::new().with(hook("first")).with(hook("second"))
+    }
+}
+
+fn chain(py: Python<'_>, scripts: &Py<PyDict>, asynchronous: bool) -> Hooks {
+    ["first", "second"]
+        .into_iter()
+        .fold(Hooks::new(), |hooks, name| {
+            hooks.with(PythonSurface::group(script_hooks(
+                py,
+                scripts,
+                name,
+                asynchronous,
+            )))
+        })
+}
+
+fn mounted(hooks: Hooks, group: impl PythonGroup + 'static) -> Hooks {
+    hooks.with(PythonSurface::group(group))
 }
 
 const TIMING: Timing = Timing {
@@ -224,11 +272,15 @@ const TIMING: Timing = Timing {
 
 struct PreparedPolicy;
 
-impl CallHooks<PythonRuntime> for PreparedPolicy {
-    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+impl ArgumentHooks<PythonSurface> for PreparedPolicy {
+    fn prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         Python::attach(|py| arguments.bind(py).set_item("policy", "configured"))
     }
 }
+
+impl ProviderHooks<PythonSurface> for PreparedPolicy {}
+impl ResponseHooks<PythonSurface> for PreparedPolicy {}
+impl OutcomeHooks<PythonSurface> for PreparedPolicy {}
 
 impl PythonOwned for PreparedPolicy {
     fn close(&mut self, _: Python<'_>) {}
@@ -241,16 +293,16 @@ impl PythonOwned for PreparedPolicy {
 #[rstest]
 #[case::sync(false)]
 #[case::suspended(true)]
-fn transformations_feed_each_other_and_notifications_share_final_values(
+fn request_stages_feed_forward_and_response_stages_unwind_over_the_final_values(
     scripts: Py<PyDict>,
     #[case] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let hooks = chain(py, &scripts, asynchronous).with(PreparedPolicy);
+        let hooks = mounted(chain(py, &scripts, asynchronous), PreparedPolicy);
         let original = PyDict::new(py).unbind();
         let arguments =
-            finish(hooks.prepare_arguments(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
-        hooks.arguments_prepared(&arguments).unwrap();
+            finish(hooks.prepare(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
+        hooks.prepared(&arguments).unwrap();
         let context = RequestContext {
             model: "model".into(),
             custom_llm_provider: "provider".into(),
@@ -267,18 +319,10 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
         assert_eq!(wire.url, "urlab");
         let response = PyDict::new(py).unbind().into_any();
         let final_response =
-            finish(hooks.transform_response(&RunToCompletion, response.clone_ref(py), TIMING))
-                .unwrap();
-        finish(hooks.on_event(
-            &RunToCompletion,
-            PythonCallEvent::Succeeded {
-                timing: TIMING,
-                response: &final_response,
-            },
-        ))
-        .unwrap();
-        hooks.on_stream_open(&py.None()).unwrap();
-        hooks.on_stream_chunk(&response).unwrap();
+            finish(hooks.transform(&RunToCompletion, response.clone_ref(py), TIMING)).unwrap();
+        finish(hooks.succeeded(&RunToCompletion, TIMING, &final_response)).unwrap();
+        hooks.stream_opened(&py.None()).unwrap();
+        hooks.stream_chunk(&response).unwrap();
         let locals = scripts.bind(py);
         locals.set_item("arguments", arguments).unwrap();
         locals.set_item("original", original).unwrap();
@@ -291,10 +335,10 @@ assert original == {}
 assert first.adopted is arguments and second.adopted is arguments
 assert first.adopted['policy'] == second.adopted['policy'] == 'configured'
 assert first.model == second.model == 'model'
-assert final_response == ((response, 'a'), 'b')
+assert final_response == ((response, 'b'), 'a')
 assert [(name, kind) for name, kind, value in log] == [
-    ('a', 'prepare'), ('b', 'prepare'), ('a', 'success'), ('b', 'success'),
-    ('a', 'stream'), ('b', 'stream'), ('a', 'stream'), ('b', 'stream'),
+    ('a', 'prepare'), ('b', 'prepare'), ('b', 'success'), ('a', 'success'),
+    ('b', 'stream'), ('a', 'stream'), ('b', 'stream'), ('a', 'stream'),
 ]
 assert log[2][2] is final_response and log[3][2] is final_response
 assert log[6][2] is response and log[7][2] is response
@@ -318,15 +362,10 @@ fn terminal_failure_does_not_skip_later_hooks(
     #[values("first", "second")] failing_hook: &str,
 ) {
     Python::attach(|py| {
-        let hooks = chain(py, &scripts, asynchronous).with(ScriptHooks {
-            object: scripts
-                .bind(py)
-                .get_item("third")
-                .unwrap()
-                .unwrap()
-                .unbind(),
-            asynchronous,
-        });
+        let hooks = mounted(
+            chain(py, &scripts, asynchronous),
+            script_hooks(py, &scripts, "third", asynchronous),
+        );
         let locals = scripts.bind(py);
         locals
             .get_item(failing_hook)
@@ -339,25 +378,17 @@ fn terminal_failure_does_not_skip_later_hooks(
             .unwrap();
         let error = pyo3::exceptions::PyValueError::new_err("provider failed").into_value(py);
         let response = py.None();
-        let event = if failed {
-            PythonCallEvent::Failed {
-                timing: TIMING,
-                origin: FailureOrigin::Call,
-                error: &error,
-            }
+        if failed {
+            finish(hooks.failed(&RunToCompletion, TIMING, FailureOrigin::Call, &error)).unwrap();
         } else {
-            PythonCallEvent::Succeeded {
-                timing: TIMING,
-                response: &response,
-            }
-        };
-        finish(hooks.on_event(&RunToCompletion, event)).unwrap();
+            finish(hooks.succeeded(&RunToCompletion, TIMING, &response)).unwrap();
+        }
         locals
             .set_item("selected", if failed { error.into_any() } else { response })
             .unwrap();
         py.run(
             c"
-assert [name for name, kind, value in log] == ['a', 'b', 'c']
+assert [name for name, kind, value in log] == ['c', 'b', 'a']
 assert all(kind == log[0][1] for name, kind, value in log)
 assert all(value is selected for name, kind, value in log)
 ",
@@ -381,8 +412,7 @@ fn transformation_failure_stops_the_chain(scripts: Py<PyDict>, #[case] asynchron
             Some(locals),
         )
         .unwrap();
-        let result =
-            finish(hooks.prepare_arguments(&RunToCompletion, PyDict::new(py).unbind(), 0.0));
+        let result = finish(hooks.prepare(&RunToCompletion, PyDict::new(py).unbind(), 0.0));
         assert!(
             result.unwrap_err().value(py).is(locals
                 .get_item("first")
@@ -408,26 +438,17 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
         let hooks = chain(py, &scripts, asynchronous);
         let locals = scripts.bind(py);
         py.run(
-            c"first.error = asyncio.CancelledError()",
+            c"second.error = asyncio.CancelledError()",
             Some(locals),
             Some(locals),
         )
         .unwrap();
         let response = py.None();
-        let result = finish(hooks.on_event(
-            &RunToCompletion,
-            PythonCallEvent::Succeeded {
-                timing: TIMING,
-                response: &response,
-            },
-        ));
-        assert!(
-            result
-                .unwrap_err()
-                .is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py)
-        );
+        let Cancelled(error) =
+            finish(hooks.succeeded(&RunToCompletion, TIMING, &response)).unwrap_err();
+        assert!(error.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py));
         py.run(
-            c"assert len(log) == 1 and log[0][0] == 'a'",
+            c"assert len(log) == 1 and log[0][0] == 'b'",
             Some(locals),
             Some(locals),
         )
@@ -504,7 +525,7 @@ asyncio.run(exercise())
 #[case::pair(2, "ab")]
 #[case::three(3, "abc")]
 #[case::four(4, "abcd")]
-fn builder_runs_hooks_in_append_order(
+fn argument_groups_run_in_mount_order(
     scripts: Py<PyDict>,
     #[case] count: usize,
     #[case] expected: &str,
@@ -514,15 +535,11 @@ fn builder_runs_hooks_in_append_order(
         let hooks = ["first", "second", "third", "fourth"]
             .into_iter()
             .take(count)
-            .fold(HookChain::new(), |chain, name| {
-                chain.with(ScriptHooks {
-                    object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
-                    asynchronous,
-                })
+            .fold(Hooks::new(), |chain, name| {
+                mounted(chain, script_hooks(py, &scripts, name, asynchronous))
             });
         let original = PyDict::new(py).unbind();
-        let result =
-            finish(hooks.prepare_arguments(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
+        let result = finish(hooks.prepare(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
         if count == 0 {
             assert!(result.bind(py).is(original.bind(py)));
         } else {

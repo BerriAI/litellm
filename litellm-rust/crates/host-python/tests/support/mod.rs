@@ -4,18 +4,18 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
-    hooks::CallHooks,
-    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
-    lifecycle::{ExecutionEvent, Timing},
+    hooks::{ArgumentHooks, Cancelled, OutcomeHooks, ProviderHooks, ResponseHooks},
+    interceptors::{ExecutionFacts, Interceptors, RawResponse, RequestContext, WireRequest},
+    lifecycle::{FailureOrigin, Timing},
     machine::{CallMachine, MachineFault},
     protocol::{Protocol, Reply},
 };
 use litellm_host_python::{
-    Awaiter, CallOptions, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
-    PythonHostCalls, PythonOwned, PythonRuntime, run_call,
+    Awaiter, CallOptions, InvokeError, PythonBinding, PythonGroup, PythonHostCalls, PythonOwned,
+    PythonSurface, report_unless_cancelled, run_call,
 };
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError, asyncio::CancelledError},
+    exceptions::{PyBaseException, PyTypeError, PyValueError, asyncio::CancelledError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyString},
@@ -313,8 +313,27 @@ pub fn hooks(log: &Log, script: HookScript) -> SyntheticHooks {
     }
 }
 
-impl CallHooks<PythonRuntime> for SyntheticHooks {
-    async fn prepare_arguments<'a>(
+impl SyntheticHooks {
+    /// What a terminal hook does with the outcome it was handed: cancels the call, raises
+    /// an ordinary error that is only reported, or records it.
+    fn outcome(&self, entry: String) -> Result<(), Cancelled<PyErr>> {
+        match self.script {
+            HookScript::CancelTerminal => {
+                Err(Cancelled(CancelledError::new_err("callback cancelled")))
+            }
+            HookScript::FailTerminal => {
+                report_unless_cancelled(Err(PyValueError::new_err("callback failed")))
+            }
+            _ => {
+                self.log.push(entry);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl ArgumentHooks<PythonSurface> for SyntheticHooks {
+    async fn prepare<'a>(
         &'a self,
         _: &'a dyn Awaiter,
         arguments: Py<PyDict>,
@@ -336,7 +355,7 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         Ok(arguments)
     }
 
-    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+    fn prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         if matches!(self.script, HookScript::ObserveArguments) {
             let value: String =
                 Python::attach(|py| arguments.bind(py).get_item("prepared")?.unwrap().extract())?;
@@ -344,7 +363,9 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         }
         Ok(())
     }
+}
 
+impl ProviderHooks<PythonSurface> for SyntheticHooks {
     async fn before_provider_request<'a>(
         &'a self,
         _: &'a dyn Awaiter,
@@ -358,7 +379,23 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         }))
     }
 
-    async fn transform_response<'a>(
+    async fn after_provider_response<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
+        raw: &RawResponse,
+    ) -> PyResult<()> {
+        self.log.push(format!("response:{}", raw.body));
+        Ok(())
+    }
+
+    async fn result_ready<'a>(&'a self, _: &'a dyn Awaiter, _: &ExecutionFacts) -> PyResult<()> {
+        self.log.push("cache_hit");
+        Ok(())
+    }
+}
+
+impl ResponseHooks<PythonSurface> for SyntheticHooks {
+    async fn transform<'a>(
         &'a self,
         _: &'a dyn Awaiter,
         response: Py<PyAny>,
@@ -374,45 +411,52 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         }
     }
 
-    async fn on_event<'a>(
-        &'a self,
-        _: &'a dyn Awaiter,
-        event: PythonCallEvent<'_>,
-    ) -> PyResult<()> {
-        let terminal = matches!(
-            event,
-            PythonCallEvent::Succeeded { .. } | PythonCallEvent::Failed { .. }
-        );
-        if terminal && matches!(self.script, HookScript::CancelTerminal) {
-            return Err(CancelledError::new_err("callback cancelled"));
-        }
-        if terminal && matches!(self.script, HookScript::FailTerminal) {
-            return Err(PyValueError::new_err("callback failed"));
-        }
-        self.log.push(Python::attach(|py| match event {
-            PythonCallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "cache_hit".into(),
-            PythonCallEvent::Started { .. } => "started".into(),
-            PythonCallEvent::Cancelled { .. } => "cancelled".into(),
-            PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                format!("response:{}", raw.body)
-            }
-            PythonCallEvent::Succeeded { response, .. } => {
-                format!("succeeded:{}", response.bind(py))
-            }
-            PythonCallEvent::Failed { origin, error, .. } => {
-                format!("failed:{origin:?}:{}", error.bind(py))
-            }
-        }));
-        Ok(())
-    }
-
-    fn on_stream_open(&self, _: &Py<PyAny>) -> PyResult<()> {
+    fn stream_opened(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("opened");
         Ok(())
     }
 
-    fn on_stream_chunk(&self, _: &Py<PyAny>) -> PyResult<()> {
+    fn stream_chunk(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("delivered");
+        Ok(())
+    }
+}
+
+impl OutcomeHooks<PythonSurface> for SyntheticHooks {
+    async fn started<'a>(&'a self, _: &'a dyn Awaiter, _: f64) -> Result<(), Cancelled<PyErr>> {
+        self.log.push("started");
+        Ok(())
+    }
+
+    async fn succeeded<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
+        _: Timing,
+        response: &Py<PyAny>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.outcome(Python::attach(|py| {
+            format!("succeeded:{}", response.bind(py))
+        }))
+    }
+
+    async fn failed<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
+        _: Timing,
+        origin: FailureOrigin,
+        error: &Py<PyBaseException>,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.outcome(Python::attach(|py| {
+            format!("failed:{origin:?}:{}", error.bind(py))
+        }))
+    }
+
+    async fn cancelled<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
+        _: Timing,
+    ) -> Result<(), Cancelled<PyErr>> {
+        self.log.push("cancelled");
         Ok(())
     }
 }
@@ -495,7 +539,7 @@ pub fn run_scripted(
     )
 }
 
-pub fn run_composed<L: PythonCallHooks + 'static>(
+pub fn run_composed<L: PythonGroup + 'static>(
     py: Python<'_>,
     machine: MachineFactory,
     binding: SyntheticBinding,
