@@ -140,3 +140,11 @@ async def test_ingest_response_preserves_integer_exception_status_code(
     )
 
     assert response["error_status_code"] == expected_status_code
+
+
+async def test_an_existing_file_id_on_a_store_that_cannot_take_one_fails_as_a_bad_request() -> None:
+    response: Final = await _FailingStoreIngestion(RuntimeError("store must not run")).ingest(file_id="file-abc")
+
+    assert response["status"] == "failed"
+    assert response["error_status_code"] == 400
+    assert "does not support ingesting an existing file_id" in str(response["error"])

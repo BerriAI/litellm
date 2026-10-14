@@ -399,7 +399,7 @@ def _provider_environment(upstream: str) -> Mapping[str, str]:
 
 def _deployment(
     gateway: Gateway, scenario: Scenario, *, name: str, model: str, api_key: str, api_base: str, team_id: str | None
-) -> None:
+) -> str:
     created: Final = gateway.post(
         "/model/new",
         {
@@ -408,7 +408,9 @@ def _deployment(
             "model_info": {} if team_id is None else {"team_id": team_id},
         },
     )
-    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(scenario.delete_model, model_id)
+    return model_id
 
 
 def _delete_credential(gateway: Gateway, name: str) -> None:
@@ -1271,3 +1273,54 @@ async def test_worker_sigkill_mid_query_burst_leaves_the_sibling_on_team_credent
             calls: Final = tuple(_call(request) for request in upstream.drain())
             assert {(call.prefix, call.authorization) for call in calls} == {("team", f"Bearer {TEAM_API_KEY}")}, calls
             assert sum(1 for call in calls if call.route == "/v1/chat/completions") == held_by[survivor_pid] + 1, calls
+
+
+def test_a_team_with_two_openai_deployments_ingests_through_the_older_one_after_it_is_edited(tmp_path: Path) -> None:
+    with (
+        gateway_from_environment() as admin_gateway,
+        admin_gateway.scenario() as scenario,
+        wire_server(_responder(threading.Event())) as upstream,
+    ):
+        older_model: Final = f"integration-rag-older-{uuid.uuid4().hex}"
+        newer_model: Final = f"integration-rag-newer-{uuid.uuid4().hex}"
+        team_id: Final = scenario.team(models=[older_model, newer_model])
+        older_id: Final = _deployment(
+            admin_gateway,
+            scenario,
+            name=older_model,
+            model="openai/gpt-4o-mini",
+            api_key=TEAM_API_KEY,
+            api_base=f"{upstream.url}/team/v1",
+            team_id=team_id,
+        )
+        _deployment(
+            admin_gateway,
+            scenario,
+            name=newer_model,
+            model="openai/gpt-4o-mini",
+            api_key=WILDCARD_API_KEY,
+            api_base=f"{upstream.url}/wildcard/v1",
+            team_id=team_id,
+        )
+        edited: Final = admin_gateway.request("PATCH", f"/model/{older_id}/update", {"litellm_params": {"timeout": 30}})
+        assert edited.status_code == 200, edited.text
+        key: Final = scenario.key(team_id=team_id)
+        with (
+            owned_proxy(
+                admin_gateway,
+                tmp_path,
+                _provider_environment(upstream.url),
+                remove_environment=("GOOGLE_API_KEY",),
+                workers=2,
+            ) as gateway,
+            gateway.scenario() as owned_scenario,
+        ):
+            upstream.drain()
+            response: Final = _ingest(gateway, key)
+            assert response.status_code == 200, response.text
+            store_id: Final = string_value(object_value(response.json())["vector_store_id"])
+            owned_scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
+
+            assert tuple(_call(request).signature for request in upstream.drain()) == _ingest_signatures(
+                "team", TEAM_API_KEY, store_id
+            )

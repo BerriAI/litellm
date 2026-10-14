@@ -322,13 +322,18 @@ class BaseRAGIngestion(ABC):
             file_id=file_id,
         )
 
-        try:
-            if existing_file_id and not self.supports_existing_file_id:
-                raise ValueError(
-                    f"{self.__class__.__name__} does not support ingesting an existing file_id. "
-                    "Upload file data or provide file_url instead."
-                )
+        if existing_file_id and not self.supports_existing_file_id:
+            return RAGIngestResponse(
+                id=self.ingest_id,
+                status="failed",
+                vector_store_id="",
+                file_id=None,
+                error=f"{self.__class__.__name__} does not support ingesting an existing file_id. "
+                "Upload file data or provide file_url instead.",
+                error_status_code=400,
+            )
 
+        try:
             # Step 2: OCR (optional)
             extracted_text: Final = await self.ocr(
                 file_content=file_content,
