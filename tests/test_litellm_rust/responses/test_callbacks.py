@@ -1,7 +1,11 @@
+import asyncio
 from collections.abc import Iterator
+from contextvars import ContextVar
+from datetime import datetime
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
@@ -25,6 +29,8 @@ from tests.test_litellm_rust.support.routing import assert_served_natively
 pytestmark = pytest.mark.requires_rust_extension
 
 SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
+_OBJECT: Final = TypeAdapter(dict[str, object])
+_HEADERS: Final = TypeAdapter(dict[str, str])
 
 
 def success_signal(asynchronous: bool) -> str:
@@ -173,18 +179,52 @@ async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(se
 
 
 @pytest.mark.asyncio
-async def test_pre_call_deployment_hook_rewrites_the_wire_request(server: RecordingServer) -> None:
+async def test_pre_call_deployment_hooks_compose_the_wire_request_in_registration_order(
+    server: RecordingServer,
+) -> None:
     class Rewrite(CustomLogger):
+        def __init__(self, marker: str) -> None:
+            super().__init__()
+            self.marker = marker
+
         async def async_pre_call_deployment_hook(
             self, kwargs: dict[str, object], call_type: object
         ) -> dict[str, object]:
-            return {**kwargs, "extra_headers": {"x-deployment-hook": "rewritten"}}
+            headers: Final = _HEADERS.validate_python(kwargs["extra_headers"])
+            return {
+                **kwargs,
+                "extra_headers": {**headers, "x-deployment-hook": headers["x-deployment-hook"] + self.marker},
+            }
 
-    with rebound(litellm, "callbacks", [Rewrite()]):
-        await call(server)
+    with rebound(litellm, "callbacks", [Rewrite("first"), Rewrite("-second")]):
+        await call(server, extra_headers={"x-deployment-hook": "caller-", "x-kept": "unchanged"})
 
     assert_served_natively(server)
-    assert server.requests[0].headers["x-deployment-hook"] == "rewritten"
+    assert server.requests[0].headers["x-deployment-hook"] == "caller-first-second"
+    assert server.requests[0].headers["x-kept"] == "unchanged"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(server: RecordingServer) -> None:
+    rejection: Final = litellm.BadRequestError(message="deployment rejected", model="test-model", llm_provider="openai")
+    recorder: Final = RecordingLogger()
+
+    class Reject(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            raise rejection
+
+    with rebound(litellm, "callbacks", [Reject(), recorder]):
+        with pytest.raises(litellm.BadRequestError, match="deployment rejected") as raised:
+            await call(server)
+        failures: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert raised.value is rejection
+    assert server.requests == []
+    assert len(failures) == 1
+    assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
+    assert not {"log_pre_api_call", "log_success_event", "async_log_success_event"} & set(recorder.names)
 
 
 @pytest.mark.asyncio
@@ -211,17 +251,81 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
 
 @pytest.mark.asyncio
 async def test_post_call_success_deployment_hook_replaces_the_response(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
     class Replace(CustomLogger):
         async def async_post_call_success_deployment_hook(
             self, request_data: dict[str, object], response: object, call_type: object
         ) -> object:
             return with_id(response, "replaced")
 
-    with rebound(litellm, "callbacks", [Replace()]):
+    with rebound(litellm, "callbacks", [Replace(), recorder]):
         response: Final = await call(server)
+        success: Final = await recorder.wait_for_async("async_log_success_event")
 
     assert_served_natively(server)
     assert response_id(response) == "replaced"
+    assert len(success) == 1
+    assert response_id(success[0].response) == response_id(response)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_keep_callback_context_metadata_and_responses_isolated(server: RecordingServer) -> None:
+    context: Final = ContextVar("responses-callback-context", default="outside")
+    first_entered: Final = asyncio.Event()
+    second_entered: Final = asyncio.Event()
+    server.enqueue(ResponseSpec(body={**RESPONSES_RESPONSE, "id": "resp_first"}))
+    server.enqueue(ResponseSpec(body={**RESPONSES_RESPONSE, "id": "resp_second"}))
+
+    class Observe(RecordingLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            arrived, other = (
+                (first_entered, second_entered)
+                if kwargs["litellm_call_id"] == "first"
+                else (second_entered, first_entered)
+            )
+            arrived.set()
+            await asyncio.wait_for(other.wait(), timeout=5)
+            return kwargs
+
+        def log_pre_api_call(self, model: object, messages: object, kwargs: dict[str, object]) -> None:
+            self._record("log_pre_api_call", {**kwargs, "caller_context": context.get()})
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            self._record("async_log_success_event", {**kwargs, "caller_context": context.get()}, response_obj)
+
+    recorder: Final = Observe()
+
+    async def invoke(marker: str) -> object:
+        token: Final = context.set(marker)
+        try:
+            return await call(server, litellm_call_id=marker, metadata={"marker": marker})
+        finally:
+            context.reset(token)
+
+    with rebound(litellm, "callbacks", [recorder]):
+        responses: Final = await asyncio.gather(invoke("first"), invoke("second"))
+        success: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+
+    assert_served_natively(server, count=2)
+    expected: Final = {"first": responses[0], "second": responses[1]}
+    pre_call: Final = recorder.wait_for("log_pre_api_call", count=2)
+    assert len(pre_call) == len(success) == 2
+    assert {_OBJECT.validate_python(event.kwargs)["litellm_call_id"] for event in success} == expected.keys()
+    for event in (*pre_call, *success):
+        details: Final = _OBJECT.validate_python(event.kwargs)
+        call_id: Final = str(details["litellm_call_id"])
+        params: Final = _OBJECT.validate_python(details["litellm_params"])
+        assert details["caller_context"] == call_id
+        assert _OBJECT.validate_python(params["metadata"])["marker"] == call_id
+    for event in success:
+        logged_call_id: Final = str(_OBJECT.validate_python(event.kwargs)["litellm_call_id"])
+        assert response_id(event.response) == response_id(expected[logged_call_id])
+    assert context.get() == "outside"
 
 
 @pytest.mark.asyncio
