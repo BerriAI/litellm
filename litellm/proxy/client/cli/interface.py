@@ -1,4 +1,5 @@
 # stdlib imports
+import functools
 import os
 import shlex
 from typing import Final, TypeAlias
@@ -141,12 +142,16 @@ def handle_special_commands(user_input: str) -> bool:
     return False
 
 
+def _subgroup(group: click.Group | None, name: str) -> click.Group | None:
+    if group is None:
+        return None
+    child: Final = group.commands.get(name)
+    return child if isinstance(child, click.Group) else None
+
+
 def _group_at(group: click.Group, path: ShellScope) -> click.Group | None:
     """The group `path` names under `group`, or None when it names a plain command or nothing"""
-    if not path:
-        return group
-    child: Final = group.commands.get(path[0])
-    return _group_at(child, path[1:]) if isinstance(child, click.Group) else None
+    return functools.reduce(_subgroup, path, group)
 
 
 def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
