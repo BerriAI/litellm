@@ -2590,7 +2590,9 @@ async def test_user_update_reaches_cached_user_on_every_worker(
             litellm_usertable=_UserTableMocks(
                 find_first=mocker.AsyncMock(return_value=saved_user),
                 find_unique=mocker.AsyncMock(return_value=updated_user),
-                find_many=mocker.AsyncMock(return_value=[saved_user]),
+                find_many=mocker.AsyncMock(
+                    return_value=[*(LiteLLM_UserTable(user_id=f"user-pine-{index}") for index in range(50)), saved_user]
+                ),
                 update_many=mocker.AsyncMock(return_value=1),
             )
         ),
