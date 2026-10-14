@@ -1,7 +1,9 @@
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from importlib.resources import files
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +16,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
+from litellm.proxy.public_endpoints.public_endpoints import _ProvidersFile
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -514,7 +517,12 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
 )
 
 
-def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
+def _is_vector_store_provider(endpoints: Mapping[str, bool]) -> bool:
+    supported: Final = frozenset(key for key, enabled in endpoints.items() if enabled)
+    return bool(supported) and all(key.startswith("vector_store") for key in supported)
+
+
+def test_every_model_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
@@ -523,8 +531,16 @@ def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
     assert response.status_code == 200
     listed = {p["litellm_provider"] for p in response.json()}
 
-    unlisted = {provider.value for provider in LlmProviders} - listed
-    assert unlisted == ADD_MODEL_UNLISTED_PROVIDERS, (
+    catalog: Final = TypeAdapter(_ProvidersFile).validate_json(
+        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
+    )
+    vector_only: Final = frozenset(
+        slug
+        for slug, entry in catalog.get("providers", {}).items()
+        if _is_vector_store_provider(entry.get("endpoints", {}))
+    )
+    unlisted = {provider.value for provider in LlmProviders} - listed - vector_only
+    assert unlisted == ADD_MODEL_UNLISTED_PROVIDERS - vector_only, (
         "Add Model dropdown drift: give the new provider an entry in provider_create_fields.json "
         "rather than adding it to ADD_MODEL_UNLISTED_PROVIDERS"
     )

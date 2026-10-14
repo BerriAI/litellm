@@ -2643,6 +2643,13 @@
         "vector_stores_search": true
       }
     },
+    "qdrant": {
+      "display_name": "Qdrant (`qdrant`)",
+      "url": "https://docs.litellm.ai/docs/providers/qdrant_vector_stores",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
     "minimax": {
       "display_name": "Minimax (`minimax`)",
       "url": "https://docs.litellm.ai/docs/providers/minimax",

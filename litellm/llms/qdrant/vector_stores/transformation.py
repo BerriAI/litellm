@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import reduce
 from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import quote, urlsplit
 
@@ -84,18 +85,12 @@ class _ExtraOptions(BaseModel):
     score_threshold: float | None = Field(default=None, allow_inf_nan=False)
 
 
-def _payload_value(payload: Mapping[str, object], path: str) -> object:
-    if path in payload:
-        return payload[path]
-    head, separator, tail = path.partition(".")
-    value: Final = payload.get(head)
-    if separator and isinstance(value, dict):
-        return _payload_value(_OBJECT.validate_python(value), tail)
-    return None
+def _payload_child(value: object, key: str) -> object:
+    return _OBJECT.validate_python(value).get(key) if isinstance(value, dict) else None
 
 
 def _payload_text(payload: Mapping[str, object], path: str) -> str:
-    value: Final = _payload_value(payload, path)
+    value: Final = payload[path] if path in payload else reduce(_payload_child, path.split("."), payload)
     if not isinstance(value, str):
         raise configuration_error(f"Qdrant payload field '{path}' must contain text")
     return value
