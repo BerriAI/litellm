@@ -7842,6 +7842,12 @@ def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_o
             {"urgent": True, "reviewed": True},
             id="every_field_holds_the_same_value",
         ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"field": "name", "value": "unknown"}, {"field": "email", "value": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="every_field_holds_the_same_string",
+        ),
     ],
 )
 def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(

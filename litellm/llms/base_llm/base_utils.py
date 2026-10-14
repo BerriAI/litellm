@@ -301,6 +301,13 @@ def _is_a_label_every_block_repeats(blocks: tuple[Mapping[str, JsonValue], ...],
     return isinstance(blocks[0][key], str) and all(block[key] == blocks[0][key] for block in blocks)
 
 
+def _value_key(blocks: tuple[Mapping[str, JsonValue], ...], keys: frozenset[str]) -> str | None:
+    if len(keys) == 1:
+        return next(iter(keys))
+    varying: Final = tuple(key for key in keys if not _is_a_label_every_block_repeats(blocks, key))
+    return varying[0] if len(varying) == 1 else None
+
+
 def _split_answer_fields(
     blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
 ) -> Mapping[str, JsonValue] | None:
@@ -311,12 +318,10 @@ def _split_answer_fields(
     if len(named) != 1:
         return None
     ((name_key, field_names),) = named
-    value_keys: Final = tuple(
-        key for key in keys if key != name_key and not _is_a_label_every_block_repeats(blocks, key)
-    )
-    if len(value_keys) != 1:
+    value_key: Final = _value_key(blocks, keys - {name_key})
+    if value_key is None:
         return None
-    return dict(zip(field_names, (block[value_keys[0]] for block in blocks), strict=True))
+    return dict(zip(field_names, (block[value_key] for block in blocks), strict=True))
 
 
 def split_response_format_answer(
