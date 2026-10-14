@@ -119,6 +119,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
+    ProxyUnsupportedEndpointError,
     endpoint_unsupported_by_model,
     route_request,
 )
@@ -2292,7 +2293,7 @@ class ProxyBaseLLMRequestProcessing:
 
         unsupported_endpoint: Final = endpoint_unsupported_by_model(
             route_type=route_type,
-            model=self.data.get("model"),
+            data=self.data,
             llm_router=llm_router,
             team_id=user_api_key_dict.team_id,
         )
@@ -2477,6 +2478,8 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
+                    except ProxyUnsupportedEndpointError:
+                        continue
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
                             raise

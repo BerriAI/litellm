@@ -3,10 +3,11 @@ import pytest
 
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+import litellm
 from litellm import Router
 from litellm.proxy.route_llm_request import (
     ProxyModelNotFoundError,
@@ -1770,8 +1771,12 @@ async def test_route_request_router_settings_override_skips_null_fields():
 
 CHAT_SHAPED_ROUTES: Final = (
     ("acompletion", "/v1/chat/completions"),
+    ("atext_completion", "/v1/completions"),
     ("anthropic_messages", "/v1/messages"),
     ("aresponses", "/v1/responses"),
+    ("agenerate_content", "generateContent"),
+    ("agenerate_content_stream", "streamGenerateContent"),
+    ("acreate_interaction", "/v1beta/interactions"),
 )
 
 CHAT_SHAPED_ROUTE_TYPES: Final = tuple(route_type for route_type, _ in CHAT_SHAPED_ROUTES)
@@ -1791,8 +1796,12 @@ def _router_with(*deployments: dict[str, object], **router_kwargs: object) -> Ro
     return Router(model_list=list(deployments), **router_kwargs)
 
 
-def _unsupported(route_type: str, model: object, router: Router | None) -> ProxyUnsupportedEndpointError | None:
-    return endpoint_unsupported_by_model(route_type=route_type, model=model, llm_router=router, team_id=None)
+def _unsupported(
+    route_type: str, model: object, router: Router | None, **request: object
+) -> ProxyUnsupportedEndpointError | None:
+    return endpoint_unsupported_by_model(
+        route_type=route_type, data={"model": model, **request}, llm_router=router, team_id=None
+    )
 
 
 @pytest.mark.parametrize("route_type, endpoint", CHAT_SHAPED_ROUTES)
@@ -1808,7 +1817,7 @@ def test_endpoint_unsupported_rejects_chat_routes_on_embedding_only_model(route_
     assert error.message == f"{endpoint} is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
 
 
-@pytest.mark.parametrize("route_type", ["aembedding", "atext_completion", "aimage_generation"])
+@pytest.mark.parametrize("route_type", ["aembedding", "aimage_generation", "_aresponses_websocket"])
 def test_endpoint_unsupported_leaves_non_chat_routes_alone(route_type):
     router: Final = _router_with(_embedding_deployment("embed-only", EMBEDDING_ONLY))
 
@@ -1824,6 +1833,8 @@ def test_endpoint_unsupported_leaves_non_chat_routes_alone(route_type):
         {"mode": "embedding", "supported_endpoints": None},
         {"mode": "embedding", "supported_endpoints": "/v1/embeddings"},
         {"mode": 1, "supported_endpoints": ["/v1/embeddings"]},
+        {"mode": "", "supported_endpoints": ["/v1/embeddings"]},
+        {"mode": "   ", "supported_endpoints": ["/v1/embeddings"]},
     ],
 )
 def test_endpoint_unsupported_keeps_todays_behavior_without_a_valid_declaration(route_type, model_info):
@@ -1840,6 +1851,7 @@ def test_endpoint_unsupported_keeps_todays_behavior_without_a_valid_declaration(
         {"mode": "chat", "supported_endpoints": ["/v1/batch"]},
         {"mode": "completion", "supported_endpoints": ["/fine_tuning"]},
         {"mode": "responses", "supported_endpoints": ["/v1/realtime"]},
+        {"mode": " Chat ", "supported_endpoints": ["/v1/embeddings"]},
     ],
 )
 def test_endpoint_unsupported_needs_a_non_chat_mode_to_reject(route_type, model_info):
@@ -1851,7 +1863,16 @@ def test_endpoint_unsupported_needs_a_non_chat_mode_to_reject(route_type, model_
 @pytest.mark.parametrize("route_type", CHAT_SHAPED_ROUTE_TYPES)
 @pytest.mark.parametrize(
     "declared",
-    [["/v1/messages"], ["/v1/responses"], ["/v1/chat/completions"], ["/chat/completions"], ["/responses"]],
+    [
+        ["/v1/messages"],
+        ["/v1/responses"],
+        ["/v1/chat/completions"],
+        ["/chat/completions"],
+        ["/responses"],
+        ["/v1/completions"],
+        ["/completions"],
+        ["/v1beta/interactions"],
+    ],
 )
 def test_endpoint_unsupported_allows_every_chat_route_when_any_chat_endpoint_is_declared(route_type, declared):
     router: Final = _router_with(
@@ -1916,6 +1937,72 @@ def test_endpoint_unsupported_ignores_models_without_deployments(model):
 
 def test_endpoint_unsupported_skips_the_check_without_a_router():
     assert _unsupported("acompletion", "embed-only", None) is None
+
+
+CHAT_FALLBACK_DEPLOYMENT: Final = {
+    "model_name": "chat-fallback",
+    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+}
+
+
+@pytest.mark.parametrize(
+    "router_kwargs, request_kwargs",
+    [
+        ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {}),
+        ({"default_fallbacks": ["chat-fallback"]}, {}),
+        ({}, {"fallbacks": ["chat-fallback"]}),
+        ({}, {"fallbacks": [{"embed-only": ["chat-fallback"]}]}),
+        ({}, {"router_settings_override": {"fallbacks": [{"embed-only": ["chat-fallback"]}]}}),
+    ],
+)
+def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, request_kwargs):
+    router: Final = _router_with(
+        _embedding_deployment("embed-only", EMBEDDING_ONLY), CHAT_FALLBACK_DEPLOYMENT, **router_kwargs
+    )
+
+    assert _unsupported("acompletion", "embed-only", router, **request_kwargs) is None
+
+
+@pytest.mark.parametrize(
+    "router_kwargs, request_kwargs",
+    [
+        ({"fallbacks": [{"other-group": ["chat-fallback"]}]}, {}),
+        ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {"disable_fallbacks": True}),
+        ({"default_fallbacks": ["chat-fallback"]}, {"fallbacks": []}),
+        (
+            {"fallbacks": [{"embed-only": ["chat-fallback"]}]},
+            {"router_settings_override": {"fallbacks": [{"other-group": ["chat-fallback"]}]}},
+        ),
+        ({}, {"fallbacks": [], "router_settings_override": {"fallbacks": [{"embed-only": ["chat-fallback"]}]}}),
+    ],
+)
+def test_endpoint_unsupported_rejects_when_no_fallback_would_answer(router_kwargs, request_kwargs):
+    router: Final = _router_with(
+        _embedding_deployment("embed-only", EMBEDDING_ONLY), CHAT_FALLBACK_DEPLOYMENT, **router_kwargs
+    )
+
+    assert isinstance(_unsupported("acompletion", "embed-only", router, **request_kwargs), ProxyUnsupportedEndpointError)
+
+
+ECHOED_CATALOG_ENTRY: Final = {"mode": "image_generation", "supported_endpoints": ["/v1/images/generations"]}
+
+
+@pytest.mark.parametrize(
+    "model_info, rejected",
+    [
+        ({"key": "echoed-image-model", **ECHOED_CATALOG_ENTRY}, False),
+        ({"key": "echoed-image-model", "mode": "image_generation", "supported_endpoints": ["/v1/embeddings"]}, False),
+        ({"key": "echoed-image-model", "mode": "embedding", "supported_endpoints": ["/v1/embeddings"]}, True),
+        (dict(ECHOED_CATALOG_ENTRY), True),
+    ],
+)
+def test_endpoint_unsupported_ignores_fields_copied_from_the_cost_map(model_info, rejected):
+    router: Final = _router_with(_embedding_deployment("image-row", model_info))
+
+    with patch.dict(litellm.model_cost, {"echoed-image-model": ECHOED_CATALOG_ENTRY}):
+        error: Final = _unsupported("acompletion", "image-row", router)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError) is rejected
 
 
 def _router_with_defaults(default_litellm_params: dict[str, object]):

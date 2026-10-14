@@ -1,16 +1,25 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 import httpx
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
+from litellm.router_utils.fallback_event_handlers import (
+    check_non_standard_fallback_format,
+    fallback_lookup_groups,
+    fallbacks_disabled_for_request,
+    get_fallback_model_group_for_lookup_groups,
+    has_unattempted_fallback_target,
+)
+from litellm.types.utils import COST_MAP_LOOKUP_KEY, echoed_cost_map_fields
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -359,14 +368,29 @@ def raise_if_required_body_param_missing(
 CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {
         "acompletion": "/v1/chat/completions",
+        "atext_completion": "/v1/completions",
         "anthropic_messages": "/v1/messages",
         "aresponses": "/v1/responses",
+        "agenerate_content": "generateContent",
+        "agenerate_content_stream": "streamGenerateContent",
+        "acreate_interaction": "/v1beta/interactions",
     }
 )
 
 CHAT_SHAPED_ENDPOINTS: Final[frozenset[str]] = frozenset(
-    {"/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses", "/responses"}
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/messages",
+        "/v1/responses",
+        "/responses",
+        "/v1beta/interactions",
+    }
 )
+
+DECLARATION_FIELDS: Final[frozenset[str]] = frozenset({"mode", "supported_endpoints"})
 
 CHAT_SHAPED_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses"})
 
@@ -382,31 +406,107 @@ class ProxyUnsupportedEndpointError(ProxyException):
     pass
 
 
+_FALLBACK_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(  # mutable-ok: router fallbacks are lists
+    list[object], config=ConfigDict(strict=True)
+)
+
+
+class _LiveCostMap(Protocol):
+    @property
+    def model_cost(self) -> Mapping[str, object]: ...
+
+
+class _RouterFallbacks(Protocol):
+    @property
+    def fallbacks(self) -> Sequence[object] | None: ...
+
+
+def _live_cost_map_entry(catalog: _LiveCostMap, catalog_key: str) -> Mapping[str, object]:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(catalog.model_cost.get(catalog_key) or {})
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _echoed_from_cost_map(model_info: Mapping[str, object]) -> frozenset[str]:
+    catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
+    if not isinstance(catalog_key, str):
+        return frozenset()
+    return frozenset(
+        echoed_cost_map_fields(
+            model_info,
+            _live_cost_map_entry(litellm, catalog_key),
+            GetModelCostMap.loaded_model_cost_map().get(catalog_key) or MappingProxyType({}),
+        )
+    )
+
+
 def _declared_non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | None:
     try:
-        declared: Final = _DeploymentEndpointDeclaration.model_validate(deployment.get("model_info") or {})
+        model_info: Final = JSON_OBJECT_ADAPTER.validate_python(deployment.get("model_info"))
+        declared: Final = _DeploymentEndpointDeclaration.model_validate(model_info)
     except ValidationError:
         return None
-    if declared.mode is None or declared.mode in CHAT_SHAPED_MODES or declared.supported_endpoints is None:
+    if not DECLARATION_FIELDS.isdisjoint(_echoed_from_cost_map(model_info)):
+        return None
+    mode: Final = (declared.mode or "").strip().lower()
+    if not mode or mode in CHAT_SHAPED_MODES or declared.supported_endpoints is None:
         return None
     endpoints: Final = frozenset(declared.supported_endpoints)
     return endpoints if endpoints.isdisjoint(CHAT_SHAPED_ENDPOINTS) else None
 
 
+def _override_fallbacks(data: Mapping[str, object]) -> object:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(data.get("router_settings_override")).get("fallbacks")
+    except ValidationError:
+        return None
+
+
+def _fallbacks_for_request(data: Mapping[str, object], llm_router: LitellmRouter) -> object:
+    if "fallbacks" in data:
+        return data["fallbacks"]
+    override_fallbacks: Final = _override_fallbacks(data)
+    return override_fallbacks if override_fallbacks is not None else _router_fallbacks(llm_router)
+
+
+def _router_fallbacks(llm_router: _RouterFallbacks) -> Sequence[object] | None:
+    return llm_router.fallbacks
+
+
+def _fallback_would_answer(model: str, data: Mapping[str, object], llm_router: LitellmRouter) -> bool:
+    if fallbacks_disabled_for_request(data):
+        return False
+    try:
+        fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(_fallbacks_for_request(data, llm_router))
+    except ValidationError:
+        return False
+    if not fallbacks:
+        return False
+    if check_non_standard_fallback_format(fallbacks=fallbacks):
+        return True
+    resolved, _ = get_fallback_model_group_for_lookup_groups(
+        fallbacks=fallbacks,
+        lookup_groups=fallback_lookup_groups(data, model),
+    )
+    return has_unattempted_fallback_target(resolved, data)
+
+
 def endpoint_unsupported_by_model(
     route_type: str,
-    model: object,
+    data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     team_id: str | None,
 ) -> ProxyUnsupportedEndpointError | None:
     endpoint: Final = CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE.get(route_type)
+    model: Final = data.get("model")
     if endpoint is None or not isinstance(model, str) or not model or llm_router is None:
         return None
     deployments: Final = tuple(llm_router.get_model_list(model_name=model, team_id=team_id) or ())
     non_chat: Final = tuple(
         endpoints for deployment in deployments if (endpoints := _declared_non_chat_endpoints(deployment)) is not None
     )
-    if not deployments or len(non_chat) < len(deployments):
+    if not deployments or len(non_chat) < len(deployments) or _fallback_would_answer(model, data, llm_router):
         return None
     supported: Final = ", ".join(sorted(frozenset[str]().union(*non_chat))) or "none"
     return ProxyUnsupportedEndpointError(

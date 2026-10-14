@@ -6934,6 +6934,57 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == "gpt-4"
 
     @pytest.mark.asyncio
+    async def test_fallback_skips_a_model_that_rejects_the_endpoint(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.route_llm_request import ProxyUnsupportedEndpointError
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "chat-rl"})
+        attempted: list[str] = []
+
+        async def mock_pre_call_logic(**kwargs):
+            model = processor.data.get("model")
+            attempted.append(model)
+            if model == "chat-rl":
+                raise ProxyRateLimitError(detail="RPM limit exceeded", headers={"retry-after": "30"})
+            if model == "embed-only":
+                raise ProxyUnsupportedEndpointError(
+                    message="/v1/chat/completions is not supported by model=embed-only",
+                    type="invalid_request_error",
+                    param="model",
+                    code=400,
+                )
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"chat-rl": ["embed-only", "chat-ctl"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="chat-rl",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert attempted == ["chat-rl", "embed-only", "chat-ctl"]
+        assert processor.data["model"] == "chat-ctl"
+
+    @pytest.mark.asyncio
     async def test_fallback_uses_key_level_router_settings(self):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing

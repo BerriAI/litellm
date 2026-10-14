@@ -18,7 +18,7 @@ import pytest
 from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import AnthropicErrorBody, AnthropicErrorEvent, LiteLLMParamsBody, ModelInfoBody, ModelNewBody
+from models import AnthropicErrorBody, AnthropicErrorEvent, LiteLLMParamsBody, ModelInfoBody, ModelMode, ModelNewBody
 from openai import OpenAI
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
@@ -27,6 +27,7 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 pytestmark = pytest.mark.e2e
 
 EMBEDDING_BACKEND: Final = "openai/text-embedding-3-small"
+CHAT_FALLBACK_BACKEND: Final = "openai/gpt-5.4-nano"
 EMBEDDINGS_ONLY: Final = ("/v1/embeddings",)
 PROMPT: Final = "Say this is a test!"
 UNSUPPORTED_MARKER: Final = "is not supported by model="
@@ -51,15 +52,20 @@ def _subject(route: Route) -> Subject:
 
 
 def _register(
-    proxy: ProxyClient, resources: ResourceManager, prefix: str, supported_endpoints: tuple[str, ...] | None
+    proxy: ProxyClient,
+    resources: ResourceManager,
+    prefix: str,
+    supported_endpoints: tuple[str, ...] | None,
+    backend: str = EMBEDDING_BACKEND,
+    mode: ModelMode = "embedding",
 ) -> str:
     model: Final = f"{prefix}-{unique_marker()}"
     model_id: Final = proxy.register_model(
         ModelNewBody(
             model_name=model,
-            litellm_params=LiteLLMParamsBody(model=EMBEDDING_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+            litellm_params=LiteLLMParamsBody(model=backend, api_key="os.environ/OPENAI_API_KEY"),
             model_info=ModelInfoBody(
-                mode="embedding",
+                mode=mode,
                 supported_endpoints=None if supported_endpoints is None else list(supported_endpoints),
             ),
         )
@@ -166,6 +172,34 @@ class TestEmbeddingOnlySupportedEndpoints:
             type="error",
             error=AnthropicErrorBody(type="invalid_request_error", message=_unsupported_message("/v1/messages", model)),
         ), f"unexpected Anthropic error envelope: {raised.value.body!r}"
+
+    @pytest.mark.covers("llm.embeddings.openai.supported_endpoints_gate.nonstream.works")
+    @meta(_subject(Route.COMPLETIONS))
+    def test_text_completions_are_rejected_before_any_provider_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, "e2e-embed-only", EMBEDDINGS_ONLY)
+        with pytest.raises(openai.APIStatusError) as raised:
+            _ = _openai_at(sdk, "/v1", resources.key()).completions.create(
+                model=model, prompt=PROMPT, max_tokens=16, extra_body=NO_PROXY_CACHE
+            )
+        _assert_openai_rejection(raised.value, "/v1/completions", model)
+
+    @pytest.mark.covers("llm.embeddings.openai.supported_endpoints_gate.nonstream.works")
+    @meta(_subject(Route.CHAT_COMPLETIONS))
+    def test_chat_completions_with_a_fallback_are_answered_by_the_fallback(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, "e2e-embed-only", EMBEDDINGS_ONLY)
+        fallback: Final = _register(proxy, resources, "e2e-chat-fallback", None, CHAT_FALLBACK_BACKEND, "chat")
+        completion: Final = _openai_at(sdk, "/v1", resources.key()).chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": PROMPT}],
+            extra_body={**NO_PROXY_CACHE, "fallbacks": [fallback]},
+        )
+        assert completion.choices and completion.choices[0].message.content, (
+            f"the fallback {fallback} should answer a chat call to {model}, got {completion!r}"
+        )
 
     @pytest.mark.covers("llm.embeddings.openai.supported_endpoints_gate.nonstream.works")
     @meta(_subject(Route.CHAT_COMPLETIONS))
