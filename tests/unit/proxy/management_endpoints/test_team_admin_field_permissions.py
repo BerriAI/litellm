@@ -449,9 +449,11 @@ class TestTeamMetadataEdits:
             pytest.param(True, 1, id="true-to-1"),
             pytest.param(1, True, id="1-to-true"),
             pytest.param({"a": 0}, {"a": False}, id="nested-0-to-false"),
+            pytest.param(2**53, 2**53 + 1, id="adjacent-integers-past-float-precision"),
+            pytest.param(0.1, 0.1000000000000001, id="close-floats"),
         ],
     )
-    def test_retyping_a_proxy_controlled_value_names_it(self, stored: object, sent: object):
+    def test_changing_the_type_or_value_of_a_proxy_controlled_value_names_it(self, stored: object, sent: object):
         verdict: Final = _metadata_verdict(
             {"allow_client_mock_response": stored, "a": 1}, {"allow_client_mock_response": sent, "a": 2}
         )

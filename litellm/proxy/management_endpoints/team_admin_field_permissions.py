@@ -10,6 +10,7 @@ authority through it."""
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -74,6 +75,7 @@ _KEY_REQUEST_IDENTITY: Final[frozenset[str]] = frozenset({"key", "token", "metad
 _FIELD_LIST: Final = TypeAdapter(list[str])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_COMPARABLE_JSON: Final[TypeAdapter[object]] = TypeAdapter(object)
 _WINDOW_LIST: Final = TypeAdapter(list[dict[str, object]])
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _METADATA_FOLDED_FIELDS: Final[frozenset[str]] = frozenset(
@@ -399,12 +401,18 @@ def changed_team_fields(
     return column_changes | _metadata_changes(data, submitted, existing)
 
 
-def _canonical_json(value: JsonValue) -> str:
-    return json.dumps(json.loads(json.dumps(value), parse_int=float), sort_keys=True)
+def _json_number(text: str) -> tuple[str, Decimal]:
+    return ("number", Decimal(text))
+
+
+def _comparable_json(value: JsonValue) -> object:
+    return _COMPARABLE_JSON.validate_python(
+        json.loads(json.dumps(value), parse_int=_json_number, parse_float=_json_number)
+    )
 
 
 def _metadata_value_changed(new: object, old: object) -> bool:
-    return _canonical_json(_JSON_VALUE.validate_python(new)) != _canonical_json(_JSON_VALUE.validate_python(old))
+    return _comparable_json(_JSON_VALUE.validate_python(new)) != _comparable_json(_JSON_VALUE.validate_python(old))
 
 
 def _is_blank(value: object) -> bool:
