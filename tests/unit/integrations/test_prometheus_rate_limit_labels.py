@@ -14,7 +14,7 @@ Covers two follow-up gaps to the unified rate-limit error work:
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, get_args
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -29,6 +29,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.integrations.prometheus import (
+    DEFINED_PROMETHEUS_METRICS,
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
     UserAPIKeyLabelValues,
@@ -840,6 +841,48 @@ async def test_project_model_rate_limit_allowed_uses_same_custom_project_alias_l
     finally:
         litellm.custom_prometheus_metadata_labels = original_custom_labels
         _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_project_alias_custom_label_keeps_project_gauges_and_total_requests_recording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["project_alias"])
+    _clear_prometheus_registry()
+    try:
+        await _run_success_event(
+            {
+                "x-ratelimit-model_per_project-limit-requests": 100,
+                "x-ratelimit-model_per_project-remaining-requests": 99,
+            }
+        )
+
+        project_requests: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "requests"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+        assert _collected_samples("litellm_project_model_rate_limit_allowed_metric") == {project_requests: 100}
+        assert _collected_samples("litellm_project_model_rate_limit_used_metric") == {project_requests: 1}
+        request_samples: Final = _collected_samples("litellm_proxy_total_requests_metric_total")
+        assert [dict(labels)["project_alias"] for labels in request_samples] == ["project-alias"], request_samples
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_custom_metadata_labels_sharing_a_built_in_label_name_are_declared_once_on_every_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_prometheus_metadata_labels", ["metadata.department", "team", "project_alias", "requested_model"]
+    )
+    declared: Final = {
+        name: PrometheusMetricLabels.get_labels(name)
+        for name in get_args(DEFINED_PROMETHEUS_METRICS)
+        if hasattr(PrometheusMetricLabels, name)
+    }
+    assert {name: labels for name, labels in declared.items() if len(labels) != len(set(labels))} == {}
 
 
 @pytest.mark.asyncio
