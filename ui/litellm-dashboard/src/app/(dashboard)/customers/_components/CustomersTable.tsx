@@ -179,8 +179,52 @@ export default function CustomersTable({
                     }}
                   />
                 </div>
+                {canModify && selectedCustomers.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-muted-foreground">{selectedCustomers.length} selected</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isBusy || selectedCustomers.length > MAX_BULK_CUSTOMERS}
+                      onClick={() => setBulkEditCustomers(selectedCustomers)}
+                    >
+                      <Pencil />
+                      Edit selected
+                    </Button>
+                    {selectedCustomers.length > MAX_BULK_CUSTOMERS && (
+                      <span className="text-sm text-muted-foreground">
+                        Select at most {MAX_BULK_CUSTOMERS} customers to edit at once
+                      </span>
+                    )}
+                    <BulkBlockedStateButton
+                      blocked
+                      premiumUser={premiumUser}
+                      disabled={isBusy}
+                      onClick={() =>
+                        void handleBulkSetBlocked(
+                          selectedCustomers.map((customer) => customer.user_id),
+                          true,
+                        )
+                      }
+                    />
+                    <BulkBlockedStateButton
+                      blocked={false}
+                      premiumUser={premiumUser}
+                      disabled={isBusy}
+                      onClick={() =>
+                        void handleBulkSetBlocked(
+                          selectedCustomers.map((customer) => customer.user_id),
+                          false,
+                        )
+                      }
+                    />
+                    <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => setRowSelection({})}>
+                      Clear selection
+                    </Button>
+                  </div>
+                )}
                 <DataTableToolbar
-                  className="flex-1"
+                  className="flex-auto"
                   table={table}
                   onRefresh={onRefresh}
                   isRefreshing={isRefreshing}
@@ -208,50 +252,6 @@ export default function CustomersTable({
                   </Button>
                 </DataTableToolbar>
               </div>
-              {canModify && selectedCustomers.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-muted-foreground">{selectedCustomers.length} selected</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={isBusy || selectedCustomers.length > MAX_BULK_CUSTOMERS}
-                    onClick={() => setBulkEditCustomers(selectedCustomers)}
-                  >
-                    <Pencil />
-                    Edit selected
-                  </Button>
-                  {selectedCustomers.length > MAX_BULK_CUSTOMERS && (
-                    <span className="text-sm text-muted-foreground">
-                      Select at most {MAX_BULK_CUSTOMERS} customers to edit at once
-                    </span>
-                  )}
-                  <BulkBlockedStateButton
-                    blocked
-                    premiumUser={premiumUser}
-                    disabled={isBusy}
-                    onClick={() =>
-                      void handleBulkSetBlocked(
-                        selectedCustomers.map((customer) => customer.user_id),
-                        true,
-                      )
-                    }
-                  />
-                  <BulkBlockedStateButton
-                    blocked={false}
-                    premiumUser={premiumUser}
-                    disabled={isBusy}
-                    onClick={() =>
-                      void handleBulkSetBlocked(
-                        selectedCustomers.map((customer) => customer.user_id),
-                        false,
-                      )
-                    }
-                  />
-                  <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => setRowSelection({})}>
-                    Clear selection
-                  </Button>
-                </div>
-              )}
               <DataTableFilterDrawer
                 table={table}
                 open={filtersOpen}
