@@ -8781,7 +8781,7 @@ async def test_prompt_cache_breakpoints_on_system_user_and_tool_definition_becom
         monkeypatch,
         messages=[
             {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": EXPLICIT}]},
-            {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": EXPLICIT_30M}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": EXPLICIT}]},
         ],
         tools=[{"type": "function", "function": {**_WEATHER_FUNCTION, "prompt_cache_breakpoint": EXPLICIT}}],
     )
@@ -8821,7 +8821,7 @@ async def test_prompt_cache_breakpoints_on_tool_calls_tool_results_and_string_me
                 "content": [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": EXPLICIT}],
             },
             {"role": "assistant", "content": "It is sunny."},
-            {"role": "user", "content": "thanks", "prompt_cache_breakpoint": EXPLICIT_30M},
+            {"role": "user", "content": "thanks", "prompt_cache_breakpoint": EXPLICIT},
         ],
         tools=[{"type": "function", "function": _WEATHER_FUNCTION}],
     )
@@ -9083,6 +9083,120 @@ async def test_a_message_level_breakpoint_on_list_content_does_not_count_toward_
             "content": [{"type": "text", "text": f"part {index}", "cache_control": EPHEMERAL} for index in range(4)],
         }
     ]
+
+
+def _text_part(text: str, marker: dict[str, str]) -> dict[str, object]:
+    return {"type": "text", "text": text, "prompt_cache_breakpoint": marker}
+
+
+_MARKED_30M_PART: Final = _text_part("hi", EXPLICIT_30M)
+_WEATHER_TOOL: Final = {"type": "function", "function": _WEATHER_FUNCTION}
+
+
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    [
+        ([{"role": "user", "content": [_MARKED_30M_PART]}], [_WEATHER_TOOL]),
+        ([{"role": "user", "content": "hi"}], [{**_WEATHER_TOOL, "prompt_cache_breakpoint": EXPLICIT_30M}]),
+    ],
+    ids=["message-part", "tool-definition"],
+)
+async def test_a_30m_breakpoint_is_a_bad_request_naming_every_fix_without_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_REPLY)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.acompletion(
+            api_key="mock_api_key",
+            model=f"anthropic/{PROMPT_CACHING_MODEL}",
+            messages=messages,
+            tools=tools,
+            num_retries=0,
+        )
+
+    assert caught.value.status_code == 400
+    assert "Remove the ttl" in str(caught.value)
+    assert "drop_params=True" in str(caught.value)
+    assert "'ttl': '1h'" in str(caught.value)
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("drop_params_source", ["kwarg", "global"])
+async def test_a_30m_breakpoint_sends_a_5m_cache_control_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop_params_source: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": [_MARKED_30M_PART]}],
+        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": EXPLICIT_30M}],
+        **({"drop_params": True} if drop_params_source == "kwarg" else {}),
+    )
+
+    body: Final = json.loads(request.content)
+    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": EPHEMERAL}]}]
+    assert body["tools"] == [{**_ANTHROPIC_WEATHER_TOOL, "cache_control": EPHEMERAL}]
+
+
+@pytest.mark.parametrize(
+    "marker", [{"mode": "implicit"}, {"mode": "explicit", "ttl": "1h"}], ids=["implicit-mode", "1h-ttl"]
+)
+async def test_a_malformed_breakpoint_is_a_bad_request_without_drop_params_and_sends_no_mark_with_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, marker: dict[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": marker}]}]
+
+    with pytest.raises(litellm.BadRequestError, match="prompt_cache_breakpoint must be") as caught:
+        await litellm.acompletion(
+            api_key="mock_api_key", model=f"anthropic/{PROMPT_CACHING_MODEL}", messages=messages, num_retries=0
+        )
+    request: Final = await _send_prompt_caching_request(respx_mock, monkeypatch, messages=messages, drop_params=True)
+
+    assert caught.value.status_code == 400
+    assert json.loads(request.content)["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize(
+    "unsent",
+    [
+        {"role": "system", "content": [{"type": "text", "text": "rules"}, _text_part("", EXPLICIT)]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}, "prompt_cache_breakpoint": EXPLICIT}
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}, "prompt_cache_breakpoint": EXPLICIT}
+            ],
+        },
+    ],
+    ids=["empty-system-text", "user-input-audio", "assistant-image"],
+)
+async def test_a_mark_on_a_block_anthropic_does_not_send_takes_none_of_the_four_slots(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, unsent: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marked: Final = [_text_part(f"part {index}", EXPLICIT) for index in range(4)]
+
+    request: Final = await _send_prompt_caching_request(
+        respx_mock, monkeypatch, messages=[unsent, {"role": "user", "content": marked}]
+    )
+
+    assert request.content.decode().count('"cache_control"') == 4
+    assert "prompt_cache_breakpoint" not in request.content.decode()
 
 
 def test_map_openai_params_maps_a_tuple_of_tools() -> None:

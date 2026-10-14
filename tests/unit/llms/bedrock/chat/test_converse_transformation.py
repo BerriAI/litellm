@@ -10171,7 +10171,7 @@ _LOOKUP_TOOL_SPEC: Final = {
 def _breakpoint_conversation() -> list[dict[str, object]]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT}]},
-        {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _EXPLICIT_30M}]},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _EXPLICIT}]},
         {
             "role": "assistant",
             "content": "",
@@ -10427,6 +10427,174 @@ async def test_a_tool_result_with_two_marked_parts_is_one_cache_point_within_the
             ],
         },
     ]
+
+
+def _four_marked_user_parts() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": _EXPLICIT} for index in range(4)
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("marker", "error", "sent_under_drop_params"),
+    [
+        (_EXPLICIT_30M, "Remove the ttl", [{"text": "hi"}, _CACHE_POINT]),
+        ({"mode": "implicit"}, "prompt_cache_breakpoint must be", [{"text": "hi"}]),
+    ],
+    ids=["30m-ttl", "malformed"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_breakpoint_claude_cannot_take_is_a_bad_request_unless_drop_params(
+    sync_mode: bool,
+    marker: dict[str, str],
+    error: str,
+    sent_under_drop_params: list[dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    def marked() -> list[dict[str, object]]:
+        return [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": marker}]}]
+
+    with pytest.raises(litellm.BadRequestError, match=error) as caught:
+        await _breakpoint_converse_request(sync_mode, _BREAKPOINT_MODEL, marked())
+    dropped: Final = await _breakpoint_converse_request(
+        sync_mode, _BREAKPOINT_MODEL, marked(), litellm_params={"drop_params": True}
+    )
+
+    assert caught.value.status_code == 400
+    assert dropped["messages"] == [{"role": "user", "content": sent_under_drop_params}]
+
+
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    [
+        (
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "rules"},
+                        {"type": "text", "text": "", "prompt_cache_breakpoint": _EXPLICIT},
+                    ],
+                },
+                *_four_marked_user_parts(),
+            ],
+            [_LOOKUP_TOOL],
+        ),
+        (
+            [
+                *_four_marked_user_parts(),
+                {"role": "assistant", "content": " ", "prompt_cache_breakpoint": _EXPLICIT},
+                {"role": "user", "content": "next"},
+            ],
+            [_LOOKUP_TOOL],
+        ),
+        (
+            _four_marked_user_parts(),
+            [
+                _LOOKUP_TOOL,
+                {"type": "tool_search_tool_regex_20251119", "name": "find", "prompt_cache_breakpoint": _EXPLICIT},
+            ],
+        ),
+        (_four_marked_user_parts(), [_LOOKUP_TOOL, {"type": "web_search", "cache_control": {"type": "ephemeral"}}]),
+    ],
+    ids=["empty-system-text", "blank-assistant-string", "tool-search-tool", "built-in-web-search-tool"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_mark_converse_does_not_send_takes_none_of_the_four_cache_points(
+    sync_mode: bool, messages: list[dict[str, object]], tools: list[dict[str, object]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = await _breakpoint_converse_request(
+        sync_mode, _BREAKPOINT_MODEL, copy.deepcopy(messages), optional_params={"tools": copy.deepcopy(tools)}
+    )
+
+    assert json.dumps(result).count("cachePoint") == 4
+    assert result["toolConfig"]["tools"] == [_LOOKUP_TOOL_SPEC]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_tool_config_injection_point_takes_one_of_the_four_cache_points(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    def optional_params() -> dict[str, object]:
+        return {
+            "tools": [_LOOKUP_TOOL],
+            "cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        }
+
+    with pytest.raises(litellm.BadRequestError, match=r"Claude accepts at most 4 cache breakpoints, found 5"):
+        await _breakpoint_converse_request(
+            sync_mode, _BREAKPOINT_MODEL, _four_marked_user_parts(), optional_params=optional_params()
+        )
+    trimmed: Final = await _breakpoint_converse_request(
+        sync_mode,
+        _BREAKPOINT_MODEL,
+        _four_marked_user_parts(),
+        optional_params=optional_params(),
+        litellm_params={"drop_params": True},
+    )
+
+    assert json.dumps(trimmed).count("cachePoint") == 4
+    assert trimmed["toolConfig"]["tools"] == [_LOOKUP_TOOL_SPEC, _CACHE_POINT]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_breakpoint_under_a_tool_function_becomes_a_cache_point_after_the_tool(sync_mode: bool) -> None:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "lookup",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+            "prompt_cache_breakpoint": _EXPLICIT,
+        },
+    }
+
+    result: Final = await _breakpoint_converse_request(
+        sync_mode, _BREAKPOINT_MODEL, [{"role": "user", "content": "hi"}], optional_params={"tools": [tool]}
+    )
+
+    assert result["toolConfig"]["tools"] == [_LOOKUP_TOOL_SPEC, _CACHE_POINT]
+
+
+@pytest.mark.parametrize(
+    ("base_model", "system"),
+    [
+        ("anthropic.claude-opus-5-5", [{"text": "rules"}, _CACHE_POINT]),
+        ("amazon.nova-2-lite-v1:0", [{"text": "rules"}]),
+    ],
+    ids=["claude", "nova"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_profile_arn_gets_claude_breakpoints_when_its_base_model_is_claude(
+    sync_mode: bool, base_model: str, system: list[dict[str, object]]
+) -> None:
+    result: Final = await _breakpoint_converse_request(
+        sync_mode,
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz",
+        [
+            {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT}]},
+            {"role": "user", "content": "hi"},
+        ],
+        litellm_params={"base_model": base_model},
+    )
+
+    assert result["system"] == system
 
 
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])

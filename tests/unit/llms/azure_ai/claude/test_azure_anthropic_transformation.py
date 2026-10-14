@@ -494,7 +494,7 @@ def test_prompt_cache_breakpoint_becomes_cache_control_on_the_same_block():
         messages=[
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}],
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}],
             }
         ],
         optional_params={},

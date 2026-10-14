@@ -2282,7 +2282,7 @@ def test_prompt_cache_breakpoints_reach_databricks_claude_as_cache_control(
         model="databricks/databricks-claude-haiku-4-5",
         messages=[
             {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT}]},
-            {"role": "user", "content": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+            {"role": "user", "content": "hi", "prompt_cache_breakpoint": _EXPLICIT},
         ],
     )
 

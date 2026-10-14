@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     claude_cache_marks,
+    converse_appends_tool_config_cache_point,
     reject_prompt_cache_options,
     resolved_claude_cache_marks,
 )
@@ -57,7 +58,6 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
@@ -110,6 +110,7 @@ from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
+    bedrock_deployment_serves_claude,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
@@ -2028,7 +2029,7 @@ class AmazonConverseConfig(BaseConfig):
         """On Claude, OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits
         ``cachePoint`` blocks, held to Claude's cap, with ``prompt_cache_options`` rejected or dropped. A Claude model
         that never emits ``cachePoint`` blocks keeps its marks as written. Other models are left as they are."""
-        if BaseAWSLLM.get_bedrock_invoke_provider(model) != "anthropic":
+        if not bedrock_deployment_serves_claude(model, litellm_params):
             return tuple(messages)
         emits_cache_points: Final = bedrock_model_accepts_cache_points(model)
         drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
@@ -2037,12 +2038,16 @@ class AmazonConverseConfig(BaseConfig):
         )
         if not emits_cache_points:
             return tuple(messages)
+        tools: Final = optional_params.get("tools")
         cache_marks: Final = resolved_claude_cache_marks(
             claude_cache_marks(
                 messages=messages,
-                tools=optional_params.get("tools"),
+                tools=tools,
                 automatic_breakpoint=optional_params.get("cache_control") is not None,
                 drop_params=drop_params,
+                tool_config_breakpoint=converse_appends_tool_config_cache_point(
+                    tools, optional_params.get("cache_control_injection_points")
+                ),
                 wire="bedrock_converse",
             ),
             model=model,

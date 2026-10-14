@@ -1217,6 +1217,14 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     )
 
 
+def bedrock_deployment_serves_claude(model: str, litellm_params: Mapping[str, object]) -> bool:
+    """Whether ``model`` names Claude, or the deployment's ``base_model`` does, as for an application inference
+    profile ARN that hides the model behind it."""
+    base_model: Final = litellm_params.get("base_model")
+    candidates: Final = (*((base_model,) if isinstance(base_model, str) else ()), model)
+    return any(get_bedrock_base_model(candidate).startswith("anthropic") for candidate in candidates)
+
+
 def bedrock_supports_tool_search(model: str) -> bool:
     """
     Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.

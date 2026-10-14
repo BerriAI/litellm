@@ -1578,7 +1578,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "tools":
                 requested_tools = cast(object, value)  # cast-ok: the loop yields untyped values
                 anthropic_tools, mcp_servers = self._map_tools(
-                    list(tools_with_prompt_cache_breakpoints_as_cache_control(requested_tools))
+                    list(
+                        tools_with_prompt_cache_breakpoints_as_cache_control(
+                            requested_tools, drop_params or litellm.drop_params is True
+                        )
+                    )
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools

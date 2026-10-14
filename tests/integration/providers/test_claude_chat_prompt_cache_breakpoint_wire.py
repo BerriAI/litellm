@@ -1,7 +1,7 @@
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, assert_never
+from typing import Final, Literal
 
 import pytest
 from integration._support.client import Gateway, Scenario, gateway_from_environment
@@ -38,6 +38,7 @@ from integration.providers._cache_control_marks_support import (
     tool_use_label,
 )
 from pydantic import BaseModel, ConfigDict, JsonValue
+from typing_extensions import assert_never
 
 Provider = Literal["anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai"]
 Site = Literal["tool", "system", "user_part", "tool_call", "tool_result_part", "string_message"]
@@ -231,12 +232,36 @@ def test_breakpoint_becomes_a_cache_mark_on_the_same_block(gateway: Gateway, pro
     assert _labels(provider, request) == [_expected(provider, site, marker)]
 
 
-def test_breakpoint_ttl_is_not_forwarded(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("breakpoint", "hint"),
+    ((_EXPLICIT_30M, "Remove the ttl"), ({"mode": "implicit"}, "prompt_cache_breakpoint must be")),
+    ids=("30m-ttl", "malformed"),
+)
+@pytest.mark.parametrize("provider", _PROVIDERS)
+def test_a_breakpoint_claude_cannot_take_is_a_400_before_any_provider_call_without_drop_params(
+    gateway: Gateway, provider: Provider, breakpoint: dict[str, JsonValue], hint: str
+) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marked(("user_part",), {"prompt_cache_breakpoint": breakpoint})
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        received: Final = wire.drain()
+    assert status == 400, text
+    assert hint in text, text
+    assert "drop_params" in text, text
+    assert received == (), [request.target for request in received]
+
+
+@pytest.mark.parametrize("source", ("deployment", "request"))
+def test_a_30m_breakpoint_is_sent_as_a_5m_mark_under_drop_params(gateway: Gateway, source: str) -> None:
     marker: Final = new_marker()
     marks: Final = _marked(("user_part",), {"prompt_cache_breakpoint": _EXPLICIT_30M})
+    deployment: Final[dict[str, JsonValue]] = {"drop_params": True} if source == "deployment" else {}
+    request_fields: Final[dict[str, JsonValue]] = {"drop_params": True} if source == "request" else {}
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, "anthropic")
-        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        model: Final = _deployment(gateway, scenario, wire, "anthropic", **deployment)
+        status, _, text = post_chat(gateway, _body(model, marker, marks, **request_fields))
         assert status == 200, text
         request: Final = _only_request(wire)
     assert anthropic_marks(request) == (Mark(ASK_LABEL, None),)

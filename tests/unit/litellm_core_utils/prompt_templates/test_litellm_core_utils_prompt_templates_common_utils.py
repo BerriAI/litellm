@@ -7,6 +7,7 @@ from typing import Final
 
 import pytest
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -2323,14 +2324,43 @@ def _lookup_call(identity: str, **fields: object) -> dict[str, object]:
     return {"id": identity, "type": "function", "function": {"name": "lookup", "arguments": "{}"}, **fields}
 
 
-def test_prompt_cache_breakpoint_becomes_an_ephemeral_cache_control_without_the_ttl() -> None:
-    marked: Final = {"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT_30M}
+@pytest.mark.parametrize("marker", [_EXPLICIT, _EXPLICIT_30M], ids=["no-ttl", "30m-ttl"])
+def test_prompt_cache_breakpoint_becomes_a_5m_cache_control_under_drop_params(marker: dict[str, str]) -> None:
+    marked: Final = {"type": "text", "text": "rules", "prompt_cache_breakpoint": marker}
 
-    assert prompt_cache_breakpoint_as_cache_control(marked) == {
+    assert prompt_cache_breakpoint_as_cache_control(marked, drop_params=True) == {
         "type": "text",
         "text": "rules",
         "cache_control": _EPHEMERAL,
     }
+
+
+def test_a_30m_breakpoint_is_a_400_naming_every_fix_without_drop_params() -> None:
+    marked: Final = {"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT_30M}
+
+    with pytest.raises(UnsupportedParamsError) as caught:
+        prompt_cache_breakpoint_as_cache_control(marked, drop_params=False)
+
+    assert caught.value.status_code == 400
+    assert "Remove the ttl" in caught.value.message
+    assert "drop_params=True" in caught.value.message
+    assert "'ttl': '1h'" in caught.value.message
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [{"mode": "implicit"}, {"mode": "explicit", "ttl": "1h"}, "explicit", {}],
+    ids=["implicit-mode", "1h-ttl", "string", "empty"],
+)
+def test_a_malformed_breakpoint_is_a_400_without_drop_params_and_no_mark_with_it(marker: object) -> None:
+    marked: Final = {"type": "text", "text": "rules", "prompt_cache_breakpoint": marker}
+
+    with pytest.raises(UnsupportedParamsError) as caught:
+        prompt_cache_breakpoint_as_cache_control(marked, drop_params=False)
+
+    assert caught.value.status_code == 400
+    assert "drop_params=True" in caught.value.message
+    assert prompt_cache_breakpoint_as_cache_control(marked, drop_params=True) == {"type": "text", "text": "rules"}
 
 
 def test_a_cache_control_the_client_wrote_wins_over_the_breakpoint_on_the_same_block() -> None:
@@ -2341,7 +2371,7 @@ def test_a_cache_control_the_client_wrote_wins_over_the_breakpoint_on_the_same_b
         "prompt_cache_breakpoint": _EXPLICIT_30M,
     }
 
-    assert prompt_cache_breakpoint_as_cache_control(both) == {
+    assert prompt_cache_breakpoint_as_cache_control(both, drop_params=False) == {
         "type": "text",
         "text": "rules",
         "cache_control": {"type": "ephemeral", "ttl": "1h"},
@@ -2351,18 +2381,18 @@ def test_a_cache_control_the_client_wrote_wins_over_the_breakpoint_on_the_same_b
 def test_a_block_without_a_breakpoint_is_returned_untouched() -> None:
     unmarked: Final = {"type": "text", "text": "rules", "cache_control": _EPHEMERAL}
 
-    assert prompt_cache_breakpoint_as_cache_control(unmarked) is unmarked
+    assert prompt_cache_breakpoint_as_cache_control(unmarked, drop_params=False) is unmarked
 
 
 def test_breakpoints_are_renamed_at_the_message_level_on_parts_and_on_tool_calls() -> None:
     message: Final = {
         "role": "assistant",
         "content": [{"type": "text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT}, {"type": "text", "text": "b"}],
-        "tool_calls": [_lookup_call("call_1", prompt_cache_breakpoint=_EXPLICIT_30M), _lookup_call("call_2")],
+        "tool_calls": [_lookup_call("call_1", prompt_cache_breakpoint=_EXPLICIT), _lookup_call("call_2")],
         "prompt_cache_breakpoint": _EXPLICIT,
     }
 
-    assert message_with_prompt_cache_breakpoints_as_cache_control(message) == {
+    assert message_with_prompt_cache_breakpoints_as_cache_control(message, drop_params=False) == {
         "role": "assistant",
         "content": [{"type": "text", "text": "a", "cache_control": _EPHEMERAL}, {"type": "text", "text": "b"}],
         "tool_calls": [_lookup_call("call_1", cache_control=_EPHEMERAL), _lookup_call("call_2")],
@@ -2374,7 +2404,7 @@ def test_a_message_level_breakpoint_on_string_content_is_renamed_and_other_messa
     unmarked: Final = {"role": "user", "content": "unmarked"}
 
     renamed: Final = messages_with_prompt_cache_breakpoints_as_cache_control(
-        [{"role": "user", "content": "hi", "prompt_cache_breakpoint": _EXPLICIT}, unmarked]
+        [{"role": "user", "content": "hi", "prompt_cache_breakpoint": _EXPLICIT}, unmarked], drop_params=False
     )
 
     assert renamed == ({"role": "user", "content": "hi", "cache_control": _EPHEMERAL}, unmarked)
@@ -2390,9 +2420,30 @@ def test_a_message_level_breakpoint_on_string_content_is_renamed_and_other_messa
     ids=["top-level", "under-function"],
 )
 def test_a_tool_breakpoint_becomes_a_top_level_cache_control(tool: dict[str, object]) -> None:
-    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool) == {
+    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool, drop_params=False) == {
         "type": "function",
         "function": {"name": "lookup", "parameters": {}},
+        "cache_control": _EPHEMERAL,
+    }
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "prompt_cache_breakpoint": _EXPLICIT_30M},
+        {"type": "function", "function": {"name": "lookup", "prompt_cache_breakpoint": _EXPLICIT_30M}},
+    ],
+    ids=["top-level", "under-function"],
+)
+def test_a_30m_tool_breakpoint_is_a_400_without_drop_params_and_a_5m_cache_control_with_it(
+    tool: dict[str, object],
+) -> None:
+    with pytest.raises(UnsupportedParamsError, match="Remove the ttl"):
+        tool_with_prompt_cache_breakpoint_as_cache_control(tool, drop_params=False)
+
+    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool, drop_params=True) == {
+        "type": "function",
+        "function": {"name": "lookup"},
         "cache_control": _EPHEMERAL,
     }
 
@@ -2407,7 +2458,7 @@ def test_a_tool_cache_control_the_client_wrote_wins_over_the_breakpoint() -> Non
         },
     }
 
-    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool) == {
+    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool, drop_params=False) == {
         "type": "function",
         "function": {"name": "lookup", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
     }
@@ -2416,8 +2467,11 @@ def test_a_tool_cache_control_the_client_wrote_wins_over_the_breakpoint() -> Non
 def test_tools_that_are_not_a_list_carry_no_marks_and_unmarked_tools_are_kept() -> None:
     unmarked: Final = {"type": "function", "function": {"name": "lookup"}}
 
-    assert tools_with_prompt_cache_breakpoints_as_cache_control(None) == ()
-    assert tools_with_prompt_cache_breakpoints_as_cache_control([unmarked, "opaque"]) == (unmarked, "opaque")
+    assert tools_with_prompt_cache_breakpoints_as_cache_control(None, drop_params=False) == ()
+    assert tools_with_prompt_cache_breakpoints_as_cache_control([unmarked, "opaque"], drop_params=False) == (
+        unmarked,
+        "opaque",
+    )
 
 
 def test_message_without_cache_control_marks_strips_only_the_listed_positions() -> None:

@@ -1,3 +1,5 @@
+import json
+import time
 from typing import Final
 
 import pytest
@@ -6,6 +8,7 @@ import litellm
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     CacheBreakpointCapExceeded,
     ClaudeCacheMarks,
+    ClaudeWire,
     claude_cache_marks,
     reject_prompt_cache_options,
     resolved_claude_cache_marks,
@@ -14,7 +17,6 @@ from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
 
 EPHEMERAL: Final = {"type": "ephemeral"}
 EXPLICIT: Final = {"mode": "explicit"}
-EXPLICIT_30M: Final = {"mode": "explicit", "ttl": "30m"}
 MODEL: Final = "claude-opus-5-5"
 
 
@@ -35,7 +37,7 @@ def _six_breakpoints() -> tuple[list[dict[str, object]], list[dict[str, object]]
     one marked, in the order Claude reads them"""
     messages: Final = [
         {"role": "system", "content": [_text("rules", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT_30M)]},
+        {"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT)]},
         {"role": "assistant", "content": "", "tool_calls": [_call("call_1", prompt_cache_breakpoint=EXPLICIT)]},
         {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny", prompt_cache_breakpoint=EXPLICIT)]},
         {"role": "user", "content": "done", "prompt_cache_breakpoint": EXPLICIT},
@@ -172,16 +174,42 @@ def _four_marked_parts_then(message: dict[str, object]) -> list[dict[str, object
     ]
 
 
-def test_a_mark_on_an_empty_assistant_string_takes_no_anthropic_slot_but_a_converse_slot() -> None:
-    messages: Final = _four_marked_parts_then({"role": "assistant", "content": "", "prompt_cache_breakpoint": EXPLICIT})
+@pytest.mark.parametrize("content", ["", " "], ids=["empty", "blank"])
+def test_a_mark_on_a_blank_assistant_string_takes_an_anthropic_slot_but_no_converse_slot(content: str) -> None:
+    messages: Final = _four_marked_parts_then(
+        {"role": "assistant", "content": content, "prompt_cache_breakpoint": EXPLICIT}
+    )
 
     anthropic: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
     converse: Final = claude_cache_marks(
         messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
     )
 
-    assert isinstance(anthropic, ClaudeCacheMarks), anthropic
-    assert converse == CacheBreakpointCapExceeded(found=5)
+    assert anthropic == CacheBreakpointCapExceeded(found=5)
+    assert isinstance(converse, ClaudeCacheMarks), converse
+
+
+@pytest.mark.parametrize("wire", ["anthropic", "bedrock_converse"])
+def test_trimming_thousands_of_marks_to_four_takes_linear_time(wire: ClaudeWire) -> None:
+    messages: Final = [
+        {"role": "user", "content": [_text(f"turn {index}", prompt_cache_breakpoint=EXPLICIT)]}
+        for index in range(10000)
+    ]
+
+    started: Final = time.perf_counter()
+    marks: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=True, wire=wire)
+    elapsed: Final = time.perf_counter() - started
+
+    assert isinstance(marks, ClaudeCacheMarks), marks
+    assert json.dumps(marks.messages).count("cache_control") == 4
+    assert marks.messages[-5:] == (
+        {"role": "user", "content": [_text("turn 9995")]},
+        *(
+            {"role": "user", "content": [_text(f"turn {index}", cache_control=EPHEMERAL)]}
+            for index in range(9996, 10000)
+        ),
+    )
+    assert elapsed < 5, f"trimming 10000 marks took {elapsed:.1f}s"
 
 
 def test_a_mark_on_a_tool_call_rebuilt_as_server_tool_use_takes_no_anthropic_slot() -> None:

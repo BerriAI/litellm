@@ -1130,7 +1130,7 @@ async def test_vertex_ai_anthropic_prompt_cache_breakpoint_becomes_cache_control
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Cache this request", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+                    {"type": "text", "text": "Cache this request", "prompt_cache_breakpoint": {"mode": "explicit"}}
                 ],
             }
         ],

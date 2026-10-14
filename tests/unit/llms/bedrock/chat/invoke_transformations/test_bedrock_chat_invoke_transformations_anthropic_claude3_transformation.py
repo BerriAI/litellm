@@ -1369,7 +1369,7 @@ class TestBedrockAnthropicPromptCachingRegression:
                     {
                         "type": "text",
                         "text": LARGE_DOCUMENT_FOR_CACHING,
-                        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
                     },
                     {"type": "text", "text": "What are the payment terms?"},
                 ],

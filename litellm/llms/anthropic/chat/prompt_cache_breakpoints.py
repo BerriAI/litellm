@@ -6,8 +6,12 @@ has no Claude equivalent and is rejected or dropped like any other unsupported p
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from typing import Final, Literal, TypeAlias, assert_never
+from itertools import chain, groupby
+from operator import itemgetter
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
@@ -19,11 +23,21 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     tools_with_prompt_cache_breakpoints_as_cache_control,
 )
 from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import AllMessageValues
 
 PROMPT_CACHE_BREAKPOINT_ON_TOOLS: Final = "_litellm_prompt_cache_breakpoint_on_tools"
 _Site: TypeAlias = tuple[Literal["tool", "message", "part", "tool_call", "tool_message"], int, int]
 ClaudeWire: TypeAlias = Literal["anthropic", "bedrock_converse"]
+_ANTHROPIC_PART_TYPES_BY_ROLE: Final = MappingProxyType(
+    {
+        "user": frozenset({"text", "image_url", "document", "file"}),
+        "tool": frozenset({"text", "image_url", "file"}),
+        "function": frozenset({"text", "image_url", "file"}),
+        "assistant": frozenset({"text", "thinking", "server_tool_use"}),
+    }
+)
+_CONVERSE_TOOL_BLOCK_KEYS: Final = frozenset({"systemTool", "toolSpec", "cachePoint"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +73,37 @@ def tools_carry_prompt_cache_breakpoint(tools: object) -> bool:
     return any(_tool_carries(tool, "prompt_cache_breakpoint") for tool in _as_blocks(tools) or ())
 
 
+def _text(block: Mapping[str, object]) -> str | None:
+    text: Final = block.get("text")
+    return text if isinstance(text, str) else None
+
+
 def _renders_message_mark(message: Mapping[str, object], wire: ClaudeWire) -> bool:
-    """Claude's message builder keeps a message-level mark on string content and on tool results only. Anthropic's
-    builder skips an empty assistant string, mark included, where Converse still emits its ``cachePoint``."""
+    """Claude's message builders keep a message-level mark on string content and on tool results only, and skip it
+    where the string itself is skipped: an empty system prompt on both wires, and on Converse an empty user string
+    or a blank assistant string."""
     content: Final = message.get("content")
-    if isinstance(content, str):
-        return bool(content) or message.get("role") != "assistant" or wire == "bedrock_converse"
-    return message.get("role") in ("tool", "function")
+    role: Final = message.get("role")
+    if not isinstance(content, str):
+        return role in ("tool", "function")
+    if wire == "bedrock_converse" and role == "assistant":
+        return bool(content.strip())
+    return bool(content) or (wire == "anthropic" and role != "system")
+
+
+def _renders_part_mark(role: object, part: Mapping[str, object], wire: ClaudeWire) -> bool:
+    """Whether the builder for ``wire`` keeps ``part``, and so its mark, in the body it sends."""
+    part_type: Final = part.get("type")
+    if role == "system" and wire == "bedrock_converse":
+        return part_type == "text" and bool(_text(part))
+    if role == "system":
+        return part_type != "text" or bool(_text(part))
+    if wire == "bedrock_converse":
+        return part_type != "text" or bool((_text(part) or "").strip())
+    if role == "assistant" and isinstance(part_type, str) and part_type.endswith("_tool_result"):
+        return True
+    kept_types: Final = _ANTHROPIC_PART_TYPES_BY_ROLE.get(role) if isinstance(role, str) else None
+    return kept_types is None or part_type in kept_types
 
 
 def _renders_tool_call_mark(message: Mapping[str, object], call: object, wire: ClaudeWire) -> bool:
@@ -75,15 +113,24 @@ def _renders_tool_call_mark(message: Mapping[str, object], call: object, wire: C
     )
 
 
+def _part_sites(index: int, message: Mapping[str, object], key: str, wire: ClaudeWire) -> Iterator[_Site]:
+    role: Final = message.get("role")
+    for position, part in enumerate(_as_blocks(message.get("content")) or ()):
+        if (
+            (fields := _as_mapping(part)) is not None
+            and _carries(fields, key)
+            and _renders_part_mark(role, fields, wire)
+        ):
+            yield ("part", index, position)
+
+
 def _message_sites(index: int, message: object, key: str, wire: ClaudeWire) -> Iterator[_Site]:
     fields: Final = _as_mapping(message)
     if fields is None:
         return
     if fields.get(key) is not None and _renders_message_mark(fields, wire):
         yield ("message", index, -1)
-    for position, part in enumerate(_as_blocks(fields.get("content")) or ()):
-        if _carries(part, key):
-            yield ("part", index, position)
+    yield from _part_sites(index, fields, key, wire)
     for position, call in enumerate(_as_blocks(fields.get("tool_calls")) or ()):
         if _carries(call, key) and _renders_tool_call_mark(fields, call, wire):
             yield ("tool_call", index, position)
@@ -99,20 +146,53 @@ def _converse_message_sites(index: int, message: object, key: str) -> Iterator[_
         yield ("tool_message", index, -1)
 
 
-def _sites(messages: Sequence[object], tools: Sequence[object], key: str, wire: ClaudeWire) -> tuple[_Site, ...]:
-    """Every mark of ``key`` the ``wire`` renders, in wire order: tool definitions first, then the messages as
-    listed. Converse reads only a tool definition's top-level mark."""
+def _messages_sites(messages: Sequence[object], key: str, wire: ClaudeWire) -> tuple[_Site, ...]:
     if wire == "bedrock_converse":
-        return (
-            *(("tool", index, -1) for index, tool in enumerate(tools) if _carries(tool, key)),
-            *chain.from_iterable(
-                _converse_message_sites(index, message, key) for index, message in enumerate(messages)
-            ),
+        return tuple(
+            chain.from_iterable(_converse_message_sites(index, message, key) for index, message in enumerate(messages))
         )
-    return (
-        *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
-        *chain.from_iterable(_message_sites(index, message, key, wire) for index, message in enumerate(messages)),
+    return tuple(
+        chain.from_iterable(_message_sites(index, message, key, wire) for index, message in enumerate(messages))
     )
+
+
+def _converse_sends_tool(tool: object) -> bool:
+    """Whether Converse keeps ``tool`` in ``toolConfig``. Tool search and built-in tools with no function schema
+    are skipped there."""
+    fields: Final = _as_mapping(tool)
+    if fields is None:
+        return False
+    if "systemTool" in fields:
+        return True
+    return fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES and any(
+        key in fields for key in ("function", "input_schema", *_CONVERSE_TOOL_BLOCK_KEYS)
+    )
+
+
+def _converse_sends_tool_mark(tool: object) -> bool:
+    """Converse adds a ``cachePoint`` only after a tool it builds a ``toolSpec`` for, and reads only the top-level
+    mark."""
+    fields: Final = _as_mapping(tool)
+    return (
+        fields is not None
+        and fields.get("cache_control") is not None
+        and _converse_sends_tool(fields)
+        and not any(key in fields for key in _CONVERSE_TOOL_BLOCK_KEYS)
+    )
+
+
+def converse_appends_tool_config_cache_point(tools: object, injection_points: object) -> bool:
+    """Whether Converse appends a ``cachePoint`` to ``toolConfig``: a ``tool_config`` injection point does once the
+    request keeps at least one tool."""
+    return any(_converse_sends_tool(tool) for tool in _as_blocks(tools) or ()) and any(
+        (_as_mapping(point) or {}).get("location") == "tool_config" for point in _as_blocks(injection_points) or ()
+    )
+
+
+def _tool_sites(tools: Sequence[object], wire: ClaudeWire) -> tuple[_Site, ...]:
+    if wire == "bedrock_converse":
+        return tuple(("tool", index, -1) for index, tool in enumerate(tools) if _converse_sends_tool_mark(tool))
+    return tuple(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, "cache_control"))
 
 
 def _without_cache_control(block: Mapping[str, object]) -> Mapping[str, object]:
@@ -130,23 +210,17 @@ def _tool_without_cache_control(tool: object) -> object:
     }
 
 
-def _dropped_positions(dropped: frozenset[_Site], kind: str, index: int) -> frozenset[int]:
-    return frozenset(
-        position for site_kind, site_index, position in dropped if (site_kind, site_index) == (kind, index)
-    )
-
-
-def _message_without(index: int, message: AllMessageValues, dropped: frozenset[_Site]) -> AllMessageValues:
-    if ("tool_message", index, -1) in dropped:
+def _message_without(message: AllMessageValues, dropped: Sequence[_Site]) -> AllMessageValues:
+    if any(kind == "tool_message" for kind, _, _ in dropped):
         content: Final = _as_blocks(message_fields(message).get("content")) or ()
         return message_without_cache_control_marks(
             message, message_mark=True, parts=frozenset(range(len(content))), tool_calls=frozenset()
         )
     return message_without_cache_control_marks(
         message,
-        message_mark=("message", index, -1) in dropped,
-        parts=_dropped_positions(dropped, "part", index),
-        tool_calls=_dropped_positions(dropped, "tool_call", index),
+        message_mark=any(kind == "message" for kind, _, _ in dropped),
+        parts=frozenset(position for kind, _, position in dropped if kind == "part"),
+        tool_calls=frozenset(position for kind, _, position in dropped if kind == "tool_call"),
     )
 
 
@@ -157,38 +231,53 @@ def claude_cache_marks(
     automatic_breakpoint: bool,
     drop_params: bool,
     tools_carried_breakpoint: bool = False,
+    tool_config_breakpoint: bool = False,
     wire: ClaudeWire = "anthropic",
 ) -> ClaudeCacheMarks | CacheBreakpointCapExceeded:
     """The request's ``prompt_cache_breakpoint`` marks renamed to ``cache_control`` and, when it carried any, held to
     Claude's cap: ``drop_params`` keeps the latest four in wire order, otherwise the excess is reported. A request
     that carried none is forwarded as written so the provider's own answer reaches the client.
 
-    ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's automatic caching), which takes one
-    slot of its own and is never dropped. ``tools_carried_breakpoint`` covers tools already mapped to Anthropic's
-    shape, where the mark was renamed before this census ran. ``wire`` is the body the marks are rendered into, so
-    the count matches the breakpoints the provider receives."""
+    ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's automatic caching) and
+    ``tool_config_breakpoint`` the ``cachePoint`` Converse appends to ``toolConfig``. Each takes one slot of its own
+    and is never dropped. ``tools_carried_breakpoint`` covers tools already mapped to Anthropic's shape, where the
+    mark was renamed before this census ran. ``wire`` is the body the marks are rendered into, so the count covers
+    only the breakpoints the provider receives."""
     listed_tools: Final = _as_blocks(tools) or ()
-    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", wire):
+    carried_breakpoint: Final = (
+        tools_carried_breakpoint
+        or tools_carry_prompt_cache_breakpoint(listed_tools)
+        or bool(_messages_sites(messages, "prompt_cache_breakpoint", wire))
+    )
+    if not carried_breakpoint:
         return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
-    renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages)
-    renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools)
-    sites: Final = _sites(renamed_messages, renamed_tools, "cache_control", wire)
-    found: Final = len(sites) + int(automatic_breakpoint)
+    renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages, drop_params)
+    renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools, drop_params)
+    tool_sites: Final = _tool_sites(renamed_tools, wire)
+    message_sites: Final = _messages_sites(renamed_messages, "cache_control", wire)
+    found: Final = len(tool_sites) + len(message_sites) + int(automatic_breakpoint) + int(tool_config_breakpoint)
     if found <= MAX_CACHE_CONTROL_BLOCKS:
         return ClaudeCacheMarks(renamed_messages, renamed_tools)
     if not drop_params:
         return CacheBreakpointCapExceeded(found)
-    dropped: Final = frozenset(sites[: found - MAX_CACHE_CONTROL_BLOCKS])
+    excess: Final = found - MAX_CACHE_CONTROL_BLOCKS
+    dropped_tools: Final = frozenset(index for _, index, _ in tool_sites[:excess])
+    dropped_by_message: Final = MappingProxyType(
+        {index: tuple(sites) for index, sites in groupby(message_sites[: excess - len(dropped_tools)], itemgetter(1))}
+    )
     verbose_logger.debug(
         "Dropping the earliest %d of %d cache breakpoints: Claude accepts at most %d.",
-        len(dropped),
+        excess,
         found,
         MAX_CACHE_CONTROL_BLOCKS,
     )
     return ClaudeCacheMarks(
-        messages=tuple(_message_without(index, message, dropped) for index, message in enumerate(renamed_messages)),
+        messages=tuple(
+            _message_without(message, dropped_by_message[index]) if index in dropped_by_message else message
+            for index, message in enumerate(renamed_messages)
+        ),
         tools=tuple(
-            _tool_without_cache_control(tool) if ("tool", index, -1) in dropped else tool
+            _tool_without_cache_control(tool) if index in dropped_tools else tool
             for index, tool in enumerate(renamed_tools)
         ),
     )

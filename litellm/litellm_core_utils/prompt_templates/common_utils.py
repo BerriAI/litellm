@@ -14,8 +14,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1787,6 +1790,8 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
 
 
 _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+_DROP_PARAMS_HINT: Final = "set drop_params=True (proxy: litellm_settings: drop_params: true)"
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
@@ -1807,18 +1812,52 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     )
 
 
-def prompt_cache_breakpoint_as_cache_control(block: _MarkedT) -> _MarkedT:
+def _claude_cache_control_for_prompt_cache_breakpoint(
+    marker: object, drop_params: bool
+) -> ChatCompletionCachedContent | None:
+    """The 5m ``cache_control`` Claude takes for an OpenAI ``prompt_cache_breakpoint``. A malformed marker answers
+    a 400, or gives no mark under ``drop_params``. A ``ttl`` Claude has no equivalent for answers a 400 naming the
+    fix, or gives a plain 5m mark under ``drop_params``."""
+    try:
+        valid_marker: Final = _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}}, optionally with ttl '30m', got "
+                    f"{marker!r}. Fix the marker, or {_DROP_PARAMS_HINT} to send the block without it."
+                ),
+                status_code=400,
+            ) from None
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint=%r under drop_params", marker)
+        return None
+    ttl: Final = valid_marker.get("ttl")
+    if ttl is not None and not drop_params:
+        raise UnsupportedParamsError(
+            message=(
+                f"Claude caches a prompt for 5m or 1h, so prompt_cache_breakpoint ttl={ttl!r} has no equivalent. "
+                f"Remove the ttl, {_DROP_PARAMS_HINT} to send a 5m breakpoint instead, or send "
+                "cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block for a 1h cache."
+            ),
+            status_code=400,
+        )
+    return ChatCompletionCachedContent(type="ephemeral")
+
+
+def prompt_cache_breakpoint_as_cache_control(block: _MarkedT, drop_params: bool) -> _MarkedT:
     """OpenAI's ``prompt_cache_breakpoint`` rewritten as Anthropic's ``cache_control`` on the same block.
 
-    A ``cache_control`` the client already wrote wins. OpenAI's 30m TTL has no Anthropic equivalent and is dropped."""
-    if block.get("prompt_cache_breakpoint") is None:
+    A ``cache_control`` the client already wrote wins, and the marker is then dropped unread."""
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if marker is None:
         return block
     unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
-    marked: Final = (
-        unmarked
+    control: Final = (
+        None
         if unmarked.get("cache_control") is not None
-        else {**unmarked, "cache_control": ChatCompletionCachedContent(type="ephemeral")}
+        else _claude_cache_control_for_prompt_cache_breakpoint(marker, drop_params)
     )
+    marked: Final = unmarked if control is None else {**unmarked, "cache_control": control}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input with the marker key renamed
 
 
@@ -1839,14 +1878,16 @@ def _without_key(block: Mapping[str, object], key: str) -> Mapping[str, object]:
     return {name: value for name, value in block.items() if name != key}
 
 
-def _block_with_prompt_cache_breakpoint_as_cache_control(block: object) -> object:
+def _block_with_prompt_cache_breakpoint_as_cache_control(block: object, drop_params: bool) -> object:
     fields: Final = _as_mapping(block)
-    return prompt_cache_breakpoint_as_cache_control(fields) if fields is not None else block
+    return prompt_cache_breakpoint_as_cache_control(fields, drop_params) if fields is not None else block
 
 
-def message_with_prompt_cache_breakpoints_as_cache_control(message: AllMessageValues) -> AllMessageValues:
+def message_with_prompt_cache_breakpoints_as_cache_control(
+    message: AllMessageValues, drop_params: bool
+) -> AllMessageValues:
     """The message-level mark, every content part's mark and every tool call's mark renamed to ``cache_control``."""
-    renamed: Final = prompt_cache_breakpoint_as_cache_control(message)
+    renamed: Final = prompt_cache_breakpoint_as_cache_control(message, drop_params)
     fields: Final = message_fields(renamed)
     content: Final = _as_list(fields.get("content"))
     tool_calls: Final = _as_list(fields.get("tool_calls"))
@@ -1857,12 +1898,20 @@ def message_with_prompt_cache_breakpoints_as_cache_control(message: AllMessageVa
         {
             **fields,
             **(
-                {"content": [_block_with_prompt_cache_breakpoint_as_cache_control(block) for block in content]}
+                {
+                    "content": [
+                        _block_with_prompt_cache_breakpoint_as_cache_control(block, drop_params) for block in content
+                    ]
+                }
                 if content is not None
                 else {}
             ),
             **(
-                {"tool_calls": [_block_with_prompt_cache_breakpoint_as_cache_control(call) for call in tool_calls]}
+                {
+                    "tool_calls": [
+                        _block_with_prompt_cache_breakpoint_as_cache_control(call, drop_params) for call in tool_calls
+                    ]
+                }
                 if tool_calls is not None
                 else {}
             ),
@@ -1871,17 +1920,24 @@ def message_with_prompt_cache_breakpoints_as_cache_control(message: AllMessageVa
 
 
 def messages_with_prompt_cache_breakpoints_as_cache_control(
-    messages: Sequence[AllMessageValues],
+    messages: Sequence[AllMessageValues], drop_params: bool
 ) -> tuple[AllMessageValues, ...]:
-    return tuple(message_with_prompt_cache_breakpoints_as_cache_control(message) for message in messages)
+    return tuple(message_with_prompt_cache_breakpoints_as_cache_control(message, drop_params) for message in messages)
 
 
-def tool_with_prompt_cache_breakpoint_as_cache_control(tool: Mapping[str, object]) -> Mapping[str, object]:
+def tool_with_prompt_cache_breakpoint_as_cache_control(
+    tool: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object]:
     """A tool definition's mark, written at the top level (Anthropic shape) or under ``function`` (OpenAI shape),
     renamed to a top-level ``cache_control``, which every Claude transform reads."""
     function: Final = _as_mapping(tool.get("function"))
-    function_marked: Final = function is not None and function.get("prompt_cache_breakpoint") is not None
-    if tool.get("prompt_cache_breakpoint") is None and not function_marked:
+    top_level_marker: Final = tool.get("prompt_cache_breakpoint")
+    marker: Final = (
+        top_level_marker
+        if top_level_marker is not None
+        else (function.get("prompt_cache_breakpoint") if function is not None else None)
+    )
+    if marker is None:
         return tool
     unmarked_function: Final = _without_key(function, "prompt_cache_breakpoint") if function is not None else None
     unmarked: Final = {
@@ -1891,7 +1947,8 @@ def tool_with_prompt_cache_breakpoint_as_cache_control(tool: Mapping[str, object
     already_marked: Final = unmarked.get("cache_control") is not None or (
         unmarked_function is not None and unmarked_function.get("cache_control") is not None
     )
-    return unmarked if already_marked else {**unmarked, "cache_control": ChatCompletionCachedContent(type="ephemeral")}
+    control: Final = None if already_marked else _claude_cache_control_for_prompt_cache_breakpoint(marker, drop_params)
+    return unmarked if control is None else {**unmarked, "cache_control": control}
 
 
 def _block_without_cache_control(block: object) -> object:
@@ -1924,14 +1981,16 @@ def message_without_cache_control_marks(
     )
 
 
-def _tool_block_with_prompt_cache_breakpoint_as_cache_control(tool: object) -> object:
+def _tool_block_with_prompt_cache_breakpoint_as_cache_control(tool: object, drop_params: bool) -> object:
     fields: Final = _as_mapping(tool)
-    return tool_with_prompt_cache_breakpoint_as_cache_control(fields) if fields is not None else tool
+    return tool_with_prompt_cache_breakpoint_as_cache_control(fields, drop_params) if fields is not None else tool
 
 
-def tools_with_prompt_cache_breakpoints_as_cache_control(tools: object) -> tuple[object, ...]:
+def tools_with_prompt_cache_breakpoints_as_cache_control(tools: object, drop_params: bool) -> tuple[object, ...]:
     """Every tool definition in ``tools`` (anything but a list or tuple is treated as none) with its mark renamed."""
-    return tuple(_tool_block_with_prompt_cache_breakpoint_as_cache_control(tool) for tool in _as_list(tools) or ())
+    return tuple(
+        _tool_block_with_prompt_cache_breakpoint_as_cache_control(tool, drop_params) for tool in _as_list(tools) or ()
+    )
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
