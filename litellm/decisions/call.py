@@ -400,14 +400,6 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
-    image_count: Final = len(input_images(ir_request.input))
-    if provider_config.max_images is not None and image_count > provider_config.max_images:
-        raise litellm.BadRequestError(
-            message=f"{provider} takes at most {provider_config.max_images} images per request, got {image_count}",
-            model=model,
-            llm_provider=provider,
-        )
-
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.update_from_kwargs(
@@ -487,6 +479,18 @@ def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
             f"{call.custom_llm_provider} takes only {', '.join(sorted(media_types))} images, "
             f"got {', '.join(unsupported)}"
         ),
+        model=call.requested_model,
+        llm_provider=call.custom_llm_provider,
+    )
+
+
+def _checked_image_count(call: DecisionsCall) -> DecisionsCall:
+    max_images: Final = call.provider_config.max_images
+    image_count: Final = len(input_images(call.ir_request.input))
+    if max_images is None or image_count <= max_images:
+        return call
+    raise litellm.BadRequestError(
+        message=f"{call.custom_llm_provider} takes at most {max_images} images per request, got {image_count}",
         model=call.requested_model,
         llm_provider=call.custom_llm_provider,
     )
@@ -581,7 +585,7 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _checked_image_types(call)
+    supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
     try:
@@ -605,7 +609,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _checked_image_types(call)
+    supported: Final = _checked_image_count(_checked_image_types(call))
     inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
     try:

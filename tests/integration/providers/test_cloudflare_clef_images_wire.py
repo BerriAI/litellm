@@ -482,6 +482,21 @@ def test_an_image_type_clef_refuses_is_refused_unless_the_deployment_drops_param
         assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), [_PNG_DATA_URL]), label
 
 
+@pytest.mark.parametrize("route", ("/v1/systemone", "/v1/decisions"))
+def test_an_image_clef_refuses_does_not_count_toward_its_limit_when_the_deployment_drops_params(
+    gateway: Gateway, route: Route
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    four: Final = [_PNG_DATA_URL, _JPEG_DATA_URL, _PNG_DATA_URL, _JPEG_DATA_URL]
+    with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
+        dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        accepted: Final = _decide(gateway, route, dropping, marker, [f"data:image/gif;base64,{_GIF_BASE64}", *four])
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json() == _expected_response(route, "clef", marker)
+        (request,) = wire.drain()
+        assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), four)
+
+
 _MIB: Final = 1024 * 1024
 
 

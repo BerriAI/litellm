@@ -2457,6 +2457,32 @@ async def test_an_image_type_cloudflare_refuses_is_dropped_under_drop_params(
     assert json.loads(route.calls[0].request.content)["images"] == [_PNG_DATA_URL]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_an_image_dropped_under_drop_params_does_not_count_toward_the_cloudflare_limit(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    gif_then_four_pngs: Final = (
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": _SCREEN_TEXT},
+                *({"type": "input_image", "image_url": url} for url in (_GIF_DATA_URL, *(_PNG_DATA_URL,) * 4)),
+            ],
+        },
+    )
+
+    litellm.decisions(
+        model="cloudflare/clef", input=gif_then_four_pngs, questions=_PREDICATE_QUESTIONS, drop_params=True
+    )
+    await litellm.adecisions(
+        model="cloudflare/clef", input=gif_then_four_pngs, questions=_PREDICATE_QUESTIONS, drop_params=True
+    )
+
+    assert [json.loads(call.request.content)["images"] for call in route.calls] == [[_PNG_DATA_URL] * 4] * 2
+
+
 @pytest.mark.usefixtures("cloudflare_account")
 def test_a_downloaded_page_that_is_not_an_image_is_refused_before_the_cloudflare_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
