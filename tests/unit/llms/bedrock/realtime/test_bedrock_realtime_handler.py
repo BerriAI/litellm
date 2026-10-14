@@ -709,7 +709,7 @@ class TestBedrockRealtimeProviderFailurePropagation:
             )
 
         assert replay.value.status_code == 400, "a committed session must not be silently restarted on a fallback"
-        assert not litellm._should_retry(replay.value.status_code), "the router must not retry the replay refusal"
+        assert not litellm.should_retry(replay.value.status_code), "the router must not retry the replay refusal"
         assert "Nova Sonic stream broke" in replay.value.message, "the router surfaces the last attempt's error"
 
     @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
@@ -88,6 +89,12 @@ def _listed_server_everywhere(client: ManagementClient, server_id: str) -> Mappi
 
 class TestMcpServerLifecycle:
     @pytest.mark.covers("mgmt.mcp_server.new.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_create_persists_every_field_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -107,6 +114,12 @@ class TestMcpServerLifecycle:
         )
     )
     @pytest.mark.covers("mgmt.mcp_server.list.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_created_server_is_listed_with_every_field(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -116,6 +129,12 @@ class TestMcpServerLifecycle:
             _assert_server_matches(row, body, where=f"GET /v1/mcp/server on {replica}")
 
     @pytest.mark.covers("mgmt.mcp_server.update.preserves_unrelated_fields")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_updating_only_the_alias_keeps_every_other_field_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -133,6 +152,12 @@ class TestMcpServerLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_server.update.clear_persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_clearing_the_description_with_null_reads_back_null(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -149,6 +174,12 @@ class TestMcpServerLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_server.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_delete_removes_the_server_from_every_replica(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -199,6 +230,12 @@ def _toolset_everywhere(
 
 class TestMcpToolsetLifecycle:
     @pytest.mark.covers("mgmt.mcp_toolset.new.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_create_persists_both_tools_under_the_exact_names_written(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -221,6 +258,12 @@ class TestMcpToolsetLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_toolset.update.preserves_unrelated_fields")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_updating_only_the_description_keeps_the_tools_and_name(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -238,6 +281,12 @@ class TestMcpToolsetLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_toolset.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_updating_the_tools_to_one_entry_reads_back_exactly_that_entry(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -256,6 +305,12 @@ class TestMcpToolsetLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_toolset.update.clear_persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_clearing_the_description_with_null_reads_back_null(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -273,6 +328,12 @@ class TestMcpToolsetLifecycle:
             )
 
     @pytest.mark.covers("mgmt.mcp_toolset.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_delete_removes_the_toolset_from_every_replica(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

@@ -115,7 +115,7 @@ class FocusLogger(CustomLogger):
 
         pod_lock_manager: PodLockManager | None = None
         if proxy_logging_obj is not None:
-            writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+            writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:
                 pod_lock_manager = getattr(writer, "pod_lock_manager", None)
 

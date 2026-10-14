@@ -815,6 +815,24 @@ describe("autorouter_presets", () => {
   });
 
   describe("getReferencedModelsError", () => {
+    it.each(["jev", "heuristic"] as const)(
+      "only checks a removed decision deployment when %s is active",
+      (classifierType) => {
+        const config = {
+          tiers: { SIMPLE: ["solver"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifierType,
+          classifierLlmConfig: undefined,
+          decisionDeploymentName: "removed-decision",
+          semanticMatchingEnabled: false,
+          embeddingModel: undefined,
+        };
+        const availability = groupsOnly(["solver"]);
+        expect(getReferencedModelsError(config, availability)).toBe(
+          classifierType === "jev" ? "Model(s) no longer available: removed-decision" : null,
+        );
+      },
+    );
+
     const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
     const available = groupsOnly(["gpt-5-nano"]);
     // Both fields are always populated with a model missing from `available`; only the

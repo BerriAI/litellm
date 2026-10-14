@@ -118,6 +118,40 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("exchangeLoginCode - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when exchange response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "sso-jwt" }),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBe("sso-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("sso-jwt");
+  });
+
+  it("does not call storeLoginToken when exchange response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBeUndefined();
+    expect(storeLoginToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
@@ -442,6 +476,20 @@ describe("teamInfoCall", () => {
     expect(parsed.searchParams.get("team_id")).toBe(teamID);
   });
 
+  it("passes key_limit when requested", async () => {
+    const mockFetch = vi.spyOn(global, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+    try {
+      await Networking.teamInfoCall("token", "team-1", { keyLimit: 1 });
+
+      const [url] = mockFetch.mock.calls[0];
+      const parsed = url instanceof Request ? new URL(url.url) : new URL(url.toString(), "http://example.com");
+      expect(parsed.searchParams.get("key_limit")).toBe("1");
+    } finally {
+      mockFetch.mockRestore();
+    }
+  });
+
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -455,6 +503,7 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+    expect(parsed.searchParams.has("key_limit")).toBe(false);
   });
 });
 
@@ -869,5 +918,22 @@ describe("schema-bound dashboard responses", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
     const result = await Networking.userListCall("explicit-token");
     expect(result.users[0]).toEqual(user);
+  });
+});
+
+describe("modelCostMap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the catalog-only map when catalogOnly is set and the full map otherwise", async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Networking.modelCostMap(true);
+    await Networking.modelCostMap();
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
   });
 });
