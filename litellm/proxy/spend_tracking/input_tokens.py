@@ -126,14 +126,18 @@ def _count_input_tokens_for_models(
     )
 
 
+def _as_object(value: object) -> object:
+    return value
+
+
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
-            messages: Final = request_body.get("messages")
+            messages: Final = _as_object(request_body.get("messages"))
             try:
                 counted: Final = litellm.token_counter(
                     model=model,
-                    messages=messages or (),
+                    messages=request_body.get("messages") or (),
                     tools=request_body.get("tools"),
                     tool_choice=request_body.get("tool_choice"),
                 )
