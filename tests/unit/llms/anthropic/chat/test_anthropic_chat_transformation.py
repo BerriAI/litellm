@@ -3501,49 +3501,68 @@ def test_code_execution_tool_results_in_hidden_params():
     assert hidden["provider_specific_fields"]["tool_results"][0]["content"]["stdout"] == "hello\n"
 
 
-def test_tool_search_tool_result_not_in_tool_results():
-    """
-    Test that tool_search_tool_result is NOT included in tool_results
-    since it's internal metadata, not actual tool execution results.
-    """
+def test_tool_search_tool_result_round_trips_right_after_its_search_call():
     import httpx
 
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
     from litellm.types.utils import ModelResponse
 
-    config = AnthropicConfig()
-
-    mock_anthropic_response = {
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-4-5-20250929",
+        "model": "claude-opus-5-5",
         "content": [
-            {"type": "text", "text": "Found tools."},
-            {"type": "tool_search_tool_result", "tool_references": ["tool1", "tool2"]},
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Search",
+                "name": "tool_search_tool_bm25",
+                "input": {"query": "weather"},
+            },
+            search_result,
+            {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
         ],
-        "stop_reason": "stop",
+        "stop_reason": "tool_use",
         "stop_sequence": None,
         "usage": {"input_tokens": 100, "output_tokens": 50},
     }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
 
-    mock_raw_response = MagicMock(spec=httpx.Response)
-    mock_raw_response.json.return_value = mock_anthropic_response
-    mock_raw_response.status_code = 200
-    mock_raw_response.headers = {}
-
-    model_response = ModelResponse()
-
-    transformed_response = config.transform_parsed_response(
-        completion_response=mock_anthropic_response,
-        raw_response=mock_raw_response,
-        model_response=model_response,
-        json_mode=False,
-        prefix_prompt=None,
+    message: Final = (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=anthropic_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+        )
+        .choices[0]
+        .message
     )
+    assert message.provider_specific_fields["tool_results"] == [search_result]
 
-    # Verify tool_search_tool_result is NOT in tool_results
-    provider_fields = transformed_response.choices[0].message.provider_specific_fields
-    assert provider_fields.get("tool_results") is None
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert replayed[1]["content"] == anthropic_response["content"]
 
 
 def test_web_search_tool_result_backwards_compatibility():

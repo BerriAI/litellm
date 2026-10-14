@@ -999,9 +999,7 @@ class ModelResponseIterator:
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
-                    elif content_type != "tool_search_tool_result":
-                        # Handle other tool results (code execution, etc.)
-                        # Skip tool_search_tool_result as it's internal metadata
+                    else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
                         # Convert to provider-neutral code_interpreter_results
