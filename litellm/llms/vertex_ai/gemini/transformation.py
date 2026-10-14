@@ -1138,6 +1138,10 @@ def transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    from ..context_caching.redis_cache_ids import attach_recovery
+
+    attach_recovery(cached_content, transform_request_body, model, custom_llm_provider, litellm_params)
+
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = transform_system_message(
@@ -1258,6 +1262,7 @@ def sync_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    cache_id_auth_scope: str | None = None,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1282,6 +1287,7 @@ def sync_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        cache_id_auth_scope=cache_id_auth_scope,
     )
 
     return transform_request_body(
@@ -1326,6 +1332,7 @@ async def async_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    cache_id_auth_scope: str | None = None,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1350,6 +1357,7 @@ async def async_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        cache_id_auth_scope=cache_id_auth_scope,
     )
 
     inlined_messages: Final = await async_inline_remote_media(

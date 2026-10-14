@@ -65,6 +65,7 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
+    RequestBody,
     ToolConfig,
     Tools,
     UsageMetadata,
@@ -93,6 +94,11 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
+)
+from ..context_caching.redis_cache_ids import (
+    async_post_with_recovery,
+    credential_scope,
+    post_with_recovery,
 )
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
@@ -2748,6 +2754,7 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    cache_body: RequestBody | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2757,7 +2764,16 @@ async def make_call(
         )
 
     try:
-        response: Final = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+        response: Final = await async_post_with_recovery(
+            lambda body: client.post(
+                api_base,
+                headers=headers,
+                data=json.dumps(body) if body is not None else data,
+                stream=True,
+                logging_obj=logging_obj,
+            ),
+            cache_body,
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
@@ -2800,13 +2816,28 @@ def make_sync_call(
     model: str,
     messages: list,
     logging_obj,
+    cache_body: RequestBody | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+    try:
+        response: Final = post_with_recovery(
+            lambda body: client.post(
+                api_base,
+                headers=headers,
+                data=json.dumps(body) if body is not None else data,
+                stream=True,
+                logging_obj=logging_obj,
+            ),
+            cache_body,
+        )
+    except httpx.HTTPStatusError as error:
+        raise VertexAIError(
+            status_code=error.response.status_code, message=str(error.response.read()), headers=error.response.headers
+        ) from error
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2899,6 +2930,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         ## LOGGING
@@ -2921,6 +2953,7 @@ class VertexLLM(VertexBase):
                 api_base=api_base,
                 headers=headers,
                 data=request_body_str,
+                cache_body=request_body,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -2992,6 +3025,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         _async_client_params: Final = {}
@@ -3013,11 +3047,9 @@ class VertexLLM(VertexBase):
         )
 
         try:
-            response: Final = await client.post(
-                api_base,
-                headers=headers,
-                json=cast(dict, request_body),
-                logging_obj=logging_obj,
+            response: Final = await async_post_with_recovery(
+                lambda body: client.post(api_base, headers=headers, json=body, logging_obj=logging_obj),
+                request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -3173,6 +3205,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+            cache_id_auth_scope=credential_scope(vertex_credentials),
         )
 
         ## LOGGING
@@ -3196,6 +3229,7 @@ class VertexLLM(VertexBase):
                     gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                     api_base=url,
                     data=request_data_str,
+                    cache_body=data,
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
@@ -3220,7 +3254,9 @@ class VertexLLM(VertexBase):
             client = client
 
         try:
-            response: Final = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)
+            response: Final = post_with_recovery(
+                lambda body: client.post(url=url, headers=headers, json=body, logging_obj=logging_obj), data
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
