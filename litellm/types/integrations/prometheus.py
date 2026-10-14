@@ -986,7 +986,9 @@ class PrometheusMetricLabels:
 
         # Add custom metadata labels
         custom_labels.extend(
-            [sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
+            label
+            for label in map(sanitize_prometheus_label_name, litellm.custom_prometheus_metadata_labels)
+            if label not in default_labels
         )
 
         # Add custom tags labels
