@@ -2810,9 +2810,7 @@ def test_streamed_json_mode_schema_object_streams_as_it_arrives():
     contents = _streamed_json_mode_contents(fragments)
 
     assert "".join(contents) == answer
-    assert contents[3] == answer[:12]
-    assert contents[4] == answer[12:]
-    assert contents[5] == ""
+    assert contents[3:] == (answer[:12], answer[12:-1], "", "}")
 
 
 def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
@@ -2836,9 +2834,7 @@ def test_streamed_json_mode_name_property_answer_streams_once_its_name_value_is_
     contents = _streamed_json_mode_contents((answer[:6], answer[6:24], answer[24:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer[:24]
-    assert contents[4] == answer[24:]
+    assert contents[2:] == ("", answer[:24], answer[24:-1], "", "}")
 
 
 def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
@@ -2847,8 +2843,7 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
     contents = _streamed_json_mode_contents((answer[:11], answer[11:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer
+    assert contents[2:] == ("", answer[:-1], "", "}")
 
 
 @pytest.mark.parametrize(
@@ -2865,7 +2860,11 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
             id="undeclared_first_key_holding_a_number",
         ),
         pytest.param(
-            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
             {"user_1": {"summary": "likes tea", "visits": 3}},
             id="undeclared_key_the_schema_allows",
         ),
@@ -2879,7 +2878,7 @@ def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arri
     contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), schema)
 
     assert "".join(contents) == encoded
-    assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+    assert contents[2:] == (encoded[:12], encoded[12:24], encoded[24:-1], "}", "")
 
 
 def test_streamed_json_mode_text_label_then_an_object_streams_once_the_object_opens():
@@ -2891,7 +2890,7 @@ def test_streamed_json_mode_text_label_then_an_object_streams_once_the_object_op
         {"type": "object", "properties": {"score": {"type": "integer"}}},
     )
 
-    assert contents[2:5] == ("", encoded[:object_opens], encoded[object_opens:])
+    assert contents[2:] == ("", encoded[:object_opens], encoded[object_opens:-1], "}", "")
 
 
 @pytest.mark.parametrize(
@@ -2901,7 +2900,11 @@ def test_streamed_json_mode_text_label_then_an_object_streams_once_the_object_op
             {"type": "object", "additionalProperties": True}, {"alpha": 1, "beta": 2}, id="schema_without_properties"
         ),
         pytest.param(
-            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
             {"user_1": {"summary": "likes tea"}},
             id="undeclared_key_the_schema_allows",
         ),
@@ -2929,7 +2932,7 @@ def test_streamed_json_mode_declared_values_key_streams_as_it_arrives():
     contents = _streamed_json_mode_contents((answer[:6], answer[6:14], answer[14:]), schema)
 
     assert "".join(contents) == answer
-    assert contents[3:5] == (answer[:14], answer[14:])
+    assert contents[3:] == (answer[:14], answer[14:-1], "", "}")
 
 
 def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_declared():
@@ -2938,9 +2941,7 @@ def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_dec
     contents = _streamed_json_mode_contents((answer[:12], answer[12:40], answer[40:]))
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer[:40]
-    assert contents[4] == answer[40:]
+    assert contents[2:] == ("", answer[:40], answer[40:-1], "}", "")
 
 
 @pytest.mark.parametrize(
@@ -3097,6 +3098,48 @@ def test_streamed_json_mode_whole_answer_after_a_field_block_keeps_the_order_the
     assert "".join(contents) == _STREAMED_TIER_FIELD + whole_answer
 
 
+@pytest.mark.parametrize(
+    "schema, answer",
+    [
+        pytest.param(_STREAMED_RISK_SCHEMA, _STREAMED_RISK_OBJECT, id="schema_with_a_required_list"),
+        pytest.param(
+            _STREAMED_CONTACT_SCHEMA, {"name": "unknown", "email": "unknown"}, id="every_field_holds_the_same_string"
+        ),
+    ],
+)
+def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arrives_as_one_object(
+    schema: dict[str, object], answer: dict[str, object]
+):
+    blocks = tuple(json.dumps({name: value}) for name, value in answer.items())
+
+    contents = _streamed_json_tool_blocks(blocks, schema)
+
+    assert json.loads("".join(contents)) == answer
+    assert contents[3] == blocks[0][:-1]
+
+
+def test_streamed_json_mode_partial_objects_that_repeat_a_field_keep_the_order_the_model_sent():
+    blocks = (json.dumps({"tier": 3}), json.dumps({"tier": 4}))
+
+    contents = _streamed_json_tool_blocks(blocks)
+
+    assert "".join(contents) == "".join(blocks)
+
+
+def test_streamed_json_mode_text_after_the_answer_follows_the_whole_answer():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    message_start, *_, message_delta = _json_tool_events(())
+    text_block = (
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": " Done."}},
+        {"type": "content_block_stop", "index": 1},
+    )
+
+    chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *text_block, message_delta))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer + " Done."
+
+
 def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unwrapped():
     envelope = json.dumps({"$FUNCTION_NAME": "summary", "PARAMETER_VALUE": _STREAMED_RISK_OBJECT})
 
@@ -3170,7 +3213,9 @@ def test_streamed_json_mode_answer_beside_a_client_tool_call_keeps_that_call_usa
         {"type": "content_block_stop", "index": 1},
     )
 
-    chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *weather_call, message_delta))
+    chunks = _json_mode_stream_chunks(
+        (message_start, *_json_tool_block_events(0, answer), *weather_call, message_delta)
+    )
 
     tool_calls = tuple(chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks))
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer

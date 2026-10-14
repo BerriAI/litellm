@@ -324,6 +324,15 @@ def _split_answer_fields(
     return dict(zip(field_names, (block[value_key] for block in blocks), strict=True))
 
 
+def _merged_partial_answers(
+    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    keys: Final = frozenset(itertools.chain.from_iterable(blocks))
+    if not keys <= schema.property_names or len(keys) != sum(len(block) for block in blocks):
+        return None
+    return dict(itertools.chain.from_iterable(block.items() for block in blocks))
+
+
 def split_response_format_answer(
     encoded_blocks: Sequence[str], schema: ResponseFormatSchema
 ) -> Mapping[str, JsonValue] | None:
@@ -331,7 +340,13 @@ def split_response_format_answer(
     blocks: Final = tuple(block for block in decoded if block is not None)
     if len(blocks) < 2 or len(blocks) != len(decoded):
         return None
-    return _split_answer_fields(blocks, schema)
+    named_fields: Final = _split_answer_fields(blocks, schema)
+    return named_fields if named_fields is not None else _merged_partial_answers(blocks, schema)
+
+
+def partial_response_format_answer(encoded_block: str, schema: ResponseFormatSchema) -> Mapping[str, JsonValue] | None:
+    block: Final = _json_object_or_encoded_object(encoded_block)
+    return block if block is not None and frozenset(block) <= schema.property_names else None
 
 
 def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:

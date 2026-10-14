@@ -7758,6 +7758,10 @@ _CONTACT_SCHEMA: Final = {
     "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
     "required": ["name", "email"],
 }
+_OPTIONAL_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}},
+}
 _FLAGS_SCHEMA: Final = {
     "type": "object",
     "properties": {"urgent": {"type": "boolean"}, "reviewed": {"type": "boolean"}},
@@ -7848,6 +7852,18 @@ def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_o
             {"name": "unknown", "email": "unknown"},
             id="every_field_holds_the_same_string",
         ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="one_partial_object_per_field",
+        ),
+        pytest.param(
+            _OPTIONAL_CONTACT_SCHEMA,
+            ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
+            {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
+            id="partial_objects_of_uneven_size_on_a_schema_with_no_required_list",
+        ),
     ],
 )
 def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
@@ -7907,6 +7923,16 @@ def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
             _PERSON_SCHEMA,
             ({"name": "name", "age": 1}, {"name": "age", "age": 2}),
             id="blocks_keyed_by_schema_properties",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"name": "Grace"}),
+            id="partial_objects_that_repeat_a_field",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"nickname": "A"}),
+            id="partial_object_with_a_key_the_schema_does_not_declare",
         ),
     ],
 )

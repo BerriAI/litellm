@@ -26,6 +26,7 @@ from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
     names_a_response_format_property,
+    partial_response_format_answer,
     response_format_envelope_contents,
     split_response_format_answer,
 )
@@ -701,6 +702,8 @@ class ModelResponseIterator:
         self._response_format_buffer: io.StringIO = io.StringIO()
         self._response_format_verdict: _EnvelopeVerdict = "undecided"
         self._split_answer_blocks: tuple[str, ...] = ()
+        self._withheld_answer_close: str = ""
+        self._streamed_answer_keys: frozenset[str] | None = None
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -963,7 +966,7 @@ class ModelResponseIterator:
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
@@ -1095,7 +1098,7 @@ class ModelResponseIterator:
                 pass
             elif type_chunk == "message_delta":
                 finish_reason, usage, container = self._handle_message_delta(chunk)
-                text = self._drain_split_answer_blocks()
+                text = self._release_answer_close() + self._drain_split_answer_blocks()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1225,28 +1228,61 @@ class ModelResponseIterator:
     ) -> str:
         if tool_use.get("id") is not None:
             self._response_format_buffer = io.StringIO()
-            self._response_format_verdict = "hold" if self._split_answer_blocks else "undecided"
+            held_back: Final = self._split_answer_blocks or self._streamed_answer_keys is not None
+            self._response_format_verdict = "hold" if held_back else "undecided"
             return ""
         fragment: Final = tool_use.get("function", {}).get("arguments") or ""
-        if self._response_format_verdict == "pass_through":
-            return fragment
         self._response_format_buffer.write(fragment)
+        if self._response_format_verdict == "pass_through":
+            return self._withhold_answer_close(fragment)
         if self._response_format_verdict == "hold":
             return ""
         buffered: Final = self._response_format_buffer.getvalue()
         self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
-        return buffered if self._response_format_verdict == "pass_through" else ""
+        return self._withhold_answer_close(buffered) if self._response_format_verdict == "pass_through" else ""
+
+    def _withhold_answer_close(self, text: str) -> str:
+        pending: Final = self._withheld_answer_close + text
+        body: Final = pending.rstrip()
+        cut: Final = len(body) - 1 if body.endswith("}") else len(pending)
+        self._withheld_answer_close = pending[cut:]
+        return pending[:cut]
+
+    def _release_answer_close(self) -> str:
+        close: Final = self._withheld_answer_close
+        self._withheld_answer_close = ""
+        self._streamed_answer_keys = None
+        return close
+
+    def _join_streamed_answer(self, held: str, schema: ResponseFormatSchema) -> str | None:
+        streamed: Final = self._streamed_answer_keys
+        fields: Final = partial_response_format_answer(held, schema)
+        if streamed is None or fields is None or not streamed.isdisjoint(fields):
+            return None
+        self._streamed_answer_keys = streamed | frozenset(fields)
+        return f", {json.dumps(fields)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
-        if self.response_format_schema is None or self._response_format_verdict == "pass_through":
+        schema: Final = self.response_format_schema
+        if schema is None:
             return ""
         held: Final = self._response_format_buffer.getvalue()
+        verdict: Final = self._response_format_verdict
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
-        if self._split_answer_blocks or names_a_response_format_property(held, self.response_format_schema):
+        if verdict == "pass_through":
+            answer: Final = partial_response_format_answer(held, schema)
+            close: Final = "" if answer is not None else self._release_answer_close()
+            self._streamed_answer_keys = None if answer is None else frozenset(answer)
+            return close
+        joined: Final = self._join_streamed_answer(held, schema)
+        if joined is not None:
+            return joined
+        released: Final = self._release_answer_close()
+        if self._split_answer_blocks or names_a_response_format_property(held, schema):
             self._split_answer_blocks = (*self._split_answer_blocks, held)
-            return ""
-        return _held_answer(held, self.response_format_schema) if held else ""
+            return released
+        return released + (_held_answer(held, schema) if held else "")
 
     def _drain_split_answer_blocks(self) -> str:
         blocks: Final = self._split_answer_blocks
