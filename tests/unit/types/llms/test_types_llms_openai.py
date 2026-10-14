@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,7 +7,13 @@ import pytest
 import json
 
 import litellm
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    OpenAIModerationResponse,
+    OpenAIVideoObject,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+)
 
 
 @pytest.mark.parametrize("stream", (False, True))
@@ -546,6 +552,17 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
         original = self._file_object(litellm_batch_guardrail=self._report())
         assert OpenAIFileObject(**original.model_dump()) == original
 
+    def test_details_fallback_marker_is_omitted_when_unset_and_round_trips_when_set(self):
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        without_marker = self._file_object()
+        assert "litellm_details_fallback" not in without_marker.model_dump()
+        assert "litellm_details_fallback" not in without_marker.model_dump_json()
+
+        with_marker = self._file_object(litellm_details_fallback=True)
+        assert with_marker.model_dump()["litellm_details_fallback"] is True
+        assert OpenAIFileObject.model_validate_json(with_marker.model_dump_json()) == with_marker
+
     def test_serialization_json_schema_still_describes_the_model(self):
         """A return annotation on the wrap serializer would collapse this to a bare object."""
         from litellm.types.llms.openai import OpenAIFileObject
@@ -559,6 +576,14 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
         page = FileListPage(object="list", data=[self._file_object()], has_more=False)
         assert "litellm_batch_guardrail" not in page.model_dump(mode="json")["data"][0]
 
+    def test_file_object_hidden_params_public_accessor_preserves_identity(self):
+        file_object: Final = self._file_object()
+        assert file_object.hidden_params is file_object._hidden_params
+
+        replacement: Final[dict[str, object]] = {"public_key": "visible"}
+        file_object.hidden_params = replacement
+        assert file_object._hidden_params is replacement
+
 
 def _binary_content(payload: bytes) -> HttpxBinaryResponseContent:
     import httpx
@@ -570,9 +595,14 @@ def test_httpx_binary_response_content_hidden_params_are_per_instance():
     first = _binary_content(b"first")
     second = _binary_content(b"second")
 
-    first._hidden_params["response_cost"] = 0.5
+    first.hidden_params["response_cost"] = 0.5
 
-    assert second._hidden_params == {}
+    assert second.hidden_params == {}
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    first.hidden_params = replacement
+    assert first._hidden_params is replacement
+    assert first.hidden_params is replacement
 
 
 def test_set_response_cost_none_leaves_hidden_params_empty():
@@ -589,3 +619,52 @@ def test_set_response_cost_none_leaves_hidden_params_empty():
     binary_response.set_response_cost(None)
 
     assert "response_cost" not in binary_response._hidden_params
+
+
+def test_responses_api_response_hidden_params_public_accessor_is_instance_scoped() -> None:
+    first: Final = ResponsesAPIResponse(id="resp_first", created_at=1, output=[])
+    second: Final = ResponsesAPIResponse(id="resp_second", created_at=2, output=[])
+
+    assert first.hidden_params is first._hidden_params
+
+    first.hidden_params["public_key"] = "visible"
+    assert first._hidden_params["public_key"] == "visible"
+    assert first.hidden_params is not second.hidden_params
+    assert "public_key" not in second.hidden_params
+
+    replacement: Final = {"replacement_key": "replacement_value"}
+    first.hidden_params = replacement
+    assert first._hidden_params is replacement
+    assert first.hidden_params is replacement
+
+
+def test_response_completed_event_hidden_params_public_accessor_preserves_identity() -> None:
+    response: Final = ResponsesAPIResponse(id="resp_event", created_at=1, output=[])
+    event: Final = ResponseCompletedEvent(type="response.completed", response=response)
+
+    assert event.hidden_params is event._hidden_params
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    event.hidden_params = replacement
+    assert event._hidden_params is replacement
+
+
+def test_moderation_response_hidden_params_public_accessor_preserves_identity() -> None:
+    response: Final = OpenAIModerationResponse(id="modr_test", model="moderation", results=[])
+
+    assert response.hidden_params is response._hidden_params
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    response.hidden_params = replacement
+    assert response._hidden_params is replacement
+
+
+def test_openai_video_object_hidden_params_public_accessor_preserves_identity() -> None:
+    video: Final = OpenAIVideoObject(id="video_test", object="video", status="completed", created_at=1)
+
+    assert video.hidden_params is video._hidden_params
+
+    replacement: Final = {**video.hidden_params, "public_key": "visible"}
+    video.hidden_params = replacement
+    assert video._hidden_params is replacement
+    assert video.hidden_params["public_key"] == "visible"

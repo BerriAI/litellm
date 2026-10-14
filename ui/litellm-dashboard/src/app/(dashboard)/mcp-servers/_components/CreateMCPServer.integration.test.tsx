@@ -1044,6 +1044,8 @@ describe("CreateMCPServer", () => {
 
       const limitInput = screen.getByPlaceholderText("e.g. 10");
       fireEvent.change(limitInput, { target: { value: "5" } });
+      const rpmInput = screen.getByPlaceholderText("e.g. 60");
+      fireEvent.change(rpmInput, { target: { value: "7" } });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-1",
@@ -1069,6 +1071,7 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.max_concurrent_requests).toBe(5);
+      expect(payload.rpm).toBe(7);
     });
 
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {

@@ -628,8 +628,8 @@ class ModelEndpoint:
 
     def _sdk_kwargs(
         self, body: Mapping[str, object]
-    ) -> dict[str, Any]:  # mutable-ok: SDK call kwargs, mutated by _invoke_sdk then splatted
-        kwargs: dict[str, Any] = {**body}  # mutable-ok: SDK call kwargs built from the JSON body, then overridden
+    ) -> dict[str, object]:  # mutable-ok: SDK call kwargs, mutated by _invoke_sdk then splatted
+        kwargs: dict[str, object] = {**body}  # mutable-ok: SDK call kwargs built from the JSON body, then overridden
         if self.model:
             kwargs["model"] = self.model
         if self.api_key:

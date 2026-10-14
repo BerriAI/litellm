@@ -252,7 +252,7 @@ def build_opencode_config(
     extra_skills: Final = (skills_path,) if skills_path else ()
     skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
     options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
-    models: Final[dict[str, Any]] = {model: {}}  # mutable-ok: opencode config JSON
+    models: Final[dict[str, Mapping[str, object]]] = {model: {}}  # mutable-ok: opencode config JSON
     provider: Final = {  # mutable-ok: opencode config JSON
         "npm": OPENCODE_PROVIDER_NPM,
         "name": "LiteLLM",

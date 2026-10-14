@@ -18,7 +18,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
-    _PROXY_MaxBudgetPerSessionHandler,
+    PROXY_MaxBudgetPerSessionHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
@@ -39,7 +39,7 @@ async def test_budget_per_session_under_budget_passes():
     Requests under budget should pass through without error.
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxBudgetPerSessionHandler(
+    handler = PROXY_MaxBudgetPerSessionHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -70,7 +70,7 @@ async def test_budget_per_session_exceeds_budget():
     pre-call check should raise 429.
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxBudgetPerSessionHandler(
+    handler = PROXY_MaxBudgetPerSessionHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -107,7 +107,7 @@ async def test_budget_per_session_independent_sessions():
     Exhausting session A does not affect session B.
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxBudgetPerSessionHandler(
+    handler = PROXY_MaxBudgetPerSessionHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -151,7 +151,7 @@ async def test_no_agent_id_passes():
     When no agent_id is set on the key, all requests pass through.
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxBudgetPerSessionHandler(
+    handler = PROXY_MaxBudgetPerSessionHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -190,7 +190,7 @@ class _OpenBreakerRedis:
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_warning(caplog):
     cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    handler = _PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(cache))
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(cache))
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):

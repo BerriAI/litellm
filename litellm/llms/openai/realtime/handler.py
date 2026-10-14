@@ -7,7 +7,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import ssl
 from typing import Any, Final, cast
 
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -45,7 +45,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: str,
         *,
         openai_beta_realtime: bool = False,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Headers for the upstream OpenAI Realtime WebSocket.
 
@@ -54,7 +54,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         so the legacy beta API is used. GA clients omit that header on the client
         connection and must send GA-shaped ``session.update`` payloads.
         """
-        headers: Final[dict] = {"Authorization": f"Bearer {api_key}"}
+        headers: Final[dict[str, str]] = {"Authorization": f"Bearer {api_key}"}
         if openai_beta_realtime:
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
@@ -107,6 +107,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
         if upstream_params:
             url = url.copy_with(params=upstream_params)
         return str(url)
+
+    def construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+    ) -> str:
+        return self._construct_url(api_base, query_params)
 
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.
@@ -190,7 +197,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
+                await websocket.close(code=1011, reason=redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error
