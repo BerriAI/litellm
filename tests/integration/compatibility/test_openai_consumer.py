@@ -297,6 +297,49 @@ async def test_azure_openai_clients_reach_openai_deployment_through_deployments_
         ]
 
 
+def test_azure_openai_text_completion_reaches_openai_text_deployment_through_deployments_alias(
+    gateway: Gateway,
+) -> None:
+    identity: Final = f"cmpl-azure-{uuid.uuid4().hex}"
+    prompt: Final = f"azure text completion {uuid.uuid4().hex}"
+
+    def provider(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/completions"), request
+        assert request.headers["authorization"] == "Bearer synthetic-text-consumer-key"
+        assert json.loads(request.body) == {"model": _TEXT_BACKEND, "prompt": prompt}
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "text_completion",
+                    "created": 1,
+                    "model": _TEXT_BACKEND,
+                    "choices": [{"index": 0, "text": "Azure text", "finish_reason": "stop", "logprobs": None}],
+                    "usage": _USAGE,
+                }
+            ).encode()
+        )
+
+    with wire_server(provider) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{_TEXT_BACKEND}", api_base=wire.url, api_key="synthetic-text-consumer-key"
+        )
+        key: Final = scenario.key(models=[model])
+        endpoint: Final = str(gateway.client.base_url).rstrip("/")
+        with AzureOpenAI(
+            api_key=key,
+            azure_endpoint=endpoint,
+            api_version=_AZURE_API_VERSION,
+            max_retries=0,
+            http_client=httpx.Client(timeout=10, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(model=model, prompt=prompt)
+        assert completion.id == identity, completion
+        assert completion.object == "text_completion", completion
+        assert [(choice.index, choice.text) for choice in completion.choices] == [(0, "Azure text")], completion
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/completions")]
+
+
 def _text_provider(identity: str, prompts: set[str]) -> Callable[[Request], Reply]:
     def provider(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", "/completions"), request

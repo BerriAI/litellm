@@ -254,15 +254,27 @@ def test_text_completion_sdk_parameter_set_reaches_upstream_whole(gateway: Gatew
 
 
 @pytest.mark.parametrize(
-    "prompt",
+    "prompt_shape",
     (
-        pytest.param(["first prompt", "second prompt"], id="string-list"),
-        pytest.param([1, 2, 3], id="token-ids"),
-        pytest.param([[1, 2], [3, 4]], id="token-id-batch"),
+        pytest.param("string-list", id="string-list"),
+        pytest.param("token-ids", id="token-ids"),
+        pytest.param("token-id-batch", id="token-id-batch"),
     ),
 )
-def test_text_completion_prompt_spellings_reach_upstream_unchanged(gateway: Gateway, prompt: JsonValue) -> None:
+def test_text_completion_prompt_spellings_reach_upstream_unchanged(gateway: Gateway, prompt_shape: str) -> None:
     identity: Final = f"cmpl-{uuid.uuid4().hex}"
+    prompt_identity: Final = uuid.uuid4()
+    token_ids: Final = tuple(
+        int.from_bytes(prompt_identity.bytes[offset : offset + 4], "big") % 50_000 + 50_000 * (offset // 4)
+        for offset in range(0, 16, 4)
+    )
+    prompt: Final[JsonValue] = (
+        [f"first {prompt_identity.hex}", f"second {prompt_identity.hex}"]
+        if prompt_shape == "string-list"
+        else list(token_ids[:3])
+        if prompt_shape == "token-ids"
+        else [list(token_ids[:2]), list(token_ids[2:])]
+    )
     texts: Final = ("first", "second") if isinstance(prompt, list) and isinstance(prompt[0], (str, list)) else ("one",)
 
     def respond(request: Request) -> Reply:
@@ -275,9 +287,7 @@ def test_text_completion_prompt_spellings_reach_upstream_unchanged(gateway: Gate
         model: Final = scenario.model(model=f"openai/{_TEXT_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         key: Final = scenario.key(models=[model])
         with _openai(gateway, key) as client:
-            completion: Final = client.completions.create(
-                model=model, prompt=prompt, extra_body={"cache": {"no-cache": True}}
-            )
+            completion: Final = client.completions.create(model=model, prompt=prompt)
         assert completion.id == identity, completion
         assert completion.object == "text_completion", completion
         assert [(choice.index, choice.text) for choice in completion.choices] == list(enumerate(texts)), completion
