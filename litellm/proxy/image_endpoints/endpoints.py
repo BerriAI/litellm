@@ -3,9 +3,9 @@ import io
 from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # cast narrows the untyped proxy_server module globals to base_process_llm_request's declared parameter types
+from typing import (
     Final,
-    cast,
+    cast,  # noqa: TID251  # cast narrows the untyped proxy_server module globals to base_process_llm_request's declared parameter types
     get_type_hints,
 )
 
@@ -284,7 +284,7 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
     image: list[UploadFile] | None = File(None),
     image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
