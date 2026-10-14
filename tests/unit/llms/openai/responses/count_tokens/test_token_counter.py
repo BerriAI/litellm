@@ -212,6 +212,50 @@ async def test_anthropic_request_format_sends_responses_input_and_instructions(
 
 
 @pytest.mark.asyncio
+async def test_anthropic_system_cache_breakpoint_is_not_repeated_as_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    system: Final = [
+        {
+            "type": "text",
+            "text": "Keep this in the developer input.",
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        }
+    ]
+
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 17}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            system=system,
+            request_format="anthropic",
+        )
+
+    assert result is not None
+    request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(route.calls[0].request.content)
+    assert "instructions" not in request_body
+    assert request_body["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Keep this in the developer input.",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("upstream_status", "upstream_text"),
     [(429, "rate limit exceeded"), (403, "forbidden"), (408, "Request timed out")],

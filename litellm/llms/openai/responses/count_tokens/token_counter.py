@@ -4,12 +4,13 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Any, Final
 
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import validate_anthropic_count_request
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -21,39 +22,16 @@ from litellm.llms.openai.responses.count_tokens.handler import (
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
-from litellm.types.llms.anthropic import (
-    AllAnthropicPassThroughMessageValues,
-    AllAnthropicToolsValues,
-    AnthropicMessagesRequest,
-    AnthropicSystemParam,
-)
+from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicSystemParam
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
-_ANTHROPIC_MESSAGES_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicPassThroughMessageValues, ...]](
-    tuple[AllAnthropicPassThroughMessageValues, ...]
-)
-_ANTHROPIC_TOOLS_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicToolsValues, ...]](tuple[AllAnthropicToolsValues, ...])
 _OPENAI_CHAT_REQUEST_ADAPTER: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 _OPENAI_ITEMS_ADAPTER: Final = TypeAdapter[tuple[Mapping[str, object], ...]](tuple[Mapping[str, object], ...])
 _OPENAI_CONVERTED_MESSAGES_ADAPTER: Final = TypeAdapter[tuple[tuple[Mapping[str, object], ...], str | None]](
     tuple[tuple[Mapping[str, object], ...], str | None]
 )
-
-
-def _materialize_anthropic_messages(
-    messages: tuple[AllAnthropicPassThroughMessageValues, ...],
-) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
-    return tuple(
-        message
-        if isinstance(message["content"], (str, list))
-        else cast(  # cast-ok: validation established content item types before iterator materialization
-            AllAnthropicPassThroughMessageValues,
-            {**message, "content": list(message["content"])},
-        )
-        for message in messages
-    )
 
 
 def _convert_anthropic_count_request(
@@ -62,12 +40,11 @@ def _convert_anthropic_count_request(
     tools: Sequence[Mapping[str, object]] | None,
     system: AnthropicSystemParam,
 ) -> tuple[tuple[Mapping[str, object], ...], str | None, tuple[Mapping[str, object], ...] | None] | None:
-    if messages is None:
+    validated_request: Final = validate_anthropic_count_request(messages, tools)
+    if validated_request is None:
         return None
     try:
-        typed_messages: Final = _ANTHROPIC_MESSAGES_ADAPTER.validate_python(messages)
-        validated_messages: Final = _materialize_anthropic_messages(typed_messages)
-        validated_tools: Final = _ANTHROPIC_TOOLS_ADAPTER.validate_python(tools) if tools is not None else None
+        validated_messages, validated_tools = validated_request
         anthropic_request: Final = AnthropicMessagesRequest(
             model=model,
             messages=[dict(message) for message in validated_messages],
@@ -167,12 +144,13 @@ class OpenAITokenCounter(BaseTokenCounter):
         )
         input_items: Final = [dict(item) for item in resolved_count_request[0]]
         instructions_from_request: Final = resolved_count_request[1]
-        instructions: Final = (
-            instructions_from_request
-            if instructions_from_request is not None
-            else (system if isinstance(system, str) else str(system))
-            if system is not None
+        fallback_instructions: Final = (
+            (system if isinstance(system, str) else str(system))
+            if system is not None and (request_format != "anthropic" or anthropic_count_request is None)
             else None
+        )
+        instructions: Final = (
+            instructions_from_request if instructions_from_request is not None else fallback_instructions
         )
         resolved_tools: Final = (
             [dict(tool) for tool in anthropic_count_request[2]]

@@ -6,9 +6,9 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -17,12 +17,52 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.types.llms.anthropic import AllAnthropicPassThroughMessageValues, AllAnthropicToolsValues
 from litellm.types.llms.openai import ChatCompletionImageObject
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
+_ANTHROPIC_MESSAGES_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicPassThroughMessageValues, ...]](
+    tuple[AllAnthropicPassThroughMessageValues, ...]
+)
+_ANTHROPIC_TOOLS_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicToolsValues, ...]](tuple[AllAnthropicToolsValues, ...])
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+
+
+def _materialize_anthropic_messages(
+    messages: tuple[AllAnthropicPassThroughMessageValues, ...],
+) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
+    return tuple(
+        message
+        if isinstance(message["content"], (str, list))
+        else cast(  # cast-ok: validation established content item types before iterator materialization
+            AllAnthropicPassThroughMessageValues,
+            {**message, "content": list(message["content"])},
+        )
+        for message in messages
+    )
+
+
+def validate_anthropic_count_request(
+    messages: Sequence[Mapping[str, object]] | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> (
+    tuple[
+        tuple[AllAnthropicPassThroughMessageValues, ...],
+        tuple[AllAnthropicToolsValues, ...] | None,
+    ]
+    | None
+):
+    if messages is None:
+        return None
+    try:
+        validated_messages: Final = _ANTHROPIC_MESSAGES_ADAPTER.validate_python(messages)
+        materialized_messages: Final = _materialize_anthropic_messages(validated_messages)
+        validated_tools: Final = _ANTHROPIC_TOOLS_ADAPTER.validate_python(tools) if tools is not None else None
+    except ValidationError:
+        return None
+    return materialized_messages, validated_tools
 
 
 def _count_image(block: JsonValue) -> JsonValue:
