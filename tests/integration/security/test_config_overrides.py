@@ -645,15 +645,17 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
     account: Final = "integration-account"
     username: Final = "integration-user"
     auth_path: Final = f"/authn/{account}/{username}/authenticate"
+    default_user_auth_path: Final = f"/authn/{account}/admin/authenticate"
     secret_names: Final = (
         "integration-cyberark-secret-one",
         "integration-cyberark-secret-two",
         "integration-cyberark-secret-three",
+        "integration-cyberark-secret-four",
     )
     encoded_secret_names: Final = frozenset(quote(name, safe="") for name in secret_names)
 
     def cyberark(request: Request) -> Reply:
-        if request.method == "POST" and request.target == auth_path:
+        if request.method == "POST" and request.target in (auth_path, default_user_auth_path):
             assert request.body == api_key.encode()
             return Reply(body=session_token.encode())
         expected_target: Final = "/secrets/integration-account/variable/"
@@ -770,6 +772,54 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
                 and request.target.rsplit("/", 1)[-1] in known_secret_names
             )
             assert observed_secret_names == known_secret_names
+
+            dashboard_edit: Final = restarted.request(
+                "POST",
+                "/config_overrides/cyberark",
+                {
+                    "cyberark_api_base": cyberark_wire.url,
+                    "cyberark_account": account,
+                    "cyberark_username": "",
+                    "client_cert": "",
+                    "ssl_verify": "true",
+                    "refresh_interval": "301",
+                },
+            )
+            assert dashboard_edit.status_code == 200, dashboard_edit.text
+            assert dashboard_edit.json() == {
+                "message": "CyberArk configuration updated successfully",
+                "status": "success",
+            }, dashboard_edit.text
+            stored_dashboard_edit: Final = _stored_override(database_url, "cyberark")
+            assert set(stored_dashboard_edit) == set(full_config) - {"cyberark_username"}, stored_dashboard_edit
+            serialized_dashboard_edit: Final = json.dumps(stored_dashboard_edit)
+            assert all(value not in serialized_dashboard_edit for value in (cyberark_wire.url, account, api_key)), (
+                serialized_dashboard_edit
+            )
+            dashboard_edit_readback: Final = restarted.request("GET", "/config_overrides/cyberark")
+            assert dashboard_edit_readback.status_code == 200, dashboard_edit_readback.text
+            dashboard_edit_values: Final = object_value(
+                object_value(_JSON_OBJECT.validate_json(dashboard_edit_readback.content))["values"]
+            )
+            assert dashboard_edit_values == {
+                "cyberark_api_base": cyberark_wire.url,
+                "cyberark_account": account,
+                "cyberark_api_key": _masked(api_key),
+                "ssl_verify": "true",
+                "refresh_interval": "301",
+            }, dashboard_edit_readback.text
+            model_four: Final = "integration-cyberark-" + uuid.uuid4().hex
+            _new_model(restarted, model_four, provider_wire.url, secret_names[3])
+            _chat(restarted, model_four, "cyberark-runtime-four-" + uuid.uuid4().hex)
+            blanked_requests: Final = cyberark_wire.drain()
+            assert any(
+                request.method == "POST" and request.target == default_user_auth_path for request in blanked_requests
+            ), blanked_requests
+            assert not any(request.target == auth_path for request in blanked_requests), blanked_requests
+            assert any(
+                request.method == "GET" and request.target.endswith(quote(secret_names[3], safe=""))
+                for request in blanked_requests
+            ), blanked_requests
 
             deleted: Final = restarted.request("DELETE", "/config_overrides/cyberark")
             assert deleted.status_code == 200, deleted.text
