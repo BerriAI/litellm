@@ -124,8 +124,10 @@ def _normalize_function_tool(tool: object) -> Mapping[str, object] | None:
             anthropic_tool: Final = _ANTHROPIC_FUNCTION_TOOL.validate_python(tool_mapping)
         except ValidationError:
             return None
+        from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+
         return _openai_function_tool(
-            name=anthropic_tool.name,
+            name=truncate_tool_name(anthropic_tool.name),
             description=anthropic_tool.description,
             parameters=anthropic_tool.input_schema,
         )

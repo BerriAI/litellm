@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, Scenario, gateway_from_environment
+from integration._support.client import Scenario, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -89,6 +89,7 @@ def test_google_count_tokens_maps_anthropic_tools_to_openai(counting_proxy: Owne
                 "name": "lookup",
                 "description": "Find a record",
                 "parameters": _TOOL_SCHEMA,
+                "strict": False,
             }
         ]
 
@@ -120,6 +121,7 @@ def test_messages_count_tokens_maps_anthropic_tools_to_openai(counting_proxy: Ow
                 "name": "lookup",
                 "description": "Find a record",
                 "parameters": _TOOL_SCHEMA,
+                "strict": False,
             }
         ]
 
