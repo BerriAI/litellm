@@ -159,10 +159,11 @@ def _spend(prompt: JsonValue, completion: JsonValue) -> float:
     return prompt * _INPUT_COST + completion * _OUTPUT_COST
 
 
-def test_always_include_stream_usage_true_injects_usage_and_relays_the_stream_the_caller_asked_for(
-    tmp_path: Path,
+@pytest.mark.parametrize("setting", [True, None], ids=["true", "null"])
+def test_always_include_stream_usage_true_or_null_injects_usage_and_relays_the_stream_the_caller_asked_for(
+    tmp_path: Path, setting: bool | None
 ) -> None:
-    with _vllm_proxy(tmp_path, _streaming, {"always_include_stream_usage": True}) as rig:
+    with _vllm_proxy(tmp_path, _streaming, {"always_include_stream_usage": setting}) as rig:
         body: Final = _chat_body(rig.model, stream=True)
         response: Final = rig.proxy.gateway.request("POST", "/vllm/chat/completions", body)
         assert response.status_code == 200, response.text

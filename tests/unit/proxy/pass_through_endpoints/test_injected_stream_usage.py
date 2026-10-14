@@ -161,8 +161,9 @@ class TestWithoutInjectedUsageFrames:
         assert relayed.endswith(DONE)
 
     @pytest.mark.asyncio
-    async def test_frames_split_across_upstream_reads_relay_the_same_bytes(self):
-        whole = CONTENT + FINISH + USAGE + DONE
+    @pytest.mark.parametrize("frame_end", [b"\n\n", b"\r\n\r\n", b"\r\r"])
+    async def test_frames_split_across_upstream_reads_relay_the_same_bytes(self, frame_end):
+        whole = (CONTENT + FINISH + USAGE + DONE).replace(b"\n\n", frame_end)
 
         assert await _relayed([whole[index : index + 1] for index in range(len(whole))]) == await _relayed([whole])
 

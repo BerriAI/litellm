@@ -2,6 +2,7 @@ import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from itertools import islice
 from types import MappingProxyType
 from typing import Final
 
@@ -15,6 +16,8 @@ from litellm.types.utils import CallTypes
 _USAGE_FRAME_ENDPOINTS: Final = ("chat/completions", "completions")
 _CALLER_ONLY_STREAM_OPTIONS: Final = frozenset({"continuous_usage_stats"})
 _SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
+_SSE_FRAME_END_LOOKBACK: Final = 3
+_USAGE_OR_FINISH: Final = re.compile(rb'"usage"\s*:\s*\{|"finish_reason"\s*:\s*"')
 _SSE_DATA_FIELD: Final = b"data:"
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _INJECTION_OFF: Final[Mapping[str, object]] = MappingProxyType({"always_include_stream_usage": False})
@@ -42,25 +45,34 @@ class StreamUsageRelay:
 
 
 @dataclass(frozen=True, slots=True)
-class _HeldFrame:
-    frame: bytes
-    earlier: "_HeldFrame | None"
+class _Stacked:
+    item: bytes
+    below: "_Stacked | None"
 
 
 @dataclass(frozen=True, slots=True)
 class _RelayState:
-    newest_held: _HeldFrame | None = None
+    newest_held: _Stacked | None = None
     passes_usage_through: bool = False
 
 
-def _newest_first(held: _HeldFrame | None) -> Iterator[bytes]:
-    while held is not None:
-        yield held.frame
-        held = held.earlier  # rebind-ok: walks the held frames back from the newest
+def _newest_first(top: _Stacked | None) -> Iterator[bytes]:
+    while top is not None:
+        yield top.item
+        top = top.below  # rebind-ok: walks the stack back from the newest item
+
+
+def _oldest_first(top: _Stacked | None) -> tuple[bytes, ...]:
+    return tuple(reversed(tuple(_newest_first(top))))
 
 
 def _held_frames(state: _RelayState) -> tuple[bytes, ...]:
-    return tuple(reversed(tuple(_newest_first(state.newest_held))))
+    return _oldest_first(state.newest_held)
+
+
+def _ends_a_frame(unterminated: _Stacked | None, piece: bytes) -> bool:
+    lookback: Final = b"".join(reversed(tuple(islice(_newest_first(unterminated), _SSE_FRAME_END_LOOKBACK))))
+    return _SSE_FRAME_END.search(lookback[-_SSE_FRAME_END_LOOKBACK:] + piece) is not None
 
 
 def _relays_usage_frames(endpoint: str) -> bool:
@@ -122,6 +134,8 @@ def _frame_payload(frame: bytes) -> bytes:
 
 
 def _relayed_chunk(frame: bytes) -> _RelayedChunk | None:
+    if _USAGE_OR_FINISH.search(frame) is None:
+        return None
     try:
         return _RelayedChunk.model_validate_json(_frame_payload(frame))
     except ValidationError:
@@ -162,7 +176,7 @@ def _relayed_frame(frame: bytes, state: _RelayState) -> tuple[bytes, _RelayState
             _RelayState(),
         )
     if _awaits_fingerprint(chunk):
-        return b"", replace(state, newest_held=_HeldFrame(frame, state.newest_held))
+        return b"", replace(state, newest_held=_Stacked(frame, state.newest_held))
     return (
         b"".join((*_held_frames(state), frame)),
         _RelayState(passes_usage_through=chunk is not None and chunk.usage is not None),
@@ -175,16 +189,22 @@ def _sse_frames(complete: bytes) -> tuple[bytes, ...]:
 
 
 async def without_injected_usage_frames(stream: AsyncGenerator[bytes, None]) -> AsyncIterator[bytes]:
-    pending = b""  # rebind-ok: carries an unterminated SSE frame across upstream reads
+    unterminated: _Stacked | None = None  # rebind-ok: stacks reads until one ends a frame, joined once
     state = _RelayState()  # rebind-ok: finish frames wait for the fingerprint vLLM moves onto the usage frame
     try:
         async for piece in stream:
-            complete, pending = split_complete_sse_frames(pending + piece)
+            if not piece:
+                continue
+            if not _ends_a_frame(unterminated, piece):
+                unterminated = _Stacked(piece, unterminated)
+                continue
+            complete, rest = split_complete_sse_frames(b"".join((*_oldest_first(unterminated), piece)))
+            unterminated = _Stacked(rest, None) if rest else None
             for frame in _sse_frames(complete):
                 outgoing, state = _relayed_frame(frame, state)
                 if outgoing:
                     yield outgoing
-        if state.newest_held is not None or pending:
-            yield b"".join((*_held_frames(state), pending))
+        if state.newest_held is not None or unterminated is not None:
+            yield b"".join((*_held_frames(state), *_oldest_first(unterminated)))
     finally:
         await stream.aclose()

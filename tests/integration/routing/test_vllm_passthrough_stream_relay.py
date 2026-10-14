@@ -3,8 +3,10 @@ import itertools
 import json
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
@@ -326,6 +328,41 @@ def test_null_stream_options_get_usage_injected_and_the_usage_frame_removed(gate
         _assert_reported_usage(_one_row(model, call.identity))
 
 
+@pytest.mark.parametrize(
+    "sent",
+    [pytest.param({}, id="empty"), pytest.param({"include_usage": False}, id="include_usage_false")],
+)
+def test_stream_options_without_include_usage_true_get_usage_injected_and_the_usage_frame_removed(
+    gateway: Gateway, sent: Mapping[str, JsonValue]
+) -> None:
+    call: Final = _call()
+    with _deployment(gateway, _scripted(call, lambda body: _plain_stream(call, body))) as (wire, model):
+        response: Final = _stream(
+            gateway, "/vllm/chat/completions", _chat_body(model, call, stream=True, stream_options=dict(sent))
+        )
+        (posted,) = _posted(wire)
+        assert posted["stream_options"] == {"include_usage": True}, posted
+        assert _frames(response.content) == (
+            _chunk(call.identity, [_delta(0, "Hello")]),
+            _stamped(_chunk(call.identity, [_finish(0)])),
+            "[DONE]",
+        ), response.text
+        _assert_reported_usage(_one_row(model, call.identity))
+
+
+def test_null_include_usage_reaches_the_upstream_as_sent_and_is_counted_locally(gateway: Gateway) -> None:
+    call: Final = _call()
+    sent: Final[dict[str, JsonValue]] = {"include_usage": None}
+    with _deployment(gateway, _scripted(call, lambda body: _plain_stream(call, body))) as (wire, model):
+        response: Final = _stream(
+            gateway, "/vllm/chat/completions", _chat_body(model, call, stream=True, stream_options=sent)
+        )
+        (posted,) = _posted(wire)
+        assert posted["stream_options"] == sent, posted
+        assert response.content == b"".join(_plain_stream(call, posted).chunks or ()), response.text
+        _assert_counted_usage(_one_row(model, call.identity))
+
+
 def test_duplicated_stream_options_key_takes_the_last_value(gateway: Gateway) -> None:
     call: Final = _call()
     raw: Final = (
@@ -589,6 +626,88 @@ def test_team_key_stream_writes_the_row_under_the_team(gateway: Gateway) -> None
         row: Final = _one_row(model, call.identity)
         assert row["team_id"] == team, row
         _assert_reported_usage(row)
+
+
+_LARGE_FRAME_BYTES: Final = 8 * 1024 * 1024
+_PIECE_BYTES: Final = 8 * 1024
+_HEALTH_CEILING_SECONDS: Final = 1.0
+_RELAY_RATIO_CEILING: Final = 4
+_RELAY_SLACK_SECONDS: Final = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class _Relay:
+    response: httpx.Response
+    seconds: float
+    health: tuple[float, ...]
+
+
+def _timed_health(client: httpx.Client) -> float:
+    started: Final = time.perf_counter()
+    response: Final = client.get("/health/liveliness", headers={"Connection": "close"})
+    assert response.status_code == 200, response.text
+    return time.perf_counter() - started
+
+
+def _health_latencies(gateway: Gateway, done: threading.Event) -> tuple[float, ...]:
+    with httpx.Client(base_url=gateway.client.base_url, timeout=60, trust_env=False) as fresh:
+        return tuple(_timed_health(fresh) for _ in iter(done.is_set, True))
+
+
+def _finish_and_done(call: _Call) -> bytes:
+    return _frame(_chunk(call.identity, [_finish(0)])) + _frame("[DONE]")
+
+
+def _content_then_usage(call: _Call, content: Sequence[bytes]) -> Callable[[Mapping[str, JsonValue]], Reply]:
+    usage: Final = _frame(_chunk(call.identity, [], usage=_USAGE))
+    finish: Final = _frame(_chunk(call.identity, [_finish(0)]))
+
+    def reply(body: Mapping[str, JsonValue]) -> Reply:
+        return _sse((*content, finish, *((usage,) if _asks_usage(body) else ()), _frame("[DONE]")))
+
+    return reply
+
+
+def _timed_relay(gateway: Gateway, call: _Call, content: Sequence[bytes]) -> _Relay:
+    with _deployment(gateway, _scripted(call, _content_then_usage(call, content))) as (_, model):
+        eventually(lambda: _all_workers_serve(gateway, model), bool, seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS)
+        done: Final = threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            polled: Final = pool.submit(_health_latencies, gateway, done)
+            started: Final = time.perf_counter()
+            try:
+                response: Final = _stream(gateway, "/vllm/chat/completions", _chat_body(model, call, stream=True))
+            finally:
+                done.set()
+            seconds: Final = time.perf_counter() - started
+            return _Relay(response, seconds, polled.result())
+
+
+def test_frame_terminated_only_at_its_end_relays_as_fast_as_the_same_bytes_in_small_frames(
+    gateway: Gateway, record_property: Callable[[str, object], None]
+) -> None:
+    small_call, large_call = _call(), _call()
+    small: Final = tuple(
+        _frame(_chunk(small_call.identity, [_delta(0, "x" * _PIECE_BYTES)]))
+        for _ in range(_LARGE_FRAME_BYTES // _PIECE_BYTES)
+    )
+    large: Final = _frame(_chunk(large_call.identity, [_delta(0, "x" * _LARGE_FRAME_BYTES)]))
+    pieces: Final = tuple(large[start : start + _PIECE_BYTES] for start in range(0, len(large), _PIECE_BYTES))
+    small_relay: Final = _timed_relay(gateway, small_call, small)
+    large_relay: Final = _timed_relay(gateway, large_call, pieces)
+    record_property("small_frames_seconds", round(small_relay.seconds, 3))
+    record_property("large_frame_seconds", round(large_relay.seconds, 3))
+    record_property("health_calls", len(large_relay.health))
+    record_property("health_max_seconds", round(max(large_relay.health), 3))
+    assert small_relay.response.content == b"".join(small) + _finish_and_done(small_call), len(
+        small_relay.response.content
+    )
+    assert large_relay.response.content == large + _finish_and_done(large_call), len(large_relay.response.content)
+    assert max(large_relay.health) < _HEALTH_CEILING_SECONDS, sorted(large_relay.health)[-5:]
+    assert large_relay.seconds < _RELAY_RATIO_CEILING * small_relay.seconds + _RELAY_SLACK_SECONDS, (
+        large_relay.seconds,
+        small_relay.seconds,
+    )
 
 
 @dataclass(frozen=True, slots=True)
