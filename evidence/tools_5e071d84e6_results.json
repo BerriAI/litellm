@@ -1,0 +1,233 @@
+{
+ "TP1_converse_blocked_tool": {
+  "base": {
+   "status": 200,
+   "call_id": "ae67ca4d-2307-48aa-bb42-db133587f683",
+   "body": "{\"metrics\":{\"latencyMs\":598},\"output\":{\"message\":{\"content\":[{\"toolUse\":{\"input\":{},\"name\":\"refund_order\",\"toolUseId\":\"tooluse_csv5Iv9wqjjCxzzvs4LK0w\",\"type\":\"tool_use\"}}],\"role\":\"assistant\"}},\"stopReason\":\"max_tokens\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":609,\"outputTokens\":40,\"serverToolUsage\":{},\"tota",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "refund_order",
+     "ship_info"
+    ]
+   ]
+  },
+  "head": {
+   "status": 400,
+   "call_id": "2df90a6e-9efb-4518-b6de-2535013856f3",
+   "body": "{\"error\":{\"message\":\"Violated tool policy\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\",\"provider_specific_fields\":{\"error\":\"Violated tool policy\",\"blocked_tools\":[\"refund_order\"],\"message\":\"Tool(s) ['refund_order'] are blocked by policy.\",\"guardrail_name\":\"tool-policy\",\"guardrail_mode\":\"pre_call\"}}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  },
+  "merge": {
+   "status": 400,
+   "call_id": "4e0d1ead-be95-4d39-9e5f-90d9da11ce87",
+   "body": "{\"error\":{\"message\":\"Violated tool policy\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\",\"provider_specific_fields\":{\"error\":\"Violated tool policy\",\"blocked_tools\":[\"refund_order\"],\"message\":\"Tool(s) ['refund_order'] are blocked by policy.\",\"guardrail_name\":\"tool-policy\",\"guardrail_mode\":\"pre_call\"}}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  }
+ },
+ "TP2_converse_allowed_tools": {
+  "base": {
+   "status": 200,
+   "call_id": "909bfb99-d421-4b39-b647-d1d633b520ba",
+   "body": "{\"metrics\":{\"latencyMs\":600},\"output\":{\"message\":{\"content\":[{\"toolUse\":{\"input\":{},\"name\":\"ship_info\",\"toolUseId\":\"tooluse_AOMTP75ViPpJbnYsFI0jnC\",\"type\":\"tool_use\"}}],\"role\":\"assistant\"}},\"stopReason\":\"max_tokens\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":558,\"outputTokens\":40,\"serverToolUsage\":{},\"totalTo",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "ship_info"
+    ]
+   ]
+  },
+  "head": {
+   "status": 200,
+   "call_id": "ce726270-6070-466e-9ac7-a96375752192",
+   "body": "{\"metrics\":{\"latencyMs\":639},\"output\":{\"message\":{\"content\":[{\"toolUse\":{\"input\":{},\"name\":\"ship_info\",\"toolUseId\":\"tooluse_zOD8TcCkKQI23AVwhBCSmC\",\"type\":\"tool_use\"}}],\"role\":\"assistant\"}},\"stopReason\":\"max_tokens\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":558,\"outputTokens\":40,\"serverToolUsage\":{},\"totalTo",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "ship_info"
+    ]
+   ]
+  },
+  "merge": {
+   "status": 200,
+   "call_id": "9b35cb72-71fa-4b16-8533-bbcb511e5655",
+   "body": "{\"metrics\":{\"latencyMs\":646},\"output\":{\"message\":{\"content\":[{\"toolUse\":{\"input\":{},\"name\":\"ship_info\",\"toolUseId\":\"tooluse_m0QaIpAn4SW1O6cXtSRelq\",\"type\":\"tool_use\"}}],\"role\":\"assistant\"}},\"stopReason\":\"max_tokens\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":558,\"outputTokens\":40,\"serverToolUsage\":{},\"totalTo",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "ship_info"
+    ]
+   ]
+  }
+ },
+ "TP3_chat_blocked_tool": {
+  "base": {
+   "status": 400,
+   "call_id": "9a5cfda7-13f5-4dc7-8c4e-8774cec300c4",
+   "body": "{\"error\":{\"message\":\"Violated tool policy\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\",\"provider_specific_fields\":{\"error\":\"Violated tool policy\",\"blocked_tools\":[\"refund_order\"],\"message\":\"Tool(s) ['refund_order'] are blocked by policy.\",\"guardrail_name\":\"tool-policy\",\"guardrail_mode\":\"pre_call\"}}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  },
+  "head": {
+   "status": 400,
+   "call_id": "03bed6bc-91ee-4837-bb65-c62f73b6b07c",
+   "body": "{\"error\":{\"message\":\"Violated tool policy\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\",\"provider_specific_fields\":{\"error\":\"Violated tool policy\",\"blocked_tools\":[\"refund_order\"],\"message\":\"Tool(s) ['refund_order'] are blocked by policy.\",\"guardrail_name\":\"tool-policy\",\"guardrail_mode\":\"pre_call\"}}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  },
+  "merge": {
+   "status": 400,
+   "call_id": "0346cbe8-33eb-42fb-906d-94e26ae7802c",
+   "body": "{\"error\":{\"message\":\"Violated tool policy\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\",\"provider_specific_fields\":{\"error\":\"Violated tool policy\",\"blocked_tools\":[\"refund_order\"],\"message\":\"Tool(s) ['refund_order'] are blocked by policy.\",\"guardrail_name\":\"tool-policy\",\"guardrail_mode\":\"pre_call\"}}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  }
+ },
+ "M1_converse_mcp_filtered": {
+  "base": {
+   "status": 200,
+   "call_id": "77b9804e-b174-4a95-ac02-db8d902c9ed7",
+   "body": "{\"metrics\":{\"latencyMs\":573},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":655,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":661}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "slack-post_message",
+     "get_weather"
+    ]
+   ]
+  },
+  "head": {
+   "status": 200,
+   "call_id": "47e714aa-b877-4414-93a8-3e5fe72e98e9",
+   "body": "{\"metrics\":{\"latencyMs\":531},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":605,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":611}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "get_weather"
+    ]
+   ]
+  },
+  "merge": {
+   "status": 200,
+   "call_id": "413e457f-62e5-4210-914b-ba482a8b15c0",
+   "body": "{\"metrics\":{\"latencyMs\":542},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":605,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":611}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "get_weather"
+    ]
+   ]
+  }
+ },
+ "M2_converse_mcp_all_removed": {
+  "base": {
+   "status": 200,
+   "call_id": "1adc8e96-6483-402b-806f-79ad4d866159",
+   "body": "{\"metrics\":{\"latencyMs\":503},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":559,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":565}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "slack-post_message"
+    ]
+   ]
+  },
+  "head": {
+   "status": 500,
+   "call_id": "a221536f-3397-4b1d-8f26-825871f87c3e",
+   "body": "{\"error\":{\"message\":\"Guardrail 'mcp-end-user' rewrote the request in a way this endpoint cannot apply, so the request was rejected rather than sent unrewritten\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"500\"}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  },
+  "merge": {
+   "status": 500,
+   "call_id": "a99f77cc-85aa-4d30-b738-e72cc41e3c63",
+   "body": "{\"error\":{\"message\":\"Guardrail 'mcp-end-user' rewrote the request in a way this endpoint cannot apply, so the request was rejected rather than sent unrewritten\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"500\"}}",
+   "bedrock_calls": 0,
+   "bedrock_tools": []
+  }
+ },
+ "M3_chat_mcp_filtered": {
+  "base": {
+   "status": 200,
+   "call_id": "e13b35c0-f1b4-46af-8ccb-7f55cd8d6730",
+   "body": "{\"id\":\"chatcmpl-6c1a48d7-2602-4b01-bf18-3ddbf703ab0c\",\"created\":1791938613,\"model\":\"claude-haiku\",\"object\":\"chat.completion\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hi there!\",\"role\":\"assistant\"}}],\"usage\":{\"completion_tokens\":6,\"prompt_tokens\":613,\"total_tokens\":619,\"completion_tokens_details\":{\"reasoning_tokens\":0,\"text_tokens\":6},\"prompt_tokens_details\":{\"cached_token",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "get_weather"
+    ]
+   ]
+  },
+  "head": {
+   "status": 200,
+   "call_id": "3f17a7dd-aa45-411c-82d5-0ef28ce1803d",
+   "body": "{\"id\":\"chatcmpl-bd586b27-3614-4327-aa32-1a4d396b974e\",\"created\":1791938615,\"model\":\"claude-haiku\",\"object\":\"chat.completion\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hi there!\",\"role\":\"assistant\"}}],\"usage\":{\"completion_tokens\":6,\"prompt_tokens\":613,\"total_tokens\":619,\"completion_tokens_details\":{\"reasoning_tokens\":0,\"text_tokens\":6},\"prompt_tokens_details\":{\"cached_token",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "get_weather"
+    ]
+   ]
+  },
+  "merge": {
+   "status": 200,
+   "call_id": "2d0b414c-f513-4984-84cf-32e33309a9ed",
+   "body": "{\"id\":\"chatcmpl-79b1fce8-8a67-4981-aff0-0f1e0d1e2cb1\",\"created\":1791938617,\"model\":\"claude-haiku\",\"object\":\"chat.completion\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hi there!\",\"role\":\"assistant\"}}],\"usage\":{\"completion_tokens\":6,\"prompt_tokens\":613,\"total_tokens\":619,\"completion_tokens_details\":{\"reasoning_tokens\":0,\"text_tokens\":6},\"prompt_tokens_details\":{\"cached_token",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "get_weather"
+    ]
+   ]
+  }
+ },
+ "M4_converse_mcp_no_end_user": {
+  "base": {
+   "status": 200,
+   "call_id": "78a95605-47e1-48f9-b466-0d42938fdf38",
+   "body": "{\"metrics\":{\"latencyMs\":573},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":655,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":661}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "slack-post_message",
+     "get_weather"
+    ]
+   ]
+  },
+  "head": {
+   "status": 200,
+   "call_id": "9606d0d6-7a96-4d1f-9800-0e42171be719",
+   "body": "{\"metrics\":{\"latencyMs\":551},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":655,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":661}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "slack-post_message",
+     "get_weather"
+    ]
+   ]
+  },
+  "merge": {
+   "status": 200,
+   "call_id": "70ee11de-bed7-4e7a-9de5-f2ce3c8d3eb1",
+   "body": "{\"metrics\":{\"latencyMs\":573},\"output\":{\"message\":{\"content\":[{\"text\":\"Hi there!\"}],\"role\":\"assistant\"}},\"stopReason\":\"end_turn\",\"usage\":{\"cacheReadInputTokenCount\":0,\"cacheReadInputTokens\":0,\"cacheWriteInputTokenCount\":0,\"cacheWriteInputTokens\":0,\"inputTokens\":655,\"outputTokens\":6,\"serverToolUsage\":{},\"totalTokens\":661}}",
+   "bedrock_calls": 1,
+   "bedrock_tools": [
+    [
+     "github-create_issue",
+     "slack-post_message",
+     "get_weather"
+    ]
+   ]
+  }
+ }
+}

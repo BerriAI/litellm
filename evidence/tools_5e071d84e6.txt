@@ -1,0 +1,25 @@
+tool_policy and mcp_end_user_permission on Converse and chat completions: real guardrail classes, real Postgres, real Bedrock, STORE_MODEL_IN_DB=True so the tool policy registry loads
+--- base 000b3685ed, head 5e071d84e6, merge 5b23203fc9 = origin/main c581c85559 + 5e071d84e6
+--- refund_order has input_policy blocked; end user eu-github-only may use only the github MCP server
+
+TP1_converse_blocked_tool      base  st=200 bedrock=1 tools=[['refund_order', 'ship_info']] 
+TP1_converse_blocked_tool      head  st=400 bedrock=0 tools=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP1_converse_blocked_tool      merge st=400 bedrock=0 tools=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP2_converse_allowed_tools     base  st=200 bedrock=1 tools=[['ship_info']] 
+TP2_converse_allowed_tools     head  st=200 bedrock=1 tools=[['ship_info']] 
+TP2_converse_allowed_tools     merge st=200 bedrock=1 tools=[['ship_info']] 
+TP3_chat_blocked_tool          base  st=400 bedrock=0 tools=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP3_chat_blocked_tool          head  st=400 bedrock=0 tools=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP3_chat_blocked_tool          merge st=400 bedrock=0 tools=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+M1_converse_mcp_filtered       base  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] 
+M1_converse_mcp_filtered       head  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] 
+M1_converse_mcp_filtered       merge st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] 
+M2_converse_mcp_all_removed    base  st=200 bedrock=1 tools=[['slack-post_message']] 
+M2_converse_mcp_all_removed    head  st=500 bedrock=0 tools=[] {"error":{"message":"Guardrail 'mcp-end-user' rewrote the request in a way this endpoint cannot apply, so the 
+M2_converse_mcp_all_removed    merge st=500 bedrock=0 tools=[] {"error":{"message":"Guardrail 'mcp-end-user' rewrote the request in a way this endpoint cannot apply, so the 
+M3_chat_mcp_filtered           base  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] 
+M3_chat_mcp_filtered           head  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] 
+M3_chat_mcp_filtered           merge st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] 
+M4_converse_mcp_no_end_user    base  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] 
+M4_converse_mcp_no_end_user    head  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] 
+M4_converse_mcp_no_end_user    merge st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] 
