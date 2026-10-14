@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.router import _maps_to_exact_model_info
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -3432,4 +3433,31 @@ def test_router_capacity_keeps_route_limits_when_base_model_is_unmapped(
             input="synthetic input",
             input_token_count=2048,
         )
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_llm_provider", "expected"),
+    (
+        ("bedrock/anthropic.router-capacity-test-base", "bedrock", True),
+        ("anthropic.router-capacity-test-base", "bedrock", True),
+        ("bedrock/anthropic.router-capacity-test-*", "bedrock", False),
+        ("bedrock/anthropic.claude-routercapacitytest-9-9", "bedrock", False),
+        ("bedrock/anthropic.router-capacity-test-unmapped", "bedrock", False),
+    ),
+)
+def test_maps_to_exact_model_info_accepts_only_exact_cost_map_entries(
+    monkeypatch: pytest.MonkeyPatch, base_model: str, custom_llm_provider: str, expected: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "bedrock/anthropic.router-capacity-test-base": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/anthropic.router-capacity-test-*": _capacity_test_metadata("bedrock", 8192),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    assert _maps_to_exact_model_info(base_model, custom_llm_provider) is expected
     _invalidate_model_cost_lowercase_map()
