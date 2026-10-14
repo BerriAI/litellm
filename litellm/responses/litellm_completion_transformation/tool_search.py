@@ -1,12 +1,13 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from typing import Final, Literal, TypeAlias
 
+from openai.types.responses import ToolSearchToolParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, OpenAIToolSearchToolParam
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS
 from litellm.types.responses.main import OutputToolSearchCall
 from litellm.types.utils import LlmProviders, Message
 
@@ -37,7 +38,6 @@ ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
 
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_TOOL_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class _ToolSearchFields(LiteLLMBaseModel):
@@ -63,13 +63,11 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
     return AnthropicToolSearchToolRegex(type=ANTHROPIC_TOOL_SEARCH_TOOL_TYPE, name=ANTHROPIC_TOOL_SEARCH_TOOL_NAME)
 
 
-def _tool_type(tool: object) -> str | None:
+def _tool_type(tool: object) -> str:
     try:
-        tool_mapping: Final = _TOOL_MAPPING_ADAPTER.validate_python(tool)
+        return _ToolSearchFields.model_validate(tool).type
     except ValidationError:
-        return None
-    tool_type: Final = tool_mapping.get("type")
-    return tool_type if isinstance(tool_type, str) else None
+        return ""
 
 
 def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
@@ -91,7 +89,7 @@ def tools_with_anthropic_tool_search_mapped(
     first_search_index: Final = next(
         index for index, tool in enumerate(tools) if is_anthropic_tool_search_chat_tool(tool)
     )
-    server_tool_search: Final[OpenAIToolSearchToolParam] = {"type": "tool_search", "execution": "server"}
+    server_tool_search: Final[ToolSearchToolParam] = {"type": "tool_search", "execution": "server"}
     return tuple(
         server_tool_search if index == first_search_index else tool
         for index, tool in enumerate(tools)

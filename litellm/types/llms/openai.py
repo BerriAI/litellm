@@ -1282,12 +1282,7 @@ class ShellToolParam(TypedDict, total=False):
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
-class OpenAIToolSearchToolParam(TypedDict, total=False):
-    type: Required[ReadOnly[Literal["tool_search"]]]
-    execution: ReadOnly[str]
-
-
-ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam | OpenAIToolSearchToolParam
+ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam
 
 
 class PromptObject(TypedDict, total=False):
