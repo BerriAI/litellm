@@ -105,7 +105,9 @@ def _sites(messages: Sequence[object], tools: Sequence[object], key: str, wire: 
     if wire == "bedrock_converse":
         return (
             *(("tool", index, -1) for index, tool in enumerate(tools) if _carries(tool, key)),
-            *chain.from_iterable(_converse_message_sites(index, message, key) for index, message in enumerate(messages)),
+            *chain.from_iterable(
+                _converse_message_sites(index, message, key) for index, message in enumerate(messages)
+            ),
         )
     return (
         *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
