@@ -135,6 +135,16 @@ def test_upstream_400_reaches_the_caller_without_trying_fallbacks(client: str) -
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
+def test_flag_applied_through_update_settings_stops_fallbacks_on_upstream_400(client: str) -> None:
+    with wire_server(_peer({"primary": _UPSTREAM_400, "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(wire)
+        router.update_settings(fallback_on_bad_request=False)
+        with pytest.raises(litellm.BadRequestError, match="Unsupported value: temperature"):
+            _complete(client, router)
+        assert _deployments_hit(wire) == ("primary",)
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
 def test_upstream_400_still_falls_back_by_default(client: str) -> None:
     with wire_server(_peer({"primary": _UPSTREAM_400, "backup": _BACKUP_ANSWERS})) as wire:
         router: Final = _router(wire)

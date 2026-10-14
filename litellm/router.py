@@ -12716,6 +12716,7 @@ class Router:
             "enable_weighted_failover",
             "enable_tag_filtering",
             "tag_routing_prefix",
+            "fallback_on_bad_request",
         ]
 
         for var in vars_to_include:
