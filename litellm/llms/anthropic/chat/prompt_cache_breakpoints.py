@@ -230,14 +230,24 @@ def _translated(messages: Sequence[object], tools: Sequence[object]) -> frozense
     )
 
 
-def _wire_position(path: _Path, messages: Sequence[object]) -> tuple[int, ...]:
-    """Where Claude reads a mark: tool definitions, then system messages wherever they sit, then the other messages,
-    with a message-level mark on the message's last block."""
+def _leading_system_count(messages: Sequence[object]) -> int:
+    return next(
+        (
+            index
+            for index, message in enumerate(messages)
+            if (_fields(message) or {}).get("role") not in ("system", "developer")
+        ),
+        len(messages),
+    )
+
+
+def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
+    """Where Claude reads a mark: tool definitions, then the leading system messages it hoists, then every other
+    message in place, with a message-level mark on the message's last block."""
     if path[0] == "tools":
         return (0, *(index for index in path if isinstance(index, int)))
     index: Final = int(path[1])
-    role: Final = (_fields(messages[index]) or {}).get("role")
-    group: Final = 1 if role in ("system", "developer") else 2
+    group: Final = 1 if index < leading_system_count else 2
     block: Final = (
         (_MESSAGE_BLOCK_KEYS.index(str(path[2])), int(path[3])) if len(path) == 4 else (len(_MESSAGE_BLOCK_KEYS),)
     )
@@ -245,12 +255,12 @@ def _wire_position(path: _Path, messages: Sequence[object]) -> tuple[int, ...]:
 
 
 def _on_wire(path: _Path, messages: Sequence[object], tools: Sequence[object]) -> bool:
-    """Claude sends a message-level mark on list content only for a tool result, and a mark under ``function`` only
-    when the tool carries none of its own."""
+    """Claude sends a message-level mark on string content, or on list content only for a tool result, and a mark
+    under ``function`` only when the tool carries none of its own."""
     if path[0] == "tools":
         return len(path) == 2 or (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
     message: Final = _fields(messages[int(path[1])]) or {}
-    return len(path) == 4 or not isinstance(message.get("content"), list) or message.get("role") == "tool"
+    return len(path) == 4 or isinstance(message.get("content"), str) or message.get("role") == "tool"
 
 
 def _ttl(cache_control: object) -> Literal["5m", "1h"]:
@@ -316,13 +326,14 @@ def claude_prompt_cache(
         verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
     renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
     translated: Final = _translated(messages, listed_tools)
+    leading_system_count: Final = _leading_system_count(messages)
     block_marks: Final = sorted(
         (
             _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None and _on_wire(path, renamed_messages, renamed_tools)
         ),
-        key=lambda mark: _wire_position(mark.path, messages),
+        key=lambda mark: _wire_position(mark.path, leading_system_count),
     )
     request_mark: Final = params.get("cache_control")
     marks: Final = (

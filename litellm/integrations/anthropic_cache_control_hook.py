@@ -223,8 +223,9 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
-    if not _carries_cache_breakpoint(tool_call):
+def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, openai_dialect: bool = False) -> bool:
+    keys: Final = ("cache_control",) if openai_dialect else CACHE_BREAKPOINT_KEYS
+    if all(_attribute_or_key(tool_call, key) is None for key in keys):
         return False
 
     return not tool_call_is_rebuilt_as_server_tool_use(
@@ -359,7 +360,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages)
+        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
+            processed_messages, openai_dialect=openai_dialect
+        )
         processed_messages = self._apply_message_injections(
             points=applied_message_points,
             messages=processed_messages,
@@ -368,7 +371,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         if (
             openai_dialect
-            and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) > breakpoints_before
+            and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages, openai_dialect=True)
+            > breakpoints_before
             and non_default_params.get("prompt_cache_options") is None
         ):
             non_default_params["prompt_cache_options"] = PromptCacheOptions(mode="implicit")
@@ -381,7 +385,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         carried_points: Final[Sequence[CacheControlInjectionPoint]] = (
             *AnthropicCacheControlHook._points_with_a_slot_left(
                 remaining_points,
-                AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) + external_breakpoints,
+                AnthropicCacheControlHook.count_request_cache_breakpoints(
+                    processed_messages, openai_dialect=openai_dialect
+                )
+                + external_breakpoints,
                 openai_dialect,
             ),
             *carried_message_points,
@@ -416,11 +423,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return _served_provider_for_model(model)
 
     @staticmethod
-    def count_request_cache_breakpoints(messages: Iterable[object], system: object = None) -> int:
+    def count_request_cache_breakpoints(
+        messages: Iterable[object], system: object = None, openai_dialect: bool = False
+    ) -> int:
         system_blocks: Final = (
             sum(1 for block in system if _carries_cache_breakpoint(block)) if isinstance(system, list) else 0
         )
-        return system_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in messages)
+        return system_blocks + sum(
+            AnthropicCacheControlHook._count_cache_control_blocks(msg, openai_dialect) for msg in messages
+        )
 
     @staticmethod
     def count_external_cache_breakpoints(
@@ -504,7 +515,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         ``max_blocks`` is reached. Injection points are honored in config order,
         so earlier points win when slots are scarce.
         """
-        used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+        used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, openai_dialect=openai_dialect)
 
         limit_reached = False
         for point in points:
@@ -521,14 +532,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                     limit_reached = True
                     break
 
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index]):
+                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], openai_dialect):
                     # Client already marked this message; don't overwrite it.
                     continue
 
                 messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
                     messages[target_index], control, openai_dialect
                 )
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index]):
+                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], openai_dialect):
                     used_blocks += 1
 
             if limit_reached:
@@ -582,22 +593,24 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return []
 
     @staticmethod
-    def _count_cache_control_blocks(message: object) -> int:
+    def _count_cache_control_blocks(message: object, openai_dialect: bool = False) -> int:
         message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
         content: Final = _as_object_list(_attribute_or_key(message, "content"))
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
-            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message))
+            sum(
+                1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message, openai_dialect)
+            )
             if tool_calls
             else 0
         )
         return message_count + content_count + tool_call_count
 
     @staticmethod
-    def _message_has_cache_control(message: AllMessageValues) -> bool:
+    def _message_has_cache_control(message: AllMessageValues, openai_dialect: bool = False) -> bool:
         """Return True if the message already carries any cache_control."""
-        return AnthropicCacheControlHook._count_cache_control_blocks(message) > 0
+        return AnthropicCacheControlHook._count_cache_control_blocks(message, openai_dialect) > 0
 
     @staticmethod
     def _safe_insert_cache_control_in_message(

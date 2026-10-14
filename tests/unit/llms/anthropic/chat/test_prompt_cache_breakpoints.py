@@ -163,16 +163,43 @@ def test_a_breakpoint_read_before_a_one_hour_mark_is_sent_as_one_hour(
     later: dict[str, object], params: dict[str, object]
 ):
     messages: Final = [
-        {"role": "user", "content": [_part("doc", prompt_cache_breakpoint=_EXPLICIT), _part("ask", **later)]},
         {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part("doc", prompt_cache_breakpoint=_EXPLICIT), _part("ask", **later)]},
     ]
 
     result: Final = _resolved(messages, params=params)
 
     ask: Final = _part("ask", cache_control=_ONE_HOUR) if later else _part("ask")
     assert list(result.messages) == [
-        {"role": "user", "content": [_part("doc", cache_control=_ONE_HOUR), ask]},
         {"role": "system", "content": [_part("s", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": [_part("doc", cache_control=_ONE_HOUR), ask]},
+    ]
+
+
+def test_a_breakpoint_read_before_a_later_system_messages_one_hour_mark_is_sent_as_one_hour():
+    messages: Final = [
+        {"role": "system", "content": [_part("s")]},
+        {"role": "user", "content": [_part("doc", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "system", "content": [_part("reminder", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": [_part("ask")]},
+    ]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages)[1] == {"role": "user", "content": [_part("doc", cache_control=_ONE_HOUR)]}
+
+
+def test_drop_params_drops_a_breakpoint_read_before_a_later_system_message_first():
+    messages: Final = [
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(4)]},
+        {"role": "system", "content": [_part("reminder", prompt_cache_breakpoint=_EXPLICIT)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert list(result.messages) == [
+        {"role": "user", "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in (1, 2, 3))]},
+        {"role": "system", "content": [_part("reminder", cache_control=_EPHEMERAL)]},
     ]
 
 
@@ -289,6 +316,23 @@ def test_a_tool_marked_at_both_levels_takes_one_slot_under_drop_params():
     assert list(result.messages) == [
         {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]}
     ]
+
+
+def test_a_message_level_breakpoint_on_a_tool_call_turn_without_content_takes_no_slot_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
+            "prompt_cache_breakpoint": _EXPLICIT,
+        },
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert list(result.messages)[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
 
 
 def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():

@@ -3310,6 +3310,33 @@ class TestOpenAIPromptCacheBreakpoint:
         assert result[3]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert result[4] == {"role": "user", "content": "e"}
 
+    def test_a_tool_call_breakpoint_takes_no_slot_openai_counts(self):
+        messages = [
+            *(
+                {"role": "user", "content": [{"type": "text", "text": text, "prompt_cache_breakpoint": self.EXPLICIT}]}
+                for text in ("a", "b", "c")
+            ),
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                        "prompt_cache_breakpoint": self.EXPLICIT,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_0", "content": "found"},
+            {"role": "user", "content": "d"},
+        ]
+        params = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+
+        _, processed, _ = self._chat(messages, params)
+
+        assert processed[-1]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
+
 
 class TestOpenAIPromptCacheBreakpointPlacementRules:
     """OpenAI dialect only marks blocks OpenAI (and the /v1/messages bridges) can carry (#37509)."""
