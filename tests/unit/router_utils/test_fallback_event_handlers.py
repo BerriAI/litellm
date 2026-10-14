@@ -39,6 +39,7 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
+from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from typing import Dict
@@ -1416,6 +1417,19 @@ class TestHasUnattemptedFallbackTarget:
         assert has_unattempted_fallback_target(["fb1", "fb3"], {"attempted_targets": attempted}) is True
         assert has_unattempted_fallback_target(["fb1"], {}) is True
         assert has_unattempted_fallback_target(None, {}) is False
+
+
+def test_attempted_fallback_targets_deduplicates_skips_in_order_and_keeps_first_reason() -> None:
+    attempted: Final = AttemptedFallbackTargets()
+    attempted.record_skip("a", FallbackSkipReason.NOT_AUTHORIZED)
+    attempted.record_skip("a", FallbackSkipReason.NOT_AUTHORIZED)
+    attempted.record_skip("b", FallbackSkipReason.OVER_BUDGET)
+    attempted.record_skip("a", FallbackSkipReason.OVER_BUDGET)
+
+    assert attempted.skipped == (
+        SkippedFallbackTarget("a", FallbackSkipReason.NOT_AUTHORIZED),
+        SkippedFallbackTarget("b", FallbackSkipReason.OVER_BUDGET),
+    )
 
 
 def test_get_fallback_model_group_matches_provider_prefixed_key():
