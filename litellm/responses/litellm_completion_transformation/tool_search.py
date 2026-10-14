@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -63,11 +63,13 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
 
 
 def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
-    return isinstance(tool, Mapping) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    return (
+        isinstance(tool, Mapping) and cast(Mapping[str, object], tool).get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    )
 
 
 def _is_openai_tool_search_tool(tool: object) -> bool:
-    return isinstance(tool, Mapping) and tool.get("type") == "tool_search"
+    return isinstance(tool, Mapping) and cast(Mapping[str, object], tool).get("type") == "tool_search"
 
 
 def tools_with_anthropic_tool_search_mapped(
