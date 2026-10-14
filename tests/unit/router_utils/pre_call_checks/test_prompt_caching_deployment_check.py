@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import os
 import functools
@@ -12,6 +13,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
     _get_min_token_count_for_deployments,
@@ -668,7 +670,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
 
     _, took, lags = await timed_with_loop_lags(
         lambda: check.async_log_success_event(
-            kwargs={"standard_logging_object": standard_logging_object},
+            kwargs={"messages": messages, "standard_logging_object": standard_logging_object},
             response_obj=None,
             start_time=None,
             end_time=None,
@@ -942,6 +944,77 @@ async def test_pin_matches_when_the_success_event_truncated_an_image_payload(mon
     )
 
     assert filtered == [deployments[1]]
+
+
+INLINE_IMAGE_PAGE: Final = (
+    '<html><body><img src="data:image/png;base64,'
+    + base64.b64encode(bytes(range(256)) * 24).decode()
+    + '"></body></html> What does this page render?'
+)
+
+
+def _success_event_kwargs(model: str, sent: list[AllMessageValues], model_id: str) -> dict[str, object]:
+    return {
+        "messages": sent,
+        "standard_logging_object": {
+            "call_type": "acompletion",
+            "model": model,
+            "messages": truncate_base64_in_messages(sent),
+            "model_id": model_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_success_event_measures_the_prefix_on_the_request_not_on_its_truncated_logging_copy():
+    """
+    The standard logging payload replaces every long base64 data URI with a size placeholder, so a
+    first turn that is mostly such a payload (an HTML page carrying its image inline, a PDF `file`
+    block once the counter prices its pages) measured a few dozen tokens on the write side while
+    routing measured thousands: every follow-up looked a pin up, the success event never stored one,
+    and the conversation spread across the group with a provider cache miss on each switch.
+    """
+    sent: Final = _turn({"role": "user", "content": [_marked(INLINE_IMAGE_PAGE)]})
+    logged: Final = cast(list[AllMessageValues], truncate_base64_in_messages(sent))
+    assert logged != sent
+    assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=logged) is False
+    assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=sent) is True
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    deployments: Final = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+
+    await check.async_log_success_event(
+        kwargs=_success_event_kwargs(AUTO_CACHING_MODEL, sent, "dep-2"),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    turn_two: Final = _turn(
+        {"role": "user", "content": [_text(INLINE_IMAGE_PAGE)]},
+        {"role": "assistant", "content": "One image."},
+        {"role": "user", "content": [_marked("And its size?")]},
+    )
+    filtered: Final = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_success_event_stores_no_pin_when_the_request_itself_is_under_the_minimum():
+    sent: Final = _turn({"role": "user", "content": [_marked("What does this page render?")]})
+    assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=sent) is False
+    cache: Final = DualCache()
+
+    await PromptCachingDeploymentCheck(cache=cache).async_log_success_event(
+        kwargs=_success_event_kwargs(AUTO_CACHING_MODEL, sent, "dep-1"),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await PromptCachingCache(cache=cache).async_get_model_id(messages=sent, tools=None) is None
 
 
 @pytest.mark.asyncio

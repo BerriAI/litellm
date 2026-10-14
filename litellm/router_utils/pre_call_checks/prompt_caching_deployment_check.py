@@ -146,10 +146,15 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        measured_messages: Final = cast(
+            list[AllMessageValues],
+            kwargs["messages"] if "messages" in kwargs and isinstance(kwargs["messages"], list) else messages,
+        )
+
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=measured_messages,
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
