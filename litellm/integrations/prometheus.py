@@ -20,6 +20,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
+from litellm.caching.redis_cache import publish_redis_breaker_metrics
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
@@ -385,6 +386,7 @@ class PrometheusLogger(CustomLogger):
             # invalid value cannot leave partially-registered metrics behind in the
             # process-global registry.
             validate_prometheus_deployment_and_latency_caller_identity()
+            publish_redis_breaker_metrics()
 
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()

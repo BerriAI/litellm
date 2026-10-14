@@ -7,6 +7,7 @@ from typing import Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.caching.redis_cache import publish_redis_breaker_metrics
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import (
     DEFAULT_SERVICE_CONFIGS,
@@ -34,6 +35,7 @@ class PrometheusServicesLogger:
             except ImportError:
                 raise Exception("Missing prometheus_client. Run `pip install prometheus-client`")
 
+            publish_redis_breaker_metrics()
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
 

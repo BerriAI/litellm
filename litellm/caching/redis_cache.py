@@ -18,7 +18,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -51,6 +51,7 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prometheus_client import CollectorRegistry as _PromRegistry
     from prometheus_client import Counter as _PromCounter
     from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
@@ -430,58 +431,142 @@ def is_redis_timeout_failure(exc: BaseException) -> bool:
     return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
-class _BreakerMetrics:
-    """Prometheus metrics for the Redis circuit breaker; no-ops when the client is absent.
+_PROMETHEUS_CALLBACK_NAMES: Final = frozenset({"prometheus", "prometheus_system"})
 
-    Registered lazily on the default registry (which /metrics serves) via the module-level
-    ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
-    """
 
-    def __init__(self) -> None:
-        self._state_gauge: _PromGauge | None = None
-        self._transitions: _PromCounter | None = None
-        self._failures: _PromCounter | None = None
-        try:
-            from prometheus_client import Counter as PromCounter
-            from prometheus_client import Gauge
-        except ImportError:
-            return
-        self._state_gauge = Gauge(
+@dataclass(frozen=True, slots=True)
+class _BreakerCollectors:
+    state: "_PromGauge"
+    transitions: "_PromCounter"
+    failures: "_PromCounter"
+
+
+def _create_breaker_collectors(registry: "_PromRegistry | None") -> _BreakerCollectors | None:
+    try:
+        from prometheus_client import REGISTRY, Gauge
+        from prometheus_client import Counter as PromCounter
+    except ImportError:
+        return None
+    target: Final = registry if registry is not None else REGISTRY
+    return _BreakerCollectors(
+        state=Gauge(
             "litellm_redis_circuit_breaker_state",
             "Number of Redis circuit breakers currently in each state",
             labelnames=("state",),
             multiprocess_mode="livesum",
-        )
-        self._transitions = PromCounter(
+            registry=target,
+        ),
+        transitions=PromCounter(
             "litellm_redis_circuit_breaker_transitions",
             "Redis circuit breaker state transitions",
             labelnames=("state",),
-        )
-        self._failures = PromCounter(
+            registry=target,
+        ),
+        failures=PromCounter(
             "litellm_redis_circuit_breaker_failures",
             "Redis health failures counted by the circuit breaker",
             labelnames=("failure_class",),
-        )
+            registry=target,
+        ),
+    )
+
+
+def _bumped(counts: Mapping[str, int], key: str, delta: int) -> Mapping[str, int]:
+    return MappingProxyType({**counts, key: counts.get(key, 0) + delta})
+
+
+def _prometheus_logging_configured() -> bool:
+    callback_lists: Final = (
+        litellm.callbacks,
+        litellm.success_callback,
+        litellm.failure_callback,
+        litellm.service_callback,
+    )
+    return any(
+        isinstance(callback, str) and callback in _PROMETHEUS_CALLBACK_NAMES
+        for callback in itertools.chain.from_iterable(callback_lists)
+    )
+
+
+class RedisBreakerMetrics:
+    """Prometheus metrics for the Redis circuit breaker.
+
+    The collectors join the registry (the default one, which /metrics serves) only once LiteLLM's own
+    Prometheus logging is in use: a configured ``prometheus`` / ``prometheus_system`` callback, or a
+    Prometheus logger calling ``publish``. Until then every breaker event is tallied here and seeds the
+    collectors when they appear, so a cache built before the callback still reports its closed breaker.
+    ``litellm.disable_redis_circuit_breaker_metrics`` keeps them off for apps exporting their own metrics.
+    """
+
+    def __init__(self, logging_configured: Callable[[], bool], registry: "_PromRegistry | None" = None) -> None:
+        self._logging_configured = logging_configured
+        self._registry = registry
+        self._lock = threading.Lock()
+        self._states: Mapping[str, int] = MappingProxyType({})
+        self._transitions: Mapping[str, int] = MappingProxyType({})
+        self._failures: Mapping[str, int] = MappingProxyType({})
+        self._collectors: _BreakerCollectors | None = None
+        self._client_missing = False
+
+    def publish(self) -> _BreakerCollectors | None:
+        with self._lock:
+            return self._exported_collectors(logger_started=True)
 
     def record_state_change(self, old_state: str | None, new_state: str) -> None:
-        if self._state_gauge is None:
-            return
-        if old_state is not None:
-            self._state_gauge.labels(old_state).dec()
-        self._state_gauge.labels(new_state).inc()
+        with self._lock:
+            collectors: Final = self._exported_collectors()
+            if old_state is not None:
+                self._states = _bumped(self._states, old_state, -1)
+            self._states = _bumped(self._states, new_state, 1)
+            if collectors is None:
+                return
+            if old_state is not None:
+                collectors.state.labels(old_state).dec()
+            collectors.state.labels(new_state).inc()
 
     def record_transition(self, state: str) -> None:
-        if self._transitions is not None:
-            self._transitions.labels(state).inc()
+        with self._lock:
+            collectors: Final = self._exported_collectors()
+            self._transitions = _bumped(self._transitions, state, 1)
+            if collectors is not None:
+                collectors.transitions.labels(state).inc()
 
     def record_failure(self, failure_class: str) -> None:
-        if self._failures is not None:
-            self._failures.labels(failure_class).inc()
+        with self._lock:
+            collectors: Final = self._exported_collectors()
+            self._failures = _bumped(self._failures, failure_class, 1)
+            if collectors is not None:
+                collectors.failures.labels(failure_class).inc()
+
+    def _exported_collectors(self, logger_started: bool = False) -> _BreakerCollectors | None:
+        if self._collectors is not None:
+            return self._collectors
+        if self._client_missing or litellm.disable_redis_circuit_breaker_metrics:
+            return None
+        if not (logger_started or self._logging_configured()):
+            return None
+        created: Final = _create_breaker_collectors(self._registry)
+        if created is None:
+            self._client_missing = True
+            return None
+        for state, count in self._states.items():
+            created.state.labels(state).inc(count)
+        for state, count in self._transitions.items():
+            created.transitions.labels(state).inc(count)
+        for failure_class, count in self._failures.items():
+            created.failures.labels(failure_class).inc(count)
+        self._collectors = created
+        return created
 
 
 @functools.lru_cache(maxsize=1)
-def _breaker_metrics() -> _BreakerMetrics:
-    return _BreakerMetrics()
+def _breaker_metrics() -> RedisBreakerMetrics:
+    return RedisBreakerMetrics(_prometheus_logging_configured)
+
+
+def publish_redis_breaker_metrics() -> None:
+    """Export the breaker metrics now that a LiteLLM Prometheus logger exists, whatever order the app built them in."""
+    _breaker_metrics().publish()
 
 
 def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
