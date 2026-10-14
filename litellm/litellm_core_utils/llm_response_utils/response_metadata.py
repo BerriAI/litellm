@@ -1,7 +1,7 @@
 import datetime
 from collections.abc import Mapping
 from functools import reduce
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # cast needed to type the untyped _hidden_params mapping
 
 import httpx
 
@@ -121,12 +121,23 @@ class ResponseMetadata:
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", None)
+        is_cached_response: Final = (
+            cast("dict[str, object]", self._hidden_params).get("cache_hit")  # cast-ok: untyped hidden params
+            is True
+        )
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
+            ## A response served from the cache is stamped with cache_hit in its
+            ## own hidden params before this runs; price it as a cache hit. The
+            ## logging object's model_call_details["cache_hit"] is only set later
+            ## in the success handler, too late for this path (#46450).
             "response_cost": logging_obj.response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
+                result=self.result,
+                cache_hit=True if is_cached_response else None,
+                litellm_model_name=model,
+                router_model_id=model_id,
             ),
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
