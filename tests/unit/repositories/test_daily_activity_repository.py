@@ -108,16 +108,18 @@ def _export_row(
     api_key: str | None,
     *,
     model: str | None = None,
+    user_id: str | None = None,
+    entity_id: str = "user-1",
     spend: float = 1.0,
     api_requests: int = 1,
 ) -> dict[str, object]:
     return {
         "date": "2026-01-01",
-        "entity_id": "user-1",
+        "entity_id": entity_id,
         "entity_alias": None,
         "api_key": api_key,
         "key_alias": None,
-        "user_id": None,
+        "user_id": user_id,
         "user_email": None,
         "model": model,
         "spend": spend,
@@ -715,6 +717,58 @@ async def test_export_is_lazy_and_uses_the_last_row_as_the_next_cursor(monkeypat
         ).params
         == database.query_calls[1][1]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("export_type", "scope", "rows", "expected_cursor_params"),
+    [
+        (
+            ExportType.DAILY,
+            _scope(),
+            (_export_row("key-1"),),
+            (("2026-01-01", "user-1", 1),),
+        ),
+        (
+            ExportType.DAILY_WITH_MODELS,
+            _scope(),
+            (_export_row("key-1", model="model-a"), _export_row("key-1", model="model-b")),
+            (
+                ("2026-01-01", "user-1", "model-a", 1),
+                ("2026-01-01", "user-1", "model-b", 1),
+            ),
+        ),
+        (
+            ExportType.DAILY_WITH_USERS,
+            _scope(table=DailyActivityTable.TEAM),
+            (
+                _export_row("key-1", user_id="user-a", entity_id="team-1"),
+                _export_row("key-2", user_id="user-b", entity_id="team-1"),
+            ),
+            (
+                ("2026-01-01", "team-1", "user-a", 1),
+                ("2026-01-01", "team-1", "user-b", 1),
+            ),
+        ),
+    ],
+)
+async def test_export_pagination_preserves_existing_grouping_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+    export_type: ExportType,
+    scope: DailyActivityScope,
+    rows: tuple[dict[str, object], ...],
+    expected_cursor_params: tuple[tuple[object, ...], ...],
+) -> None:
+    monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 1)
+    database = _FakeDatabase(tuple((row,) for row in rows))
+    repository, _ = _repository(database)
+
+    exported_rows: Final = tuple([row async for row in repository.export_rows(scope, export_type=export_type)])
+
+    assert len(exported_rows) == len(rows)
+    cursor_param_count: Final = len(expected_cursor_params[0])
+    next_page_params: Final = tuple(query[1][-cursor_param_count:] for query in database.query_calls[1:])
+    assert next_page_params == expected_cursor_params
 
 
 @pytest.mark.asyncio
