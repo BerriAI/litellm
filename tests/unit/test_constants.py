@@ -193,17 +193,17 @@ def test_morph_config_get_provider_info():
 
     # Test with environment variable
     with patch.dict(os.environ, {"MORPH_API_KEY": "test-key-from-env"}):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.morphllm.com/v1"
         assert api_key == "test-key-from-env"
 
     # Test with passed api_key
-    api_base, api_key = config._get_openai_compatible_provider_info(None, "direct-key")
+    api_base, api_key = config.get_openai_compatible_provider_info(None, "direct-key")
     assert api_base == "https://api.morphllm.com/v1"
     assert api_key == "direct-key"
 
     # Test with custom api_base
-    api_base, api_key = config._get_openai_compatible_provider_info("https://custom.morph.com", "key")
+    api_base, api_key = config.get_openai_compatible_provider_info("https://custom.morph.com", "key")
     assert api_base == "https://custom.morph.com"
     assert api_key == "key"
 

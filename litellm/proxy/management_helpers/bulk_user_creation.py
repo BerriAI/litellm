@@ -42,15 +42,17 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
     generate_key_helper_fn,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped helper; result validated by _KEY_RESPONSE
     metadata_json_with_limits,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
 )
 from litellm.proxy.management_helpers.utils import (
     _resolve_member_budget_id,  # pyright: ignore[reportPrivateUsage]  # shared with /team/member_add
@@ -214,7 +216,7 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         )
     try:
         validate_budget_duration(item.budget_duration)
-        _check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:
             enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
@@ -344,7 +346,7 @@ async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _Pre
         data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
-            await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
+            await set_object_permission(data_json=data_json, prisma_client=prisma_client)
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only

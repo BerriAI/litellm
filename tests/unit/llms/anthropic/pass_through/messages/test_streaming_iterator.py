@@ -15,11 +15,11 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
     _incomplete_stream_error_sse_event,
-    _is_message_stop_chunk,
-    _is_provider_error_chunk,
     anthropic_messages_response_as_sse_events,
     is_anthropic_content_delta_chunk,
     is_anthropic_ping_chunk,
+    is_message_stop_chunk,
+    is_provider_error_chunk,
     parse_anthropic_error_event,
 )
 
@@ -165,11 +165,11 @@ async def test_async_sse_wrapper_treats_message_stop_bytes_as_complete():
 
 
 def test_is_message_stop_chunk():
-    assert _is_message_stop_chunk({"type": "message_stop"}) is True
-    assert _is_message_stop_chunk({"type": "message_delta"}) is False
-    assert _is_message_stop_chunk(b"event: message_stop\ndata: {}\n\n") is True
-    assert _is_message_stop_chunk(b"raw-bytes") is False
-    assert _is_message_stop_chunk("message_stop") is False
+    assert is_message_stop_chunk({"type": "message_stop"}) is True
+    assert is_message_stop_chunk({"type": "message_delta"}) is False
+    assert is_message_stop_chunk(b"event: message_stop\ndata: {}\n\n") is True
+    assert is_message_stop_chunk(b"raw-bytes") is False
+    assert is_message_stop_chunk("message_stop") is False
 
 
 @pytest.mark.parametrize(
@@ -202,7 +202,7 @@ def test_is_message_stop_chunk_ignores_substring_in_payload():
         b'data: {"type": "content_block_delta", "delta": '
         b'{"type": "input_json_delta", "partial_json": "\\"message_stop\\""}}\n\n'
     )
-    assert _is_message_stop_chunk(delta_frame_with_substring) is False
+    assert is_message_stop_chunk(delta_frame_with_substring) is False
 
 
 def test_parse_anthropic_error_event_from_dict_chunk():
@@ -210,7 +210,7 @@ def test_parse_anthropic_error_event_from_dict_chunk():
     (type, message, status) so the Router can decide whether to fall back."""
     chunk = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     assert parse_anthropic_error_event(chunk) == ("overloaded_error", "Overloaded", 503)
-    assert _is_provider_error_chunk(chunk) is True
+    assert is_provider_error_chunk(chunk) is True
 
 
 def test_parse_anthropic_error_event_from_sse_bytes():
@@ -218,11 +218,10 @@ def test_parse_anthropic_error_event_from_sse_bytes():
     Anthropic/Bedrock passthrough forwards verbatim today) must parse
     identically to the dict shape so the Router can raise a fallback."""
     sse_chunk = (
-        b"event: error\n"
-        b'data: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
+        b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
     )
     assert parse_anthropic_error_event(sse_chunk) == ("internal_server_error", "boom", 500)
-    assert _is_provider_error_chunk(sse_chunk) is True
+    assert is_provider_error_chunk(sse_chunk) is True
 
 
 def test_parse_anthropic_error_event_defaults_status_for_unknown_type():
@@ -248,7 +247,7 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     must not be treated as an error event or raise, just be ignored."""
     malformed_frame = b"event: error\ndata: {not valid json\n\n"
     assert parse_anthropic_error_event(malformed_frame) is None
-    assert _is_provider_error_chunk(malformed_frame) is False
+    assert is_provider_error_chunk(malformed_frame) is False
 
 
 class TestIsAnthropicContentDeltaChunk:
@@ -281,7 +280,7 @@ class TestIsAnthropicContentDeltaChunk:
 )
 def test_parse_anthropic_error_event_non_error_chunks_return_none(chunk):
     assert parse_anthropic_error_event(chunk) is None
-    assert _is_provider_error_chunk(chunk) is False
+    assert is_provider_error_chunk(chunk) is False
 
 
 def test_parse_anthropic_error_event_ignores_substring_in_payload():

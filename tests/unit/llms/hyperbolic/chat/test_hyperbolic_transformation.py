@@ -42,13 +42,13 @@ def test_hyperbolic_get_openai_compatible_provider_info():
     config = HyperbolicChatConfig()
 
     # Test default API base
-    api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+    api_base, api_key = config.get_openai_compatible_provider_info(None, None)
     assert api_base == "https://api.hyperbolic.xyz/v1"
     # api_key may be set from environment, so we don't test for None
 
     # Test custom API base
     custom_base = "https://custom.hyperbolic.com/v1"
-    api_base, api_key = config._get_openai_compatible_provider_info(custom_base, "test-key")
+    api_base, api_key = config.get_openai_compatible_provider_info(custom_base, "test-key")
     assert api_base == custom_base
     assert api_key == "test-key"
 

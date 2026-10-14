@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import textwrap
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -149,7 +150,7 @@ class TestS3V2UnitTests:
         mock_sync_client.put.return_value = mock_response
 
         with patch(
-            "litellm.integrations.s3_v2._get_httpx_client",
+            "litellm.integrations.s3_v2.get_httpx_client",
             return_value=mock_sync_client,
         ):
             s3_logger_sync.upload_data_to_s3(test_element)
@@ -290,7 +291,7 @@ class TestS3V2UnitTests:
         mock_sync_client.put.return_value = mock_response
 
         with patch(
-            "litellm.integrations.s3_v2._get_httpx_client",
+            "litellm.integrations.s3_v2.get_httpx_client",
             return_value=mock_sync_client,
         ):
             s3_logger_sync_virtual.upload_data_to_s3(test_element)
@@ -781,7 +782,7 @@ def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, mon
     handler.client = httpx.Client(transport=httpx.MockTransport(respond))
     with (
         patch(  # test-quality-ok: sync upload builds its HTTPHandler per call, there is no injection seam for it
-            "litellm.integrations.s3_v2._get_httpx_client", return_value=handler
+            "litellm.integrations.s3_v2.get_httpx_client", return_value=handler
         ),
         patch("time.sleep") as mock_sleep,
     ):
@@ -827,7 +828,7 @@ def test_sync_upload_retries_on_s3_503():
     mock_sync_client.put = MagicMock(side_effect=[response_503, response_200])
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         with patch("time.sleep") as mock_sleep:
@@ -1889,7 +1890,7 @@ def test_sync_upload_sets_content_md5_header(monkeypatch):
     mock_sync_client.put.return_value = response
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         logger.upload_data_to_s3(test_element)
@@ -2020,7 +2021,7 @@ def test_sync_upload_sets_sse_kms_key_id_header_when_configured():
     mock_sync_client.put.return_value = response
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         logger.upload_data_to_s3(test_element)
@@ -2297,7 +2298,7 @@ def test_sync_upload_signs_object_key_with_space_the_way_s3_does():
     mock_sync_client = MagicMock()
     mock_sync_client.put.return_value = response
 
-    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+    with patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client):
         logger.upload_data_to_s3(_element_with_space())
 
     call = mock_sync_client.put.call_args
@@ -2395,7 +2396,7 @@ def test_sync_upload_percent_encodes_reserved_characters_in_object_key(s3_object
     mock_sync_client = MagicMock()
     mock_sync_client.put.return_value = response
 
-    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+    with patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client):
         logger.upload_data_to_s3(_element_for(s3_object_key))
 
     call = mock_sync_client.put.call_args
@@ -3749,7 +3750,7 @@ def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
     sync_client: Final = _SyncRecordingClient(_coded_failure_response(404, "NoSuchKey"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync-404"}, "sync-404"))
@@ -3779,7 +3780,7 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
     sync_client: Final = _SyncRecordingClient(_coded_failure_response(status, "SlowDown"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync"}, "sync"))
@@ -4135,7 +4136,7 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
     logger.handle_callback_failure = failures
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -4152,7 +4153,7 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
     mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         dropping.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -4174,7 +4175,7 @@ def test_sync_retry_lines_stay_at_warning_level(caplog) -> None:
 
     with (
         caplog.at_level("WARNING"),
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -4252,7 +4253,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
     mock_sync_client.put = MagicMock(side_effect=[_transient_failure_response(503), _ok_response()])
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -4263,7 +4264,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
 
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(404, None))
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "y"}, "y"))
@@ -4682,7 +4683,7 @@ def test_sync_upload_retries_access_denied_403(caplog):
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(403, "AccessDenied"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(test_element)
@@ -4711,7 +4712,7 @@ def test_sync_upload_drops_terminal_object_once_and_logs_it_only_when_opted_in(c
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(400, "EntityTooLarge"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(test_element)
@@ -5291,12 +5292,15 @@ class _FakeS3Paginator:
 class _FakeS3Client:
     def __init__(self):
         self.objects = defaultdict(dict)
+        self.object_written = threading.Event()
 
     def clear(self):
         self.objects.clear()
+        self.object_written.clear()
 
     def put_object(self, Bucket, Key, Body, **_kwargs):
         self.objects[Bucket][Key] = Body
+        self.object_written.set()
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def delete_object(self, Bucket, Key):
@@ -5363,7 +5367,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
                 response_id = chunk.id
         else:
             response_id = response.id
-        time.sleep(2)
+        assert _FAKE_S3_CLIENT.object_written.wait(timeout=5)
     else:
         response = await litellm.acompletion(
             model="gpt-5-mini",
@@ -5376,7 +5380,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
                 response_id = chunk.id
         else:
             response_id = response.id
-        await asyncio.sleep(2)
+        assert await asyncio.to_thread(_FAKE_S3_CLIENT.object_written.wait, 5)
 
     total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
 
@@ -5411,9 +5415,11 @@ async def test_basic_s3_v2_logging(streaming):
     litellm.callbacks = [s3_v2_logger]
 
     uploaded_keys: list = []
+    uploaded = asyncio.Event()
 
     async def mock_upload(batch_logging_element):
         uploaded_keys.append(batch_logging_element.s3_object_key)
+        uploaded.set()
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
@@ -5431,7 +5437,7 @@ async def test_basic_s3_v2_logging(streaming):
     else:
         response_id = response.id
 
-    await asyncio.sleep(5)
+    assert await asyncio.wait_for(uploaded.wait(), timeout=5)
 
     assert len(uploaded_keys) > 0, "S3 upload was never called"
     assert any(response_id in key for key in uploaded_keys), (
@@ -5465,6 +5471,7 @@ async def test_basic_s3_v2_logging_failure():
     s3_v2_logger.async_httpx_client.put.return_value = mock_response
 
     upload_called = False
+    uploaded = asyncio.Event()
 
     async def mock_upload(batch_logging_element):
         nonlocal upload_called
@@ -5474,6 +5481,7 @@ async def test_basic_s3_v2_logging_failure():
         data = '{"model": "gpt-5-mini"}'
 
         await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
+        uploaded.set()
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
@@ -5496,7 +5504,7 @@ async def test_basic_s3_v2_logging_failure():
     except Exception:
         pass
 
-    await asyncio.sleep(5)
+    assert await asyncio.wait_for(uploaded.wait(), timeout=5)
 
     assert upload_called, "S3 upload method was not called"
 

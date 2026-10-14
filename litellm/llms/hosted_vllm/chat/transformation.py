@@ -112,6 +112,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def _is_video_file(self, content_item: ChatCompletionFileObject) -> bool:
         file: Final = content_item.get("file", {})
         format: Final = file.get("format")

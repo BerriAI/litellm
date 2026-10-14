@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
 };
+use litellm_router_types::LitellmParams;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,6 +18,7 @@ pub struct MessagesCall {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
+    pub litellm_params: LitellmParams,
     pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
@@ -27,8 +29,16 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
 }
 
+/// The caller's litellm params, projected by a host from the keys [`LitellmParams::fields`]
+/// names. A key present with a value of the wrong type is a request error, as it is for
+/// Python's `GenericLiteLLMParams(**kwargs)`.
+pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
+    serde_json::from_value(Value::Object(fields))
+        .map_err(|err| Error::InvalidRequest(ErrorDetail::invalid("litellm params", err)))
+}
+
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
+    Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =
@@ -38,6 +48,12 @@ pub type MessagesCallResponse =
 pub struct MessagesShaping {
     #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
+    #[serde(flatten)]
+    pub settings: MessagesSettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MessagesSettings {
     #[serde(default)]
     pub drop_params: bool,
     #[serde(default)]
@@ -58,16 +74,25 @@ mod tests {
     #[case::nothing_projected(json!({}), MessagesShaping::default())]
     #[case::only_drop_params(
         json!({"drop_params": true}),
-        MessagesShaping { drop_params: true, ..MessagesShaping::default() },
+        MessagesShaping {
+            settings: MessagesSettings { drop_params: true, ..MessagesSettings::default() },
+            ..MessagesShaping::default()
+        },
     )]
     #[case::only_reasoning_auto_summary(
         json!({"reasoning_auto_summary": true}),
-        MessagesShaping { reasoning_auto_summary: true, ..MessagesShaping::default() },
+        MessagesShaping {
+            settings: MessagesSettings { reasoning_auto_summary: true, ..MessagesSettings::default() },
+            ..MessagesShaping::default()
+        },
     )]
     #[case::only_additional_drop_params(
         json!({"additional_drop_params": ["tools[*].input_examples"]}),
         MessagesShaping {
-            additional_drop_params: vec!["tools[*].input_examples".to_string()],
+            settings: MessagesSettings {
+                additional_drop_params: vec!["tools[*].input_examples".to_string()],
+                ..MessagesSettings::default()
+            },
             ..MessagesShaping::default()
         },
     )]
@@ -98,6 +123,11 @@ mod tests {
             "additional_drop_params": ["metadata.user_id", "thinking"]
         }),
         MessagesShaping {
+            settings: MessagesSettings {
+                drop_params: true,
+                reasoning_auto_summary: true,
+                additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
+            },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
@@ -106,6 +136,7 @@ mod tests {
                 supports_output_config: true,
                 supports_sampling_params: false,
                 supports_speed: true,
+                supports_mid_conversation_system: false,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,
@@ -115,9 +146,6 @@ mod tests {
                     max: false,
                 },
             },
-            drop_params: true,
-            reasoning_auto_summary: true,
-            additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
         },
     )]
     fn shaping_deserializes_with_defaults_for_absent_fields(
@@ -126,5 +154,22 @@ mod tests {
     ) {
         let shaping: MessagesShaping = serde_json::from_value(projected).unwrap();
         assert_eq!(shaping, expected);
+        let serialized = serde_json::to_value(&shaping).unwrap();
+        assert_eq!(
+            serialized["drop_params"],
+            json!(expected.settings.drop_params)
+        );
+        assert_eq!(
+            serialized["reasoning_auto_summary"],
+            json!(expected.settings.reasoning_auto_summary)
+        );
+        assert_eq!(
+            serialized["additional_drop_params"],
+            json!(expected.settings.additional_drop_params)
+        );
+        assert_eq!(
+            serialized["capabilities"],
+            serde_json::to_value(expected.capabilities).unwrap()
+        );
     }
 }

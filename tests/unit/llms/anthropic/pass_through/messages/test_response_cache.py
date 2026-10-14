@@ -289,7 +289,7 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         assert await _collect(iterator) == STREAM_EVENTS
