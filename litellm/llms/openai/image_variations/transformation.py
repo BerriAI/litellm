@@ -40,6 +40,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
             "data": {
                 "image": image,
                 **optional_params,
+                **({"model": model} if model is not None else {}),
             }
         }
 

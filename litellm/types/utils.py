@@ -483,6 +483,8 @@ class CallTypes(str, Enum):
     aimage_generation = "aimage_generation"
     image_edit = "image_edit"
     aimage_edit = "aimage_edit"
+    image_variation = "image_variation"
+    aimage_variation = "aimage_variation"
     moderation = "moderation"
     amoderation = "amoderation"
     atranscription = "atranscription"
@@ -673,6 +675,8 @@ CallTypesLiteral = Literal[
     "aimage_generation",
     "image_edit",
     "aimage_edit",
+    "image_variation",
+    "aimage_variation",
     "moderation",
     "amoderation",
     "atranscription",
@@ -780,6 +784,13 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Image Edits
     "/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
     "/v1/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    # Image Variations
+    "/images/variations": [CallTypes.aimage_variation, CallTypes.image_variation],
+    "/v1/images/variations": [CallTypes.aimage_variation, CallTypes.image_variation],
+    "/openai/deployments/{model}/images/variations": [
+        CallTypes.aimage_variation,
+        CallTypes.image_variation,
+    ],
     # Audio Transcriptions
     "/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
     "/v1/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],

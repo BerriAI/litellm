@@ -343,3 +343,10 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+def test_image_variation_empty_image_list_raises_value_error():
+    """Empty image list must raise ValueError."""
+    with pytest.raises(ValueError, match="image is required for image variations"):
+        litellm.image_variation(model="dall-e-2", image=[])
+

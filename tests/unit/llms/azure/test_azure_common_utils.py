@@ -465,6 +465,8 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "afile_list",
             "aimage_edit",
             "image_edit",
+            "aimage_variation",
+            "image_variation",
             "agenerate_content_stream",
             "agenerate_content",
             "allm_passthrough_route",

@@ -167,6 +167,7 @@ ProxyRouteType: TypeAlias = Literal[
     "aretrieve_fine_tuning_job",
     "alist_input_items",
     "aimage_edit",
+    "aimage_variation",
     "agenerate_content",
     "agenerate_content_stream",
     "allm_passthrough_route",
@@ -2064,6 +2065,7 @@ class ProxyBaseLLMRequestProcessing:
             "aretrieve_fine_tuning_job",
             "alist_input_items",
             "aimage_edit",
+            "aimage_variation",
             "agenerate_content",
             "agenerate_content_stream",
             "allm_passthrough_route",
@@ -2199,7 +2201,9 @@ class ProxyBaseLLMRequestProcessing:
             general_settings,
             user_model,
             model,
-            kind="image_edit" if route_type == "aimage_edit" else "completion",
+            kind="image_variation"
+            if route_type == "aimage_variation"
+            else ("image_edit" if route_type == "aimage_edit" else "completion"),
         )
 
         # override with user settings, these are params passed via cli

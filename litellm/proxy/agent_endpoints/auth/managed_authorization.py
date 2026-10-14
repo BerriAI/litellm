@@ -26,6 +26,7 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "messages/count_tokens",
             "images/generations",
             "images/edits",
+            "images/variations",
             "audio/transcriptions",
             "audio/speech",
             "moderations",
@@ -53,6 +54,7 @@ _MANAGED_MODEL_PATHS: Final = (
     "/openai/deployments/{model:path}/embeddings",
     "/openai/deployments/{model:path}/images/generations",
     "/openai/deployments/{model:path}/images/edits",
+    "/openai/deployments/{model:path}/images/variations",
     "/v1beta/models/{model_name:path}:countTokens",
     "/v1beta/models/{model_name:path}:generateContent",
     "/v1beta/models/{model_name:path}:streamGenerateContent",
@@ -66,11 +68,12 @@ _MANAGED_MCP_ROUTES: Final = tuple(
 
 
 _MODEL_ROUTE_KINDS: Final[
-    Mapping[str, Literal["image_generation", "image_edit", "moderation", "speech", "body", "path"]]
+    Mapping[str, Literal["image_generation", "image_edit", "image_variation", "moderation", "speech", "body", "path"]]
 ] = MappingProxyType(
     {
         "/images/generations": "image_generation",
         "/images/edits": "image_edit",
+        "/images/variations": "image_variation",
         "/moderations": "moderation",
         "/audio/transcriptions": "moderation",
         "/audio/speech": "speech",
@@ -122,7 +125,9 @@ def managed_inference_request(
 
     kind: Final = next((kind for suffix, kind in _MODEL_ROUTE_KINDS.items() if route.endswith(suffix)), "completion")
     endpoint_model: Final = path_model or (
-        query_model if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits")) else None
+        query_model
+        if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits", "/images/variations"))
+        else None
     )
     effective: Final = resolve_inference_model(body.get("model"), settings, cli_model, endpoint_model, kind=kind)
     if not isinstance(effective, str) or not effective:

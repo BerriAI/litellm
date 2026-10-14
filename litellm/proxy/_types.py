@@ -253,6 +253,9 @@ class LiteLLMRoutes(enum.Enum):
         # image edit
         "/images/edits",
         "/v1/images/edits",
+        # image variation
+        "/images/variations",
+        "/v1/images/variations",
         # video generation
         "/videos",
         "/v1/videos",

@@ -614,7 +614,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
 
 @client
 def image_variation(
-    image: FileTypes,
+    image: FileTypes | list[FileTypes],  # mutable-ok: matches image_edit polymorphic parameter contract
     model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
     n: int = 1,
     response_format: Literal["url", "b64_json"] = "url",
@@ -622,6 +622,10 @@ def image_variation(
     user: str | None = None,
     **kwargs,
 ) -> ImageResponse:
+    if isinstance(image, list) and len(image) == 0:
+        raise ValueError("image is required for image variations")
+    target_image: Final[FileTypes] = image[0] if isinstance(image, list) else image
+
     # get non-default params
     client: Final = kwargs.get("client", None)
     # get logging object
@@ -636,6 +640,17 @@ def image_variation(
         api_base=litellm_params.get("api_base", None),
         api_key=litellm_params.get("api_key", None),
     )
+
+    optional_params: Final[dict[str, object]] = {  # mutable-ok: outgoing parameter dictionary
+        k: v
+        for k, v in (
+            ("n", n),
+            ("response_format", response_format),
+            ("size", size),
+            ("user", user),
+        )
+        if v is not None
+    }
 
     # route to the correct provider w/ the params
     try:
@@ -673,11 +688,11 @@ def image_variation(
             api_key=api_key,
             api_base=api_base,
             model=model,
-            image=image,
+            image=target_image,
             timeout=litellm_params.get("timeout", None),
             custom_llm_provider=custom_llm_provider,
             logging_obj=litellm_logging_obj,
-            optional_params={},
+            optional_params=optional_params,
             litellm_params=litellm_params,
         )
     elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
@@ -691,11 +706,11 @@ def image_variation(
             api_key=api_key,
             api_base=api_base,
             model=model,
-            image=image,
+            image=target_image,
             timeout=litellm_params.get("timeout", None) or DEFAULT_REQUEST_TIMEOUT,
             custom_llm_provider=custom_llm_provider,
             logging_obj=litellm_logging_obj,
-            optional_params={},
+            optional_params=optional_params,
             litellm_params=litellm_params,
             client=client,
         )

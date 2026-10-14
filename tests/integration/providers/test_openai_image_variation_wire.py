@@ -4,7 +4,6 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from typing import Final, cast
 
-import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel
@@ -33,8 +32,6 @@ def _multipart_parts(request: Request) -> tuple[Message, ...]:
 
 
 def test_image_variation_multipart_image_and_string_n_reach_openai_as_file_part(gateway: Gateway) -> None:
-    pytest.skip("BUG: POST /v1/images/variations is not routed by the proxy")
-
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/images/variations"
@@ -50,14 +47,21 @@ def test_image_variation_multipart_image_and_string_n_reach_openai_as_file_part(
             if part.get_filename() is None
         ) == [("model", "dall-e-2"), ("n", "2")]
         assert [
-            (cast(str, part.get_param("name", header="content-disposition")), cast(bytes, part.get_payload(decode=True)))
+            (
+                cast(str, part.get_param("name", header="content-disposition")),
+                cast(bytes, part.get_payload(decode=True)),
+            )
             for part in parts
             if part.get_filename()
         ] == [("image", _PNG_BYTES)]
-        return Reply(body=json.dumps({"created": 1700000000, "data": [{"url": url} for url in _VARIATION_URLS]}).encode())
+        return Reply(
+            body=json.dumps({"created": 1700000000, "data": [{"url": url} for url in _VARIATION_URLS]}).encode()
+        )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model="openai/dall-e-2", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key")
+        model: Final = scenario.model(
+            model="openai/dall-e-2", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
         response: Final = gateway.client.post(
             "/v1/images/variations",
             data={"model": model, "n": "2"},
