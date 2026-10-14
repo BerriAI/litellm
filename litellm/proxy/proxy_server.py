@@ -590,6 +590,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
 from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -20357,6 +20358,7 @@ app.include_router(openai_files_router)
 reserve_lazy_slot(app, "llm_passthrough")
 app.include_router(pass_through_router)
 app.include_router(health_router)
+app.include_router(deployment_warning_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(daily_activity_router)
