@@ -55,6 +55,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
 from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.repositories.chunked_in import count_in
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.types.llms.openai import BATCH_GUARDRAIL_RESPONSE_FIELD, OpenAIFileObject
@@ -491,11 +492,11 @@ async def addressed_response_id_issuance(
 
     if prisma_client is None:
         return "issued"
-    object_ids: Final = sorted(f"passthrough:{provider}:{raw_id}" for raw_id in _addressed_raw_response_ids(path, body))
+    object_ids: Final = tuple(f"passthrough:{provider}:{raw_id}" for raw_id in _addressed_raw_response_ids(path, body))
     if not object_ids:
         return "issued"
     try:
-        issued_count: Final = await _object_table(prisma_client).count(where={"model_object_id": {"in": object_ids}})
+        issued_count: Final = await count_in(_object_table(prisma_client), "model_object_id", object_ids)
     except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
         verbose_proxy_logger.warning("managed_id_rewriter: response id ownership lookup failed", exc_info=True)
         return "unverified"
