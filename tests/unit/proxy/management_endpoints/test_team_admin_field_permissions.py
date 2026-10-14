@@ -457,8 +457,28 @@ class TestTeamMetadataEdits:
         )
         assert verdict == TeamAdminMetadataKeyProxyControlled(key="allow_client_mock_response")
 
-    def test_resending_a_whole_number_as_an_int_is_not_a_change(self):
-        verdict: Final = _metadata_verdict({"priority": 5.0, "a": 1}, {"priority": 5, "a": 2})
+    @pytest.mark.parametrize(
+        "stored,sent",
+        [
+            pytest.param({"a": 1}, {"a": 2, "callback_settings": None}, id="add-as-null"),
+            pytest.param({"a": 1, "callback_settings": None}, {"a": 2}, id="remove-stored-null"),
+        ],
+    )
+    def test_a_null_valued_proxy_controlled_key_appearing_or_disappearing_names_it(
+        self, stored: dict[str, object], sent: dict[str, object]
+    ):
+        assert _metadata_verdict(stored, sent) == TeamAdminMetadataKeyProxyControlled(key="callback_settings")
+
+    @pytest.mark.parametrize(
+        "stored,sent",
+        [
+            pytest.param(5.0, 5, id="whole-number-as-int"),
+            pytest.param({"tiers": [1.0, {"b": 2.0}]}, {"tiers": [1, {"b": 2}]}, id="nested-whole-numbers"),
+            pytest.param({"x": 1, "y": {"p": "a", "q": "b"}}, {"y": {"q": "b", "p": "a"}, "x": 1}, id="key-order"),
+        ],
+    )
+    def test_resending_an_equal_proxy_controlled_value_is_not_a_change(self, stored: object, sent: object):
+        verdict: Final = _metadata_verdict({"priority": stored, "a": 1}, {"priority": sent, "a": 2})
         assert isinstance(verdict, TeamAdminEditAllowed)
 
     def test_null_metadata_on_a_team_with_member_defaults_names_the_system_key(self):

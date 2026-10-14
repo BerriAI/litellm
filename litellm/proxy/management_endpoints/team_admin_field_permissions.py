@@ -7,6 +7,7 @@ above the organization's budget, never removing the cap), the ``projects`` permi
 user and the key is confined to LLM API routes: the team admin who holds its secret gains no management
 authority through it."""
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -398,22 +399,12 @@ def changed_team_fields(
     return column_changes | _metadata_changes(data, submitted, existing)
 
 
-def _same_json(left: JsonValue, right: JsonValue) -> bool:
-    match left, right:
-        case bool(), bool():
-            return left == right
-        case (bool(), _) | (_, bool()):
-            return False
-        case dict(), dict():
-            return left.keys() == right.keys() and all(_same_json(left[key], right[key]) for key in left)
-        case list(), list():
-            return len(left) == len(right) and all(_same_json(a, b) for a, b in zip(left, right, strict=True))
-        case _:
-            return left == right
+def _canonical_json(value: JsonValue) -> str:
+    return json.dumps(json.loads(json.dumps(value), parse_int=float), sort_keys=True)
 
 
 def _metadata_value_changed(new: object, old: object) -> bool:
-    return not _same_json(_JSON_VALUE.validate_python(new), _JSON_VALUE.validate_python(old))
+    return _canonical_json(_JSON_VALUE.validate_python(new)) != _canonical_json(_JSON_VALUE.validate_python(old))
 
 
 def _is_blank(value: object) -> bool:
@@ -438,7 +429,7 @@ def changed_team_metadata(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTab
         {
             key: merged.get(key)
             for key in (merged.keys() | stored.keys()) - restored
-            if _metadata_value_changed(merged.get(key), stored.get(key))
+            if (key in merged) != (key in stored) or _metadata_value_changed(merged.get(key), stored.get(key))
         }
     )
 
