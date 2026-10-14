@@ -8194,7 +8194,7 @@ def test_metadata_user_id_from_litellm_params_strips_extras():
 
 @pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
 def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
-    data = _make_transform_request(
+    data: Final = _make_transform_request(
         optional_params={},
         litellm_params={"metadata": {"user_id": user_id}},
     )

@@ -3591,14 +3591,24 @@ class TestGetOptionalParamsSpeedGate:
         self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
     ) -> None:
         monkeypatch.setattr(litellm, "drop_params", global_drop_params)
-        result = litellm.get_optional_params(
+        result: Final = litellm.get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=not global_drop_params
         )
         assert not self._speed_anywhere(result), result
 
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_speed_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=False
+        )
+        assert self._speed_anywhere(result), result
+
     def test_drop_params_keeps_speed_for_a_downstream_litellm_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
-        result = litellm.get_optional_params(
+        result: Final = litellm.get_optional_params(
             model="claude-opus-4-8", custom_llm_provider="litellm_proxy", speed="fast", drop_params=True
         )
         assert self._speed_anywhere(result), result
@@ -3612,7 +3622,7 @@ class TestGetOptionalParamsSpeedGate:
             for name, info in litellm.model_cost.items()
             if info.get("supports_speed") is True and info.get("litellm_provider") == "anthropic"
         )
-        result = litellm.get_optional_params(
+        result: Final = litellm.get_optional_params(
             model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
         )
         assert result.get("speed") == "fast"

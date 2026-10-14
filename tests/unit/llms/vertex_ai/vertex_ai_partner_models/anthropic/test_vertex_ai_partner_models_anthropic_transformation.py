@@ -983,7 +983,7 @@ def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_mode
         for name, info in litellm.model_cost.items()
         if _is_tool_based_vertex_claude_rejecting_forced_tools(info)
     )
-    result_params = VertexAIAnthropicConfig().map_openai_params(
+    result_params: Final = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
                 "type": "json_schema",
