@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from typing import Final
 
@@ -9,12 +10,14 @@ import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import CompactedResponse
 from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _ALIASES: Final = ("/v1/responses/compact", "/responses/compact", "/openai/v1/responses/compact")
 _FUNCTION_TOOL: Final = {
     "type": "function",
@@ -41,11 +44,13 @@ def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
 
 
 def _deployment(scenario: Scenario, wire: Wire) -> str:
-    return scenario.model(
+    model: Final = scenario.model(
         model=f"openai/{_MODEL}",
         api_key=_API_KEY,
         api_base=f"{wire.url}/v1",
     )
+    wait_for_worker_readiness(scenario.gateway, model, 1, _PROXY_WORKERS)
+    return model
 
 
 def test_responses_compact_routes_forward_complete_request_and_typed_items(gateway: Gateway) -> None:

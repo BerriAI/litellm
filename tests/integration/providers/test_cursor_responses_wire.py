@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from typing import Final
 
@@ -8,11 +9,13 @@ import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
 from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-cursor-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _CHAT_THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "max")
 _RESPONSES_SUFFIXES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = tuple(
@@ -122,11 +125,13 @@ def _chat_completion(stream: bool) -> bytes | tuple[bytes, ...]:
 
 
 def _deployment(scenario: Scenario, wire: Wire) -> str:
-    return scenario.model(
+    model: Final = scenario.model(
         model=f"openai/{_MODEL}",
         api_key=_API_KEY,
         api_base=f"{wire.url}/v1",
     )
+    wait_for_worker_readiness(scenario.gateway, model, 1, _PROXY_WORKERS)
+    return model
 
 
 @pytest.mark.parametrize(
