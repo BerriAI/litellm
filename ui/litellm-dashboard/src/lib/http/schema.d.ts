@@ -2449,6 +2449,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Registration status (action is always "created") and plugin information.
@@ -2515,6 +2516,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Update status (action is always "updated") and plugin information.
@@ -6145,6 +6147,9 @@ export interface paths {
          * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
          *     cache hits vs successful LLM API requests vs failed requests, plus totals
          *     for the stat cards and the available key-alias/model filter options.
+         *
+         *     Admin callers see proxy-wide activity; all other callers see only their own
+         *     spend logs and those of teams they may view, exactly like ``/spend/logs/ui``.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -8347,7 +8352,7 @@ export interface paths {
          *     - key_alias: Optional[str] - User defined key alias
          *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
-         *     - user_id: Optional[str] - The user id of the key
+         *     - user_id: Optional[str] - The user id of the key. Non-admin callers may only pass their own id, except a team admin creating a key in a team they administer for another member of that team, when a proxy admin has added `create_member_keys` to `team_admin_editable_team_fields`. That member must have the `internal_user` or `internal_user_viewer` role, and the key is always an `llm_api` key.
          *     - agent_id: Optional[str] - The agent id associated with the key.
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
@@ -17537,6 +17542,43 @@ export interface paths {
          * @description Store the telemetry groups and destination for every worker, applied from the next report window
          */
         put: operations["update_telemetry_settings_telemetry_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ui Event
+         * @description Count one Admin UI page view or tab click. Events are dropped unless Page navigation is on
+         */
+        post: operations["record_ui_event_telemetry_ui_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ui Events Enabled */
+        get: operations["ui_events_enabled_telemetry_ui_events_enabled_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -40201,6 +40243,8 @@ export interface components {
             homepage?: string | null;
             /** Id */
             id: string;
+            /** Installation Preference */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -40236,6 +40280,11 @@ export interface components {
              * @description Plugin unique ID
              */
             id: string;
+            /**
+             * Installation Preference
+             * @description Plugin installation preference
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Name
              * @description Plugin name
@@ -41654,6 +41703,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Keywords
              * @description Search keywords
@@ -47241,6 +47295,33 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * UIAction
+         * @enum {string}
+         */
+        UIAction: "view" | "click" | "submit";
+        /** UIEventAccepted */
+        UIEventAccepted: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+        };
+        /** UIEventBody */
+        UIEventBody: {
+            action: components["schemas"]["UIAction"];
+            /** Page */
+            page: string;
+            /** Target */
+            target?: string | null;
+        };
+        /** UIEventsEnabledResponse */
+        UIEventsEnabledResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** UIField */
         UIField: {
             /** Key */
@@ -47784,6 +47865,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Keywords
              * @description Search keywords
@@ -73508,6 +73594,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_ui_event_telemetry_ui_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UIEventBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_events_enabled_telemetry_ui_events_enabled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventsEnabledResponse"];
                 };
             };
         };
