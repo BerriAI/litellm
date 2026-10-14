@@ -3353,3 +3353,45 @@ async def test_cache_options_preserve_resolved_backend_and_explicit_connection(
         assert isinstance(cache.cache, RedisCache)
         connection: Final = cache.cache.redis_client.connection_pool.connection_kwargs
         assert (connection["host"], connection["port"]) == (expected_host, expected_port)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_params", "expected_type"),
+    (
+        ({}, "redis"),
+        ({"ttl": 60}, "redis"),
+        ({"mode": "default_off"}, "redis"),
+        ({"supported_call_types": ["acompletion"]}, "redis"),
+        ({"type": "local", "ttl": 60}, "local"),
+    ),
+)
+async def test_cache_without_redis_connection_requires_explicit_local_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_params: dict[str, str | int | list[str]],
+    expected_type: Literal["redis", "local"],
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy import proxy_server
+
+    for name in ("REDIS_HOST", "REDIS_PORT", "REDIS_URL", "REDIS_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    config_path: Final = tmp_path / "cache.yaml"
+    config_path.write_text(
+        json.dumps({"model_list": [], "litellm_settings": {"cache": True, "cache_params": cache_params}})
+    )
+
+    if expected_type == "redis":
+        with pytest.raises(ValueError, match="Either 'host' or 'url' must be specified for redis"):
+            await proxy_server.ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+        return
+
+    await proxy_server.ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+    assert litellm.cache is not None
+    assert isinstance(litellm.cache.cache, InMemoryCache)
+    assert litellm.cache.type == expected_type
