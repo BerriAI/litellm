@@ -2522,11 +2522,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def _transform_usage_objects(self, result: object) -> object:
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
-            transformed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(result.usage)
-            transformed_usage_dict: Final = (
-                transformed_usage.model_dump() if hasattr(transformed_usage, "model_dump") else dict(transformed_usage)
+            chat_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(result.usage)
+            chat_usage_dict: Final = (
+                chat_usage.model_dump() if hasattr(chat_usage, "model_dump") else dict(chat_usage)
             )
-            setattr(result, "usage", transformed_usage_dict)
+            setattr(result, "usage", chat_usage_dict)
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
                 response_dict: Final = result.model_dump() if hasattr(result, "model_dump") else dict(result)
                 standard_logging_payload["response"] = response_dict
