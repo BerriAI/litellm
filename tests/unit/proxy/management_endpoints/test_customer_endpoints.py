@@ -1,4 +1,6 @@
 import asyncio
+import json
+import sqlite3
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from types import MappingProxyType, SimpleNamespace
@@ -15,8 +17,8 @@ from pydantic import TypeAdapter
 
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
-    LiteLLM_ObjectPermissionBase,
     LiteLLM_EndUserTable,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -1223,6 +1225,7 @@ class _CustomerBatchDatabase:
         permissions: tuple[LiteLLM_ObjectPermissionTable, ...] = (),
         budgets: tuple[LiteLLM_BudgetTable, ...] = (),
         failed_customer_ids: frozenset[str] = frozenset(),
+        budget_references: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.customers: Mapping[str, LiteLLM_EndUserTable] = MappingProxyType(
             {customer.user_id: customer for customer in customers}
@@ -1234,9 +1237,66 @@ class _CustomerBatchDatabase:
             {budget.budget_id: budget for budget in budgets}
         )
         self.failed_customer_ids = failed_customer_ids
+        self.budget_references = budget_references
+        self.locked_budget_ids: frozenset[str] = frozenset()
 
-    async def query_raw(self, _query: str, user_id: str) -> tuple[Mapping[str, str], ...]:
-        return ({"user_id": user_id},) if user_id in self.customers else ()
+    async def query_raw(self, query: str, identifier: str, *parameters: str) -> tuple[Mapping[str, object], ...]:
+        if 'FROM "LiteLLM_EndUserTable"' in query and query.rstrip().endswith("FOR UPDATE"):
+            return ({"user_id": identifier},) if identifier in self.customers else ()
+        if query.rstrip().endswith("FOR UPDATE"):
+            self.locked_budget_ids = self.locked_budget_ids | {identifier}
+            return ({"budget_id": identifier},) if identifier in self.budgets else ()
+        assert identifier in self.locked_budget_ids
+        return self.budget_reference_rows(query, (identifier, *parameters))
+
+    def budget_reference_rows(self, query: str, parameters: tuple[str, ...]) -> tuple[Mapping[str, object], ...]:
+        table_names: Final = (
+            "LiteLLM_BudgetTable",
+            "LiteLLM_EndUserTable",
+            "LiteLLM_VerificationToken",
+            "LiteLLM_OrganizationTable",
+            "LiteLLM_ProjectTable",
+            "LiteLLM_TagTable",
+            "LiteLLM_ModelAccessGroupBudgetTable",
+            "LiteLLM_TeamMembership",
+            "LiteLLM_OrganizationMembership",
+            "LiteLLM_TeamTable",
+        )
+        with sqlite3.connect(":memory:") as database:
+            database.row_factory = sqlite3.Row
+            for table in table_names:
+                database.execute(f'CREATE TABLE "{table}" (budget_id TEXT, user_id TEXT, metadata TEXT)')
+            database.executemany(
+                'INSERT INTO "LiteLLM_BudgetTable" (budget_id) VALUES (?)',
+                tuple((budget_id,) for budget_id in self.budgets),
+            )
+            database.executemany(
+                'INSERT INTO "LiteLLM_EndUserTable" (budget_id, user_id) VALUES (?, ?)',
+                tuple((customer.budget_id, customer.user_id) for customer in self.customers.values()),
+            )
+            for reference, budget_id in self.budget_references:
+                table: Final = (
+                    "LiteLLM_VerificationToken"
+                    if reference == "key_default"
+                    else "LiteLLM_TeamTable"
+                    if reference == "team_default"
+                    else reference
+                )
+                assert table in table_names
+                metadata_key: Final = "end_user_budget_id" if reference == "key_default" else "team_member_budget_id"
+                metadata: Final = json.dumps({metadata_key: budget_id}) if reference.endswith("_default") else "{}"
+                database.execute(
+                    f'INSERT INTO "{table}" (budget_id, metadata) VALUES (?, ?)',
+                    (None if reference.endswith("_default") else budget_id, metadata),
+                )
+            return TypeAdapter(tuple[dict[str, object], ...]).validate_python(
+                [
+                    dict(row)
+                    for row in database.execute(
+                        query, {str(index): value for index, value in enumerate(parameters, 1)}
+                    ).fetchall()
+                ]
+            )
 
     async def find_customer(
         self, *, where: Mapping[str, str], include: Mapping[str, bool]
@@ -1255,7 +1315,17 @@ class _CustomerBatchDatabase:
         permission: Final = self.permissions.get(updated.object_permission_id or "")
         saved: Final = updated.model_copy(update={"object_permission": permission})
         self.customers = MappingProxyType({**self.customers, saved.user_id: saved})
-        return saved
+        budget: Final = self.budgets.get(saved.budget_id)
+        return (
+            CustomerResponse.model_validate(
+                {
+                    **saved.model_dump(),
+                    "litellm_budget_table": {**budget.model_dump(), "created_at": "2026-01-01T00:00:00Z"},
+                }
+            )
+            if budget is not None
+            else saved
+        )
 
     async def find_permission(self, *, where: Mapping[str, str]) -> LiteLLM_ObjectPermissionTable | None:
         return self.permissions.get(where["object_permission_id"])
@@ -1920,3 +1990,143 @@ def test_customer_bulk_update_rejects_org_admin_context_without_writing(
     assert database.customers == {"bulk-a": original}
     mock_prisma_client.db.litellm_endusertable.update.assert_not_awaited()
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+
+_SHARED_BUDGET_REFERENCES: Final = (
+    "customer",
+    "LiteLLM_VerificationToken",
+    "LiteLLM_OrganizationTable",
+    "LiteLLM_ProjectTable",
+    "LiteLLM_TagTable",
+    "LiteLLM_ModelAccessGroupBudgetTable",
+    "LiteLLM_TeamMembership",
+    "LiteLLM_OrganizationMembership",
+    "key_default",
+    "team_default",
+    "proxy_default",
+)
+
+
+@pytest.mark.parametrize(
+    "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
+)
+@pytest.mark.parametrize("reference", _SHARED_BUDGET_REFERENCES)
+def test_customer_budget_update_rejects_shared_references_without_partial_writes(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str, reference: str
+) -> None:
+    budget: Final = LiteLLM_BudgetTable(budget_id="shared-budget", max_budget=50)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="shared-permission", mcp_toolsets=["old"])
+    original: Final = LiteLLM_EndUserTable(
+        user_id="shared-customer",
+        blocked=False,
+        alias="Original",
+        budget_id=budget.budget_id,
+        litellm_budget_table=budget,
+        object_permission_id=permission.object_permission_id,
+    )
+    other: Final = LiteLLM_EndUserTable(
+        user_id="other-customer", blocked=False, budget_id=budget.budget_id if reference == "customer" else None
+    )
+    references: Final = () if reference in {"customer", "proxy_default"} else ((reference, "shared-budget"),)
+    database: Final = _CustomerBatchDatabase((original, other), (permission,), (budget,), budget_references=references)
+    database.attach(mock_prisma_client)
+    update: Final = {
+        "user_id": original.user_id,
+        "max_budget": 100,
+        "alias": "Changed",
+        "object_permission": {"mcp_toolsets": ["new"]},
+    }
+    bulk: Final = route.endswith("bulk_update")
+    payload: Final = {"customers": [update, {"user_id": other.user_id, "alias": "Independent"}]} if bulk else update
+    with patch("litellm.max_end_user_budget_id", "shared-budget" if reference == "proxy_default" else None):
+        response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    expected_error: Final = (
+        "Cannot update max_budget for a shared budget. Update the budget directly or assign a different budget."
+    )
+    assert response.status_code == (200 if bulk else 400), response.text
+    if bulk:
+        body: Final = response.json()
+        assert (body["total_requested"], body["successful_updates"], body["failed_updates"]) == (2, 1, 1)
+        assert body["results"][0] == {
+            "user_id": original.user_id,
+            "success": False,
+            "updated_customer": None,
+            "error": expected_error,
+        }
+        assert body["results"][1]["success"] is True
+        assert database.customers[other.user_id].alias == "Independent"
+    else:
+        assert response.json()["error"]["message"] == expected_error
+        assert database.customers[other.user_id] == other
+    assert database.customers[original.user_id] == original
+    assert database.permissions == {permission.object_permission_id: permission}
+    assert database.budgets == {budget.budget_id: budget}
+    assert database.locked_budget_ids == {budget.budget_id}
+
+
+@pytest.mark.parametrize(
+    "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
+)
+def test_customer_budget_update_allows_own_budget_with_unrelated_shared_references(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    own_budget: Final = LiteLLM_BudgetTable(budget_id="own-budget", max_budget=50)
+    other_budget: Final = LiteLLM_BudgetTable(budget_id="other-budget", max_budget=75)
+    own_customer: Final = LiteLLM_EndUserTable(
+        user_id="own-customer",
+        blocked=False,
+        budget_id=own_budget.budget_id,
+        litellm_budget_table=own_budget,
+    )
+    other: Final = LiteLLM_EndUserTable(user_id="other-customer", blocked=False, budget_id=other_budget.budget_id)
+    references: Final = tuple(
+        (reference, "other-budget")
+        for reference in _SHARED_BUDGET_REFERENCES
+        if reference not in {"customer", "proxy_default"}
+    )
+    database: Final = _CustomerBatchDatabase(
+        (own_customer, other), budgets=(own_budget, other_budget), budget_references=references
+    )
+    database.attach(mock_prisma_client)
+    update: Final = {"user_id": own_customer.user_id, "max_budget": 100}
+    payload: Final = {"customers": [update]} if route.endswith("bulk_update") else update
+    with patch("litellm.max_end_user_budget_id", "other-budget"):
+        response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 200, response.text
+    assert database.budgets[own_budget.budget_id].max_budget == 100
+    assert database.budgets[other_budget.budget_id] == other_budget
+    assert database.customers[own_customer.user_id].budget_id == own_budget.budget_id
+    assert database.locked_budget_ids == {own_budget.budget_id}
+
+
+@pytest.mark.parametrize(
+    "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
+)
+@pytest.mark.parametrize("max_budget", (None, 100))
+@pytest.mark.parametrize("budget_id", (None, "other-budget"))
+def test_customer_update_rejects_both_budget_fields_before_writing(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    route: str,
+    max_budget: int | None,
+    budget_id: str | None,
+) -> None:
+    original: Final = LiteLLM_EndUserTable(user_id="customer", alias="Original", blocked=False)
+    database: Final = _CustomerBatchDatabase((original,))
+    database.attach(mock_prisma_client)
+    invalid: Final = {"user_id": original.user_id, "max_budget": max_budget, "budget_id": budget_id}
+    payload: Final = (
+        {"customers": [{"user_id": original.user_id, "alias": "Changed"}, invalid]}
+        if route.endswith("bulk_update")
+        else invalid
+    )
+    response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 422, response.text
+    assert "Set either 'max_budget' or 'budget_id', not both." in response.text
+    assert database.customers == {original.user_id: original}
+    assert database.budgets == {}
+    mock_prisma_client.db.query_raw.assert_not_awaited()
+    mock_prisma_client.db.litellm_endusertable.update.assert_not_awaited()
