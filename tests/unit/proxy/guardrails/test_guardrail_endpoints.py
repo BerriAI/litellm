@@ -123,6 +123,7 @@ def test_get_guardrails_list_response() -> None:
     assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
     assert minimal_response.guardrails[0].guardrail_info is None
 
+
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
         "guardrail": "litellm_content_filter",
@@ -653,6 +654,8 @@ async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, 
     response = await get_guardrail_info("test-db-guardrail")
 
     assert response.litellm_params.stream_scope is None
+
+
 async def test_get_guardrail_info_normalizes_invalid_scope_from_db(
     mocker, mock_guardrail_registry, mock_in_memory_handler
 ):
@@ -3557,3 +3560,27 @@ async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guar
 
     assert exc_info.value.status_code == 400
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_takes_identity_from_auth_not_body(mocker):
+    """A body-supplied key hash must not reach guardrails: Presidio scopes PII
+    tokens by it, so a spoofed hash would compute another caller's tokens."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={"user_api_key_hash": "victim-hash", "user_api_key_end_user_id": "victim", "x": 1},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="caller-hash"),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={"metadata": {"x": 1, "user_api_key_hash": "caller-hash"}},
+        input_type="request",
+    )

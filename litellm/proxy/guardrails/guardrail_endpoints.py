@@ -2431,6 +2431,26 @@ async def _emit_guardrail_success_logs(
     return response
 
 
+def _with_authenticated_identity(
+    metadata: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object]:  # mutable-ok: becomes request_data["metadata"], which guardrails write to
+    """
+    ``metadata`` with the caller identity taken from the authenticated key, not the body.
+
+    Guardrails scope per-caller state by these fields (Presidio derives its PII
+    tokens from them); a body-supplied ``user_api_key_hash`` would let one caller
+    compute tokens in another caller's scope and match them against masked logs.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    identity: Final = {
+        "user_api_key_hash": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+        "user_api_key_end_user_id": user_api_key_dict.end_user_id,
+    }
+    body: Final = {k: v for k, v in metadata.items() if k not in identity}
+    return {**body, **{k: v for k, v in identity.items() if v is not None}}
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
@@ -2499,7 +2519,11 @@ async def apply_guardrail(
 
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            **(
+                {"metadata": _with_authenticated_identity(request.metadata, user_api_key_dict)}
+                if request.metadata is not None
+                else {}
+            ),
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
