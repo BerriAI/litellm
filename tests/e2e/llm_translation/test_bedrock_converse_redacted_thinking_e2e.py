@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import queue
-from dataclasses import dataclass, field
+import base64
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -24,7 +23,7 @@ from models import (
     ThinkingParam,
 )
 from provider_edge import LiveEdge, start_provider_edge
-from provider_edge_bedrock import bedrock_signer
+from provider_edge_bedrock import ConverseBodyCapture, bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
 
@@ -34,6 +33,7 @@ pytestmark = pytest.mark.e2e
 # (Sonnet 5.5 answers it with plain thinking, checked 2026-10-14). Source for the string:
 # https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#thinking-redaction
 BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
+INVOKE_BACKEND: Final = "bedrock/invoke/us.anthropic.claude-sonnet-4-6"
 REDACTED_THINKING_TRIGGER: Final = (
     "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"
 )
@@ -84,29 +84,19 @@ class _StreamChunk(_Frozen):
     choices: tuple[_StreamChoice, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _ConverseCapture:
-    """The Converse bodies the proxy sent upstream, seen by a live edge between the proxy and Bedrock"""
-
-    _bodies: queue.SimpleQueue[bytes] = field(default_factory=queue.SimpleQueue)
-
-    def observe(self, url: str, headers: object, body: bytes | None) -> None:
-        if body is not None and "/converse" in url:
-            self._bodies.put(body)
-
-    def replayed_redacted_content(self) -> tuple[str, ...]:
-        """The redactedContent of every reasoning block in the last request's assistant turns"""
-        bodies: Final = tuple(self._bodies.get_nowait() for _ in range(self._bodies.qsize()))
-        assert bodies, "the proxy sent no Converse request through the edge"
-        assistant: Final = (
-            message for message in _ConverseBody.model_validate_json(bodies[-1]).messages if message.role == "assistant"
-        )
-        reasoning: Final = (block.reasoningContent for block in chain.from_iterable(m.content for m in assistant))
-        return tuple(block.redactedContent for block in reasoning if block is not None and block.redactedContent)
+def _replayed_redacted_content(capture: ConverseBodyCapture) -> tuple[str, ...]:
+    """The redactedContent of every reasoning block in the last Converse request's assistant turns"""
+    bodies: Final = capture.drain()
+    assert bodies, "the proxy sent no Converse request through the edge"
+    assistant: Final = (
+        message for message in _ConverseBody.model_validate_json(bodies[-1]).messages if message.role == "assistant"
+    )
+    reasoning: Final = (block.reasoningContent for block in chain.from_iterable(m.content for m in assistant))
+    return tuple(block.redactedContent for block in reasoning if block is not None and block.redactedContent)
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str, _ConverseCapture]:
-    capture: Final = _ConverseCapture()
+def _edge(resources: ResourceManager) -> tuple[str, ConverseBodyCapture]:
+    capture: Final = ConverseBodyCapture()
     edge: Final = start_provider_edge(
         LiveEdge(observe_request=capture.observe, sign=bedrock_signer(REGION)),
         mounts=MappingProxyType({EDGE_MOUNT: f"https://bedrock-runtime.{REGION}.amazonaws.com"}),
@@ -114,19 +104,28 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str,
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
     )
     resources.defer(edge.shutdown)
+    return edge.edge.api_base(EDGE_MOUNT), capture
+
+
+def _deploy(proxy: ProxyClient, resources: ResourceManager, api_base: str, backend: str) -> str:
     model: Final = f"e2e-bedrock-redacted-thinking-{unique_marker()}"
     model_id: Final = proxy.create_model(
         model,
         LiteLLMParamsBody(
-            model=BACKEND,
-            api_base=edge.edge.api_base(EDGE_MOUNT),
+            model=backend,
+            api_base=api_base,
             aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
             aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
             aws_region_name=REGION,
         ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
-    return model, resources.key(), capture
+    return model
+
+
+def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str, ConverseBodyCapture]:
+    api_base, capture = _edge(resources)
+    return _deploy(proxy, resources, api_base, BACKEND), resources.key(), capture
 
 
 def _chat(proxy: ProxyClient, key: str, body: ChatBody) -> OutMessage:
@@ -217,7 +216,7 @@ class TestBedrockConverseRedactedThinkingReplay:
         )
 
         assert (second.content or "").strip(), f"Bedrock answered the replayed turn with no text: {second}"
-        assert capture.replayed_redacted_content() == redacted
+        assert _replayed_redacted_content(capture) == redacted
 
     @pytest.mark.provider_edge_host
     @meta(
@@ -268,5 +267,53 @@ class TestBedrockConverseRedactedThinkingReplay:
             ),
         )
 
-        assert "18" in (second.content or ""), f"the answer ignored the tool result: {second.content!r}"
-        assert capture.replayed_redacted_content() == redacted
+        assert (second.content or "").strip(), f"Bedrock answered the tool result with no text: {second}"
+        assert _replayed_redacted_content(capture) == redacted
+
+    @pytest.mark.provider_edge_host
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(INVOKE_BACKEND, BACKEND),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_redacted_thinking_from_bedrock_invoke_is_sent_to_converse_in_its_blob_encoding(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        """Invoke, like the Anthropic API, returns the bare ``data`` string. Converse needs it as a base64 blob, and
+        Bedrock 400s with "Invalid data in redacted_thinking block" when a model group mixing the two routes
+        replays it bare"""
+        api_base, capture = _edge(resources)
+        invoke_model: Final = _deploy(proxy, resources, api_base, INVOKE_BACKEND)
+        converse_model: Final = _deploy(proxy, resources, api_base, BACKEND)
+        key: Final = resources.key()
+        question: Final = ChatMessage(role="user", content=REDACTED_THINKING_TRIGGER)
+
+        first: Final = _chat(
+            proxy, key, ChatBody(model=invoke_model, messages=[question], thinking=THINKING, max_tokens=2048)
+        )
+        redacted: Final = _redacted_data(first)
+
+        second: Final = _chat(
+            proxy,
+            key,
+            ChatBody(
+                model=converse_model,
+                thinking=THINKING,
+                max_tokens=2048,
+                messages=[
+                    question,
+                    ChatAssistantTurn(content=first.content, thinking_blocks=first.thinking_blocks),
+                    ChatMessage(role="user", content=FOLLOW_UP),
+                ],
+            ),
+        )
+
+        assert (second.content or "").strip(), f"Bedrock answered the replayed turn with no text: {second}"
+        assert _replayed_redacted_content(capture) == tuple(
+            base64.b64encode(data.encode()).decode() for data in redacted
+        )

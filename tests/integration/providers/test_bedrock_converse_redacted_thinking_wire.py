@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Callable, Mapping
 from itertools import chain
@@ -14,7 +15,8 @@ CLAUDE_MODEL_ID: Final = "us.anthropic.claude-sonnet-4-6"
 NOVA_MODEL_ID: Final = "us.amazon.nova-pro-v1:0"
 APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
 TOKEN: Final = "synthetic-bedrock-bearer"
-REDACTED: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+NATIVE_REDACTED: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+REDACTED: Final = base64.b64encode(NATIVE_REDACTED.encode()).decode()
 FIRST_ANSWER: Final = "I looked into it."
 FINAL_ANSWER: Final = "redacted thinking replay control"
 QUESTION: Final = "What's the weather in Paris?"
@@ -259,30 +261,53 @@ def test_claude_redacted_thinking_before_a_tool_call_is_replayed_with_the_tool_r
 
 
 @pytest.mark.parametrize(
-    "target, model_info, replays_redacted",
+    "deployment, history_data, sent_data",
     [
-        pytest.param(NOVA_MODEL_ID, {}, False, id="nova"),
-        pytest.param(APPLICATION_PROFILE_ARN, {}, False, id="application-profile-arn-without-base-model"),
+        pytest.param({"model": f"bedrock/converse/{NOVA_MODEL_ID}"}, REDACTED, None, id="nova"),
         pytest.param(
-            APPLICATION_PROFILE_ARN,
-            {"base_model": f"bedrock/{CLAUDE_MODEL_ID}"},
-            True,
+            {"model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}"},
+            REDACTED,
+            None,
+            id="application-profile-arn-without-base-model",
+        ),
+        pytest.param(
+            {
+                "model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}",
+                "model_info": {"base_model": f"bedrock/{CLAUDE_MODEL_ID}"},
+            },
+            REDACTED,
+            REDACTED,
             id="application-profile-arn-with-claude-base-model",
+        ),
+        pytest.param(
+            {"model": f"bedrock/converse/{CLAUDE_MODEL_ID}", "model_id": APPLICATION_PROFILE_ARN},
+            REDACTED,
+            REDACTED,
+            id="claude-model-id-override",
+        ),
+        pytest.param(
+            {"model": f"bedrock/converse/{CLAUDE_MODEL_ID}"},
+            NATIVE_REDACTED,
+            REDACTED,
+            id="claude-history-minted-by-anthropic-or-bedrock-invoke",
         ),
     ],
 )
-def test_claude_history_replayed_to_another_converse_target_only_carries_redacted_content_when_it_is_claude(
-    gateway: Gateway, target: str, model_info: dict[str, JsonValue], replays_redacted: bool
+def test_redacted_history_replayed_to_a_converse_target_carries_redacted_content_only_when_it_is_claude(
+    gateway: Gateway, deployment: dict[str, JsonValue], history_data: str, sent_data: str | None
 ) -> None:
-    """A Router fallback or model switch replays a Claude history to a different Converse target. Nova, Llama,
-    DeepSeek and gpt-oss 400 on redactedContent, so only a target known to be Claude gets the block"""
+    """A Router fallback or model switch replays a redacted history to a different Converse target. Non-Claude
+    targets 400 on redactedContent, so only a target known to be Claude gets the block. Data minted by the
+    Anthropic API or Bedrock Invoke is the bare string, which Converse needs wrapped in base64"""
+    model_info: Final = deployment.get("model_info")
+    parameters: Final = {key: value for key, value in deployment.items() if key != "model_info"}
     with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
-            model=f"bedrock/converse/{target}",
+            model_info=model_info if isinstance(model_info, dict) else None,
             api_key=TOKEN,
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint=wire.url,
-            model_info=model_info,
+            **parameters,
         )
 
         reply: Final = _chat(
@@ -295,7 +320,7 @@ def test_claude_history_replayed_to_another_converse_target_only_carries_redacte
                     {
                         "role": "assistant",
                         "content": FIRST_ANSWER,
-                        "thinking_blocks": [{"type": "redacted_thinking", "data": REDACTED}],
+                        "thinking_blocks": [{"type": "redacted_thinking", "data": history_data}],
                     },
                     {"role": "user", "content": FOLLOW_UP},
                 ],
@@ -303,5 +328,5 @@ def test_claude_history_replayed_to_another_converse_target_only_carries_redacte
         )
 
         assert reply.content == FINAL_ANSWER
-        redacted: Final = ({"reasoningContent": {"redactedContent": REDACTED}},) if replays_redacted else ()
+        redacted: Final = () if sent_data is None else ({"reasoningContent": {"redactedContent": sent_data}},)
         assert _replayed_assistant_turn(wire).content == (*redacted, {"text": FIRST_ANSWER})

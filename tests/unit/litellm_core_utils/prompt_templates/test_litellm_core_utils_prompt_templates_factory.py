@@ -494,6 +494,13 @@ async def test_bedrock_converse_wraps_redacted_thinking_minted_outside_converse(
     assert assistant_content == [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}, {"text": "hello"}]
 
 
+def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
+    """Outside callers that only pass the thinking blocks keep the old behavior, with no redactedContent sent."""
+    assert BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+        [{"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}]
+    ) == [{"reasoningContent": {"reasoningText": {"text": ""}}}]
+
+
 @pytest.mark.parametrize("data", ["", "  "])
 def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
     """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
