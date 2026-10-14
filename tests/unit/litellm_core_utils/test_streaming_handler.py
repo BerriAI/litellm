@@ -1154,6 +1154,8 @@ async def test_stream_failure_is_logged_against_the_failed_deployment_before_the
         def __init__(self) -> None:
             super().__init__()
             self.failed_deployment_ids: tuple[object, ...] = ()
+            self.sync_failed_deployment_ids: tuple[object, ...] = ()
+            self.sync_failure_logged = threading.Event()
 
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             self.failed_deployment_ids = (
@@ -1161,8 +1163,17 @@ async def test_stream_failure_is_logged_against_the_failed_deployment_before_the
                 kwargs["litellm_params"]["model_info"]["id"],
             )
 
+        def cooldown_failed_deployment(self, kwargs, completion_response, start_time, end_time) -> None:
+            time.sleep(0.05)
+            self.sync_failed_deployment_ids = (
+                *self.sync_failed_deployment_ids,
+                kwargs["litellm_params"]["model_info"]["id"],
+            )
+            self.sync_failure_logged.set()
+
     recorder: Final = FailureRecorder()
     monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [recorder.cooldown_failed_deployment])
     logging_obj.model_call_details["litellm_params"] = {"model_info": {"id": "rate-limited-deployment"}}
 
     async def _raise_rate_limit(**kwargs):
@@ -1179,12 +1190,10 @@ async def test_stream_failure_is_logged_against_the_failed_deployment_before_the
     with pytest.raises(MidStreamFallbackError):
         await response.__anext__()
     logging_obj.model_call_details["litellm_params"] = {"model_info": {"id": "fallback-deployment"}}
-    for _ in range(50):
-        if recorder.failed_deployment_ids:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.to_thread(recorder.sync_failure_logged.wait, 5)
 
     assert recorder.failed_deployment_ids == ("rate-limited-deployment",)
+    assert recorder.sync_failed_deployment_ids == ("rate-limited-deployment",)
 
 
 def test_streaming_handler_with_created_time_propagation(

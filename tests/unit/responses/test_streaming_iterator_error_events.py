@@ -19,8 +19,12 @@ Also covers: ErrorEventError.param must accept dict payloads without raising a
 Pydantic ValidationError (previously typed as Optional[str]).
 """
 
+import asyncio
 import json
+import threading
+import time
 from importlib import import_module
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -268,6 +272,31 @@ async def test_async_iterator_raises_mid_stream_fallback_on_rate_limit_error_eve
     assert exc_info.value.generated_content == ""
     assert isinstance(exc_info.value.original_exception, litellm.RateLimitError)
     assert exc_info.value.original_exception.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_async_iterator_logs_the_failure_against_the_failed_deployment_before_raising():
+    iterator: Final = _make_async_iterator_with_events(
+        [{"type": "error", "error": {"type": "tokens", "code": "rate_limit_exceeded", "message": "rate limited"}}]
+    )
+    logging_obj: Final = iterator.logging_obj
+    logging_obj.model_call_details = {"litellm_params": {"model_info": {"id": "rate-limited-deployment"}}}
+    sync_failure_logged: Final = threading.Event()
+
+    def cooldown_failed_deployment(*args: object) -> None:
+        time.sleep(0.05)
+        logging_obj.sync_failed_deployment_id = logging_obj.model_call_details["litellm_params"]["model_info"]["id"]
+        sync_failure_logged.set()
+
+    logging_obj.failure_handler.side_effect = cooldown_failed_deployment
+
+    with pytest.raises(MidStreamFallbackError):
+        async for _ in iterator:
+            pass
+    logging_obj.model_call_details = {"litellm_params": {"model_info": {"id": "fallback-deployment"}}}
+    await asyncio.to_thread(sync_failure_logged.wait, 5)
+
+    assert logging_obj.sync_failed_deployment_id == "rate-limited-deployment"
 
 
 @pytest.mark.asyncio
