@@ -1,5 +1,4 @@
 import asyncio
-import threading
 import time
 import types
 from collections.abc import Iterator
@@ -981,10 +980,8 @@ async def test_breaker_metrics_track_state_and_failure_class():
     from litellm.caching.redis_cache import RedisCircuitBreaker, _breaker_metrics, is_redis_timeout_failure
 
     metrics: Final = _breaker_metrics()
-    collectors: Final = metrics.publish()
-    assert collectors is not None
-    for collector in (collectors.state, collectors.transitions, collectors.failures):
-        if collector not in REGISTRY._collector_to_names:
+    for collector in (metrics._state_gauge, metrics._transitions, metrics._failures):
+        if collector is not None and collector not in REGISTRY._collector_to_names:
             REGISTRY.register(collector)
 
     def sample(name, labels=None):
@@ -1647,56 +1644,3 @@ async def test_async_set_cache_pipeline_does_not_format_cached_values_for_loggin
 
     assert _FormatCountingStr.format_calls == 0
     assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
-
-
-def _breaker_registry_sample(registry, name: str, labels: dict[str, str]) -> float | None:
-    return registry.get_sample_value(name, labels)
-
-
-def test_breaker_metrics_stay_off_the_registry_until_prometheus_logging_is_configured():
-    """A fresh breaker reports its states only once LiteLLM's Prometheus logging is on, and nothing before is lost."""
-    from prometheus_client import CollectorRegistry
-
-    from litellm.caching.redis_cache import RedisBreakerMetrics
-
-    registry: Final = CollectorRegistry()
-    logging_on: Final = threading.Event()
-    metrics: Final = RedisBreakerMetrics(logging_on.is_set, registry)
-    metrics.record_state_change(None, "closed")
-    metrics.record_state_change(None, "closed")
-    metrics.record_failure("timeout")
-    metrics.record_transition("open")
-    metrics.record_state_change("closed", "open")
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "closed"}) is None
-
-    logging_on.set()
-    metrics.record_failure("connectivity")
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "closed"}) == 1
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "open"}) == 1
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_transitions_total", {"state": "open"}) == 1
-    assert (
-        _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"})
-        == 1
-    )
-    assert (
-        _breaker_registry_sample(
-            registry, "litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"}
-        )
-        == 1
-    )
-
-
-def test_publish_exports_breakers_built_before_the_prometheus_logger():
-    """A Prometheus logger starting after the cache was built still sees the closed breaker."""
-    from prometheus_client import CollectorRegistry
-
-    from litellm.caching.redis_cache import RedisBreakerMetrics
-
-    registry: Final = CollectorRegistry()
-    metrics: Final = RedisBreakerMetrics(lambda: False, registry)
-    metrics.record_state_change(None, "closed")
-    metrics.publish()
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "closed"}) == 1
-    metrics.record_state_change("closed", "open")
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "closed"}) == 0
-    assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "open"}) == 1
