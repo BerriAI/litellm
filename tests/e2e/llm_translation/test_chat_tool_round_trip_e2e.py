@@ -28,12 +28,14 @@ pytestmark = pytest.mark.e2e
 GEMINI_BACKEND: Final = "gemini/gemini-3.5-flash-lite"
 MISTRAL_BACKEND: Final = "mistral/mistral-medium-3.5"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
+ANTHROPIC_ADAPTIVE_THINKING_BACKEND: Final = "anthropic/claude-sonnet-5-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
 BEDROCK_LEGACY_THINKING_BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
 
 PROMPT: Final = "What is the weather in Paris and in Tokyo? Use the get_weather tool for each city."
 CITY_TEMPERATURES: Final = MappingProxyType({"paris": "22", "tokyo": "31"})
 THINKING: Final = ThinkingParam(type="enabled", budget_tokens=1024)
+ADAPTIVE_THINKING: Final = ThinkingParam(type="adaptive")
 
 WEATHER_TOOL: Final = ChatTool(
     function=ChatToolFunction(
@@ -194,6 +196,24 @@ class TestChatToolResultRoundTrip:
     def test_anthropic_with_extended_thinking(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, _api_key_params(ANTHROPIC_BACKEND, "ANTHROPIC_API_KEY"))
         _assert_tool_results_reach_the_model(client, key, model, thinking=THINKING, tool_choice=None)
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_ADAPTIVE_THINKING_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_with_adaptive_thinking(self, client: PassthroughClient, resources: ResourceManager) -> None:
+        """Adaptive-thinking models default to ``display: omitted``, so the thinking
+        blocks replayed on the second turn are signed but carry empty text."""
+        model, key = _register(
+            client, resources, _api_key_params(ANTHROPIC_ADAPTIVE_THINKING_BACKEND, "ANTHROPIC_API_KEY")
+        )
+        _assert_tool_results_reach_the_model(client, key, model, thinking=ADAPTIVE_THINKING, tool_choice=None)
 
     @meta(
         Subject(

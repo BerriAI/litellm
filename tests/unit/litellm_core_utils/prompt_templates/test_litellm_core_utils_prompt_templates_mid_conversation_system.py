@@ -337,6 +337,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         },
         {"role": "assistant", "content": None, "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "", "signature": "s"}]},
         {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
         litellm.Message(
             role="assistant",
@@ -349,6 +350,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         "signed-thinking-block",
         "redacted-thinking-block",
         "signed-thinking-part",
+        "signed-empty-thinking-part",
         "function-call",
         "pydantic-tool-calls",
     ],
