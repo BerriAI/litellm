@@ -4122,7 +4122,13 @@ _PERSON_NAME: Final = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
 
 def _person_spans(text: str) -> list[dict]:
     return [
-        {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85, "analysis_explanation": None}
+        {
+            "entity_type": "PERSON",
+            "start": match.start(),
+            "end": match.end(),
+            "score": 0.85,
+            "analysis_explanation": None,
+        }
         for match in _PERSON_NAME.finditer(text)
     ]
 
@@ -4328,9 +4334,7 @@ def test_validate_environment_missing_http(base_url):
         if not (base_url.startswith("https://") or base_url.startswith("http://")):
             expected_url = "http://" + base_url
 
-        assert (
-            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
-        ), "Got={}, Expected={}".format(
+        assert pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/", "Got={}, Expected={}".format(
             pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
         )
         assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
@@ -4370,20 +4374,13 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [
-                {"role": "system", "content": "You are an helpfull assistant"}
-            ],
-            "metadata": {
-                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
-            },
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
+            "metadata": {"pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}},
         },
         response=response,
     )
 
-    assert (
-        new_response.choices[0].message.content
-        == "Hello Jane Doe! How can I assist you today?"
-    )
+    assert new_response.choices[0].message.content == "Hello Jane Doe! How can I assist you today?"
 
 
 input_a_anonymizer_results = {
@@ -4426,9 +4423,7 @@ async def test_presidio_pii_masking_input_a():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
-    )
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_a_anonymizer_results)
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -4457,9 +4452,7 @@ async def test_presidio_pii_masking_input_b():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
-    )
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_b_anonymizer_results)
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -4546,16 +4539,12 @@ async def test_presidio_language_configuration():
     assert analyze_request_es["language"] == "es"
     assert analyze_request_es["text"] == test_text_es
 
-    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, mock_testing=True
-    )
+    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, mock_testing=True)
 
     test_text_en = "My phone number is +1 555-123-4567"
 
-    analyze_request_default = (
-        presidio_guardrail_default._get_presidio_analyze_request_payload(
-            text=test_text_en, presidio_config=None, request_data={}
-        )
+    analyze_request_default = presidio_guardrail_default._get_presidio_analyze_request_payload(
+        text=test_text_en, presidio_config=None, request_data={}
     )
 
     assert analyze_request_default["language"] == "en"
@@ -4567,9 +4556,7 @@ async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
     litellm.turn_on_debug()
 
-    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, presidio_language="de", mock_testing=True
-    )
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, presidio_language="de", mock_testing=True)
 
     test_text = "Test text with PII"
 
@@ -4639,7 +4626,9 @@ class _InMemoryPresidioTransport(asyncio.Transport):
         if not separator:
             return
         request_line, *header_lines = head.decode().split("\r\n")
-        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
+        headers: Final = {
+            name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)
+        }
         if len(body) < int(headers.get("content-length", "0")):
             return
         self._received = b""
@@ -4803,9 +4792,7 @@ async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkey
     assert pii_masking_obj is not None
     assert hasattr(pii_masking_obj, "logging_only")
     assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
-    assert pii_masking_obj.should_run_guardrail(
-        data={}, event_type=GuardrailEventHooks.logging_only
-    )
+    assert pii_masking_obj.should_run_guardrail(data={}, event_type=GuardrailEventHooks.logging_only)
 
 
 async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:
@@ -4838,18 +4825,22 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert presidio_guardrail._http_session is None
 
 
-
 def _sse_text_events(index: int, parts: list[str]) -> bytes:
-    return b"".join(
-        (
-            "event: content_block_delta\ndata: "
-            + json.dumps({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": t}})
-            + "\n\n"
+    return (
+        b"".join(
+            (
+                "event: content_block_delta\ndata: "
+                + json.dumps(
+                    {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": t}}
+                )
+                + "\n\n"
+            ).encode()
+            for t in parts
+        )
+        + (
+            f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
         ).encode()
-        for t in parts
-    ) + (
-        f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
-    ).encode()
+    )
 
 
 def _sse_text(out: bytes) -> str:
@@ -4873,7 +4864,9 @@ async def test_stream_pii_unmasking_token_split_across_text_deltas():
     async def stream():
         yield body
 
-    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    out = b"".join(
+        [c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})]
+    )
     assert _sse_text(out) == "From New York to Boston, Bobby."
 
 
@@ -4887,7 +4880,9 @@ async def test_stream_pii_unmasking_sse_line_split_across_byte_chunks():
         for i in range(0, len(body), 7):
             yield body[i : i + 7]
 
-    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    out = b"".join(
+        [c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})]
+    )
     assert _sse_text(out) == "Hi Bobby from New York!"
 
 
@@ -4900,7 +4895,9 @@ async def test_stream_pii_unmasking_flushes_held_text_when_upstream_fails():
         yield body
         raise RuntimeError("upstream died")
 
-    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    out = b"".join(
+        [c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})]
+    )
     assert _sse_text(out) == "ok Bobby, a < b"
 
 
@@ -4908,3 +4905,14 @@ def test_unmask_pii_text_does_not_guess_ambiguous_truncated_token():
     tokens = {"<PERSON_1>": "Bobby", "<PERSON_2>": "Alice"}
     assert OPTIONAL_PresidioPIIMasking._unmask_pii_text("Hi <PERSON_", tokens) == "Hi <PERSON_"
     assert OPTIONAL_PresidioPIIMasking._unmask_pii_text("Hi <PERSON_2", tokens) == "Hi Alice"
+
+
+def test_unmask_pii_text_truncated_token_check_is_linear():
+    """The ambiguity check ran over the whole map once per token (quadratic):
+    10k caller-supplied tokens stalled the event loop for seconds."""
+    import time
+
+    tokens = {f"<PERSON_{i}>": f"name{i}" for i in range(20_000)}
+    started = time.monotonic()
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text("Hi <PERSON_", tokens) == "Hi <PERSON_"
+    assert time.monotonic() - started < 2

@@ -1345,17 +1345,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for token, original_text in pii_tokens.items():
             if token in text:
                 text = text.replace(token, original_text)
-            else:
-                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                # Only check at the very end of the text.
-                min_overlap = min(20, len(token) // 2)
-                for i in range(max(0, len(text) - len(token)), len(text)):
-                    sub = text[i:]
-                    if token.startswith(sub) and len(sub) >= min_overlap:
-                        # Ambiguous prefix (`<PERSON_` of two people): leave it rather than guess.
-                        if sum(t.startswith(sub) for t in pii_tokens) == 1:
-                            text = text[:i] + original_text
-                        break
+        # FALLBACK: a token cut off by max_tokens at the very end of the text.
+        # A token has `<` only at its start, so the only candidate suffix is
+        # the one from the last `<`; one pass keeps this linear in the map size.
+        start: Final = text.rfind("<")
+        if start == -1:
+            return text
+        sub: Final = text[start:]
+        matches: Final = [t for t in pii_tokens if t.startswith(sub)]
+        # Ambiguous prefix (`<PERSON_` of two people): leave it rather than guess.
+        if len(matches) == 1 and len(sub) >= min(20, len(matches[0]) // 2):
+            return text[:start] + pii_tokens[matches[0]]
         return text
 
     @staticmethod
