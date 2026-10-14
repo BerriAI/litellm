@@ -208,7 +208,7 @@ def hops_original_response(hops: LongDecodeHops, first_response: httpx.Response)
     return first_response.text if len(hops) == 1 else json.dumps(hops)
 
 
-def log_failed_hop(error: Exception) -> None:
+def log_failed_hop(error: Exception | str) -> None:
     verbose_logger.warning(
         "Gemini long decode: a continuation hop failed, returning the answer so far with its continuation_token: %s",
         error,

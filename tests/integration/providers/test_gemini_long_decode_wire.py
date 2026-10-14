@@ -6,8 +6,10 @@ import json
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
-from typing import Final, Literal
+from queue import SimpleQueue
+from typing import Final, Literal, TypeAlias
 
 import anthropic
 import httpx
@@ -64,6 +66,7 @@ from integration.providers._gemini_long_decode_support import (
     received,
     refuses,
     register,
+    register_vertex,
     request_body,
     seen,
     single,
@@ -79,12 +82,13 @@ from integration.providers._gemini_long_decode_support import (
 from pydantic import BaseModel, JsonValue
 
 Client = Literal["sdk_sync", "sdk_async", "httpx"]
-Failure = Literal["400", "500", "drop"]
+Failure = Literal["400", "500", "drop", "notjson", "errorframe"]
 Dropped = Literal["first", "continued"]
 Absent = Literal["missing", "null", "empty"]
+Respond: TypeAlias = Callable[[Request], Reply]
 
 _CLIENTS: Final[tuple[Client, ...]] = ("sdk_sync", "sdk_async", "httpx")
-_FAILURES: Final[tuple[Failure, ...]] = ("400", "500", "drop")
+_FAILURES: Final[tuple[Failure, ...]] = ("400", "500", "drop", "notjson", "errorframe")
 _JOINED: Final = FIRST_HALF.text + SECOND_HALF.text
 _CHAIN_USAGE: Final = summed(FIRST_HALF, SECOND_HALF)
 _CHAT_MESSAGES: Final = ({"role": "user", "content": PROMPT},)
@@ -373,6 +377,13 @@ def test_answer_google_finishes_itself_stays_one_request_with_no_token(
         assert_billed(model, endpoint, PLAIN.usage, _identities(observed, response_id))
 
 
+def _unavailable_mid_stream(stream: bool) -> Reply:
+    if not stream:
+        return refuses(503)(stream)
+    error: Final = {"error": {"code": 503, "message": REFUSAL, "status": "UNAVAILABLE"}}
+    return Reply(content_type="text/event-stream", body=b"data: " + json.dumps(error).encode() + b"\r\n\r\n")
+
+
 def _failing(failure: Failure) -> Answer:
     match failure:
         case "400":
@@ -381,6 +392,10 @@ def _failing(failure: Failure) -> Answer:
             return refuses(500)
         case "drop":
             return drops_before_answering
+        case "notjson":
+            return lambda _stream: Reply(body=b"<html>not json</html>", content_type="text/html")
+        case "errorframe":
+            return _unavailable_mid_stream
 
 
 def _failed_cells() -> tuple[ParameterSet, ...]:
@@ -490,6 +505,158 @@ def test_third_request_that_fails_to_open_returns_both_earlier_parts_with_the_se
         assert_billed(model, endpoint, usage, _identities(observed, first_id))
 
 
+_TOKEN_PATH: Final = "/_oauth/token"
+_EXPIRED: Final = "The scripted Google refused an access token that had expired"
+_REVOKED: Final = "The scripted token endpoint revoked this service account"
+_CALLERS_AUTHORIZATION: Final = "Bearer the-callers-own-credential"
+
+
+def _vertex_cells(endpoints: Sequence[Endpoint]) -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(endpoint, stream, id=f"vertex_ai-{endpoint}-{_mode(stream)}")
+        for endpoint, stream in itertools.product(endpoints, (False, True))
+    )
+
+
+def _token_reply(token: str, lifetime: int) -> Reply:
+    return Reply(body=json.dumps({"access_token": token, "token_type": "Bearer", "expires_in": lifetime}).encode())
+
+
+def _issuing_tokens(lifetime: int, google: Respond) -> Respond:
+    issued: Final = itertools.count()
+
+    def respond(request: Request) -> Reply:
+        if request.target == _TOKEN_PATH:
+            return _token_reply(f"issued-{next(issued)}", lifetime)
+        return google(request)
+
+    return respond
+
+
+def _tokens_that_expire_by_the_next_request(google: Respond) -> Respond:
+    issued: Final = itertools.count()
+    unspent: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def respond(request: Request) -> Reply:
+        if request.target == _TOKEN_PATH:
+            token: Final = f"issued-{next(issued)}"
+            unspent.put(token)
+            return _token_reply(token, 0)
+        valid: Final = frozenset(f"Bearer {unspent.get()}" for _ in range(unspent.qsize()))
+        if request.headers.get("authorization") in valid:
+            return google(request)
+        error: Final = {"error": {"code": 401, "message": _EXPIRED, "status": "UNAUTHENTICATED"}}
+        return Reply(status=401, body=json.dumps(error).encode())
+
+    return respond
+
+
+def _tokens_revoked_once_google_is_asked(google: Respond) -> Respond:
+    issued: Final = itertools.count()
+    asked: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if request.target != _TOKEN_PATH:
+            asked.set()
+            return google(request)
+        if not asked.is_set():
+            return _token_reply(f"issued-{next(issued)}", 0)
+        refusal: Final = {"error": "invalid_grant", "error_description": _REVOKED}
+        return Reply(status=400, body=json.dumps(refusal).encode())
+
+    return respond
+
+
+def _google_calls(requests: Sequence[Request], stream: bool, continued: tuple[bool, ...]) -> tuple[Request, ...]:
+    calls: Final = tuple(request for request in requests if request.target != _TOKEN_PATH)
+    assert [(call.method, call.target) for call in calls] == [
+        ("POST", target("vertex_ai", stream, resumed)) for resumed in continued
+    ], requests
+    return calls
+
+
+def _chain_through(token_endpoint: Callable[[Respond], Respond], first_id: str) -> Respond:
+    return token_endpoint(upstream(answers(first_id, FIRST_HALF), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF)))
+
+
+@pytest.mark.parametrize(("endpoint", "stream"), _vertex_cells(ENDPOINTS))
+def test_vertex_continuation_request_sent_after_the_access_token_expired_carries_a_new_one_and_completes(
+    gateway: Gateway, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    with (
+        wire_server(_chain_through(_tokens_that_expire_by_the_next_request, first_id)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = register_vertex(scenario, wire, wire.url)
+        observed: Final = _over_httpx(gateway, endpoint, model, stream)
+        assert (observed.answer, observed.streamed) == (_JOINED, _JOINED), observed
+        assert (observed.finishes, observed.usage) == ((complete(endpoint),), _CHAIN_USAGE), observed
+        assert observed.tokens == () and observed.errors == (), observed
+        assert _EXPIRED not in observed.raw and HOP_TOKEN not in observed.raw, observed.raw
+        assert_one_id(endpoint, stream, observed, first_id)
+        _google_calls(wire.drain(), stream, (False, True))
+        assert_billed(model, endpoint, _CHAIN_USAGE, _identities(observed, first_id))
+
+
+@pytest.mark.parametrize(("endpoint", "stream"), _vertex_cells(ENDPOINTS))
+def test_vertex_access_token_that_cannot_be_renewed_before_the_continuation_returns_the_answer_so_far_with_its_token(
+    gateway: Gateway, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    with (
+        wire_server(_chain_through(_tokens_revoked_once_google_is_asked, first_id)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = register_vertex(scenario, wire, wire.url)
+        observed: Final = _over_httpx(gateway, endpoint, model, stream)
+        assert (observed.answer, observed.streamed) == (FIRST_HALF.text, FIRST_HALF.text), observed
+        assert (observed.finishes, observed.usage) == ((cut_off(endpoint),), FIRST_HALF.usage), observed
+        assert observed.incomplete_reason == ("max_output_tokens" if endpoint == "responses" else None), observed
+        assert observed.tokens == ((HOP_TOKEN,) if carries_token(endpoint, stream) else ()), observed
+        assert (HOP_TOKEN in observed.raw) == carries_token(endpoint, stream) and observed.errors == (), observed.raw
+        assert _REVOKED not in observed.raw and CHECKPOINT not in observed.raw, observed.raw
+        assert_one_id(endpoint, stream, observed, first_id)
+        _google_calls(wire.drain(), stream, (False,))
+        assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
+
+
+@pytest.mark.parametrize(("endpoint", "stream"), _vertex_cells(("chat",)))
+def test_vertex_access_token_still_fresh_is_fetched_once_and_sent_on_every_request_of_a_continued_answer(
+    gateway: Gateway, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    with (
+        wire_server(_chain_through(partial(_issuing_tokens, 3600), first_id)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = register_vertex(scenario, wire, wire.url)
+        observed: Final = _over_httpx(gateway, endpoint, model, stream)
+        assert (observed.answer, observed.finishes) == (_JOINED, (complete(endpoint),)), observed
+        requests: Final = wire.drain()
+        calls: Final = _google_calls(requests, stream, (False, True))
+        assert [request.target for request in requests].count(_TOKEN_PATH) == 1, requests
+        assert len({call.headers["authorization"] for call in calls}) == 1, requests
+
+
+@pytest.mark.parametrize(("endpoint", "stream"), _vertex_cells(("chat",)))
+def test_vertex_deployments_own_authorization_header_is_sent_on_every_request_of_a_continued_answer(
+    gateway: Gateway, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    with (
+        wire_server(_chain_through(partial(_issuing_tokens, 0), first_id)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = register_vertex(
+            scenario, wire, wire.url, extra_headers={"Authorization": _CALLERS_AUTHORIZATION}
+        )
+        observed: Final = _over_httpx(gateway, endpoint, model, stream)
+        assert (observed.answer, observed.finishes) == (_JOINED, (complete(endpoint),)), observed
+        calls: Final = _google_calls(wire.drain(), stream, (False, True))
+        assert [call.headers["authorization"] for call in calls] == [_CALLERS_AUTHORIZATION] * 2, calls
+
+
 _SILENCE_SECONDS: Final = 5
 
 
@@ -521,6 +688,32 @@ def test_non_streamed_continuation_request_left_unanswered_returns_the_answer_so
         assert observed.tokens == ((HOP_TOKEN,) if carries_token(endpoint, False) else ()), observed
         assert_one_id(endpoint, False, observed, first_id)
         opening, continuing = received(wire, provider, False, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
+        assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
+
+
+@pytest.mark.parametrize(("provider", "endpoint"), tuple(itertools.product(PROVIDERS, ENDPOINTS)))
+def test_streamed_continuation_request_left_unanswered_ends_the_stream_with_the_answer_so_far_at_the_callers_timeout(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    release: Final = threading.Event()
+    with (
+        wire_server(upstream(answers(first_id, FIRST_HALF), _silent(release))) as wire,
+        contextlib.ExitStack() as cleanup,
+        gateway.scenario() as scenario,
+    ):
+        cleanup.callback(release.set)
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body(endpoint, model, True, {**NO_CACHE, "timeout": _SILENCE_SECONDS})
+        response: Final = post(gateway, endpoint, body)
+        observed: Final = answered(endpoint, True, response)
+        assert ends_cleanly(endpoint, response.text), response.text
+        assert (observed.answer, observed.finishes) == (FIRST_HALF.text, (cut_off(endpoint),)), observed
+        assert (observed.usage, observed.errors) == (FIRST_HALF.usage, ()), observed
+        assert observed.tokens == ((HOP_TOKEN,) if carries_token(endpoint, True) else ()), observed
+        assert_one_id(endpoint, True, observed, first_id)
+        opening, continuing = received(wire, provider, True, (False, True))
         assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
         assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
 
@@ -562,6 +755,34 @@ def test_stream_that_drops_mid_body_reaches_the_caller_as_an_error_with_no_finis
         assert CHECKPOINT not in response.text and HOP_TOKEN not in response.text, response.text
         bodies: Final = received(wire, provider, True, (False,) if dropped == "first" else (False, True))
         assert [body.get("continuationToken") for body in bodies] == [None, HOP_TOKEN][: len(bodies)], bodies
+
+
+_UNFINISHED_FRAME: Final = b'data: {"candidates": [{"content": {"parts": [{"text": "never finished\n\n'
+
+
+def _ends_on_an_unfinished_frame(response_id: str) -> Answer:
+    finished: Final = tuple(f"data: {json.dumps(item)}\n\n".encode() for item in stream_frames(response_id, FIRST_HALF))
+    return lambda _stream: Reply(content_type="text/event-stream", chunks=(*finished, _UNFINISHED_FRAME))
+
+
+@pytest.mark.parametrize(("provider", "endpoint"), tuple(itertools.product(PROVIDERS, ENDPOINTS)))
+def test_stream_that_ends_on_an_unfinished_frame_is_still_continued_into_one_joined_answer(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    respond: Final = upstream(
+        _ends_on_an_unfinished_frame(first_id), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF)
+    )
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        observed: Final = _over_httpx(gateway, endpoint, model, True)
+        assert (observed.answer, observed.streamed) == (_JOINED, _JOINED), observed
+        assert (observed.finishes, observed.usage) == ((complete(endpoint),), _CHAIN_USAGE), observed
+        assert observed.tokens == () and observed.errors == (), observed
+        assert_one_id(endpoint, True, observed, first_id)
+        opening, continuing = received(wire, provider, True, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
+        assert_billed(model, endpoint, _CHAIN_USAGE, _identities(observed, first_id))
 
 
 _MALFORMED: Final[tuple[ParameterSet, ...]] = (

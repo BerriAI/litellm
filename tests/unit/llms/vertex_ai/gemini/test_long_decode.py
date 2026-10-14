@@ -1,7 +1,7 @@
 import json
 import sys
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain, count, repeat
@@ -383,6 +383,7 @@ async def _stream_chunks(
     api_base: str | None = None,
     continuation_token: str | None = None,
     n: int | None = None,
+    timeout: float | None = None,
 ) -> list:
     kwargs: Final = {
         "model": MODEL,
@@ -394,6 +395,7 @@ async def _stream_chunks(
         "api_base": api_base,
         "continuation_token": continuation_token,
         "n": n,
+        "timeout": timeout,
     }
     if is_async:
         stream: Final = await litellm.acompletion(
@@ -684,11 +686,31 @@ async def test_streaming_cut_off_stream_gives_the_client_only_its_final_token(is
     assert _client_tokens(chunks) == ["dG9rLTE="]
 
 
+class _BodyThatDropsBeforeItsFirstFrame(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __iter__(self) -> Iterator[bytes]:
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+@pytest.mark.parametrize(
+    "failed_hop",
+    [
+        lambda: httpx.Response(500, json={"error": {"code": 500}}),
+        lambda: httpx.Response(200, content=b"<html>not json</html>"),
+        lambda: _sse({"error": {"code": 503, "message": "The model is overloaded.", "status": "UNAVAILABLE"}}, HOP_2),
+        lambda: httpx.Response(200, stream=_BodyThatDropsBeforeItsFirstFrame()),
+    ],
+    ids=["refused", "not_json", "error_frame", "dropped"],
+)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_streaming_failed_continuation_hop_ends_the_stream_with_length_and_the_token(is_async: bool):
+async def test_streaming_failed_continuation_hop_ends_the_stream_with_length_and_the_token(
+    is_async: bool, failed_hop: Callable[[], httpx.Response]
+):
     sent: Final[list[dict[str, object]]] = []
-    hops: Final = (_stream_hops()[0], httpx.Response(500, json={"error": {"code": 500}}))
+    hops: Final = (_stream_hops()[0], failed_hop())
 
     chunks: Final = await _collect_stream(is_async, hops, sent)
 
@@ -696,6 +718,22 @@ async def test_streaming_failed_continuation_hop_ends_the_stream_with_length_and
     assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hello"
     assert [c.choices[0].finish_reason for c in chunks if c.choices and c.choices[0].finish_reason] == ["length"]
     assert {"continuation_token": "dG9rLTE="} in _delta_fields(chunks)
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_continuation_request_is_sent_with_the_callers_timeout(is_async: bool):
+    read_timeouts: Final[list[object]] = []
+    hops: Final = _stream_hops()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return hops[len(read_timeouts) - 1]
+
+    chunks: Final = await _stream_chunks(is_async, handler, timeout=7.5)
+
+    assert _stream_text(chunks) == "hello world"
+    assert read_timeouts == [7.5, 7.5]
 
 
 @dataclass(frozen=True, slots=True)

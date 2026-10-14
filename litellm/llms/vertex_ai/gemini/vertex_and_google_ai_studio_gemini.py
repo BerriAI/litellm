@@ -3418,6 +3418,7 @@ class ModelResponseIterator:
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
+        self._unanswered_hop_token: str | None = None
         self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
@@ -3585,6 +3586,7 @@ class ModelResponseIterator:
             # Detect mid-stream error chunks (e.g. 429 RESOURCE_EXHAUSTED).
             # Vertex AI can return errors as HTTP 200 but with an "error" field in the SSE body.
             self._check_streaming_error(chunk)
+            self._unanswered_hop_token = None
 
             from litellm.types.utils import ModelResponseStream
 
@@ -3661,7 +3663,7 @@ class ModelResponseIterator:
                 key: value for key, value in delta_fields.items() if key != "continuation_token"
             } or None
 
-    def _start_hop(self, response: httpx.Response) -> None:
+    def _start_hop(self, response: httpx.Response, token: str) -> None:
         if self._initial_prompt_tokens is None:
             self._initial_prompt_tokens = self._hop_usage.get("promptTokenCount")
         self._usage_offset = sum_usage_metadata(self._usage_offset, self._hop_usage)
@@ -3669,6 +3671,7 @@ class ModelResponseIterator:
         self._grounding_offset = (*self._grounding_offset, *self._hop_grounding)
         self._hop_grounding = ()
         self._json_buffer = JSONFragmentAccumulator()
+        self._unanswered_hop_token = token
         self.response = response
 
     def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
@@ -3685,6 +3688,16 @@ class ModelResponseIterator:
             ],
         )
 
+    def _end_of_unanswered_hop(
+        self, reason: Exception | str = "the continuation stream ended without a readable frame"
+    ) -> Optional["ModelResponseStream"]:
+        token: Final = self._unanswered_hop_token
+        if token is None:
+            return None
+        self._unanswered_hop_token = None
+        log_failed_hop(reason)
+        return self._truncated_stream_end(token)
+
     async def _open_next_hop_async(self, token: str) -> Optional["ModelResponseStream"]:
         if not isinstance(self._resume, AsyncStreamResume):
             return None
@@ -3694,7 +3707,7 @@ class ModelResponseIterator:
         except HOP_FAILURES as e:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
-        self._start_hop(hop_response)
+        self._start_hop(hop_response, token)
         self.streaming_response = hop_response.aiter_lines()
         self.async_response_iterator = self.streaming_response
         return None
@@ -3708,7 +3721,7 @@ class ModelResponseIterator:
         except HOP_FAILURES as e:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
-        self._start_hop(hop_response)
+        self._start_hop(hop_response, token)
         self.streaming_response = hop_response.iter_lines()
         self.response_iterator = self.streaming_response
         return None
@@ -3782,6 +3795,15 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
+        try:
+            return self._next_chunk()
+        except HOP_FAILURES as e:
+            if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
+                raise
+            self.close()
+            return unanswered_end
+
+    def _next_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
             try:
                 chunk = self.response_iterator.__next__()  # pyright: ignore[reportAttributeAccessIssue]  # sync stream
@@ -3790,6 +3812,8 @@ class ModelResponseIterator:
                     result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                     if result is not None:
                         return result
+                if (unanswered_end := self._end_of_unanswered_hop()) is not None:
+                    return unanswered_end
                 if (token := self._pending_hop_token) is None:
                     raise StopIteration
                 self._pending_hop_token = None
@@ -3812,6 +3836,15 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
+        try:
+            return await self._anext_chunk()
+        except HOP_FAILURES as e:
+            if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
+                raise
+            await self.aclose()
+            return unanswered_end
+
+    async def _anext_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
             try:
                 chunk = await self.async_response_iterator.__anext__()
@@ -3820,6 +3853,8 @@ class ModelResponseIterator:
                     result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                     if result is not None:
                         return result
+                if (unanswered_end := self._end_of_unanswered_hop()) is not None:
+                    return unanswered_end
                 if (token := self._pending_hop_token) is None:
                     raise StopAsyncIteration
                 self._pending_hop_token = None

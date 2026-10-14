@@ -151,6 +151,20 @@ def upstream(first: Answer, continued: Answer | None = None) -> Callable[[Reques
     return respond
 
 
+def register_vertex(scenario: Scenario, wire: Wire, token_url: str, *, extra_headers: JsonValue = None) -> str:
+    return scenario.model(
+        model=f"vertex_ai/{BACKEND}",
+        api_base=f"{wire.url}{MODEL_PATH}",
+        api_key=None,
+        vertex_project=PROJECT,
+        vertex_location=LOCATION,
+        vertex_credentials=service_account_json(PROJECT, token_url),
+        input_cost_per_token=INPUT_COST,
+        output_cost_per_token=OUTPUT_COST,
+        extra_headers=extra_headers,
+    )
+
+
 def register(gateway: Gateway, scenario: Scenario, provider: Provider, wire: Wire) -> str:
     if provider == "gemini":
         return scenario.model(
@@ -160,16 +174,7 @@ def register(gateway: Gateway, scenario: Scenario, provider: Provider, wire: Wir
             input_cost_per_token=INPUT_COST,
             output_cost_per_token=OUTPUT_COST,
         )
-    return scenario.model(
-        model=f"vertex_ai/{BACKEND}",
-        api_base=f"{wire.url}{MODEL_PATH}",
-        api_key=None,
-        vertex_project=PROJECT,
-        vertex_location=LOCATION,
-        vertex_credentials=service_account_json(PROJECT, gateway.upstream_url.rstrip("/")),
-        input_cost_per_token=INPUT_COST,
-        output_cost_per_token=OUTPUT_COST,
-    )
+    return register_vertex(scenario, wire, gateway.upstream_url.rstrip("/"))
 
 
 def target(provider: Provider, stream: bool, continued: bool = False) -> str:
