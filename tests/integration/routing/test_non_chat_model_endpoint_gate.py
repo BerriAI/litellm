@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import uuid
 from collections.abc import Iterator, Mapping
@@ -13,6 +14,7 @@ import anthropic
 import httpx
 import openai
 import pytest
+import websockets
 import yaml
 from integration._support.client import (
     JSON_OBJECT,
@@ -30,6 +32,7 @@ from integration._support.openai_wire import answering_model_discovery, chat_rep
 from integration._support.process import graceful_stop_seconds, owned_proxy_process, owned_upstream, paused
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+from websockets.exceptions import ConnectionClosed
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
@@ -524,6 +527,39 @@ def test_key_alias_to_an_embedding_only_model_is_rejected_under_the_resolved_nam
         key: Final = scenario.key(aliases={alias: target})
         response: Final = rig.gateway.request("POST", "/v1/chat/completions", _chat_body(alias, marker), key=key)
         _assert_rejected(rig, response, marker, _openai_error("/v1/chat/completions", target, "/v1/embeddings"))
+
+
+async def _websocket_first_frame_and_close(
+    gateway: Gateway, key: str, model: str, marker: str
+) -> tuple[dict[str, JsonValue], int | None, str | None]:
+    url: Final = str(gateway.client.base_url).rstrip("/").replace("http://", "ws://", 1) + "/v1/responses"
+    async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {key}"}, open_timeout=10) as ws:
+        await ws.send(json.dumps({"type": "response.create", "model": model, "input": marker}))
+        first: Final = JSON_OBJECT.validate_json(await asyncio.wait_for(ws.recv(), 30))
+        with contextlib.suppress(ConnectionClosed):
+            await asyncio.wait_for(ws.recv(), 30)
+        return first, ws.close_code, ws.close_reason
+
+
+@pytest.mark.parametrize("aliased", [False, True])
+def test_responses_websocket_closes_on_an_embedding_only_model_before_the_upstream(rig: _Rig, aliased: bool) -> None:
+    target: Final = rig.names["embedding_only"]
+    alias: Final = f"gate-ws-alias-{uuid.uuid4().hex[:12]}"
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(aliases={alias: target})
+        frame, close_code, close_reason = asyncio.run(
+            _websocket_first_frame_and_close(rig.gateway, key, alias if aliased else target, marker)
+        )
+    assert frame == {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": f"/v1/responses is not supported by model={target}. Supported endpoints: /v1/embeddings",
+        },
+    }
+    assert (close_code, close_reason) == (1008, "Pre-call error")
+    assert rig.upstream.calls(marker) == ()
 
 
 def test_team_scoped_embedding_only_model_is_rejected_under_its_public_name(rig: _Rig) -> None:

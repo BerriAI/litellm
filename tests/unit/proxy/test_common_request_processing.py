@@ -726,15 +726,11 @@ class TestProxyBaseLLMRequestProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "route_type, endpoint",
-        [("acompletion", "/v1/chat/completions"), ("_aresponses_websocket", "/v1/responses")],
-    )
-    @pytest.mark.parametrize(
         "requested_model, key_aliases",
         [("embed-only", {}), ("embed-alias", {"embed-alias": "embed-only"})],
     )
     async def test_common_processing_pre_call_logic_rejects_chat_on_embedding_only_model_before_pre_call_hooks(
-        self, monkeypatch, route_type, endpoint, requested_model, key_aliases
+        self, monkeypatch, requested_model, key_aliases
     ):
         processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, _ = self._guardrail_tag_budget_harness(
             monkeypatch,
@@ -749,13 +745,13 @@ class TestProxyBaseLLMRequestProcessing:
                 user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", aliases=key_aliases),
                 proxy_logging_obj=mock_proxy_logging_obj,
                 proxy_config=mock_proxy_config,
-                route_type=route_type,
+                route_type="acompletion",
                 llm_router=self._router_with_embedding_only_model(),
             )
 
         assert exc_info.value.code == "400"
         assert exc_info.value.message == (
-            f"{endpoint} is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
+            "/v1/chat/completions is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
         )
         mock_proxy_logging_obj.pre_call_hook.assert_not_awaited()
 

@@ -15,7 +15,6 @@ from litellm.router_utils.common_utils import is_proxy_admin_request
 from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     fallback_lookup_groups,
-    fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
     has_unattempted_fallback_target,
 )
@@ -514,12 +513,15 @@ def _fallback_would_answer(
     team_id: str | None,
     walked: frozenset[str] = frozenset(),
 ) -> bool:
-    if fallbacks_disabled_for_request(data):
+    if data.get("disable_fallbacks") is True:
+        return False
+    raw_fallbacks: Final = _fallbacks_for_request(data, llm_router)
+    if raw_fallbacks is None:
         return False
     try:
-        fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(_fallbacks_for_request(data, llm_router))
+        fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks)
     except ValidationError:
-        return False
+        return True
     walked_here: Final = walked | {model}
     return any(
         has_unattempted_fallback_target((target,), data)

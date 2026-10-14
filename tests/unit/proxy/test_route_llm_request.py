@@ -1963,6 +1963,8 @@ EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment("embed-fallback", E
         ({}, {"fallbacks": [{"model": "chat-fallback", "temperature": 0.2}]}),
         ({"fallbacks": [{"embed-only": ["chat-alias"]}], "model_group_alias": {"chat-alias": "chat-fallback"}}, {}),
         ({"fallbacks": [{"embed-only": ["embed-fallback"]}, {"embed-fallback": ["chat-fallback"]}]}, {}),
+        ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {"metadata": {"_disable_fallbacks": True}}),
+        ({}, {"fallbacks": {"chat-fallback": ["embed-fallback"]}}),
     ],
 )
 def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, request_kwargs):

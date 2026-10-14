@@ -1007,7 +1007,8 @@ class TestResponsesWSFirstFrameModelAuth:
 
 class TestResponsesWSDeclaredNonChatModel:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("query_model", [None, "embed-only"])
+    @pytest.mark.parametrize("requested_model", ["embed-only", "embed-alias"])
+    @pytest.mark.parametrize("use_query_model", [False, True])
     @pytest.mark.parametrize(
         "model_info, rejected",
         [
@@ -1016,12 +1017,11 @@ class TestResponsesWSDeclaredNonChatModel:
         ],
     )
     async def test_session_closes_on_a_model_declared_non_chat_before_routing(
-        self, query_model: str | None, model_info: dict[str, object], rejected: bool
+        self, requested_model: str, use_query_model: bool, model_info: dict[str, object], rejected: bool
     ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
-        from litellm.proxy.route_llm_request import endpoint_unsupported_by_model
 
         router: Final = litellm.Router(
             model_list=[
@@ -1039,21 +1039,17 @@ class TestResponsesWSDeclaredNonChatModel:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "model": "embed-only", "input": []})
+            return_value=json.dumps({"type": "response.create", "model": requested_model, "input": []})
         )
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
+        key_aliases: Final = {"embed-alias": "embed-only"}
 
-        async def gated_pre_call(**kwargs):
-            unsupported = endpoint_unsupported_by_model(
-                route_type=kwargs["route_type"], data={"model": kwargs["model"]}, llm_router=router, team_id=None
-            )
-            if unsupported is not None:
-                raise unsupported
-            return {"model": kwargs["model"], "litellm_metadata": {}}, MagicMock()
+        async def alias_resolving_pre_call(**kwargs):
+            return {"model": key_aliases.get(kwargs["model"], kwargs["model"]), "litellm_metadata": {}}, MagicMock()
 
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(side_effect=gated_pre_call)
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=alias_resolving_pre_call)
 
         async def fake_llm_call():
             return None
@@ -1076,7 +1072,7 @@ class TestResponsesWSDeclaredNonChatModel:
         ):
             await responses_websocket_endpoint(
                 websocket=ws,
-                model=query_model,
+                model=requested_model if use_query_model else None,
                 user_api_key_dict=MagicMock(team_id=None),
             )
 

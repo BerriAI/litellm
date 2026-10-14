@@ -36,7 +36,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
-from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.proxy.route_llm_request import endpoint_unsupported_by_model, raise_if_required_body_param_missing
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -1564,6 +1564,14 @@ async def _responses_websocket_session(
             model=resolved_model,
             route_type="_aresponses_websocket",
         )
+        unsupported_endpoint: Final = endpoint_unsupported_by_model(
+            route_type="_aresponses_websocket",
+            data=data,
+            llm_router=llm_router,
+            team_id=user_api_key_dict.team_id,
+        )
+        if unsupported_endpoint is not None:
+            raise unsupported_endpoint
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
