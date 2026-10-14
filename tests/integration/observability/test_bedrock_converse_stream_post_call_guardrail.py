@@ -299,7 +299,7 @@ def _stream_with_call_id(rig: Rig, guardrail: str, marker: str) -> tuple[int, st
 
 def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        'SELECT status, api_base FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        'SELECT status, api_base, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
         "OR metadata->>'litellm_call_id'=%s ORDER BY status",
         (call_id, call_id, call_id),
     )
@@ -365,7 +365,9 @@ def test_block_mid_stream_reaches_boto3_as_an_event_stream_exception(rig: Rig) -
 def test_block_raised_mid_stream_logs_the_relayed_spend_and_the_failure(rig: Rig) -> None:
     marker: Final = f"relay-{uuid.uuid4().hex}"
     rig.scripts[marker] = Reply(
-        content_type=EVENT_STREAM, chunks=converse_frames((f"The secret {marker} is ", BLOCKED_WORD, "."))
+        content_type=EVENT_STREAM,
+        chunks=converse_frames((f"The secret {marker} is ", BLOCKED_WORD, *(f" word{index}" for index in range(30)))),
+        pause_between_chunks=0.05,
     )
     status, content_type, body, call_id = _stream_with_call_id(rig, CODE, marker)
     assert (status, content_type) == (200, EVENT_STREAM), body
@@ -377,6 +379,7 @@ def test_block_raised_mid_stream_logs_the_relayed_spend_and_the_failure(rig: Rig
     rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= 2, seconds=70)
     assert [row["status"] for row in rows] == ["failure", "success"], rows
     assert rows[1]["api_base"], rows
+    assert isinstance(rows[1]["prompt_tokens"], int) and rows[1]["prompt_tokens"] > 0, rows
 
 
 def test_clean_stream_reaches_boto3_unchanged(rig: Rig) -> None:
@@ -589,6 +592,30 @@ def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> Non
     )
     assert closed, "the proxy kept reading the upstream after the caller went away"
     assert rig.provider.disconnected.get_nowait() == target
+
+
+def test_client_disconnect_logs_prompt_tokens_the_upstream_never_reported(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Long {marker} ", *(f" word{index}" for index in range(60))))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames, pause_between_chunks=0.1)
+    with rig.gateway.client.stream(
+        "POST",
+        _stream_path(),
+        json=_stream_body(marker),
+        headers={"Authorization": f"Bearer {rig.keys[SAMPLED]}"},
+        timeout=case_timeout_seconds(),
+    ) as response:
+        assert response.status_code == 200
+        call_id: Final = response.headers.get("x-litellm-call-id", "")
+        received: Final = bytearray()
+        for chunk in response.iter_raw():
+            received.extend(chunk)
+            if len(received) >= len(b"".join(frames[:3])):
+                break
+    assert call_id, "the relayed stream carries no x-litellm-call-id"
+    rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= 1, seconds=70)
+    assert [row["status"] for row in rows] == ["success"], rows
+    assert isinstance(rows[0]["prompt_tokens"], int) and rows[0]["prompt_tokens"] > 0, rows
 
 
 def test_non_streaming_converse_block_is_unchanged(rig: Rig) -> None:

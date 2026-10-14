@@ -691,6 +691,58 @@ def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
     )
 
 
+def test_converse_stream_cut_before_usage_estimates_prompt_tokens_from_the_request():
+    logging_obj: Final = _converse_stream_logging_obj()
+    logging_obj.model_call_details["input"] = {
+        "system": [{"text": "You are a terse assistant."}],
+        "messages": [
+            {"role": "user", "content": [{"text": "Write a story about a lighthouse keeper."}]},
+            {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {"query": "harbor log"}}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "t1",
+                            "content": [{"text": "calm water"}, {"json": {"wind": "steady"}}],
+                        }
+                    }
+                ],
+            },
+        ],
+    }
+    cut: Final = _converse_stream_collector()
+    _feed(cut, _event_frame("messageStart", {"role": "assistant"}) + _text_block(0, ["Once ", "upon"]))
+    response: Final = cut.build_logged_response(logging_obj)
+    assert isinstance(response, ModelResponse)
+    expected_messages: Final = [
+        {"role": "system", "content": "You are a terse assistant."},
+        {"role": "user", "content": "Write a story about a lighthouse keeper."},
+        {"role": "user", "content": '{"query": "harbor log"}'},
+        {"role": "user", "content": 'calm water\n{"wind": "steady"}'},
+    ]
+    assert response.usage.prompt_tokens == litellm.token_counter(model=logging_obj.model, messages=expected_messages)
+    assert response.usage.prompt_tokens > 0
+
+    for request_without_turns in ("not a Converse request", {"prompt": "a model-native invoke body"}):
+        logging_obj.model_call_details["input"] = request_without_turns
+        unestimated = cut.build_logged_response(logging_obj)
+        assert isinstance(unestimated, ModelResponse)
+        assert (unestimated.usage.prompt_tokens, unestimated.usage.completion_tokens) == (
+            0,
+            response.usage.completion_tokens,
+        ), request_without_turns
+
+    full: Final = _converse_stream_collector()
+    _feed(full, _converse_text_stream(["Once ", "upon"]))
+    full_response: Final = full.build_logged_response(logging_obj)
+    assert isinstance(full_response, ModelResponse)
+    assert full_response.usage.prompt_tokens == 25
+
+
 class _CaptureAsyncSuccessCallback(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
