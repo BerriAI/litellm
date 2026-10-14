@@ -10,8 +10,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, targets_openai_api
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -28,7 +28,11 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
-from litellm.responses.litellm_completion_transformation.tool_search import tools_with_anthropic_tool_search_mapped
+from litellm.responses.litellm_completion_transformation.tool_search import (
+    input_without_unanswered_anthropic_tool_search_calls,
+    tools_with_anthropic_tool_search_mapped,
+    tools_without_tool_search,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -68,6 +72,17 @@ class _DeploymentHost(BaseModel):
 
     api_base: object = None
     base_url: object = None
+
+
+class _DropParamsSetting(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    drop_params: object = None
+
+
+def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+    setting: Final = _DropParamsSetting.model_validate(litellm_params)
+    return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
 
 
 def _provider_name(provider: LlmProviders | str) -> str:
@@ -407,17 +422,44 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             else validated_input
         )
+        targets_openai: Final = self._targets_openai_api(litellm_params)
         mapped_tools: Final = (
-            tools_with_anthropic_tool_search_mapped(tools) if self.custom_llm_provider == LlmProviders.OPENAI else tools
+            self._tools_for_openai_tool_search(model=model, tools=tools, litellm_params=litellm_params)
+            if targets_openai
+            else tools
+        )
+        replayable_input: Final = (
+            input_without_unanswered_anthropic_tool_search_calls(marked_input) if targets_openai else marked_input
         )
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=marked_input, tools=mapped_tools
+            model=model, input=replayable_input, tools=mapped_tools
         )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
         return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+
+    def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
+        host: Final = _DeploymentHost.model_validate(litellm_params)
+        return self.custom_llm_provider == LlmProviders.OPENAI and targets_openai_api(host.api_base or host.base_url)
+
+    @staticmethod
+    def _tools_for_openai_tool_search(
+        model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None, litellm_params: GenericLiteLLMParams
+    ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+        if not _drops_params(litellm_params) or litellm.supports_tool_search(
+            model=model, custom_llm_provider=LlmProviders.OPENAI.value
+        ):
+            return tools_with_anthropic_tool_search_mapped(tools)
+        unsearched_tools: Final = tools_without_tool_search(tools)
+        if unsearched_tools is not tools:
+            verbose_logger.warning(
+                "Dropping tool search under drop_params: OpenAI model '%s' cannot run it, so deferred tools load "
+                "up front.",
+                model,
+            )
+        return unsearched_tools
 
     def _reads_prompt_cache_breakpoints(
         self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object

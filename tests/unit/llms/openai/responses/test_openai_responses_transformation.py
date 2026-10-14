@@ -79,6 +79,22 @@ def validate_responses_api_response(response: ResponsesAPIResponse, final_chunk:
     return True
 
 
+_CLAUDE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "call_id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "arguments": '{"query": "weather"}',
+}
+
+
+def _openai_model(supports_tool_search: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and info.get("supports_tool_search", False) is supports_tool_search
+    )
+
+
 class TestOpenAIResponsesAPIConfig:
     def setup_method(self):
         self.config = OpenAIResponsesAPIConfig()
@@ -222,7 +238,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input="Find a tool",
             response_api_optional_request_params={"tools": tools},
-            litellm_params={},
+            litellm_params=_OPENAI_API,
             headers={},
         )
 
@@ -244,7 +260,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input="Find a tool",
             response_api_optional_request_params={"tools": tools},
-            litellm_params={},
+            litellm_params=_OPENAI_API,
             headers={},
         )
 
@@ -273,7 +289,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input="Find a tool",
             response_api_optional_request_params={"tools": tools},
-            litellm_params={},
+            litellm_params=_OPENAI_API,
             headers={},
         )
 
@@ -289,11 +305,90 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input="Find a tool",
             response_api_optional_request_params={"tools": tools},
-            litellm_params={},
+            litellm_params=_OPENAI_API,
             headers={},
         )
 
         assert result["tools"] == tools
+
+    def test_transform_forwards_anthropic_search_tool_and_history_unchanged_to_another_gateway(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+        ]
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OTHER_HOST,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert result["input"] == history
+
+    @pytest.mark.parametrize(
+        "search_tool",
+        [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "tool_search", "execution": "server"},
+        ],
+    )
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self, search_tool: dict[str, str]) -> None:
+        deferred: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=_openai_model(supports_tool_search=False),
+            input="Find a tool",
+            response_api_optional_request_params={"tools": [search_tool, deferred, eager]},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=True),
+            headers={},
+        )
+
+        assert result["tools"] == [{key: value for key, value in deferred.items() if key != "defer_loading"}, eager]
+
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self) -> None:
+        deferred: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=_openai_model(supports_tool_search=True),
+            input="Find a tool",
+            response_api_optional_request_params={
+                "tools": [{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}, deferred]
+            },
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=True),
+            headers={},
+        )
+
+        assert result["tools"] == [{"type": "tool_search", "execution": "server"}, deferred]
+
+    def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
+        answered_search_call: Final = {
+            **_CLAUDE_SEARCH_CALL,
+            "call_id": "srvtoolu_02Answered",
+            "name": "tool_search_tool_regex",
+        }
+        history: Final = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            _CLAUDE_SEARCH_CALL,
+            answered_search_call,
+            {"type": "function_call_output", "call_id": "srvtoolu_02Answered", "output": "get_weather"},
+            {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
