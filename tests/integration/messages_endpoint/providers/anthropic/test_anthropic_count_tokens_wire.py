@@ -29,7 +29,6 @@ _TOOLS: Final[list[JsonValue]] = [
     }
 ]
 _COUNTED_INPUT_TOKENS: Final = 73
-_LOCAL_INPUT_TOKENS: Final = 65
 _UPSTREAM_ERROR: Final = {
     "type": "error",
     "error": {"type": "invalid_request_error", "message": "The scripted count request was rejected."},
@@ -117,7 +116,7 @@ def test_anthropic_count_tokens_forwards_body_and_refuses_a_key_without_model_ac
             assert wire.drain() == ()
 
 
-def test_anthropic_count_tokens_uses_local_count_after_an_upstream_server_error(gateway: Gateway) -> None:
+def test_anthropic_count_tokens_relays_an_upstream_server_error(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         with wire_server(
             _count_peer(
@@ -132,18 +131,20 @@ def test_anthropic_count_tokens_uses_local_count_after_an_upstream_server_error(
                 num_retries=0,
             )
             client: Final = _client(gateway, gateway.key)
-            result: Final = client.messages.count_tokens(
-                model=model,
-                messages=_MESSAGES,
-                system=_SYSTEM,
-                tools=_TOOLS,
-                extra_headers={"anthropic-beta": _COUNT_BETA},
-            )
+            with pytest.raises(anthropic.InternalServerError) as raised:
+                client.messages.count_tokens(
+                    model=model,
+                    messages=_MESSAGES,
+                    system=_SYSTEM,
+                    tools=_TOOLS,
+                    extra_headers={"anthropic-beta": _COUNT_BETA},
+                )
+            assert raised.value.status_code == 500
+            assert "The scripted count request was rejected." in raised.value.message
             assert len(wire.drain()) == 1
-            assert result.model_dump() == {"input_tokens": _LOCAL_INPUT_TOKENS}
 
 
-def test_anthropic_count_tokens_falls_back_locally_after_an_upstream_client_error(gateway: Gateway) -> None:
+def test_anthropic_count_tokens_relays_an_upstream_client_error(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         with wire_server(
             _count_peer(
@@ -158,15 +159,17 @@ def test_anthropic_count_tokens_falls_back_locally_after_an_upstream_client_erro
                 num_retries=0,
             )
             client: Final = _client(gateway, gateway.key)
-            result: Final = client.messages.count_tokens(
-                model=model,
-                messages=_MESSAGES,
-                system=_SYSTEM,
-                tools=_TOOLS,
-                extra_headers={"anthropic-beta": _COUNT_BETA},
-            )
+            with pytest.raises(anthropic.BadRequestError) as raised:
+                client.messages.count_tokens(
+                    model=model,
+                    messages=_MESSAGES,
+                    system=_SYSTEM,
+                    tools=_TOOLS,
+                    extra_headers={"anthropic-beta": _COUNT_BETA},
+                )
+            assert raised.value.status_code == 400
+            assert "The scripted count request was rejected." in raised.value.message
             assert len(wire.drain()) == 1
-            assert result.model_dump() == {"input_tokens": _LOCAL_INPUT_TOKENS}
 
 
 def test_anthropic_count_tokens_preserves_thinking_tool_choice_and_output_config(gateway: Gateway) -> None:
