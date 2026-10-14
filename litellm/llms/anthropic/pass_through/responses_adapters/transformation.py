@@ -138,11 +138,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
     @classmethod
-    def _tool_result_image_parts(cls, content: object) -> tuple[dict[str, object], ...]:  # mutable-ok: json parts
-        """Each image in a tool_result's content as an input_image part, keeping a breakpoint the image carries."""
+    def _tool_result_image_parts(
+        cls, blocks: Sequence[Mapping[str, object]]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: json parts
+        """Each image block as an input_image part, keeping a breakpoint the image carries."""
         sources: Final = tuple(
             (cls._translate_anthropic_image_source_to_url(block.get("source")), block.get("prompt_cache_breakpoint"))
-            for block in cls._content_blocks(content)
+            for block in blocks
             if block.get("type") == "image"
         )
         return tuple(
@@ -152,15 +154,32 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
     @classmethod
-    def _tool_result_breakpoint(cls, block: Mapping[str, object]) -> object:
-        """The tool_result's own breakpoint, else one on a text or document block inside it."""
-        inner_breakpoints: Final = tuple(
-            inner.get("prompt_cache_breakpoint")
-            for inner in cls._content_blocks(block.get("content"))
-            if inner.get("type") != "image"
+    def _tool_result_images_by_breakpoint(
+        cls, block: Mapping[str, object]
+    ) -> tuple[object, tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:  # mutable-ok: json parts
+        """The breakpoint covering a tool_result, its images at or before that breakpoint, and its images after it.
+
+        A mark on the tool_result covers all of it, and a mark on a block inside it covers the result up to that block,
+        the same prefix Anthropic caches for the mark.
+        """
+        inner: Final = cls._content_blocks(block.get("content"))
+        own_breakpoint: Final = block.get("prompt_cache_breakpoint")
+        if own_breakpoint is not None:
+            return own_breakpoint, cls._tool_result_image_parts(inner), ()
+        last_marked: Final = next(
+            (
+                position
+                for position in reversed(range(len(inner)))
+                if inner[position].get("prompt_cache_breakpoint") is not None
+            ),
+            None,
         )
-        return next(
-            (mark for mark in (block.get("prompt_cache_breakpoint"), *inner_breakpoints) if mark is not None), None
+        if last_marked is None:
+            return None, (), cls._tool_result_image_parts(inner)
+        return (
+            inner[last_marked].get("prompt_cache_breakpoint"),
+            cls._tool_result_image_parts(inner[: last_marked + 1]),
+            cls._tool_result_image_parts(inner[last_marked + 1 :]),
         )
 
     @staticmethod
@@ -348,8 +367,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
-                            tool_breakpoint = self._tool_result_breakpoint(
-                                cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                            tool_breakpoint, covered_image_parts, later_image_parts = (
+                                self._tool_result_images_by_breakpoint(
+                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                                )
                             )
                             document_candidates = (
                                 tuple(
@@ -361,7 +382,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 else ()
                             )
                             tool_file_parts = tuple(part for part in document_candidates if part is not None)
-                            result_image_parts = self._tool_result_image_parts(inner)
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -371,7 +391,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
-                                if result_image_parts:
+                                if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
@@ -379,23 +399,27 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     )
                             else:
                                 output_text = str(inner)
-                            tool_image_parts.extend(result_image_parts)
+                            images_inside_breakpoint = (
+                                (*tool_image_parts, *covered_image_parts) if tool_breakpoint is not None else ()
+                            )
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
                                     "output": self._tool_result_output_value(
-                                        output_text, tool_file_parts, None if tool_image_parts else tool_breakpoint
+                                        output_text,
+                                        tool_file_parts,
+                                        None if images_inside_breakpoint else tool_breakpoint,
                                     ),
                                 }
                             )
-                            if tool_image_parts and (
-                                tool_breakpoint is not None
-                                or any(part.get("prompt_cache_breakpoint") is not None for part in result_image_parts)
-                            ):
-                                input_items.append(self._tool_result_images_message(tool_image_parts, tool_breakpoint))
+                            if images_inside_breakpoint:
+                                input_items.append(
+                                    self._tool_result_images_message(images_inside_breakpoint, tool_breakpoint)
+                                )
                                 tool_image_parts.clear()
+                            tool_image_parts.extend(later_image_parts)
                     if tool_image_parts:
                         input_items.append(self._tool_result_images_message(tool_image_parts, None))
                     if user_parts:

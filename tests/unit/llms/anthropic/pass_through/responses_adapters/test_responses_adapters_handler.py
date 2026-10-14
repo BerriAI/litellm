@@ -301,6 +301,54 @@ def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5
     ]
 
 
+RAW_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+@pytest.mark.parametrize(
+    ("extra_kwargs", "log_output", "question"),
+    [
+        pytest.param(
+            OPENAI_API,
+            [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}],
+            {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT},
+            id="sent-as-is",
+        ),
+        pytest.param(
+            {**OPENAI_API, "drop_params": True},
+            "build ok",
+            {"type": "input_text", "text": "q"},
+            id="dropped-under-drop-params",
+        ),
+    ],
+)
+def test_raw_prompt_cache_breakpoints_reach_a_deployment_that_reads_none_unless_drop_params_drops_them(
+    extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.5",
+        extra_kwargs=extra_kwargs,
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_log",
+                        "content": [{"type": "text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}],
+                    },
+                ],
+            }
+        ],
+    )
+
+    assert responses_kwargs["input"] == [
+        {"type": "function_call_output", "call_id": "toolu_log", "output": log_output},
+        {"type": "message", "role": "user", "content": [question]},
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "extra_kwargs"),
     [

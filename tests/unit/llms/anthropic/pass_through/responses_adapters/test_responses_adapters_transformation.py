@@ -623,9 +623,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result == [
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}
-        ]
+        assert result == [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}]
 
     def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
         """Summary parts of one upstream reasoning item are regrouped into that item."""
@@ -2292,9 +2290,7 @@ class TestPromptCacheBreakpointToResponses:
                         {
                             "type": "tool_result",
                             "tool_use_id": "toolu_log",
-                            "content": [
-                                {"type": "text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}
-                            ],
+                            "content": [{"type": "text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}],
                         }
                     ],
                 }
@@ -2307,6 +2303,67 @@ class TestPromptCacheBreakpointToResponses:
                 "output": [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}],
             }
         ]
+
+    SCREENSHOT_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,c2hvdA=="}
+    MARKED_LOG_TEXT: Final = {"type": "text", "text": "build ok", "prompt_cache_breakpoint": EXPLICIT}
+    LOG_TEXT_WITH_SCREENSHOT: Final = f"build ok\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+
+    @pytest.mark.parametrize(
+        ("content", "output", "screenshot"),
+        [
+            pytest.param(
+                [MARKED_LOG_TEXT, SCREENSHOT],
+                [{"type": "input_text", "text": LOG_TEXT_WITH_SCREENSHOT, "prompt_cache_breakpoint": EXPLICIT}],
+                SCREENSHOT_PART,
+                id="screenshot-after-the-marked-text",
+            ),
+            pytest.param(
+                [SCREENSHOT, MARKED_LOG_TEXT],
+                LOG_TEXT_WITH_SCREENSHOT,
+                MARKED_SCREENSHOT_PART,
+                id="screenshot-before-the-marked-text",
+            ),
+        ],
+    )
+    def test_a_breakpoint_on_text_inside_a_tool_result_covers_only_the_screenshots_before_that_text(
+        self, content: list[dict[str, object]], output: object, screenshot: dict[str, object]
+    ):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_shot", "content": content}]}]
+        )
+        assert items == [
+            {"type": "function_call_output", "call_id": "toolu_shot", "output": output},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY}, screenshot],
+            },
+        ]
+
+    def test_a_later_tool_output_stays_after_the_last_marked_screenshot_of_an_earlier_result(self):
+        marked_screenshot: Final = {**self.SCREENSHOT, "prompt_cache_breakpoint": self.EXPLICIT}
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_shot",
+                            "content": [marked_screenshot, marked_screenshot],
+                        },
+                        {"type": "tool_result", "tool_use_id": "toolu_log", "content": "build ok"},
+                    ],
+                }
+            ]
+        )
+        _, screenshots, log_output = items
+        assert screenshots["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            self.MARKED_SCREENSHOT_PART,
+            self.MARKED_SCREENSHOT_PART,
+        ]
+        assert log_output == self.LOG_OUTPUT
 
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
         from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
