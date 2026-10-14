@@ -11,11 +11,11 @@ from io import BufferedReader, BytesIO
 from math import log
 from pathlib import Path, PurePath
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -95,10 +95,11 @@ _STATUS_MAP: Final = MappingProxyType(
         "SUCCEEDED": "completed",
         "FAILED": "failed",
         "CANCELED": "cancelled",
+        "SUSPENDED": "queued",
     }
 )
 
-_PENDING_STATUSES: Final = frozenset({"PENDING", "RUNNING"})
+_PENDING_STATUSES: Final = frozenset({"PENDING", "RUNNING", "SUSPENDED"})
 
 _TERMINAL_FAILURE_STATUSES: Final = frozenset({"FAILED", "CANCELED"})
 
@@ -169,6 +170,18 @@ _RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = (
 _SUPPORTED_RATIOS: Final[tuple[tuple[int, int], ...]] = ((16, 9), (9, 16), (1, 1), (4, 3), (3, 4))
 
 
+class _KnownParameters(BaseModel, frozen=True):
+    """A malformed value here can fail the task after DashScope created and billed it, so it is caught first."""
+
+    duration: StrictInt | None = None
+    seed: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] | None = None
+    audio: StrictBool | None = None
+    prompt_extend: StrictBool | None = None
+    watermark: StrictBool | None = None
+    resolution: StrictStr | None = None
+    ratio: StrictStr | None = None
+
+
 def _video_error(raw_response: httpx.Response, status_code: int, message: str) -> DashScopeVideoError:
     """The provider's own status wins when it reported one. DashScope otherwise answers 200 even for
     failures, and a 200 has the proxy retry a call the provider already rejected, so the caller's
@@ -178,6 +191,11 @@ def _video_error(raw_response: httpx.Response, status_code: int, message: str) -
         message=message,
         headers=raw_response.headers,
     )
+
+
+def _task_not_found(raw_response: httpx.Response) -> DashScopeVideoError:
+    """400, since a 404 would put the deployment in cooldown for everyone over one caller's expired id."""
+    return _video_error(raw_response, 400, _TASK_NOT_FOUND_MESSAGE)
 
 
 def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
@@ -266,6 +284,14 @@ def _duration_fields(seconds: object, model: str, drop_params: bool) -> Mapping[
 def _size_fields(size: object, model: str, drop_params: bool) -> Mapping[str, object]:
     if size is None:
         return _EMPTY_PARAMS
+    if not _priced_tiers(model):
+        if drop_params:
+            return _EMPTY_PARAMS
+        raise _unsupported_value(
+            model,
+            f"size only maps onto DashScope video models in litellm's cost map, and {model} is not one, so send "
+            "DashScope's own size fields inside parameters",
+        )
     ratio: Final = _ratio_from_size(size) if isinstance(size, str) else None
     if ratio is None or not isinstance(size, str):
         if drop_params:
@@ -293,6 +319,18 @@ def _parameters_fields(parameters: object, model: str, drop_params: bool) -> Map
     raise _unsupported_value(
         model, f"parameters must be an object of DashScope request fields, got {type(parameters).__name__}"
     )
+
+
+def _malformed_parameters(parameters: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+    try:
+        _ = _KnownParameters.model_validate(dict(parameters))
+    except ValidationError as e:
+        return tuple((str(error["loc"][0]), error["msg"]) for error in e.errors() if error["loc"])
+    return ()
+
+
+def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+    return litellm_params.drop_params is True or litellm.drop_params is True
 
 
 def _caller_parameters(parameters: Mapping[str, object], extra_body: object) -> Mapping[str, object]:
@@ -476,7 +514,7 @@ def _video_object_from_task(
 ) -> VideoObject:
     output: Final = _task_output(task, raw_response)
     if output.task_status == _UNKNOWN_TASK_STATUS:
-        raise _video_error(raw_response, 404, _TASK_NOT_FOUND_MESSAGE)
+        raise _task_not_found(raw_response)
     status: Final = _STATUS_MAP.get(output.task_status)
     if status is None:  # defaulting it would hand back a job the caller polls forever
         raise _video_error(raw_response, 502, f"Unknown DashScope task status: {output.task_status}")
@@ -516,7 +554,7 @@ def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> s
     if output.task_status in _TERMINAL_FAILURE_STATUSES:
         raise _video_error(raw_response, 400, f"Video generation ended as {output.task_status} with no video URL.")
     if output.task_status == _UNKNOWN_TASK_STATUS:
-        raise _video_error(raw_response, 404, _TASK_NOT_FOUND_MESSAGE)
+        raise _task_not_found(raw_response)
     raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
 
 
@@ -631,7 +669,12 @@ class DashScopeVideoConfig(BaseVideoConfig):
         return resolved_api_key
 
     def _resolve_video_api_base(self, video_api_base: str | None) -> str:
-        return video_api_base or get_secret_str("DASHSCOPE_API_BASE_VIDEO") or DASHSCOPE_VIDEO_DEFAULT_API_BASE
+        return (
+            video_api_base
+            or get_secret_str("DASHSCOPE_API_BASE_VIDEO")
+            or get_secret_str("DASHSCOPE_API_BASE")
+            or DASHSCOPE_VIDEO_DEFAULT_API_BASE
+        )
 
     def validate_environment(
         self,
@@ -715,16 +758,21 @@ class DashScopeVideoConfig(BaseVideoConfig):
                 model=model,
                 llm_provider="dashscope",
             )
+        drop_params: Final = _drops_params(litellm_params)
+        malformed: Final = _malformed_parameters(requested_parameters)
+        if malformed and not drop_params:
+            raise _unsupported_value(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
         resolution: Final = requested_parameters.get("resolution")
         priced_tiers: Final = _priced_tiers(model) if resolution is not None else None
         drops_resolution: Final = priced_tiers is not None and not _is_priced_tier(resolution, priced_tiers)
-        if drops_resolution and not (litellm_params.drop_params is True or litellm.drop_params is True):
+        if drops_resolution and not drop_params:
             raise _unsupported_value(
                 model,
                 f"{model} is not offered at resolution {resolution!r}, only at {', '.join(priced_tiers or ())}",
             )
+        dropped: Final = frozenset({*(field for field, _ in malformed), *(("resolution",) if drops_resolution else ())})
         parameters: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
-            key: value for key, value in requested_parameters.items() if not (drops_resolution and key == "resolution")
+            key: value for key, value in requested_parameters.items() if key not in dropped
         }
 
         request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler

@@ -150,6 +150,34 @@ class TestDashScopeVideoCreateRequest:
         )
         assert dropped["parameters"] == {"duration": 5}
 
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"seed": "abc"},
+            {"seed": -1},
+            {"watermark": "no"},
+            {"dashscope_parameters": {"prompt_extend": "yes"}},
+            {"dashscope_parameters": {"duration": "5"}},
+        ],
+    )
+    def test_malformed_parameters_raise_unless_dropped(self, params):
+        """Regression: a seed of "abc" was sent, DashScope created the task, then failed
+        it, and the caller was billed the full price for a video that never existed."""
+        with pytest.raises(UnsupportedParamsError, match="invalid") as raised:
+            _create({**params, "resolution": "720P"})
+
+        assert raised.value.status_code == 400
+
+        dropped, _, _ = DashScopeVideoConfig().transform_video_create_request(
+            model="wan3.0-video",
+            prompt="a cat on a roof",
+            api_base=API_BASE,
+            video_create_optional_request_params={**params, "resolution": "720P"},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+        assert dropped["parameters"] == {"resolution": "720P"}
+
     @pytest.mark.parametrize("model", ["wan3.0-video", "happyhorse-1.1-t2v", "a-model-not-in-the-cost-map"])
     def test_a_tier_the_model_is_priced_at_is_sent(self, model):
         data, _, _ = _create({"resolution": "480P"}, model=model)
@@ -343,6 +371,52 @@ class TestDashScopeVideoMapOpenAIParams:
             )
             == {}
         )
+
+    def test_size_on_a_model_missing_from_the_cost_map_raises_unless_dropped(self):
+        """Regression: older models take a WIDTH*HEIGHT size, ignored the ratio and tier
+        litellm mapped size onto, and silently rendered at their default size."""
+        with pytest.raises(UnsupportedParamsError, match="inside parameters") as raised:
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params={"size": "1280x720"},
+                model="a-model-not-in-the-cost-map",
+                drop_params=False,
+            )
+
+        assert raised.value.status_code == 400
+        assert (
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params={"size": "1280x720"}, model="a-model-not-in-the-cost-map", drop_params=True
+            )
+            == {}
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_call_drop_params_drops_a_malformed_value(self):
+        """Regression: only the global litellm.drop_params reached the mapping, so drop_params
+        set on the call or the deployment still answered 400."""
+        sent: Final[list[dict]] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            video = await avideo_generation(
+                model="dashscope/wan3.0-video",
+                prompt="a cat on a roof",
+                seconds="10s",
+                size="1280x720",
+                drop_params=True,
+                api_key="sk-test",
+                api_base=API_BASE,
+                client=handler,
+            )
+
+        assert video.status == "queued"
+        assert sent[0]["parameters"] == {"ratio": "16:9", "resolution": "720P"}
 
     @pytest.mark.parametrize("seconds,expected", [("8", 8), ("8.0", 8), (8, 8)])
     def test_whole_seconds_are_accepted_in_any_spelling(self, seconds, expected):
@@ -612,6 +686,7 @@ class TestDashScopeVideoStatus:
             ("SUCCEEDED", "completed"),
             ("FAILED", "failed"),
             ("CANCELED", "cancelled"),
+            ("SUSPENDED", "queued"),
         ],
     )
     def test_status_mapping(self, task_status, expected):
@@ -685,7 +760,7 @@ class TestDashScopeVideoStatus:
                 custom_llm_provider="dashscope",
             )
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
 
     def test_in_body_lookup_error_is_raised_instead_of_a_queued_video(self):
         """An unknown or expired task id comes back as a 200 with top-level code
@@ -770,7 +845,7 @@ class TestDashScopeVideoContent:
 
         assert _video_url_from_task(_parse_task_response(response), response) == "https://oss/video.mp4"
 
-    @pytest.mark.parametrize("task_status", ["PENDING", "RUNNING"])
+    @pytest.mark.parametrize("task_status", ["PENDING", "RUNNING", "SUSPENDED"])
     def test_pending_task_raises_still_processing(self, task_status):
         """400, which litellm neither retries nor counts toward a deployment cooldown.
         A 404 put the deployment in cooldown, so a client downloading early took the
@@ -800,7 +875,7 @@ class TestDashScopeVideoContent:
         with pytest.raises(DashScopeVideoError, match="24 hours") as raised:
             _video_url_from_task(_parse_task_response(response), response)
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
 
     @pytest.mark.parametrize("task_status", ["FAILED", "CANCELED"])
     def test_terminal_task_with_no_error_detail_is_not_retryable(self, task_status):
@@ -857,7 +932,8 @@ class TestDashScopeVideoContentDownload:
     @pytest.mark.asyncio
     async def test_polling_an_expired_task_says_why_it_is_gone(self):
         """Regression: the caller got DashScope's bare UNKNOWN body, with nothing saying
-        task ids expire after 24 hours or only exist in the region that created them."""
+        task ids expire after 24 hours or only exist in the region that created them, and
+        a 404 put the deployment in cooldown for every other caller."""
         encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -867,10 +943,10 @@ class TestDashScopeVideoContentDownload:
             handler: Final = AsyncHTTPHandler()
             await handler.close()
             handler.client = http_client
-            with pytest.raises(litellm.NotFoundError, match="24 hours") as raised:
+            with pytest.raises(litellm.BadRequestError, match="24 hours") as raised:
                 await avideo_status(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
 
     def test_sync_download_reuses_the_client_that_served_the_task_lookup(self):
         encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
@@ -932,9 +1008,21 @@ class TestDashScopeVideoEnvironment:
 
     def test_default_host_is_beijing(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_BASE_VIDEO", raising=False)
+        monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
 
         assert (
             DashScopeVideoConfig().get_complete_url(model="wan3.0-video", api_base=None, litellm_params={}) == API_BASE
+        )
+
+    def test_chat_api_base_env_points_video_at_the_same_region(self, monkeypatch):
+        """Regression: a DASHSCOPE_API_BASE set for an international chat key still sent
+        video to the Beijing host, where that key is rejected."""
+        monkeypatch.delenv("DASHSCOPE_API_BASE_VIDEO", raising=False)
+        monkeypatch.setenv("DASHSCOPE_API_BASE", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+
+        assert (
+            DashScopeVideoConfig().get_complete_url(model="wan3.0-video", api_base=None, litellm_params={})
+            == "https://dashscope-intl.aliyuncs.com"
         )
 
 
