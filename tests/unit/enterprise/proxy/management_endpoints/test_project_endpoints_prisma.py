@@ -1238,6 +1238,23 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
     assert "rpm/tpm quota" in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_new_project_does_not_expose_database_errors(monkeypatch):
+    internal_detail = "db-internal-marker"
+    mock_prisma_client = mock.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = mock.AsyncMock(side_effect=RuntimeError(internal_detail))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team"))
+
+    assert exc_info.value.code == "500"
+    assert exc_info.value.message
+    assert internal_detail not in exc_info.value.message
+
+
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     existing_row = mock.MagicMock(
         team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata

@@ -653,7 +653,16 @@ async def new_project(
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.project_endpoints.new_project(): Exception occured - {}".format(str(e))
         )
-        raise handle_exception_on_proxy(e)
+        proxy_exception: Final[ProxyException] = handle_exception_on_proxy(e)
+        if proxy_exception.code == "500":
+            raise ProxyException(
+                message="Internal server error",
+                type="internal_server_error",
+                param=None,
+                code=500,
+                headers=proxy_exception.headers,
+            ) from e
+        raise proxy_exception
 
 
 @router.post(
