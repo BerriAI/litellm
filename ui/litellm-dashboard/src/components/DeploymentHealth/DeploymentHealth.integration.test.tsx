@@ -132,15 +132,15 @@ describe("deployment health icon", () => {
     {
       name: "destructive when a critical warning is active",
       warnings: [ENV_CREDENTIAL, NO_REDIS],
-      variant: "destructive",
+      tone: "error",
     },
-    { name: "quiet when only non-critical warnings are active", warnings: [NO_REDIS, DEBUG], variant: "secondary" },
-  ])("should count active warnings and be $name", async ({ warnings, variant }) => {
+    { name: "quiet when only non-critical warnings are active", warnings: [NO_REDIS, DEBUG], tone: "neutral" },
+  ])("should count active warnings and be $name", async ({ warnings, tone }) => {
     proxy.warnings = [...warnings, { ...LICENSE_IN_3_DAYS, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
     renderHealth();
 
     const icon = await screen.findByRole("button", { name: "Deployment health, 2 active warnings" });
-    expect(within(icon).getByText("2")).toHaveAttribute("data-variant", variant);
+    expect(within(icon).getByText("2")).toHaveAttribute("data-tone", tone);
   });
 
   it("should not render or call the proxy for users below proxy admin viewer", async () => {
@@ -255,7 +255,7 @@ describe("deployment health panel", () => {
       renderHealth();
       const panel = await openPanel(user);
 
-      await user.click(within(panel).getByRole("button", { name: "Ignore No Redis configured" }));
+      await user.click(within(panel).getByRole("button", { name: "Actions for No Redis configured" }));
       await user.click(await screen.findByRole("menuitem", { name: option }));
 
       await waitFor(() => expect(proxy.patches).toEqual([{ id: "no_redis", body }]));
@@ -278,7 +278,10 @@ describe("deployment health panel", () => {
     expect(within(panel).getByText("No active deployment warnings")).toBeVisible();
 
     await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
-    await user.click(within(panel).getByRole("button", { name: "Restore Environment-credential login is enabled" }));
+    await user.click(
+      within(panel).getByRole("button", { name: "Actions for Environment-credential login is enabled" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Restore" }));
 
     await waitFor(() => expect(proxy.patches).toEqual([{ id: "env_credential_login", body: { ignored: false } }]));
     const critical = await within(panel).findByRole("region", { name: "Critical" });

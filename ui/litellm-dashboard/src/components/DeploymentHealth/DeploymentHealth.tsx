@@ -7,8 +7,6 @@ import {
   useDeploymentHealthAccess,
   useDeploymentWarnings,
 } from "@/app/(dashboard)/hooks/deploymentWarnings/useDeploymentWarnings";
-import { Alert, AlertAction, AlertTitle } from "@/components/shared/Alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SheetTrigger } from "@/components/ui/sheet";
 import { deploymentWarningContent } from "./DeploymentWarningContent";
@@ -33,18 +31,24 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
   return (
     <SheetTrigger
       handle={handle}
-      render={<Button variant="ghost" size={active.length > 0 ? "sm" : "icon"} />}
+      render={<Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground" />}
       aria-label={active.length > 0 ? `Deployment health, ${pluralWarnings(active.length)}` : "Deployment health"}
     >
-      <Shield aria-hidden />
+      <Shield className="size-4" aria-hidden />
       {active.length > 0 ? (
-        <Badge variant={hasCritical ? "destructive" : "secondary"} aria-hidden>
+        <span
+          data-tone={hasCritical ? "error" : "neutral"}
+          className="absolute top-1 left-5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[12px] leading-4 font-medium tabular-nums ring-2 ring-background data-[tone=error]:bg-destructive data-[tone=error]:text-white data-[tone=neutral]:bg-muted-foreground data-[tone=neutral]:text-background"
+          aria-hidden
+        >
           {active.length}
-        </Badge>
+        </span>
       ) : null}
     </SheetTrigger>
   );
 };
+
+const bannerLinkClassName = "h-auto p-0 text-[13px] leading-5 font-medium text-foreground underline underline-offset-3";
 
 export const DeploymentHealthCriticalRow = ({ handle }: { handle: DeploymentHealthHandle }) => {
   const { canView } = useDeploymentHealthAccess();
@@ -54,17 +58,29 @@ export const DeploymentHealthCriticalRow = ({ handle }: { handle: DeploymentHeal
 
   const [top, ...rest] = critical;
   return (
-    <Alert variant="error" className="rounded-none border-x-0 border-t-0">
-      <CircleAlert aria-hidden />
-      <AlertTitle>
-        {deploymentWarningContent(top.id).title}
-        {rest.length > 0 ? <span className="ml-2 font-normal">+{rest.length} more</span> : null}
-      </AlertTitle>
-      <AlertAction>
-        <SheetTrigger handle={handle} render={<Button variant="outline" size="sm" />}>
-          Review
+    <div
+      role="alert"
+      aria-label="Deployment alert"
+      className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-[13px] leading-5 text-foreground"
+    >
+      <CircleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
+      <strong className="min-w-0 font-medium">{deploymentWarningContent(top.id).title}</strong>
+      <SheetTrigger handle={handle} render={<Button variant="link" className={bannerLinkClassName} />}>
+        Review
+      </SheetTrigger>
+      {rest.length > 0 ? (
+        <SheetTrigger
+          handle={handle}
+          render={
+            <Button
+              variant="link"
+              className="ml-auto h-auto p-0 text-[12px] leading-4 font-normal text-muted-foreground hover:text-foreground"
+            />
+          }
+        >
+          +{rest.length} more
         </SheetTrigger>
-      </AlertAction>
-    </Alert>
+      ) : null}
+    </div>
   );
 };
