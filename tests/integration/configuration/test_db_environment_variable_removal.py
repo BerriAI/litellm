@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import socket
@@ -26,8 +27,13 @@ from integration._support.anthropic_sse import delta_text, message_json, message
 from integration._support.async_server import LoopbackServer, close_writer
 from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually, gateway_from_environment, held, string_value
-from integration._support.database import scratch_database, write_rows
-from integration._support.database_relay import TriggerScanner, database_relay
+from integration._support.database import read_rows, scratch_database, write_rows
+from integration._support.database_relay import (
+    DroppedConnectionRelay,
+    TriggerScanner,
+    database_relay,
+    dropped_connection_relay,
+)
 from integration._support.environment_probe import PROBE_HOOK, PROBE_ROUTE
 from integration._support.process import (
     DB_PUSH,
@@ -39,6 +45,8 @@ from integration._support.process import (
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value
 
 MODEL: Final = "db-env-removal-claude"
 UPSTREAM_MODEL: Final = "claude-sonnet-5-5"
@@ -90,10 +98,19 @@ GENERIC_SSO_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 CLEARED_SSO_FIELDS: Final[Mapping[str, None]] = MappingProxyType(
     {"generic_client_id": None, **{field: None for field in GENERIC_SSO_FIELDS}}
 )
+SSO_ENVIRONMENT_KEYS: Final = ("GENERIC_CLIENT_ID", *(field.upper() for field in GENERIC_SSO_FIELDS))
+NOT_AN_OBJECT: Final[JsonValue] = ["lit9489", "not", "an", "object"]
+SALT_KEY: Final = "sk-lit9489-salt-key"
+RETIRED_SALT_KEY: Final = "sk-lit9489-retired-salt-key"
+ROTATED_MASTER_KEY: Final = "sk-lit9489-rotated-master-key"
+PLAINTEXT_KEY: Final = "LIT9489_STORED_IN_PLAINTEXT"
+RETIRED_KEY: Final = "LIT9489_UNDER_A_RETIRED_KEY"
+DECRYPTABLE_KEY: Final = "LIT9489_DECRYPTABLE"
 UNTOUCHED: Final[Mapping[str, str | None]] = MappingProxyType(
     {YAML_LITERAL: YAML_LITERAL_VALUE, YAML_REFERENCE: YAML_SOURCE_VALUE, PROCESS_ONLY: PROCESS_ONLY_VALUE}
 )
 REQUEST_BODY: Final = TypeAdapter(dict[str, JsonValue])
+ENVIRONMENT_ROW: Final = TypeAdapter(dict[str, JsonValue])
 
 pytestmark: Final = pytest.mark.timeout(
     2 * readiness_seconds(WORKERS) + 4 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS
@@ -176,12 +193,13 @@ def _pod(
     workers: int = WORKERS,
     general_settings: Mapping[str, JsonValue] = MappingProxyType({}),
     remove_environment: tuple[str, ...] = SCRATCH_ONLY,
+    environment: Mapping[str, str] = MappingProxyType({}),
 ) -> AbstractContextManager[OwnedProxy]:
     directory.mkdir(parents=True, exist_ok=True)
     return owned_proxy_process(
         gateway,
         directory,
-        _process_environment(provider, database_url),
+        {**_process_environment(provider, database_url), **environment},
         config=_config(directory, general_settings),
         remove_environment=_without_the_worker_redis(remove_environment),
         workers=workers,
@@ -517,17 +535,113 @@ def _save_sso(proxy: OwnedProxy, fields: Mapping[str, JsonValue]) -> None:
     assert response.status_code == 200, response.text
 
 
-def _legacy_sso_in_the_environment_row(pods: SsoPods) -> str:
-    _save_sso(pods.writer, CLEARED_SSO_FIELDS)
-    client_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
-    _set_through_the_api(
-        pods.writer,
-        {
-            "GENERIC_CLIENT_ID": client_id,
-            **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()},
-        },
+def _sso_environment(client_id: str) -> Mapping[str, str]:
+    return MappingProxyType(
+        {"GENERIC_CLIENT_ID": client_id, **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()}}
     )
+
+
+def _legacy_sso_in_the_environment_row(writer: OwnedProxy) -> str:
+    _save_sso(writer, CLEARED_SSO_FIELDS)
+    client_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
+    _set_through_the_api(writer, _sso_environment(client_id))
     return client_id
+
+
+def _legacy_ciphertext(value: str, signing_key: str) -> str:
+    return base64.urlsafe_b64encode(encrypt_value(value=value, signing_key=signing_key)).decode()
+
+
+def _store_sso_row(database_url: str, sso_settings: JsonValue) -> None:
+    write_rows(
+        'UPDATE "LiteLLM_SSOConfig" SET sso_settings = %s::jsonb WHERE id = %s',
+        (json.dumps(sso_settings), SSO_ROW_ID.decode()),
+        database_url=database_url,
+    )
+
+
+def _encrypted_sso_row(client_id: str) -> dict[str, JsonValue]:
+    fields: Final = {"generic_client_id": client_id, **GENERIC_SSO_FIELDS}
+    return {field: _legacy_ciphertext(value, SALT_KEY) for field, value in fields.items()}
+
+
+def _move_sso_keys_out_of_the_row(database_url: str, marker: str) -> None:
+    write_rows(
+        'UPDATE "LiteLLM_Config" SET param_value = (param_value - %s::text[]) || %s::jsonb WHERE param_name = %s',
+        (
+            "{" + ",".join(f'"{key}"' for key in SSO_ENVIRONMENT_KEYS) + "}",
+            json.dumps({SYNC_MARKER: marker}),
+            "environment_variables",
+        ),
+        database_url=database_url,
+    )
+
+
+def _sso_reads_dropped(relay: DroppedConnectionRelay, database_url: str, saved_id: str) -> None:
+    relay.arm()
+    _store_sso_row(database_url, _encrypted_sso_row(saved_id))
+
+
+def _sso_reads_restored(relay: DroppedConnectionRelay, database_url: str, saved_id: str) -> None:
+    assert relay.dropped.is_set(), "No SSO settings read reached the relay while it dropped them"
+    relay.disarm()
+
+
+def _sso_row_not_an_object(relay: DroppedConnectionRelay, database_url: str, saved_id: str) -> None:
+    _store_sso_row(database_url, NOT_AN_OBJECT)
+
+
+def _sso_row_repaired(relay: DroppedConnectionRelay, database_url: str, saved_id: str) -> None:
+    _store_sso_row(database_url, _encrypted_sso_row(saved_id))
+
+
+SsoStep = Callable[[DroppedConnectionRelay, str, str], None]
+SSO_READ_FAILURES: Final[Mapping[str, tuple[SsoStep, SsoStep]]] = MappingProxyType(
+    {
+        "read_fails": (_sso_reads_dropped, _sso_reads_restored),
+        "not_an_object": (_sso_row_not_an_object, _sso_row_repaired),
+    }
+)
+
+
+def _environment_row(database_url: str) -> Mapping[str, JsonValue]:
+    rows: Final = read_rows(
+        'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )
+    assert len(rows) == 1, len(rows)
+    return ENVIRONMENT_ROW.validate_python(rows[0]["param_value"])
+
+
+def _regenerate_the_master_key(proxy: OwnedProxy) -> str:
+    response: Final = proxy.gateway.request(
+        "POST", "/key/regenerate", {"key": proxy.gateway.key, "new_master_key": ROTATED_MASTER_KEY}
+    )
+    assert response.status_code == 200, response.status_code
+    return ROTATED_MASTER_KEY
+
+
+def _migrate_the_encryption(proxy: OwnedProxy) -> str:
+    response: Final = proxy.gateway.request("POST", "/credentials/migrate-encryption")
+    assert response.status_code == 200, response.text
+    return SALT_KEY
+
+
+@dataclass(frozen=True, slots=True)
+class Rotation:
+    general_settings: Mapping[str, JsonValue]
+    rotate: Callable[[OwnedProxy], str]
+
+
+ROTATIONS: Final[Mapping[str, Rotation]] = MappingProxyType(
+    {
+        "master_key_regeneration": Rotation(MappingProxyType({}), _regenerate_the_master_key),
+        "encryption_migration": Rotation(
+            MappingProxyType({"encryption_algorithm": "aes-256-gcm"}), _migrate_the_encryption
+        ),
+    }
+)
 
 
 def _sso_client_id(proxy: OwnedProxy) -> str | None:
@@ -808,7 +922,7 @@ def test_api_version_the_cli_set_comes_back_after_removal(pods: Pods) -> None:
 
 @pytest.mark.timeout(3 * readiness_seconds(WORKERS) + 6 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS)
 def test_sso_save_on_one_pod_keeps_sso_login_on_the_other_pod_without_a_password_page(sso_pods: SsoPods) -> None:
-    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods)
+    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods.writer)
     _settled(sso_pods.reader, {"GENERIC_CLIENT_ID": legacy_id})
     eventually(lambda: _sso_client_id(sso_pods.reader), lambda client_id: client_id == legacy_id)
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
@@ -838,7 +952,7 @@ def test_sso_save_on_one_pod_keeps_sso_login_on_the_other_pod_without_a_password
 
 @pytest.mark.timeout(3 * readiness_seconds(WORKERS) + 6 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS)
 def test_sso_save_reaches_a_pod_that_leaves_sso_settings_out(sso_pods: SsoPods) -> None:
-    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods)
+    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods.writer)
     _settled(sso_pods.excluded, {"GENERIC_CLIENT_ID": legacy_id})
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
 
@@ -849,3 +963,75 @@ def test_sso_save_reaches_a_pod_that_leaves_sso_settings_out(sso_pods: SsoPods) 
         {"GENERIC_CLIENT_ID": saved_id, **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()}},
     )
     assert _sso_client_id(sso_pods.excluded) == saved_id
+
+
+def test_sso_key_removed_from_the_row_with_no_stored_sso_value_is_unset(pods: Pods) -> None:
+    row_only: Final = f"lit9489-row-only-{uuid.uuid4().hex}"
+    _set_through_the_api(pods.writer, {"GENERIC_CLIENT_ID": row_only})
+    _settled_on_both(pods, {"GENERIC_CLIENT_ID": row_only})
+
+    _remove_from_row(pods.database_url, ("GENERIC_CLIENT_ID",))
+
+    _settled_on_both(pods, {"GENERIC_CLIENT_ID": None})
+
+
+@pytest.mark.parametrize("failure", tuple(SSO_READ_FAILURES))
+def test_sso_keys_leaving_the_row_keep_their_values_until_the_sso_table_is_read(tmp_path: Path, failure: str) -> None:
+    fail, recover = SSO_READ_FAILURES[failure]
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    marker: Final = f"sync-{uuid.uuid4().hex}"
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        dropped_connection_relay(database_url, SSO_ROW_ID) as (relay, relayed_url),
+        _pod(
+            gateway, tmp_path / "pod", provider, _plaintext(relayed_url), environment={"LITELLM_SALT_KEY": SALT_KEY}
+        ) as proxy,
+    ):
+        legacy_id: Final = _legacy_sso_in_the_environment_row(proxy)
+        _settled(proxy, _sso_environment(legacy_id))
+
+        fail(relay, database_url, saved_id)
+        _move_sso_keys_out_of_the_row(database_url, marker)
+
+        _settled(proxy, {**_sso_environment(legacy_id), SYNC_MARKER: marker})
+
+        recover(relay, database_url, saved_id)
+
+        _settled(proxy, _sso_environment(saved_id))
+        assert _sso_client_id(proxy) == saved_id
+
+
+@pytest.mark.parametrize("rotation", tuple(ROTATIONS))
+def test_rotation_keeps_environment_values_it_cannot_decrypt_exactly_as_stored(tmp_path: Path, rotation: str) -> None:
+    plaintext: Final = f"lit9489-plaintext-{uuid.uuid4().hex}"
+    retired: Final = _legacy_ciphertext(f"lit9489-retired-{uuid.uuid4().hex}", RETIRED_SALT_KEY)
+    decryptable: Final = f"lit9489-decryptable-{uuid.uuid4().hex}"
+    encrypted: Final = _legacy_ciphertext(decryptable, SALT_KEY)
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        _pod(
+            gateway,
+            tmp_path / "pod",
+            provider,
+            database_url,
+            general_settings=ROTATIONS[rotation].general_settings,
+            environment={"LITELLM_SALT_KEY": SALT_KEY},
+        ) as proxy,
+    ):
+        _merge_into_row(database_url, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired, DECRYPTABLE_KEY: encrypted})
+        _settled(proxy, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired, DECRYPTABLE_KEY: decryptable})
+
+        signing_key: Final = ROTATIONS[rotation].rotate(proxy)
+
+        row: Final = _environment_row(database_url)
+        rotated: Final = string_value(row[DECRYPTABLE_KEY])
+        assert (rotated != encrypted, decrypt_if_encrypted_with(rotated, signing_key)) == (True, decryptable)
+        assert {key: row.get(key) for key in (PLAINTEXT_KEY, RETIRED_KEY)} == {
+            PLAINTEXT_KEY: plaintext,
+            RETIRED_KEY: retired,
+        }
+        _settled(proxy, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired})
