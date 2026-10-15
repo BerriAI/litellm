@@ -21,6 +21,27 @@ tests:
             name: REDIS_CLUSTER_NODES
           any: true
 
+  - it: gateway renders without redis env vars when passwordSecret is null
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_HOST
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+          any: true
+
   - it: gateway emits host, port and password when redis is configured
     template: gateway/deployment.yaml
     set:
@@ -68,6 +89,27 @@ tests:
                 name: redis-secret
                 key: redis-password
 
+  - it: backend renders without redis env vars when passwordSecret is null
+    template: backend/deployment.yaml
+    set:
+      redis.passwordSecret: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_HOST
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+          any: true
+
   - it: gateway omits REDIS_PASSWORD for an auth-less redis
     template: gateway/deployment.yaml
     set:
@@ -107,3 +149,174 @@ tests:
           content:
             name: REDIS_CLUSTER_NODES
           any: true
+
+  - it: gateway gets redis host from hostKey and keeps port and password
+    template: gateway/deployment.yaml
+    set:
+      redis.host: ""
+      redis.port: 6380
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.hostKey: hostname
+      redis.passwordSecret.passwordKey: redis-password
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_HOST
+            valueFrom:
+              secretKeyRef:
+                name: redis-secret
+                key: hostname
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PORT
+            value: "6380"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: redis-secret
+                key: redis-password
+
+  - it: backend gets redis host from hostKey with the same coordination env
+    template: backend/deployment.yaml
+    set:
+      redis.host: ""
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.hostKey: hostname
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_HOST
+            valueFrom:
+              secretKeyRef:
+                name: redis-secret
+                key: hostname
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PORT
+            value: "6379"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: redis-secret
+                key: password
+
+  - it: gateway expands the redis cluster seed from hostKey at runtime
+    template: gateway/deployment.yaml
+    set:
+      redis.host: ""
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.hostKey: hostname
+      redis.cluster: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_CLUSTER_NODES
+            value: '[{"host":"$(REDIS_HOST)","port":6379}]'
+      - equal:
+          path: spec.template.spec.containers[0].env[8].name
+          value: REDIS_HOST
+      - equal:
+          path: spec.template.spec.containers[0].env[11].name
+          value: REDIS_CLUSTER_NODES
+
+  - it: gateway gets REDIS_URL from urlKey without discrete Redis env
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.urlKey: connection-url
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_URL
+            valueFrom:
+              secretKeyRef:
+                name: redis-secret
+                key: connection-url
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_HOST
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PORT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_CLUSTER_NODES
+          any: true
+
+  - it: redis rejects host together with hostKey
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.passwordSecret.hostKey: hostname
+      redis.passwordSecret.name: redis-secret
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.host and redis.passwordSecret.hostKey cannot both be set"
+
+  - it: redis urlKey rejects host
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.passwordSecret.urlKey: connection-url
+      redis.passwordSecret.name: redis-secret
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster"
+
+  - it: redis urlKey rejects hostKey
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.hostKey: hostname
+      redis.passwordSecret.urlKey: connection-url
+      redis.passwordSecret.name: redis-secret
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster"
+
+  - it: redis urlKey rejects cluster mode
+    template: gateway/deployment.yaml
+    set:
+      redis.cluster: true
+      redis.passwordSecret.urlKey: connection-url
+      redis.passwordSecret.name: redis-secret
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster"
+
+  - it: redis hostKey requires a Secret name
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.hostKey: hostname
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.passwordSecret.name is required when hostKey or urlKey is set"
+
+  - it: redis urlKey requires a Secret name
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.urlKey: connection-url
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.passwordSecret.name is required when hostKey or urlKey is set"

@@ -1,11 +1,12 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+import re
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -17,6 +18,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
+from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -24,18 +27,24 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMe
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
+
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for pump tasks
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
 
 
-def _is_message_stop_chunk(chunk: object) -> bool:
+def is_message_stop_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "message_stop"
     if isinstance(chunk, (bytes, bytearray)):
         return any(line == b"event: message_stop" for line in chunk.splitlines())
     return False
+
+
+_is_message_stop_chunk = is_message_stop_chunk
 
 
 def is_anthropic_ping_chunk(chunk: object) -> bool:
@@ -133,8 +142,11 @@ def _anthropic_error_body(chunk: object) -> Mapping[str, object] | None:
     return error_body if isinstance(error_body, dict) else None
 
 
-def _is_provider_error_chunk(chunk: object) -> bool:
+def is_provider_error_chunk(chunk: object) -> bool:
     return _anthropic_error_body(chunk) is not None
+
+
+_is_provider_error_chunk = is_provider_error_chunk
 
 
 def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
@@ -161,7 +173,7 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
 
 
 def _is_terminal_stream_chunk(chunk: object) -> bool:
-    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+    return is_message_stop_chunk(chunk) or is_provider_error_chunk(chunk)
 
 
 def _try_claim_detached_drain_slot() -> bool:
@@ -366,6 +378,14 @@ class AnthropicMessagesStreamingResponse:
         self._hidden_params = hidden_params
 
     @property
+    def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: AnthropicMessagesStreamHiddenParams) -> None:
+        self._hidden_params = hidden_params
+
+    @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self.completion_stream, "has_buffered_provider_output", False) is True
 
@@ -377,6 +397,74 @@ class AnthropicMessagesStreamingResponse:
 
     async def aclose(self) -> None:
         await aclose_if_supported(self.completion_stream)
+
+
+_SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
+_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
+_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _sse_data_payload(line: bytes) -> bytes | None:
+    return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
+
+
+def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+    payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
+    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
+    try:
+        return _SSE_EVENT.validate_python(json.loads(data))
+    except (ValueError, ValidationError):
+        return None
+
+
+async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
+    event: Final = _sse_frame_event(frame)
+    if event is None:
+        return frame
+    stamped: Final = await safeguard_results.observe(event)
+    return frame if stamped is event else anthropic_sse_frame(stamped)
+
+
+def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+
+
+async def _stamped_sse_frames(
+    stream: AsyncIterator[bytes], safeguard_results: StreamedSafeguardResults
+) -> AsyncGenerator[bytes, None]:
+    open_frame: Final = bytearray()
+    async for chunk in stream:
+        scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+        open_frame.extend(chunk)
+        if not _ends_a_frame(open_frame, scan_from):
+            continue
+        *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+        open_frame[:] = unterminated
+        for frame in frames:
+            yield await _stamped_sse_frame(frame, safeguard_results)
+    if open_frame:
+        yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
+
+
+class SafeguardedAnthropicSSEStream:
+    def __init__(self, stream: AsyncIterator[bytes], evaluator: "SafeguardsEvaluator") -> None:
+        self._stream: Final = stream
+        self._frames: Final = _stamped_sse_frames(stream, StreamedSafeguardResults(evaluator))
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._stream, "has_buffered_provider_output", False) is True
+
+    def __aiter__(self) -> "SafeguardedAnthropicSSEStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._frames.__anext__()
+
+    async def aclose(self) -> None:
+        await self._frames.aclose()
+        await aclose_if_supported(self._stream)
 
 
 class BaseAnthropicMessagesStreamingIterator:
@@ -407,7 +495,7 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        logging_coroutine: Final = PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        logging_coroutine: Final = PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=self.litellm_logging_obj,
             passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
             url_route="/v1/messages",
@@ -699,7 +787,7 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
         if on_detached_failure is None:
             return
         try:

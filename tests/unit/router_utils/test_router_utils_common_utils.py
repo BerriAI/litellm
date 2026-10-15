@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -12,12 +12,15 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
+    resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
+from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 
 
 class TestFilterTeamBasedModels:
@@ -402,7 +405,7 @@ def test_filter_deployments_by_model_access_groups_access_group_only_key():
 
     filtered = router._filter_deployments_by_model_access_groups(
         model="gpt-5",
-        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        healthy_deployments=router.get_all_deployments(model_name="gpt-5"),
         request_kwargs={
             "metadata": {
                 "user_api_key_team_id": "team-2",
@@ -561,9 +564,28 @@ class TestResolveModelGroupAlias:
             model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
         )
 
-        assert router._get_model_from_alias("group-a") == "group-b"
-        assert router._get_model_from_alias("group-item") == "group-b"
-        assert router._get_model_from_alias("group-b") is None
+        assert router.get_model_from_alias("group-a") == "group-b"
+        assert router.get_model_from_alias("group-item") == "group-b"
+        assert router.get_model_from_alias("group-b") is None
+
+
+@pytest.mark.parametrize(
+    "model, model_alias_map, key_aliases, model_group_alias, expected",
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-key-router-order"),
+        pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {}, {}, {}, "a", id="no-alias"),
+    ],
+)
+def test_resolves_served_model_aliases_in_order(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+    expected: str,
+) -> None:
+    assert resolve_served_model(model, model_alias_map, key_aliases, model_group_alias) == expected
 
 
 class TestTruncateFallbackErrorDetail:
@@ -588,6 +610,56 @@ class TestTruncateFallbackErrorDetail:
         to stay small enough that a walk over many model groups cannot compound it into an
         output volume that starves the process."""
         assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
+
+
+def test_format_fallback_outcome_reports_unauthorized_skips_without_failure_detail() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model",),
+        "",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+
+    assert "Fallback to restricted-model was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+def test_format_fallback_outcome_separates_attempted_failures_from_skipped_targets() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model", "dead-allowed"),
+        "boom",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+    failed_sentence: Final = message.split("Fallback to dead-allowed also failed:", 1)[1].split(
+        " Fallback to restricted-model was skipped", 1
+    )[0]
+
+    assert "Fallback to dead-allowed also failed: boom" in message
+    assert "Fallback to restricted-model was skipped because the caller is not authorized" in message
+    assert "restricted-model" not in failed_sentence
+
+
+def test_format_fallback_outcome_uses_plural_for_multiple_over_budget_skips() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("paid-one", "paid-two"),
+        "",
+        skipped=(
+            SkippedFallbackTarget("paid-one", FallbackSkipReason.OVER_BUDGET),
+            SkippedFallbackTarget("paid-two", FallbackSkipReason.OVER_BUDGET),
+        ),
+    )
+
+    assert "Fallback to paid-one, paid-two was skipped because the caller is over budget for them." in message
+
+
+def test_format_fallback_outcome_preserves_attempted_failure_wording_without_skips() -> None:
+    assert (
+        format_fallback_outcome_message("primary", ("fallback",), "detail")
+        == "\n\nLiteLLM: model group 'primary' failed with the error above. "
+        "Fallback to fallback also failed: detail"
+    )
 
 
 class TestWarnOnProviderCredentialMismatch:

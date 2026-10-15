@@ -1,12 +1,11 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
-import json
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator
 
 from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
@@ -20,8 +19,11 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
 )
+from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.responses.streaming_iterator import stream_error_status_and_message
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .transformation import (
     REASONING_SUMMARY_PART_SEPARATOR,
@@ -30,9 +32,10 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
 
 
-class _UpstreamFailure(BaseModel):
+class _UpstreamFailure(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     status_code: int | None = None
@@ -56,13 +59,13 @@ class _UpstreamFailure(BaseModel):
         return value if isinstance(value, str) else None
 
 
-class _FailedResponse(BaseModel):
+class _FailedResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     error: object | None = None
 
 
-class _FailedResponseEvent(BaseModel):
+class _FailedResponseEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     response: _FailedResponse | None = None
@@ -119,9 +122,11 @@ class AnthropicResponsesStreamWrapper:
         responses_stream: Any,
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        safeguards_evaluator: "SafeguardsEvaluator | None" = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
+        self.safeguards_evaluator: Final = safeguards_evaluator
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -485,10 +490,6 @@ class AnthropicResponsesStreamWrapper:
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """Yield SSE-encoded bytes for each Anthropic event chunk."""
+        safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
         async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                yield chunk
+            yield anthropic_sse_frame(await safeguard_results.observe(chunk))
