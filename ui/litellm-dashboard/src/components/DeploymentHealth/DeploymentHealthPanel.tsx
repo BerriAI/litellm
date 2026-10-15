@@ -1,13 +1,24 @@
 "use client";
 
-import { ChevronRight, CircleAlert, Ellipsis, ExternalLink, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  BellOff,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Clock,
+  ExternalLink,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
 import {
   type DeploymentWarning,
   useDeploymentHealthAccess,
   useDeploymentWarnings,
   useUpdateDeploymentWarningIgnore,
 } from "@/app/(dashboard)/hooks/deploymentWarnings/useDeploymentWarnings";
-import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -16,6 +27,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { cn } from "@/lib/cva.config";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -35,10 +48,12 @@ const SEVERITY_GROUPS = [
   { severity: "warning", label: "Warnings" },
 ] as const;
 
+const LOCAL_DAY_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const LOCAL_MINUTE_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const FULL_UTC_FORMAT = new Intl.DateTimeFormat("en-US", { dateStyle: "full", timeStyle: "long", timeZone: "UTC" });
 
 const formatLocalMinute = (iso: string): string => LOCAL_MINUTE_FORMAT.format(new Date(iso));
+const formatLocalDay = (iso: string): string => LOCAL_DAY_FORMAT.format(new Date(iso));
 const formatFullUtc = (iso: string): string => FULL_UTC_FORMAT.format(new Date(iso));
 
 interface ItemPermissions {
@@ -46,125 +61,185 @@ interface ItemPermissions {
   ignoreAvailable: boolean;
 }
 
-const ActionsMenu = ({ warning, title }: { warning: DeploymentWarning; title: string }) => {
+type IgnoreState = NonNullable<DeploymentWarning["ignore"]>;
+
+const SnoozeMenu = ({ warningId, title }: { warningId: string; title: string }) => {
   const update = useUpdateDeploymentWarningIgnore();
   const ignore = (snoozeSeconds?: number) =>
-    update.mutate({ warningId: warning.id, update: { ignored: true, snooze_seconds: snoozeSeconds } });
+    update.mutate({ warningId, update: { ignored: true, snooze_seconds: snoozeSeconds } });
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-my-1 size-7 text-muted-foreground"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[13px]"
             disabled={update.isPending}
-            aria-label={`Actions for ${title}`}
+            aria-label={`Snooze ${title}`}
           />
         }
       >
-        <Ellipsis aria-hidden />
+        Snooze
+        <ChevronDown data-icon="inline-end" aria-hidden />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-44">
-        {warning.ignore ? (
-          <DropdownMenuItem onClick={() => update.mutate({ warningId: warning.id, update: { ignored: false } })}>
-            Restore
+      <DropdownMenuContent align="end" className="min-w-48 [&_[data-slot=dropdown-menu-item]]:whitespace-nowrap">
+        {SNOOZE_OPTIONS.map(({ label, seconds }) => (
+          <DropdownMenuItem key={seconds} onClick={() => ignore(seconds)}>
+            <Clock aria-hidden />
+            {label}
           </DropdownMenuItem>
-        ) : (
-          <>
-            {SNOOZE_OPTIONS.map(({ label, seconds }) => (
-              <DropdownMenuItem key={seconds} onClick={() => ignore(seconds)}>
-                {label}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => ignore()}>Ignore forever</DropdownMenuItem>
-          </>
-        )}
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => ignore()}>
+          <BellOff aria-hidden />
+          Ignore forever
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 };
 
-const hasActions = (warning: DeploymentWarning, { canManage, ignoreAvailable }: ItemPermissions): boolean => {
-  const adminControlled = !warning.ignore || warning.ignore.source === "admin";
-  return canManage && ignoreAvailable && adminControlled;
-};
-
-const IgnoreStatus = ({ ignore }: { ignore: NonNullable<DeploymentWarning["ignore"]> }) => {
-  if (ignore.source === "env_var") {
-    return (
-      <p className="text-[12px] leading-4 text-muted-foreground">
-        <span>Ignored</span> by the <code className="font-mono">{ignore.env_var}</code> environment variable
-      </p>
-    );
-  }
+const RestoreButton = ({ warningId, title }: { warningId: string; title: string }) => {
+  const update = useUpdateDeploymentWarningIgnore();
   return (
-    <p className="text-[12px] leading-4 text-muted-foreground">
-      {ignore.ignored_until ? (
-        <SimpleTooltip content={formatFullUtc(ignore.ignored_until)}>
-          <span className="underline decoration-dotted underline-offset-3">
-            Snoozed until {formatLocalMinute(ignore.ignored_until)}
-          </span>
-        </SimpleTooltip>
-      ) : (
-        <span>Ignored</span>
-      )}{" "}
-      by {ignore.ignored_by} on {formatLocalMinute(ignore.ignored_at)}
-    </p>
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 text-[13px]"
+      disabled={update.isPending}
+      aria-label={`Restore ${title}`}
+      onClick={() => update.mutate({ warningId, update: { ignored: false } })}
+    >
+      Restore
+    </Button>
   );
 };
 
-const SeverityIcon = ({ warning }: { warning: DeploymentWarning }) => {
-  const Icon = warning.severity === "critical" ? CircleAlert : TriangleAlert;
-  const activeTone = warning.severity === "critical" ? "text-destructive" : "text-warning";
-  const tone = warning.ignore ? "text-muted-foreground" : activeTone;
-  return <Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} aria-hidden />;
+const ItemAction = ({
+  warning,
+  title,
+  canManage,
+  ignoreAvailable,
+}: ItemPermissions & { warning: DeploymentWarning; title: string }) => {
+  if (!canManage || !ignoreAvailable) return null;
+  if (!warning.ignore) return <SnoozeMenu warningId={warning.id} title={title} />;
+  return warning.ignore.source === "admin" ? <RestoreButton warningId={warning.id} title={title} /> : null;
+};
+
+const IgnoreMeta = ({ ignore }: { ignore: IgnoreState }) => {
+  if (ignore.source === "env_var") {
+    return (
+      <span>
+        By env var <code className="font-mono wrap-break-word">{ignore.env_var}</code>
+      </span>
+    );
+  }
+  if (ignore.ignored_until) {
+    return (
+      <span>
+        <SimpleTooltip content={formatFullUtc(ignore.ignored_until)}>
+          <span className="underline decoration-dotted underline-offset-3">
+            Until {formatLocalMinute(ignore.ignored_until)}
+          </span>
+        </SimpleTooltip>{" "}
+        · by {ignore.ignored_by}
+      </span>
+    );
+  }
+  return (
+    <span>
+      Since {formatLocalDay(ignore.ignored_at)} · by {ignore.ignored_by}
+    </span>
+  );
+};
+
+const IgnoreStatus = ({ ignore }: { ignore: IgnoreState }) => {
+  const snoozed = ignore.source === "admin" && Boolean(ignore.ignored_until);
+  const Icon = snoozed ? Clock : BellOff;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] leading-4 text-muted-foreground">
+      <Badge variant="outline" className="gap-1 bg-muted text-muted-foreground">
+        <Icon aria-hidden />
+        {snoozed ? "Snoozed" : "Ignored"}
+      </Badge>
+      <IgnoreMeta ignore={ignore} />
+    </div>
+  );
 };
 
 const WarningItem = ({ warning, ...permissions }: ItemPermissions & { warning: DeploymentWarning }) => {
   const content = deploymentWarningContent(warning.id);
-  const showDatabaseHint = permissions.canManage && !permissions.ignoreAvailable && !warning.ignore;
+  const critical = warning.severity === "critical";
+  const SeverityIcon = critical ? CircleAlert : TriangleAlert;
   return (
-    <article aria-label={content.title} className="flex gap-2 py-3">
-      <SeverityIcon warning={warning} />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex items-start gap-2">
-          <p className="min-w-0 flex-1 font-medium">{content.title}</p>
-          {hasActions(warning, permissions) ? <ActionsMenu warning={warning} title={content.title} /> : null}
-        </div>
-        {content.fix && !warning.ignore ? (
-          <p className="text-muted-foreground [&_code]:font-mono [&_code]:text-[12px] [&_code]:wrap-break-word [&_code]:text-foreground">
-            {content.fix}
-          </p>
-        ) : null}
-        {content.docsUrl && !warning.ignore ? (
-          <a
-            className="inline-flex w-fit items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
-            href={content.docsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read the docs
-            <ExternalLink className="size-3.5 text-muted-foreground" aria-hidden />
-          </a>
-        ) : null}
+    <Alert
+      variant={critical ? "error" : "warning"}
+      role="article"
+      aria-label={content.title}
+      data-ignored={warning.ignore ? "" : undefined}
+      className="gap-x-2 border-warning/25 *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive bg-warning/6 p-3 text-[13px] leading-5 text-foreground *:data-[slot=alert-description]:text-muted-foreground data-[variant=error]:border-destructive/35 data-[variant=error]:bg-destructive/10 data-ignored:border-warning/20 data-ignored:bg-warning/4 data-ignored:data-[variant=error]:border-destructive/20 data-ignored:data-[variant=error]:bg-destructive/4"
+    >
+      <SeverityIcon aria-hidden />
+      <AlertTitle>{content.title}</AlertTitle>
+      <AlertDescription className="flex flex-col [&_a]:no-underline [&_a]:hover:underline [&_p:not(:last-child)]:mb-0 text-[13px] leading-5 text-pretty [&_code]:font-mono [&_code]:text-[12px] [&_code]:wrap-break-word [&_code]:text-foreground">
+        {content.fix ? <p className="mt-0.5">{content.fix}</p> : null}
         {warning.ignore ? <IgnoreStatus ignore={warning.ignore} /> : null}
-        {showDatabaseHint ? (
-          <p className="text-[12px] leading-4 text-muted-foreground">Connect a database to ignore warnings</p>
-        ) : null}
-      </div>
-    </article>
+        <div className="mt-2 flex items-center gap-2">
+          {content.docsUrl ? (
+            <a
+              href={content.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                buttonVariants({ variant: "link" }),
+                "h-auto gap-1 p-0 text-[13px] leading-5 font-medium text-foreground no-underline hover:underline",
+              )}
+            >
+              Read the docs
+              <ExternalLink className="size-3.5 text-muted-foreground" aria-hidden />
+            </a>
+          ) : null}
+          <span className="flex-1" />
+          <ItemAction warning={warning} title={content.title} {...permissions} />
+        </div>
+      </AlertDescription>
+    </Alert>
   );
 };
 
-const groupLabelClassName = "text-[12px] leading-4 font-medium text-muted-foreground";
-const groupListClassName = "divide-y divide-border border-y border-border";
+const GroupTrigger = ({ label, count }: { label: string; count: number }) => (
+  <CollapsibleTrigger className="flex h-8 w-fit items-center gap-1.5 rounded-sm font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50 data-[panel-open]:[&>svg]:rotate-90">
+    <ChevronRight className="size-3.5 text-muted-foreground transition-transform" aria-hidden />
+    {label} <span className="font-normal text-muted-foreground">{count}</span>
+  </CollapsibleTrigger>
+);
+
+const WarningGroup = ({
+  label,
+  warnings,
+  defaultOpen,
+  permissions,
+}: {
+  label: string;
+  warnings: readonly DeploymentWarning[];
+  defaultOpen: boolean;
+  permissions: ItemPermissions;
+}) => (
+  <Collapsible defaultOpen={defaultOpen} render={<section aria-label={label} />} className="flex flex-col gap-2">
+    <GroupTrigger label={label} count={warnings.length} />
+    <CollapsibleContent className="flex flex-col gap-2">
+      {warnings.map((warning) => (
+        <WarningItem key={warning.id} warning={warning} {...permissions} />
+      ))}
+    </CollapsibleContent>
+  </Collapsible>
+);
 
 const PanelSkeleton = () => (
-  <div className={groupListClassName} aria-hidden>
+  <div className="flex flex-col gap-2" aria-hidden>
     {[0, 1].map((row) => (
-      <div key={row} className="flex gap-2 py-3">
+      <div key={row} className="flex gap-2 rounded-lg border border-border p-3">
         <Skeleton className="size-4 rounded-full" />
         <div className="flex flex-1 flex-col gap-2">
           <Skeleton className="h-3 w-2/3" />
@@ -174,6 +249,25 @@ const PanelSkeleton = () => (
       </div>
     ))}
   </div>
+);
+
+const NoActiveWarnings = ({ hasIgnored }: { hasIgnored: boolean }) => (
+  <Empty className="gap-2 p-0 py-6">
+    <EmptyHeader>
+      <EmptyMedia
+        variant="icon"
+        className="border border-border bg-transparent text-muted-foreground [&_svg:not([class*='size-'])]:size-4"
+      >
+        <ShieldCheck aria-hidden />
+      </EmptyMedia>
+      <EmptyTitle className="text-[15px] leading-[22px] font-semibold tracking-normal">No active warnings</EmptyTitle>
+      <EmptyDescription className="text-[13px] leading-5">
+        {hasIgnored
+          ? "Snoozed and ignored warnings are listed below"
+          : "Deployment warnings show up here when this proxy\u2019s setup needs attention"}
+      </EmptyDescription>
+    </EmptyHeader>
+  </Empty>
 );
 
 const PanelBody = () => {
@@ -199,40 +293,16 @@ const PanelBody = () => {
   const ignored = data.warnings.filter((warning) => warning.ignore);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pb-4 text-[13px] leading-5">
-      {active.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-8 text-center">
-          <ShieldCheck className="size-5 text-muted-foreground" aria-hidden />
-          <p className="text-muted-foreground">No active deployment warnings</p>
-        </div>
-      ) : null}
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 text-[13px] leading-5">
+      {active.length === 0 ? <NoActiveWarnings hasIgnored={ignored.length > 0} /> : null}
       {SEVERITY_GROUPS.map(({ severity, label }) => {
         const group = active.filter((warning) => warning.severity === severity);
         return group.length === 0 ? null : (
-          <section key={severity} aria-label={label} className="flex flex-col gap-2">
-            <h3 className={groupLabelClassName}>{label}</h3>
-            <div className={groupListClassName}>
-              {group.map((warning) => (
-                <WarningItem key={warning.id} warning={warning} {...permissions} />
-              ))}
-            </div>
-          </section>
+          <WarningGroup key={severity} label={label} warnings={group} defaultOpen permissions={permissions} />
         );
       })}
       {ignored.length > 0 ? (
-        <Collapsible className="flex flex-col gap-2">
-          <CollapsibleTrigger
-            className={`${groupLabelClassName} flex w-fit items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 data-[panel-open]:[&>svg]:rotate-90`}
-          >
-            <ChevronRight className="size-3.5 transition-transform" aria-hidden />
-            Ignored and snoozed ({ignored.length})
-          </CollapsibleTrigger>
-          <CollapsibleContent className={groupListClassName}>
-            {ignored.map((warning) => (
-              <WarningItem key={warning.id} warning={warning} {...permissions} />
-            ))}
-          </CollapsibleContent>
-        </Collapsible>
+        <WarningGroup label="Ignored and snoozed" warnings={ignored} defaultOpen={false} permissions={permissions} />
       ) : null}
     </div>
   );

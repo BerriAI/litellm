@@ -11,7 +11,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createDeploymentHealthHandle,
-  DeploymentHealthCriticalRow,
+  DeploymentHealthBanner,
   DeploymentHealthIcon,
 } from "@/components/DeploymentHealth/DeploymentHealth";
 import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
@@ -148,7 +148,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           isPublicPage={false}
           deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
         />
-        <DeploymentHealthCriticalRow handle={deploymentHealthHandle} />
+        <DeploymentHealthBanner handle={deploymentHealthHandle} />
         <DeploymentHealthPanel handle={deploymentHealthHandle} />
         <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
@@ -200,7 +200,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               }
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
             />
-            <DeploymentHealthCriticalRow handle={deploymentHealthHandle} />
+            <DeploymentHealthBanner handle={deploymentHealthHandle} />
             <DeploymentHealthPanel handle={deploymentHealthHandle} />
             <UserBanner accessToken={accessToken} />
             <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">

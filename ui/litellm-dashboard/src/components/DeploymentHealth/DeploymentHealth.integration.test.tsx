@@ -3,7 +3,7 @@ import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import type { DeploymentWarning } from "@/app/(dashboard)/hooks/deploymentWarnings/useDeploymentWarnings";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
-import { createDeploymentHealthHandle, DeploymentHealthCriticalRow, DeploymentHealthIcon } from "./DeploymentHealth";
+import { createDeploymentHealthHandle, DeploymentHealthBanner, DeploymentHealthIcon } from "./DeploymentHealth";
 import { DeploymentHealthPanel } from "./DeploymentHealthPanel";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -79,7 +79,7 @@ const Harness = () => {
       <header>
         <DeploymentHealthIcon handle={handle} />
       </header>
-      <DeploymentHealthCriticalRow handle={handle} />
+      <DeploymentHealthBanner handle={handle} />
       <DeploymentHealthPanel handle={handle} />
     </>
   );
@@ -154,22 +154,23 @@ describe("deployment health icon", () => {
   });
 });
 
-describe("critical row", () => {
-  it("should show the top critical warning and count the other critical ones", async () => {
-    proxy.warnings = [LICENSE_IN_3_DAYS, ENV_CREDENTIAL, NO_REDIS];
+describe("deployment banner", () => {
+  it("should show the first critical warning ahead of warnings without counting the rest", async () => {
+    proxy.warnings = [NO_REDIS, LICENSE_IN_3_DAYS, ENV_CREDENTIAL];
     renderHealth();
 
-    const row = await screen.findByRole("alert");
-    expect(row).toHaveTextContent("Your LiteLLM Enterprise license expires in 3 days (Oct 17, 2026)");
-    expect(row).toHaveTextContent("+1 more");
-    expect(row).not.toHaveTextContent("Environment-credential login");
+    const banner = await screen.findByRole("alert", { name: "Deployment alert" });
+    expect(banner).toHaveTextContent("Your LiteLLM Enterprise license expires in 3 days (Oct 17, 2026)");
+    expect(banner).not.toHaveTextContent("No Redis configured");
+    expect(banner).not.toHaveTextContent("more");
   });
 
-  it("should not show a row when only non-critical warnings are active", async () => {
+  it("should show the top warning when no critical warning is active", async () => {
     proxy.warnings = [NO_REDIS, { ...ENV_CREDENTIAL, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
     renderHealth();
 
-    await screen.findByRole("button", { name: "Deployment health, 1 active warning" });
+    const banner = await screen.findByRole("status", { name: "Deployment alert" });
+    expect(banner).toHaveTextContent("No Redis configured");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -201,7 +202,7 @@ describe("deployment health panel", () => {
       within(panel)
         .getAllByRole("region")
         .map((region) => region.getAttribute("aria-label")),
-    ).toEqual(["Critical", "Warnings"]);
+    ).toEqual(["Critical", "Warnings", "Ignored and snoozed"]);
     const critical = within(panel).getByRole("region", { name: "Critical" });
     expect(within(critical).getByRole("article")).toHaveTextContent(
       "general_settings.disable_env_credential_login: true",
@@ -228,24 +229,25 @@ describe("deployment health panel", () => {
     );
     expect(within(panel).queryByRole("article", { name: "Detailed debug logging is on" })).not.toBeInTheDocument();
 
-    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (2)" }));
+    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed 2" }));
 
     const debug = within(panel).getByRole("article", { name: "Detailed debug logging is on" });
-    expect(within(debug).getByText(/^Snoozed until/)).toHaveTextContent(/^Snoozed until Oct 2[12], 2026/);
-    expect(debug).toHaveTextContent(/by admin-2 on Sep (29|30), 2026/);
+    expect(within(debug).getByText("Snoozed")).toBeVisible();
+    expect(within(debug).getByText(/^Until/)).toHaveTextContent(/^Until Oct 2[12], 2026/);
+    expect(debug).toHaveTextContent("by admin-2");
     const expired = within(panel).getByRole("article", {
       name: "Your LiteLLM Enterprise license expired on Oct 1, 2026",
     });
     expect(expired).toHaveTextContent("by admin-3");
 
-    await user.hover(within(debug).getByText(/Snoozed until/));
+    await user.hover(within(debug).getByText(/^Until/));
     expect(await screen.findByText(/October 21, 2026 at 5:04:12\sPM UTC/)).toBeVisible();
   });
 
   it.each([
-    { option: "Snooze for 1 day", body: { ignored: true, snooze_seconds: 86_400 }, badge: /Snoozed until/ },
-    { option: "Snooze for 7 days", body: { ignored: true, snooze_seconds: 604_800 }, badge: /Snoozed until/ },
-    { option: "Snooze for 30 days", body: { ignored: true, snooze_seconds: 2_592_000 }, badge: /Snoozed until/ },
+    { option: "Snooze for 1 day", body: { ignored: true, snooze_seconds: 86_400 }, badge: /^Snoozed$/ },
+    { option: "Snooze for 7 days", body: { ignored: true, snooze_seconds: 604_800 }, badge: /^Snoozed$/ },
+    { option: "Snooze for 30 days", body: { ignored: true, snooze_seconds: 2_592_000 }, badge: /^Snoozed$/ },
     { option: "Ignore forever", body: { ignored: true }, badge: /^Ignored$/ },
   ])(
     "should let a proxy admin $option and move the warning to the ignored section",
@@ -255,12 +257,12 @@ describe("deployment health panel", () => {
       renderHealth();
       const panel = await openPanel(user);
 
-      await user.click(within(panel).getByRole("button", { name: "Actions for No Redis configured" }));
+      await user.click(within(panel).getByRole("button", { name: "Snooze No Redis configured" }));
       await user.click(await screen.findByRole("menuitem", { name: option }));
 
       await waitFor(() => expect(proxy.patches).toEqual([{ id: "no_redis", body }]));
       await waitFor(() => expect(within(panel).queryByRole("region", { name: "Warnings" })).not.toBeInTheDocument());
-      await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
+      await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed 1" }));
       const item = within(panel).getByRole("article", { name: "No Redis configured" });
       expect(within(item).getByText(badge)).toBeVisible();
       expect(item).toHaveTextContent("by admin-1");
@@ -275,13 +277,10 @@ describe("deployment health panel", () => {
     proxy.warnings = [{ ...ENV_CREDENTIAL, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
     renderHealth();
     const panel = await openPanel(user);
-    expect(within(panel).getByText("No active deployment warnings")).toBeVisible();
+    expect(within(panel).getByText("No active warnings")).toBeVisible();
 
-    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
-    await user.click(
-      within(panel).getByRole("button", { name: "Actions for Environment-credential login is enabled" }),
-    );
-    await user.click(await screen.findByRole("menuitem", { name: "Restore" }));
+    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed 1" }));
+    await user.click(within(panel).getByRole("button", { name: "Restore Environment-credential login is enabled" }));
 
     await waitFor(() => expect(proxy.patches).toEqual([{ id: "env_credential_login", body: { ignored: false } }]));
     const critical = await within(panel).findByRole("region", { name: "Critical" });
@@ -297,14 +296,14 @@ describe("deployment health panel", () => {
     renderHealth();
     const panel = await openPanel(user);
 
-    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
+    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed 1" }));
 
     const item = within(panel).getByRole("article", { name: "No Redis configured" });
-    expect(item).toHaveTextContent("by the LITELLM_DISABLE_NO_REDIS_WARNING environment variable");
+    expect(item).toHaveTextContent("By env var LITELLM_DISABLE_NO_REDIS_WARNING");
     expect(within(item).queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("should replace the ignore menu with a database hint when no database is connected", async () => {
+  it("should leave only the docs link when no database is connected", async () => {
     const user = userEvent.setup();
     proxy.warnings = [NO_REDIS];
     proxy.ignoreAvailable = false;
@@ -312,7 +311,7 @@ describe("deployment health panel", () => {
     const panel = await openPanel(user);
 
     const item = within(panel).getByRole("article", { name: "No Redis configured" });
-    expect(item).toHaveTextContent("Connect a database to ignore warnings");
+    expect(within(item).getByRole("link", { name: "Read the docs" })).toBeVisible();
     expect(within(item).queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -321,14 +320,13 @@ describe("deployment health panel", () => {
     proxy.warnings = [NO_REDIS, { ...ENV_CREDENTIAL, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
     renderHealth("proxy_admin_viewer");
     const panel = await openPanel(user);
-    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
+    await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed 1" }));
 
     const active = within(panel).getByRole("article", { name: "No Redis configured" });
     const ignored = within(panel).getByRole("article", { name: "Environment-credential login is enabled" });
     expect(ignored).toHaveTextContent("by admin-2");
     expect(within(active).queryByRole("button")).not.toBeInTheDocument();
     expect(within(ignored).queryByRole("button")).not.toBeInTheDocument();
-    expect(active).not.toHaveTextContent("Connect a database");
   });
 
   it("should refetch when opened even while the icon is served from cache", async () => {

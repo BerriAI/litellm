@@ -1,12 +1,14 @@
 "use client";
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { CircleAlert, Shield } from "lucide-react";
+import { CircleAlert, Shield, TriangleAlert } from "lucide-react";
 import {
   type DeploymentWarning,
   useDeploymentHealthAccess,
   useDeploymentWarnings,
 } from "@/app/(dashboard)/hooks/deploymentWarnings/useDeploymentWarnings";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SheetTrigger } from "@/components/ui/sheet";
 import { deploymentWarningContent } from "./DeploymentWarningContent";
@@ -36,51 +38,46 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
     >
       <Shield className="size-4" aria-hidden />
       {active.length > 0 ? (
-        <span
+        <Badge
           data-tone={hasCritical ? "error" : "neutral"}
-          className="absolute top-1 left-5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[12px] leading-4 font-medium tabular-nums ring-2 ring-background data-[tone=error]:bg-destructive data-[tone=error]:text-white data-[tone=neutral]:bg-muted-foreground data-[tone=neutral]:text-background"
+          className="absolute top-1 left-5 h-4 border-0 min-w-4 px-1 tabular-nums ring-2 ring-background data-[tone=error]:bg-destructive data-[tone=error]:text-white data-[tone=neutral]:bg-muted-foreground data-[tone=neutral]:text-background"
           aria-hidden
         >
           {active.length}
-        </span>
+        </Badge>
       ) : null}
     </SheetTrigger>
   );
 };
 
-const bannerLinkClassName = "h-auto p-0 text-[13px] leading-5 font-medium text-foreground underline underline-offset-3";
-
-export const DeploymentHealthCriticalRow = ({ handle }: { handle: DeploymentHealthHandle }) => {
+export const DeploymentHealthBanner = ({ handle }: { handle: DeploymentHealthHandle }) => {
   const { canView } = useDeploymentHealthAccess();
   const { data } = useDeploymentWarnings();
-  const critical = activeWarnings(data?.warnings ?? []).filter((warning) => warning.severity === "critical");
-  if (!canView || critical.length === 0) return null;
+  const active = activeWarnings(data?.warnings ?? []);
+  const top = active.find((warning) => warning.severity === "critical") ?? active[0];
+  if (!canView || !top) return null;
 
-  const [top, ...rest] = critical;
+  const critical = top.severity === "critical";
+  const Icon = critical ? CircleAlert : TriangleAlert;
   return (
-    <div
-      role="alert"
+    <Alert
+      variant={critical ? "error" : "warning"}
+      role={critical ? "alert" : "status"}
       aria-label="Deployment alert"
-      className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-[13px] leading-5 text-foreground"
+      className="min-h-10 shrink-0 items-center *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive rounded-none border-x-0 border-t-0 border-b-warning/25 bg-warning/10 px-4 py-2 text-[13px] leading-5 text-foreground data-[variant=error]:border-b-destructive/25 data-[variant=error]:bg-destructive/10"
     >
-      <CircleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
-      <strong className="min-w-0 font-medium">{deploymentWarningContent(top.id).title}</strong>
-      <SheetTrigger handle={handle} render={<Button variant="link" className={bannerLinkClassName} />}>
-        Review
-      </SheetTrigger>
-      {rest.length > 0 ? (
+      <Icon aria-hidden />
+      <AlertTitle className="flex flex-wrap items-center gap-x-2">
+        {deploymentWarningContent(top.id).title}
         <SheetTrigger
           handle={handle}
           render={
-            <Button
-              variant="link"
-              className="ml-auto h-auto p-0 text-[12px] leading-4 font-normal text-muted-foreground hover:text-foreground"
-            />
+            <Button variant="link" className="h-auto p-0 text-[13px] leading-5 font-medium text-foreground underline" />
           }
         >
-          +{rest.length} more
+          Review
         </SheetTrigger>
-      ) : null}
-    </div>
+      </AlertTitle>
+    </Alert>
   );
 };
