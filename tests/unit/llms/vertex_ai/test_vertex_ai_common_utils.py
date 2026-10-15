@@ -1,3 +1,4 @@
+import copy
 import time
 from collections.abc import Iterator
 from typing import Final
@@ -209,6 +210,16 @@ def test_anyof_conversion_leaves_empty_anyof_for_the_provider_to_judge():
     convert_anyof_null_to_nullable(schema)
 
     assert schema == {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+
+@pytest.mark.parametrize("malformed", ["string", {"type": "string"}], ids=["string", "object"])
+def test_anyof_conversion_forwards_a_non_list_anyof_unchanged(malformed: JsonValue):
+    """A malformed union is the provider's to judge, as it was before null branches were stripped in one pass."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": copy.deepcopy(malformed)}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": malformed}}}
 
 
 def test_anyof_with_excessive_nesting():

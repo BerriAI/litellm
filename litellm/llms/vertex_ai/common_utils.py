@@ -926,7 +926,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         )
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof: Final = schema.get("anyOf", None)
-    if anyof is not None:
+    if isinstance(anyof, list):
         non_null_branches: Final = [
             atype for atype in anyof if not (isinstance(atype, dict) and atype.get("type") == "null")
         ]
