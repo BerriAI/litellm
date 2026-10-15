@@ -1,6 +1,6 @@
 import builtins
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import PrivateAttr
 from typing_extensions import ReadOnly, TypedDict
@@ -25,7 +25,7 @@ class ContainerObject(LiteLLMBaseModel):
     expires_after: ExpiresAfter | None = None
     last_active_at: int | None = None
     name: str | None = None
-    _hidden_params: dict[str, Any] = PrivateAttr(default={})
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation

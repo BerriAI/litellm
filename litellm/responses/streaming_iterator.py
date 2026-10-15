@@ -285,6 +285,21 @@ def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_pro
         return mapped_exception
 
 
+def _event_field(event: object, name: str) -> object:
+    return event.get(name) if _is_json_object(event) else getattr(event, name, None)
+
+
+def _is_error_field_value(value: object) -> bool:
+    return isinstance(value, (str, int)) and not isinstance(value, bool)
+
+
+def _error_event_error_object(event: object) -> object:
+    nested_error: Final = _event_field(event, "error")
+    if nested_error is not None:
+        return nested_error
+    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+
+
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
@@ -662,7 +677,7 @@ class BaseResponsesAPIStreamingIterator:
         error_obj: Final[object] = (
             getattr(getattr(result, "response", None), "error", None)
             if chunk_type == "response.failed"
-            else getattr(result, "error", None)
+            else _error_event_error_object(result)
         )
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)
@@ -1605,6 +1620,30 @@ def _stamp_responses_usage_cost(
         setattr(usage_obj, "cost", cost)
 
 
+def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    match payload.get("type"):
+        case "message":
+            return {**payload, "content": [], "status": "in_progress"}
+        case "function_call":
+            return {**payload, "arguments": "", "status": "in_progress"}
+        case "custom_tool_call":
+            return {**payload, "input": ""}
+        case "reasoning":
+            return {**payload, "summary": []}
+        case _:
+            return payload
+
+
+def opening_part_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    match payload.get("type"):
+        case "output_text":
+            return {**payload, "text": ""}
+        case "refusal":
+            return {**payload, "refusal": ""}
+        case _:
+            return payload
+
+
 def build_synthetic_response_events(
     *,
     transformed: ResponsesAPIResponse,
@@ -1630,7 +1669,7 @@ def build_synthetic_response_events(
             openai_types.OutputItemAddedEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_item_payload(output_item_payload)),
             )
         )
 
@@ -1644,7 +1683,7 @@ def build_synthetic_response_events(
                         item_id=item_id,
                         output_index=output_index,
                         content_index=content_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**part_payload),
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_part_payload(part_payload)),
                     )
                 )
                 _add_text_like_part_events(
@@ -1682,11 +1721,43 @@ def build_synthetic_response_events(
                     arguments=arguments,
                 )
             )
+        elif item_type == "custom_tool_call":
+            tool_input = str(output_item_payload.get("input") or "")
+            for i in range(0, len(tool_input), chunk_size):
+                events.append(
+                    openai_types.GenericEvent.model_validate(
+                        {
+                            "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "delta": tool_input[i : i + chunk_size],
+                        }
+                    )
+                )
+            events.append(
+                openai_types.GenericEvent.model_validate(
+                    {
+                        "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value,
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "input": tool_input,
+                    }
+                )
+            )
         elif item_type == "reasoning":
             summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
             for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
+                events.append(
+                    openai_types.ResponsePartAddedEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                        item_id=item_id,
+                        output_index=output_index,
+                        summary_index=summary_index,
+                        part={**summary_payload, "text": ""},
+                    )
+                )
                 for i in range(0, len(summary_text), chunk_size):
                     events.append(
                         openai_types.ReasoningSummaryTextDeltaEvent(
@@ -1903,7 +1974,7 @@ class _ResponsesWsTurn:
 
 def _ws_event_error(event: Mapping[str, object]) -> object:
     if event.get("type") == "error":
-        return event.get("error")
+        return _error_event_error_object(event)
     response: Final = event.get("response")
     return response.get("error") if _is_json_object(response) else None
 

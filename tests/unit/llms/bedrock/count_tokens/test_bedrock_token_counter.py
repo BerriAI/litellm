@@ -93,8 +93,10 @@ async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
 @pytest.mark.parametrize(
     ("model_to_use", "runtime"),
     (
+        ("global.anthropic.claude-opus-4-8", (401, {"Message": "not authorized to perform: bedrock:CountTokens"})),
         ("global.anthropic.claude-opus-4-8", (403, {"Message": "not authorized to perform: bedrock:CountTokens"})),
         ("amazon.nova-pro-v1:0", (400, UNSUPPORTED)),
+        ("amazon.nova-pro-v1:0", (404, UNSUPPORTED)),
     ),
 )
 async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
@@ -120,7 +122,7 @@ async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
 @pytest.mark.asyncio
 async def test_mantle_failure_is_reported_with_its_status() -> None:
     bedrock: Final = _Bedrock(
-        runtime=(400, UNSUPPORTED),
+        runtime=(404, UNSUPPORTED),
         mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
     )
 
@@ -138,3 +140,37 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_404_retries_with_system_and_tools_on_mantle() -> None:
+    bedrock: Final = _Bedrock(runtime=(404, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Find a record",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }
+    ]
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        system="You are a terse assistant.",
+        tools=tools,
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 2177
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    mantle_body: Final = _JSON_BODY.validate_json(bedrock.requests[1].content)
+    assert mantle_body == {
+        "model": "anthropic.claude-opus-4-8",
+        "messages": MESSAGES,
+        "system": "You are a terse assistant.",
+        "tools": tools,
+    }

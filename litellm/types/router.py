@@ -56,6 +56,17 @@ from .utils import (
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
+class FallbackSkipReason(str, enum.Enum):
+    NOT_AUTHORIZED = "not_authorized"
+    OVER_BUDGET = "over_budget"
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedFallbackTarget:
+    target: str
+    reason: FallbackSkipReason
+
+
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
     api_base: str
 
@@ -188,6 +199,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
+    fallback_on_unsupported_params: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -722,6 +734,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
@@ -951,6 +964,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | str | httpx.Timeout | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):
