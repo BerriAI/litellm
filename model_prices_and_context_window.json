@@ -74805,5 +74805,22 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true
+    },
+    "together_ai/nvidia/NVIDIA-Nemotron-3.5-Super-VL": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }

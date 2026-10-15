@@ -99,9 +99,12 @@ class CostMapEntry(BaseModel):
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_1hr_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
+    input_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
+    output_cost_per_token_above_200k_tokens_priority: float | None = None
     cache_read_input_audio_token_cost: float | None = None
     tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
