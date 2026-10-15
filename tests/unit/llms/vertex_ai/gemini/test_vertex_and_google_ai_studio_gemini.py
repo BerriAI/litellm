@@ -6589,15 +6589,15 @@ def test_calculate_web_search_requests_counts_unique_queries():
     ["gemini-2.5-flash"],
     ids=["thinking_budget_mapper"],
 )
-@pytest.mark.parametrize("reasoning_effort", ["banana", "xhigh"])
-def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model, reasoning_effort):
+def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model):
     """Regression for #40474.
 
     Both reasoning_effort mappers used to end their if/elif chain in a bare `ValueError`, which
     `exception_type()` has no branch for, so it fell through to `APIConnectionError` and the proxy
-    answered a malformed client request with a retryable HTTP 500. `xhigh` is covered alongside the
-    nonsense value because it is a member of litellm's own `REASONING_EFFORT` literal, so callers
-    bridging from OpenAI-shaped code reach it without typing anything wrong.
+    answered a malformed client request with a retryable HTTP 500.
+
+    `xhigh` / `max` are now clamped to `high` (#46468); nonsense values still 400 when
+    drop_params is False. With drop_params=True they are dropped instead of raising.
     """
     from litellm.utils import get_optional_params
 
@@ -6605,15 +6605,75 @@ def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model,
         get_optional_params(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            reasoning_effort=reasoning_effort,
-            drop_params=True,
+            reasoning_effort="banana",
+            drop_params=False,
         )
 
     assert exc_info.value.status_code == 400
     message: Final = str(exc_info.value)
-    assert reasoning_effort in message
+    assert "banana" in message
     for supported in ("minimal", "low", "medium", "high", "none", "disable"):
         assert supported in message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("reasoning_effort", ["xhigh", "max"])
+@pytest.mark.parametrize(
+    "model,expected_key,expected_value",
+    [
+        ("gemini-2.5-flash", "thinkingBudget", 4096),
+        ("gemini-3-pro-preview", "thinkingLevel", "high"),
+    ],
+    ids=["budget_mapper", "level_mapper"],
+)
+def test_gemini_clamps_xhigh_and_max_reasoning_effort(
+    custom_llm_provider, reasoning_effort, model, expected_key, expected_value
+):
+    """OpenAI-shaped xhigh/max must map to Gemini high instead of 400 (#46468)."""
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort=reasoning_effort,
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"][expected_key] == expected_value
+    assert optional_params["thinkingConfig"]["includeThoughts"] is True
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_drops_invalid_reasoning_effort_when_drop_params(custom_llm_provider):
+    """drop_params=True must skip an unsupported effort instead of raising (#46468)."""
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gemini-2.5-flash",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="banana",
+        drop_params=True,
+    )
+    assert "thinkingConfig" not in optional_params
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+@pytest.mark.parametrize("reasoning_effort", ["xhigh", "max"])
+def test_map_openai_params_clamps_xhigh_max_dict_effort(config_cls, reasoning_effort):
+    """Agents SDK dict-shaped reasoning_effort also clamps xhigh/max (#46468)."""
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    cfg = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": reasoning_effort, "summary": "auto"}},
+        optional_params={},
+        model="gemini-3-pro-preview",
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
