@@ -832,6 +832,168 @@ def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
     assert converted == [flat_tool]
 
 
+@pytest.mark.parametrize(
+    ("tool", "expected_defer_loading"),
+    [
+        ({"type": "function", "function": {"name": "lookup"}, "defer_loading": True}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": False}, False),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": None}, True),
+    ],
+    ids=["tool-level", "function-level", "tool-level-wins", "null-tool-level-falls-back"],
+)
+def test_convert_tools_to_responses_format_keeps_defer_loading(tool, expected_defer_loading):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    converted = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [{"type": "tool_search"}, tool]
+    )
+
+    assert converted == [
+        {"type": "tool_search"},
+        {
+            "type": "function",
+            "name": "lookup",
+            "parameters": None,
+            "strict": None,
+            "description": None,
+            "defer_loading": expected_defer_loading,
+        },
+    ]
+
+
+_TOOL_SEARCH: Final = {"type": "tool_search"}
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "with_tool_search", "expected_defer_loading"),
+    [(True, False, None), (True, True, True), (False, True, True)],
+    ids=["drop-params-no-search", "drop-params-with-search", "no-drop-params-with-search"],
+)
+def test_transform_request_forwards_defer_loading_only_beside_tool_search(
+    deferred_tool, drop_params, with_tool_search, expected_defer_loading
+):
+    tools: Final = [_TOOL_SEARCH, deferred_tool] if with_tool_search else [deferred_tool]
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": tools},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert lookup_tool.get("defer_loading") == expected_defer_loading
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+    ],
+    ids=["tool-level", "function-level"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop-params", "drop-params"])
+@pytest.mark.parametrize(
+    "tool_search_tool",
+    [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
+    ids=["client-only", "hosted-and-client"],
+)
+def test_transform_request_drops_defer_loading_beside_client_tool_search(
+    deferred_tool, drop_params, tool_search_tool
+):
+    tool_search_tools: Final = (
+        [tool_search_tool]
+        if tool_search_tool.get("execution") == "client"
+        else [tool_search_tool, {"type": "tool_search", "execution": "client"}]
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": [*tool_search_tools, deferred_tool]},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_deferred_tool_without_tool_search(deferred_tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"tool_search.*drop_params"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([deferred_tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": False},
+        {"type": "function", "name": "lookup", "defer_loading": False},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_omits_false_defer_loading_without_tool_search(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([tool])
+
+    assert "defer_loading" not in converted[0]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": "yes"}},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_non_bool_defer_loading_without_drop_params(tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match="defer_loading must be a boolean"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([_TOOL_SEARCH, tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_drops_non_bool_defer_loading_under_drop_params(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [_TOOL_SEARCH, tool], drop_params=True
+    )
+
+    lookup_tool: Final = next(item for item in converted if item.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
