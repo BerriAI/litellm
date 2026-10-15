@@ -121,14 +121,29 @@ _PROXY_WIDE_TEAM_DECISION: Final = {
         ("team-decision", (), "team.example", ("team-decision", "owner", "owner-team")),
         (
             "team-decision",
-            ({"model_name": "*", "litellm_params": {"model": "*"}},),
-            "team.example",
-            ("team-decision", "owner", "owner-team"),
+            (
+                {
+                    "model_name": "*",
+                    "litellm_params": {
+                        "model": "*",
+                        "custom_llm_provider": "typesafe",
+                        "api_base": "https://shared.example",
+                        "api_key": "synthetic-test-key",
+                    },
+                },
+            ),
+            "shared.example",
+            ("team-decision", None, None),
         ),
         ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "shared.example", ("team-decision", None, None)),
         ("shared-decision", (), "shared.example", ("shared-decision", None, None)),
     ],
-    ids=["team-model", "catch-all-wildcard", "proxy-wide-name-wins-over-the-team-name", "proxy-wide-model"],
+    ids=[
+        "team-model",
+        "custom-provider-catch-all-wins-over-the-team-name",
+        "proxy-wide-name-wins-over-the-team-name",
+        "proxy-wide-model",
+    ],
 )
 @pytest.mark.asyncio
 async def test_decision_call_goes_to_the_owner_team_deployment_and_charges_the_team(

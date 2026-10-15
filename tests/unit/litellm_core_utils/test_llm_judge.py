@@ -179,6 +179,19 @@ _PROXY_WIDE_CUSTOM_PROVIDER_JUDGE: dict[str, object] = {
     "litellm_params": {"model": "in-house-judge", "custom_llm_provider": "openai", "api_key": "fake"},
 }
 _SHARED_PREFIX_WILDCARD: dict[str, object] = {"model_name": "wc/*", "litellm_params": {"model": "openai/*"}}
+_CUSTOM_PROVIDER_CATCH_ALL: dict[str, object] = {
+    "model_name": "*",
+    "litellm_params": {"model": "*", "custom_llm_provider": "openai"},
+}
+_CUSTOM_PROVIDER_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "wc/*",
+    "litellm_params": {"model": "*", "custom_llm_provider": "openai"},
+}
+_TEAM_UNDER_CUSTOM_PROVIDER_PREFIX: dict[str, object] = {
+    "model_name": "owner-wc-in-house-deployment",
+    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/in-house-judge"},
+}
 _TEAM_UNDER_SHARED_PREFIX: dict[str, object] = {
     "model_name": "owner-wc-deployment",
     "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
@@ -255,12 +268,14 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         ((_TEAM_JUDGE, _SHARED_JUDGE), "team-judge", None, None),
         ((_TEAM_JUDGE, _SHARED_JUDGE), "shared-judge", "owner", None),
         ((_TEAM_JUDGE, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
-        ((_TEAM_JUDGE, _CATCH_ALL), "team-judge", "owner", "owner"),
+        ((_TEAM_JUDGE, _CATCH_ALL), "team-judge", "owner", None),
+        ((_TEAM_JUDGE, _CUSTOM_PROVIDER_CATCH_ALL), "team-judge", "owner", None),
         ((_TEAM_GPT_4O,), "gpt-4o", "owner", None),
         ((_TEAM_GPT_4O, _CATCH_ALL), "gpt-4o", "owner", None),
         ((_TEAM_JUDGE, _PROXY_WIDE_TEAM_JUDGE), "team-judge", "owner", None),
         ((_TEAM_JUDGE, _PROXY_WIDE_CUSTOM_PROVIDER_JUDGE), "team-judge", "owner", None),
         ((_TEAM_UNDER_SHARED_PREFIX, _SHARED_PREFIX_WILDCARD), "wc/gpt-4o", "owner", None),
+        ((_TEAM_UNDER_CUSTOM_PROVIDER_PREFIX, _CUSTOM_PROVIDER_PREFIX_WILDCARD), "wc/in-house-judge", "owner", None),
         ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "other", None),
         ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "owner", None),
         ((_LEGACY_OWNER_SHARED_JUDGE,), "shared-judge", "other", None),
@@ -278,12 +293,14 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         "teamless-key",
         "shared-deployment",
         "sdk-public-name",
-        "catch-all-wildcard",
+        "catch-all-wins-over-the-team-name",
+        "custom-provider-catch-all-wins-over-the-team-name",
         "sdk-name-wins-over-the-team-name",
         "sdk-name-through-a-catch-all-wins-over-the-team-name",
         "proxy-wide-name-wins-over-the-team-name",
         "proxy-wide-custom-provider-name-wins-over-the-team-name",
         "shared-wildcard-name-wins-over-the-team-name",
+        "custom-provider-wildcard-name-wins-over-the-team-name",
         "untagged-team-sees-fewer-shared-deployments",
         "legacy-team-tag-on-a-shared-name",
         "only-a-legacy-team-deployment",

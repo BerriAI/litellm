@@ -259,13 +259,24 @@ def test_team_decision_model_follows_the_authenticated_caller_on_every_endpoint(
 
 
 def _add_model_named(
-    gateway: Gateway, scenario: Scenario, name: str, model: str, handle: ScenarioHandle, team: str | None
+    gateway: Gateway,
+    scenario: Scenario,
+    name: str,
+    model: str,
+    handle: ScenarioHandle,
+    team: str | None,
+    provider: str | None = None,
 ) -> None:
     created: Final = gateway.post(
         "/model/new",
         {
             "model_name": name,
-            "litellm_params": {"model": model, "api_base": handle.api_base(), "api_key": handle.scenario_id},
+            "litellm_params": {
+                "model": model,
+                "api_base": handle.api_base(),
+                "api_key": handle.scenario_id,
+                **({} if provider is None else {"custom_llm_provider": provider}),
+            },
             "model_info": {} if team is None else {"team_id": team},
         },
     )
@@ -285,7 +296,7 @@ def _decision_scenarios(requests: JsonValue, handles: Sequence[ScenarioHandle]) 
 
 
 @pytest.mark.parametrize("caller", ["owner", "other-team"])
-@pytest.mark.parametrize("shared", ["same-name", "wildcard"])
+@pytest.mark.parametrize("shared", ["same-name", "wildcard", "custom-provider-wildcard"])
 def test_team_model_cannot_take_over_a_shared_decision_model_name(gateway: Gateway, shared: str, caller: str) -> None:
     with gateway.scenario() as scenario:
         team_handle: Final = register_scenario(f"dm-own-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
@@ -296,14 +307,13 @@ def test_team_model_cannot_take_over_a_shared_decision_model_name(gateway: Gatew
         owner: Final = scenario.team(models=[chat])
         prefix: Final = f"integration-{uuid.uuid4().hex}"
         decision: Final = f"{prefix}/jev-latest"
-        _add_model_named(
-            gateway,
-            scenario,
-            decision if shared == "same-name" else f"{prefix}/*",
-            "typesafe/jev-latest" if shared == "same-name" else "typesafe/*",
-            shared_handle,
-            None,
-        )
+        shared_models: Final = {
+            "same-name": (decision, "typesafe/jev-latest", None),
+            "wildcard": (f"{prefix}/*", "typesafe/*", None),
+            "custom-provider-wildcard": (f"{prefix}/*", "*", "typesafe"),
+        }
+        shared_name, shared_model, shared_provider = shared_models[shared]
+        _add_model_named(gateway, scenario, shared_name, shared_model, shared_handle, None, shared_provider)
         _add_model_named(gateway, scenario, decision, "typesafe/jev-latest", team_handle, owner)
         key: Final = scenario.key(team_id=owner if caller == "owner" else scenario.team(models=[chat]))
         guardrail: Final = f"dm-shadow-guard-{uuid.uuid4().hex}"

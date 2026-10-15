@@ -154,26 +154,17 @@ def _named_route(router: Router, deployment_id: str) -> bool:
     return all("*" not in name for name in public_names)
 
 
-def _served_without_a_team(router: Router, model: str) -> bool:
-    """Whether a caller without a team reaches a model under `model`: the SDK knows the name,
-    a deployment is listed under it, or a wildcard turns it into a name the SDK knows."""
-    names: Final = (model, *router.resolved_litellm_models(model))
-    return any(_provider_qualified(name) is not None for name in names) or any(
-        _named_route(router, deployment_id) for deployment_id in router.get_candidate_model_ids_for_route(model)
-    )
-
-
 def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | None) -> str | None:
     """The team a guardrail call for the caller behind `auth` resolves `model` under, or None.
 
-    It is the caller's team only when a caller without a team reaches no model under
-    `model`, and the router's route to `model` for that team reaches deployments that are
-    each listed under a name rather than a wildcard pattern. A name a shared deployment or
-    the SDK already serves keeps resolving exactly as it does without a team, so a team model
+    It is the caller's team only when `judge_target` finds nothing that serves `model`
+    without a team, and the router's route to `model` for that team reaches deployments that
+    are each listed under a name rather than a wildcard pattern. A name the router or the SDK
+    serves without a team keeps resolving exactly as it does without one, so a team model
     given that name cannot take over the guardrail's calls.
     """
     team_id: Final = auth.team_id if auth is not None else None
-    if team_id is None or router is None or _served_without_a_team(router, model):
+    if team_id is None or router is None or judge_target(router, model).via != "nothing":
         return None
     team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
     return team_id if team_route and all(_named_route(router, deployment_id) for deployment_id in team_route) else None
