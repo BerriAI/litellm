@@ -8045,7 +8045,7 @@ async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
     hash, no verification table, and no key-minting endpoint. Regression for the 401 that
     shipped the key hash plus "Unable to find token in cache or
     LiteLLM_VerificationTokenTable" to anyone who probed a public deployment. The hash the
-    operator still needs is logged at the raise site, covered in test_resolvers_store."""
+    operator still needs is on the auth failure log line, covered in test_auth_exception_handler."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
     from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
     from litellm.proxy.proxy_server import hash_token

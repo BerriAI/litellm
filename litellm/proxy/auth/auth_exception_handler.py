@@ -28,6 +28,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
     normalize_request_route,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -124,6 +125,12 @@ def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
     return f"\nKey Identity: {known}" if known else ""
 
 
+def _key_hash_log_suffix(e: Exception) -> str:
+    if not isinstance(e, KeyNotFoundError):
+        return ""
+    return f"\nKey Hash (Token): {_escape_control_chars(e.hashed_token)}"
+
+
 class UserAPIKeyAuthExceptionHandler:
     @staticmethod
     async def handle_authentication_error(
@@ -196,10 +203,11 @@ class UserAPIKeyAuthExceptionHandler:
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s%s",
                 e,
                 requester_ip,
                 _identity_log_suffix(resolved_identity),
+                _key_hash_log_suffix(e),
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
                 extra=log_extra,
             )

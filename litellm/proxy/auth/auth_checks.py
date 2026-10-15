@@ -4218,7 +4218,6 @@ async def get_key_object(
     )
 
     if _valid_token is None:
-        verbose_proxy_logger.warning("Auth: no key row for Key Hash (Token) = %s", hashed_token)
         raise ProxyException(
             message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,

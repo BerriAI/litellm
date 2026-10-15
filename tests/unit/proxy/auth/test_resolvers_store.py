@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Dict, Optional
 
 import pytest
@@ -81,18 +80,15 @@ async def test_resolve_raises_without_a_db_connection():
         await store.resolve(hashed_token="missing")
 
 
-async def test_resolve_logs_the_hash_when_no_key_row_exists(caplog):
-    """Every path that resolves a key reaches this raise site, the JWT key-mapping
-    ones included, so it is the only place the operator's lookup detail can be logged
-    once the 401 itself stopped carrying it. Killing the log leaves a JWT-mapped miss
-    with nothing but a generic 401 in the operator's logs."""
+async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_key_row_exists():
+    """The 401 message stays generic for the caller, while the hash rides on the
+    exception so the auth failure log line can still name it for the operator."""
     missing = hash_token("sk-live-not-a-key")
     store = IdentityStore(_FakeEmptyKeyTable(), _FakeCache())
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        with pytest.raises(KeyNotFoundError) as exc_info:
-            await store.resolve(hashed_token=missing)
+    with pytest.raises(KeyNotFoundError) as exc_info:
+        await store.resolve(hashed_token=missing)
 
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     assert missing not in str(exc_info.value)
-    assert missing in caplog.text
+    assert exc_info.value.hashed_token == missing

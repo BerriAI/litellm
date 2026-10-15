@@ -35,7 +35,7 @@ def test_key_not_found_preserves_the_public_401_contract():
 def test_key_not_found_message_hides_the_hash_but_the_raise_site_can_still_log_it():
     """The JWT key-mapping paths surface this exception's own message to the caller
     without the rewrite the main key path applies, so the message itself has to be
-    generic. The hash stays reachable on the instance for the raise site to log."""
+    generic. The hash stays reachable on the instance for the auth failure log line."""
     error = KeyNotFoundError("hashed-token")
 
     assert error.message == INVALID_API_KEY_ERROR_MESSAGE

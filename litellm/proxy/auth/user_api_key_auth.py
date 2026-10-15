@@ -2756,8 +2756,6 @@ async def user_api_key_auth_builder(
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    # Unauthenticated callers reach this branch; the lookup detail is logged
-                    # at the raise site instead of being returned.
                     e.message = INVALID_API_KEY_ERROR_MESSAGE
                 raise e
             # update end-user params on valid token
