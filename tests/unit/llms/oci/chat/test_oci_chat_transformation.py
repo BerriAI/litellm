@@ -2070,7 +2070,7 @@ SERVED_GROK_4_20_MODELS = [
 
 
 class TestReasoningEffortGating:
-    @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS + ["oci/xai.grok-4.20-reasoning"])
+    @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS + ["oci/xai.grok-4.20-reasoning", "xai.grok-4.20"])
     def test_models_declaring_no_levels_are_gated(self, local_model_cost_map, model):
         assert _model_supports_reasoning_effort(model) is False
 
