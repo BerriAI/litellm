@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, count, groupby
@@ -1097,6 +1097,7 @@ async def pass_through_request(
     merge_query_params: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
+    excluded_query_params: Collection[str] = (),
     stream: bool | None = None,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
@@ -1157,7 +1158,9 @@ async def pass_through_request(
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
-        requested_query_params: dict | None = query_params or dict(request.query_params) or None
+        requested_query_params: dict[str, Any] | None = {
+            k: v for k, v in (query_params or request.query_params).items() if k not in excluded_query_params
+        } or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url), custom_llm_provider
@@ -2102,6 +2105,7 @@ def create_pass_through_route(
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
+    excluded_query_params: Collection[str] = (),
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2238,6 +2242,7 @@ def create_pass_through_route(
                         merge_query_params=cast(bool | None, param_merge_query_params),
                         query_params=final_query_params,
                         default_query_params=cast(dict | None, param_default_query_params),
+                        excluded_query_params=excluded_query_params,
                         stream=is_stream,
                         custom_body=final_custom_body,
                         cost_per_request=cast(float | None, param_cost_per_request),

@@ -215,9 +215,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
-    upstream: Final = respx_mock.post(
-        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
-    ).mock(
+    upstream: Final = respx_mock.post(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
         return_value=httpx.Response(
             200,
             json={"totalTokens": 9},
@@ -255,5 +253,64 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert upstream.call_count == 1
     outbound: Final = upstream.calls[0].request
     assert outbound.url.path == f"/{endpoint}"
-    assert outbound.url.params["key"] == "gemini-test-key"
+    assert outbound.headers["x-goog-api-key"] == "gemini-test-key"
+    assert "key" not in outbound.url.params
+    assert "sk-9876" not in str(outbound.url)
     assert json.loads(outbound.content) == json.loads(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_key_in_header", [False, True])
+async def test_gemini_pass_through_endpoint_keeps_provider_key_out_of_url(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    client_key_in_header: bool,
+) -> None:
+    """The provider key is sent in x-goog-api-key, the LiteLLM key is never forwarded, other query params pass through."""
+    import httpx
+    from fastapi import Request, Response
+
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        gemini_proxy_route,
+    )
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    endpoint: Final = "v1beta/models/gemini-2.5-flash:streamGenerateContent"
+    upstream: Final = respx_mock.get(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    # No content-type: the request's own query string is the only source of query params.
+    headers: Final = [(b"x-goog-api-key", b"sk-9876")] if client_key_in_header else []
+    query_string: Final = b"alt=sse" if client_key_in_header else b"alt=sse&key=sk-9876"
+    scope: Final = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": f"/gemini/{endpoint}",
+        "raw_path": f"/gemini/{endpoint}".encode(),
+        "root_path": "",
+        "query_string": query_string,
+        "headers": headers,
+        "client": ("127.0.0.1", 51234),
+        "server": ("proxy.local", 4000),
+        "state": {},
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    response: Final = await gemini_proxy_route(
+        endpoint=endpoint,
+        request=Request(scope, receive),
+        fastapi_response=Response(),
+    )
+
+    assert response.status_code == 200
+    assert upstream.call_count == 1
+    outbound: Final = upstream.calls[0].request
+    assert outbound.headers["x-goog-api-key"] == "gemini-test-key"
+    assert dict(outbound.url.params) == {"alt": "sse"}
+    assert "sk-9876" not in str(outbound.url)
+    assert "sk-9876" not in str(outbound.headers)
