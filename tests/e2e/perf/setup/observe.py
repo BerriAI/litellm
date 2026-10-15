@@ -8,6 +8,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
 from e2e_http import NoBody, get_external, post_external, unwrap
@@ -203,9 +204,18 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    label: str
+    metric: Metric
+    percentile: int | None
     observed: float | None
     limit: float | None
+
+    @property
+    def label(self) -> str:
+        return f"{self.metric} percentile {self.percentile}" if self.percentile is not None else self.metric
+
+    @property
+    def property_name(self) -> str:
+        return f"perf_{self.metric}" if self.percentile is None else f"perf_{self.metric}_p{self.percentile}"
 
     @property
     def over(self) -> bool:
@@ -240,8 +250,14 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
     rows: list[Row] = []
     for metric, rank in keys:
         limit = limits.get((metric, rank))
-        label = f"{metric} percentile {rank}" if rank is not None else metric
-        rows.append(Row(label=label, observed=observe(metric, rank, observation), limit=limit.max if limit else None))
+        rows.append(
+            Row(
+                metric=metric,
+                percentile=rank,
+                observed=observe(metric, rank, observation),
+                limit=limit.max if limit else None,
+            )
+        )
     exceeded: Final = [
         f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}"
         if row.over and row.observed is not None and row.limit is not None
@@ -250,6 +266,16 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
         if row.over or row.missing
     ]
     return rows, exceeded
+
+
+def _row_properties(row: Row) -> tuple[tuple[str, float], ...]:
+    observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
+    limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
+    return observed + limit
+
+
+def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float], ...]:
+    return tuple(chain.from_iterable(map(_row_properties, rows)))
 
 
 def render(case: PerformanceTestCase, observation: Observation, rows: list[Row]) -> str:

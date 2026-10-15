@@ -17,6 +17,7 @@ from cases import CASES
 from setup.observe import (
     Observation,
     evaluate,
+    junit_properties,
     read_guardrail_calls,
     read_mock_requests,
     render,
@@ -48,7 +49,13 @@ def _spend_logged_share(proxy: ProxyClient, call_ids: tuple[str, ...]) -> float 
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak, resources: ResourceManager) -> None:
+def test_perf_case(
+    case: PerformanceTestCase,
+    proxy: ProxyClient,
+    idp: Keycloak,
+    resources: ResourceManager,
+    request: pytest.FixtureRequest,
+) -> None:
     plan: Final = build_plan(case)
     mock_urls: Final = {provider: mock_url(provider) for provider in MOCK_PROVIDERS}
     for url in (*mock_urls.values(), guardrail_url()):
@@ -94,6 +101,12 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         gateway_cpu_seconds=cpu.seconds,
     )
     rows, exceeded_limits = evaluate(case, observation)
+    item: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
+    assert isinstance(item, pytest.Item)
+    item.user_properties[:] = [
+        entry for entry in item.user_properties if not entry[0].startswith("perf_")
+    ]  # rebind-ok: a --reruns retry replaces the first attempt's numbers instead of appending a second set
+    item.user_properties.extend(junit_properties(rows))
     print(render(case, observation, rows))
     print(
         f"  phases: setup {run_started - setup_started:.0f}s, locust {run_finished - run_started:.0f}s, "
