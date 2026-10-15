@@ -428,6 +428,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    "gigachat_auth_url",
     # NVIDIA Riva fields consumed by the audio-transcription handler
     # via ``optional_params``. Banned for the same reason as the
     # provider-specific entries above: a caller-supplied value retargets

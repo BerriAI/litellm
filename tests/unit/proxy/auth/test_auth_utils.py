@@ -2994,6 +2994,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             "s3_endpoint_url",
             "sagemaker_base_url",
             "deployment_url",
+            "gigachat_auth_url",
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
