@@ -554,6 +554,7 @@ def get_logging_payload(
         call_type or "acompletion",
         _OBJECT_MAPPING.validate_python(response_obj_dict),
         _OBJECT_MAPPING.validate_python(kwargs),
+        metadata,
     )
     raw_response_id: Final = response_obj_dict.get("id")
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))

@@ -1,4 +1,4 @@
-use std::{future::Future, path::Path, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use litellm_auth_types::{CredentialPlacement, Error, ErrorDetail, http::apply_credential};
@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     config::{
-        CredentialSource, VertexConfig, credential_source, get_vertex_ai_project, non_empty_env,
+        CredentialSource, VertexConfig, credential_source, get_vertex_ai_project,
+        is_base64_encoded_json, names_a_credentials_file, non_empty_env,
     },
     constants::{
         CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT, VERTEX_AI_API_KEY_ENV,
@@ -176,14 +177,7 @@ impl VertexProviderLoader for GcpProviderLoader {
                     .map_err(auth_acquisition_error)?,
                 ),
                 CredentialSource::Trusted(configured) => {
-                    let configured = configured.expose();
-                    let service_account = if Path::new(configured).is_file() {
-                        CustomServiceAccount::from_file(configured)
-                    } else {
-                        CustomServiceAccount::from_json(configured)
-                    }
-                    .map_err(auth_acquisition_error)?;
-                    Arc::new(service_account)
+                    Arc::new(load_trusted_service_account(configured.expose())?)
                 }
                 CredentialSource::ApplicationCredentials(path) => {
                     Arc::new(CustomServiceAccount::from_file(path).map_err(auth_acquisition_error)?)
@@ -240,6 +234,23 @@ enum CredentialCacheKey {
     Adc,
 }
 
+const BASE64_CREDENTIALS: &str = "The `vertex_credentials` value is base64-encoded JSON, not the JSON itself. \
+    Set it to a readable file path, or to the credentials JSON itself.";
+
+fn load_trusted_service_account(configured: &str) -> Result<CustomServiceAccount, Error> {
+    if is_base64_encoded_json(configured) {
+        return Err(Error::InvalidConfiguration(ErrorDetail::Message(
+            BASE64_CREDENTIALS.into(),
+        )));
+    }
+    if names_a_credentials_file(configured) {
+        CustomServiceAccount::from_file(configured)
+    } else {
+        CustomServiceAccount::from_json(configured)
+    }
+    .map_err(auth_acquisition_error)
+}
+
 fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
     Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::failed(
         "Vertex AI credentials",
@@ -262,6 +273,73 @@ mod tests {
         #[case] accepted: bool,
     ) {
         assert_eq!(validate_request_credentials(credentials).is_ok(), accepted);
+    }
+
+    #[rstest::rstest]
+    #[case::missing_file(
+        "/nonexistent/vertex-key.json",
+        "failed to open application credentials file"
+    )]
+    #[case::malformed_json(
+        " {\"type\": \"service_account\",",
+        "failed to deserialize ApplicationCredentials"
+    )]
+    #[case::quoted_json(
+        "'{\"type\": \"service_account\"}'",
+        "failed to deserialize ApplicationCredentials"
+    )]
+    #[tokio::test]
+    async fn trusted_credentials_are_read_as_a_file_unless_they_are_json(
+        #[case] configured: &str,
+        #[case] expected: &str,
+    ) {
+        let Err(error) = GcpProviderLoader
+            .load(CredentialSource::Trusted(SecretValue::new(configured)))
+            .await
+        else {
+            panic!("{configured:?} should not load");
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    #[rstest::rstest]
+    #[case::padded("eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCJ9")]
+    #[case::quoted_prefixed_unpadded("\"base64:eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCJ9\"")]
+    #[case::url_safe_wrapped("eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsICJr\nZXkiOiAiPz8_In0=")]
+    #[tokio::test]
+    async fn base64_encoded_credentials_are_named_as_base64(#[case] configured: &str) {
+        assert!(
+            trusted_load_error(configured)
+                .await
+                .contains("is base64-encoded JSON, not the JSON itself")
+        );
+    }
+
+    async fn trusted_load_error(configured: &str) -> String {
+        match GcpProviderLoader
+            .load(CredentialSource::Trusted(SecretValue::new(configured)))
+            .await
+        {
+            Ok(_) => panic!("{configured:?} should not load"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn a_relative_key_file_named_like_json_is_read_as_a_file() {
+        let key = tempfile::Builder::new()
+            .prefix("{vertex")
+            .suffix(".json")
+            .tempfile_in(".")
+            .unwrap();
+        std::fs::write(key.path(), r#"{"project_id":"file-project"}"#).unwrap();
+        let relative_name = key.path().file_name().unwrap().to_str().unwrap();
+        let absolute_path = std::fs::canonicalize(key.path()).unwrap();
+        assert_eq!(
+            trusted_load_error(relative_name).await,
+            trusted_load_error(absolute_path.to_str().unwrap()).await
+        );
     }
 
     #[rstest::rstest]

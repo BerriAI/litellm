@@ -5311,6 +5311,9 @@ def init_custom_logger_compatible_class_at_startup(
     )
 
 
+init_custom_logger_compatible_class: Final = _init_custom_logger_compatible_class
+
+
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
@@ -5856,7 +5859,7 @@ class StandardLoggingPayloadSetup:
         return messages
 
     @staticmethod
-    def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict:
+    def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict[str, object]:
         """
         Merge both litellm_metadata and metadata from litellm_params.
 
@@ -6483,7 +6486,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_request_tags(
         litellm_params: dict[str, object],
-        proxy_server_request: dict[str, object],
+        proxy_server_request: Mapping[str, object],
     ) -> list[str]:
         metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("metadata") or {}

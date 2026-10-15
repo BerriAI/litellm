@@ -4049,7 +4049,7 @@
     },
     "azure_ai/gpt-chat-latest": {
         "cache_read_input_token_cost": 5e-07,
-        "deprecation_date": "2026-12-02",
+        "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 272000,
@@ -8866,7 +8866,7 @@
     },
     "azure/gpt-chat-latest": {
         "cache_read_input_token_cost": 5e-07,
-        "deprecation_date": "2026-12-02",
+        "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -9313,7 +9313,7 @@
     },
     "azure/us/gpt-chat-latest": {
         "cache_read_input_token_cost": 5.5e-07,
-        "deprecation_date": "2026-12-02",
+        "deprecation_date": "2027-05-18",
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -24102,14 +24102,14 @@
         "max_tokens": 1048576,
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 3e-07,
         "cache_read_input_token_cost": 6e-09,
-        "input_cost_per_token_balanced": 1.2e-07,
-        "output_cost_per_token_balanced": 4.8e-07,
+        "input_cost_per_token_balanced": 7e-08,
+        "output_cost_per_token_balanced": 2.2e-07,
         "cache_read_input_token_cost_balanced": 5e-09,
-        "input_cost_per_token_flex": 8e-08,
-        "output_cost_per_token_flex": 3e-07,
+        "input_cost_per_token_flex": 5e-08,
+        "output_cost_per_token_flex": 1.5e-07,
         "cache_read_input_token_cost_flex": 4e-09,
         "litellm_provider": "sail",
         "mode": "chat",
@@ -28207,6 +28207,7 @@
     "ft:gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.875e-06,
         "cache_read_input_token_cost_batches": 9e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 3.75e-06,
         "input_cost_per_token_batches": 2.225e-06,
         "litellm_provider": "openai",
@@ -28228,6 +28229,7 @@
     },
     "ft:gpt-4o-2024-11-20": {
         "cache_creation_input_token_cost": 1.875e-06,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 3.75e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -28246,6 +28248,7 @@
     "ft:gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
         "litellm_provider": "openai",
@@ -28267,6 +28270,7 @@
     "ft:gpt-4.1-2025-04-14": {
         "cache_read_input_token_cost": 7.5e-07,
         "cache_read_input_token_cost_batches": 5e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "openai",
@@ -28287,6 +28291,7 @@
     "ft:gpt-4.1-mini-2025-04-14": {
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 8e-07,
         "input_cost_per_token_batches": 4e-07,
         "litellm_provider": "openai",
@@ -33987,6 +33992,7 @@
     "gpt-4.1-2025-04-14": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_priority": 3.5e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -34073,6 +34079,7 @@
     "gpt-4.1-mini-2025-04-14": {
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_priority": 7e-07,
         "input_cost_per_token_batches": 2e-07,
@@ -34238,6 +34245,7 @@
     "gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_priority": 2.125e-06,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_priority": 4.25e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -34262,6 +34270,7 @@
     "gpt-4o-2024-11-20": {
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_priority": 2.125e-06,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_priority": 4.25e-06,
         "input_cost_per_token_batches": 1.25e-06,
@@ -34575,6 +34584,7 @@
     "gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_priority": 1.25e-07,
+        "deprecation_date": "2027-01-14",
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_priority": 2.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
@@ -35679,6 +35689,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35796,6 +35807,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35972,6 +35984,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36048,6 +36061,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36133,6 +36147,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36206,6 +36221,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36281,6 +36297,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36355,6 +36372,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36429,6 +36447,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36714,6 +36733,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36776,6 +36796,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36830,6 +36851,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36881,6 +36903,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36935,6 +36958,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -36992,6 +37016,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -37045,6 +37070,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37097,6 +37123,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37152,6 +37179,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37206,6 +37234,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37559,6 +37588,7 @@
         "supports_response_schema": true,
         "supports_system_messages": false,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -39124,6 +39154,736 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "inferenceapis/deepseek-ai/DeepSeek-V3": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-ai/DeepSeek-V4-Flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-ai/DeepSeek-V4-Pro": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1.72e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-ai/DeepSeek-V4-Pro-0813": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1.72e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-ai/DeepSeek-V4.1-Flash": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-chat": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-flash": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-reasoner": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-v3": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1.72e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/glm-5.3": {
+        "cache_read_input_token_cost": 3.4e-07,
+        "input_cost_per_token": 1.82e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 5.72e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/glm-5.3-flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/gpt-oss-120b": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/gpt-oss-20b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.9e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 8.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.42e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/llama-3.1-8b-instant": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/llama-3.3-70b": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/llama-3.3-70b-instruct": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/llama-3.3-70b-versatile": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/meta-llama/Llama-3.3-70B-Instruct": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/minimax-m3": {
+        "cache_read_input_token_cost": 8e-08,
+        "input_cost_per_token": 3.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 1.56e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/MiniMaxAI/MiniMax-M3": {
+        "cache_read_input_token_cost": 8e-08,
+        "input_cost_per_token": 3.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 1.56e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/moonshotai/Kimi-K2.7-Code": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 8.9e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.42e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/openai/gpt-oss-120b": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/openai/gpt-oss-20b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.9e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/Qwen/Qwen3-VL-235B-A22B-Instruct": {
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "inferenceapis/Qwen/Qwen3.8-Flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/qwen3-vl": {
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "inferenceapis/qwen3-vl-235b": {
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.15e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "inferenceapis/qwen3.8-flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 3.4e-07,
+        "input_cost_per_token": 1.82e-06,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 5.72e-06,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "inferenceapis/zai-org/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "inferenceapis",
+        "max_input_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-07,
+        "source": "https://inferenceapis.com/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "text-completion-inception/mercury-edit-2": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
@@ -40252,6 +41012,58 @@
         "supports_vision": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000
+    },
+    "minimax/MiniMax-H3": {
+        "litellm_provider": "minimax",
+        "mode": "video_generation",
+        "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "output_cost_per_second_2k": 0.13,
+        "input_cost_per_image": 0.04,
+        "provider_specific_entry": {
+            "minimax_free_input_images": 5
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "V2 async task API. Pay-as-you-go list price $0.08/s at 768P and $0.13/s at 2K, plus $0.04 per input image beyond the first 5. Audio input is free. Reference video input is rejected, since MiniMax bills its duration only after the create call."
+        }
+    },
+    "minimax/MiniMax-H3-Max": {
+        "litellm_provider": "minimax",
+        "mode": "video_generation",
+        "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.08,
+        "input_cost_per_image": 0.074,
+        "provider_specific_entry": {
+            "minimax_free_input_images": 2
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "V2 async task API, fast tier. Pay-as-you-go list price $0.05/s at 480P and $0.08/s at 768P; no 2K. Plus $0.074 per input image beyond the first 2. Audio input is free. Reference video input is rejected, since MiniMax bills its duration only after the create call."
+        }
     },
     "mistral.devstral-2-123b": {
         "deprecation_date": "2027-03-30",
@@ -45629,6 +46441,53 @@
         "mode": "chat",
         "supports_vision": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
+    "scx-ai/DeepSeek-V4.1-flash": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "scx-ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 375000,
+        "max_tokens": 375000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://scx.ai/models/deepseek-v4-1-flash",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "scx-ai/GLM-5.3": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 9.8e-07,
+        "litellm_provider": "scx-ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.08e-06,
+        "source": "https://scx.ai/models/glm-5-3",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false
+    },
+    "scx-ai/Kimi-K3": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "input_cost_per_token": 2.83e-06,
+        "litellm_provider": "scx-ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.413e-05,
+        "source": "https://scx.ai/models/kimi-k3",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "scx-ai/GLM-5.2": {
         "cache_read_input_token_cost": 2.2e-07,
@@ -61305,8 +62164,8 @@
             {
                 "name": "claude-tool-search",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
-                "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is left out on purpose: Anthropic documents tool search as unavailable on Azure-hosted Foundry deployments, and the azure_ai/ key cannot tell those from Anthropic-hosted ones.",
+                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is included because Microsoft Foundry runs tool search for Claude on both Anthropic-hosted and Azure-hosted deployments.",
                 "model_info": {
                     "supports_tool_search": true
                 }
@@ -69797,13 +70656,24 @@
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
+    "typesafe/jev-1.14.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
+    },
     "typesafe/jev-latest": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
@@ -69811,9 +70681,11 @@
     "typesafe/jev-preview": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.typesafe.ai/models"
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 3e-08,
@@ -72214,6 +73086,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -73868,6 +74741,113 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "xai/grok-voice-3.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-latest": {
+        "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-2.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "together_ai/nvidia/NVIDIA-Nemotron-3.5-Super-VL": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "jp.amazon.nova-2-lite-v1:0": {
+        "cache_read_input_token_cost": 9.9e-08,
+        "cache_read_input_token_cost_flex": 4.95e-08,
+        "cache_read_input_token_cost_priority": 1.7325e-07,
+        "input_cost_per_token": 3.96e-07,
+        "input_cost_per_token_batches": 1.98e-07,
+        "input_cost_per_token_flex": 1.98e-07,
+        "input_cost_per_token_priority": 6.93e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 3.311e-06,
+        "output_cost_per_token_batches": 1.6555e-06,
+        "output_cost_per_token_flex": 1.6555e-06,
+        "output_cost_per_token_priority": 5.79425e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-northeast-1/index.json",
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     }
 }

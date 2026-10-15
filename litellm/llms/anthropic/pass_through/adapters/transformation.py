@@ -11,6 +11,7 @@ import litellm
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 
@@ -809,7 +810,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "eager_input_streaming",
         ]
 
-        for idx, tool in enumerate(tools):
+        for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):

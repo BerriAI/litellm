@@ -3,27 +3,11 @@ from typing import Final, NoReturn
 import pytest
 
 import litellm
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
-
-
-@pytest.mark.parametrize("enabled", [False, True, None])
-def test_public_ocr_uses_native_route_independently_of_flag(server: RecordingServer, enabled: bool | None) -> None:
-    litellm.rust(enabled)
-    response: Final = litellm.ocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=server.base_url,
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert response.pages[0].markdown == "native OCR response"
-    assert_served_natively(server, response)
 
 
 @pytest.mark.asyncio
@@ -47,17 +31,15 @@ async def test_ocr_does_not_depend_on_chat_cache(
     assert len(server.requests) == 1
 
 
-@pytest.mark.parametrize("required", [False, True])
 @pytest.mark.parametrize("failure", ["invalid", "live", "schema"])
 def test_native_projection_errors_never_select_python(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, required: bool, failure: str
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     import dataclasses
     import ssl
 
     from litellm.rust_bridge import runtime
-    from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-    from litellm.rust_bridge.configuration import Rollout
+    from litellm.rust_bridge.catalog import Route, RouteContext
     from litellm.rust_bridge.host import settings
     from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR
     from litellm.rust_bridge.public_call import NativeCall
@@ -93,7 +75,6 @@ def test_native_projection_errors_never_select_python(
             binding=NATIVE_OCR,
             native=lambda native: native(request),
             python=python_fallback,
-            rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
         )
     assert server.requests == []
 

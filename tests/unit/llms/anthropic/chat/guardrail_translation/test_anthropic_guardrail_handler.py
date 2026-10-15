@@ -2075,6 +2075,45 @@ class TestAnthropicMessagesScanOnlyToolResults:
         )
         assert data["messages"][2]["content"][0]["text"] == "sibling POISON text"
 
+    @staticmethod
+    def _strict_weather_tool() -> dict[str, Any]:
+        return {
+            "name": "get_weather",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "input_examples": [{"city": "Paris"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_strict_tool_with_input_examples_is_forwarded_as_sent(self):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "tools": [self._strict_weather_tool()],
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "sunny"}],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=self._guardrail())
+
+        assert data["tools"] == [self._strict_weather_tool()]
+
     @pytest.mark.asyncio
     async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(self):
         handler = AnthropicMessagesHandler()

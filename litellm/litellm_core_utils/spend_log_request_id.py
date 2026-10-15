@@ -10,9 +10,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.types.utils import CallTypes
+from litellm.constants import EMPTY_MAPPING, INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, CallTypes
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
+BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 _RESPONSE_ID_KEYED_CALL_TYPES: Final = frozenset(
     {
@@ -36,7 +38,10 @@ def _standard_logging_id(kwargs: Mapping[object, object]) -> str | None:
 
 
 def get_spend_logs_id(
-    call_type: object, response_obj: Mapping[object, object], kwargs: Mapping[object, object]
+    call_type: object,
+    response_obj: Mapping[object, object],
+    kwargs: Mapping[object, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     candidate_ids: Final = (
         (
@@ -44,7 +49,7 @@ def get_spend_logs_id(
             _standard_logging_id(kwargs),
             kwargs.get("litellm_call_id"),
         )
-        if call_type in _RESPONSE_ID_KEYED_CALL_TYPES
+        if call_type in _RESPONSE_ID_KEYED_CALL_TYPES or call_type in NON_INFERENCE_CALL_TYPES
         else (
             kwargs.get("litellm_call_id"),
             _standard_logging_id(kwargs),
@@ -56,4 +61,10 @@ def get_spend_logs_id(
     )
     if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
         return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"
+    if (
+        resolved_id is not None
+        and call_type in NON_INFERENCE_CALL_TYPES
+        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+    ):
+        return f"{resolved_id}{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"
     return resolved_id
