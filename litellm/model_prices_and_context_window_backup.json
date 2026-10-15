@@ -73927,5 +73927,65 @@
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "xai/grok-voice-3.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-latest": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-2.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
     }
 }
