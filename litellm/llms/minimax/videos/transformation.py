@@ -390,12 +390,11 @@ def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
         return frozenset()
 
 
-def _parameters_fields(value: object, model: str, dropped_keys: frozenset[str]) -> Mapping[str, object]:
+def _parameters_fields(value: object, model: str) -> Mapping[str, object]:
     try:
-        fields: Final = _RESPONSE_ADAPTER.validate_python(value)
+        return MappingProxyType(_RESPONSE_ADAPTER.validate_python(value))
     except ValidationError as e:
         raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
-    return MappingProxyType({key: field for key, field in fields.items() if key not in dropped_keys})
 
 
 def _billable_input_image_count(model: str, input_image_count: int) -> int:
@@ -466,8 +465,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
-        additional_dropped_keys: Final = _additional_drop_keys(video_create_optional_params)
-        dropped_keys: Final = _DROP_FROM_CREATE_BODY | additional_dropped_keys
+        dropped_keys: Final = _DROP_FROM_CREATE_BODY | _additional_drop_keys(video_create_optional_params)
         for key, value in video_create_optional_params.items():
             if value is None or key in dropped_keys:
                 continue
@@ -476,7 +474,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             elif key == "size":
                 mapped_params.setdefault("ratio", _ratio_from_size(value, model))
             elif key == "parameters":
-                mapped_params.update(_parameters_fields(value, model, additional_dropped_keys))
+                mapped_params.update(_parameters_fields(value, model))
             else:
                 mapped_params[key] = value
         unsupported: Final = sorted(key for key in mapped_params if key not in _CREATE_REQUEST_PARAMS)
@@ -549,8 +547,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
             "model": model,
             "content": content,
         }
+        dropped_keys: Final = _additional_drop_keys(litellm_params.model_dump())
         for key in _CREATE_BODY_KEYS:
-            if video_create_optional_request_params.get(key) is not None:
+            if key not in dropped_keys and video_create_optional_request_params.get(key) is not None:
                 request_data[key] = video_create_optional_request_params[key]
 
         request_data.setdefault("resolution", MINIMAX_VIDEO_DEFAULT_RESOLUTION)

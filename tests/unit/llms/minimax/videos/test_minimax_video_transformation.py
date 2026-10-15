@@ -16,6 +16,7 @@ import litellm
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.minimax.videos.transformation import (
+    MINIMAX_VIDEO_DEFAULT_RESOLUTION,
     MinimaxVideoConfig,
     MinimaxVideoError,
     _MiniMaxTask,
@@ -1081,6 +1082,19 @@ class TestMinimaxVideoEndToEndRequest:
 
         assert body["ratio"] == "1:1"
         assert "aigc_watermark" not in body
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_field_is_not_sent_when_it_arrives_in_extra_body(self):
+        body = await self._wire_body(
+            model="minimax/MiniMax-H3",
+            prompt="p",
+            extra_body={"aigc_watermark": True, "resolution": "2K", "ratio": "1:1"},
+            additional_drop_params=["aigc_watermark", "resolution"],
+        )
+
+        assert body["ratio"] == "1:1"
+        assert "aigc_watermark" not in body
+        assert body["resolution"] == MINIMAX_VIDEO_DEFAULT_RESOLUTION
 
     @pytest.mark.asyncio
     async def test_a_param_minimax_cannot_honor_is_rejected_before_the_billed_call(self):
