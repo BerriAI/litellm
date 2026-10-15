@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Final, cast
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.router_utils.common_utils import resolve_model_group_alias
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -160,13 +161,47 @@ class ClaudeCodeRoutingNames:
 
 @dataclass(frozen=True, slots=True)
 class CallerAliases:
-    """`own` are the caller's key and team alias maps, the names `/v1/models` lists for it.
-    `rewrite` are the maps `/chat/completions` rewrites its model through, in the order it
-    applies them: the team's, the key's in `add_litellm_data_to_request`, then the global
-    `model_alias_map` and the key's again in `common_processing_pre_call_logic`."""
+    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it, and `router`,
+    its key's or team's `router_settings.model_group_alias`.
+    `rewrite` are the maps `/chat/completions` rewrites its model through after auth's `router`
+    rewrite, in the order it applies them: the team's, the key's in `add_litellm_data_to_request`,
+    then the global `model_alias_map` and the key's again in `common_processing_pre_call_logic`,
+    which ends with `router` again."""
 
-    own: tuple[object, ...]
-    rewrite: tuple[object, ...]
+    team: object
+    key: object
+    router: object = None
+
+    @property
+    def own(self) -> tuple[object, ...]:
+        return (self.team, self.key)
+
+    @property
+    def rewrite(self) -> tuple[object, ...]:
+        return (self.team, self.key, litellm.model_alias_map, self.key)
+
+
+@dataclass(frozen=True, slots=True)
+class DeployedModelGroups:
+    """Names the router serves `team_id` from deployments of their own, directly or as a
+    `model_group_alias`, leaving out the `hidden` names, groups `/v1/models` does not list, and,
+    when a listing callback runs, every name outside `callback_kept`, since it never judged those."""
+
+    llm_router: Router | None
+    hidden: Container[str] = frozenset[str]()
+    team_id: str | None = None
+    callback_kept: Container[str] | None = None
+
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str) or self.llm_router is None or name in self.hidden:
+            return False
+        if self.callback_kept is not None and name not in self.callback_kept:
+            return False
+        group: Final = self.llm_router.routable_model_group(name)
+        return group not in self.hidden and any(
+            self.llm_router.deployment_usable_by_team(deployment, self.team_id)
+            for deployment in self.llm_router.get_all_deployments(model_name=group)
+        )
 
 
 def caller_alias_maps(
@@ -174,11 +209,12 @@ def caller_alias_maps(
     team_aliases: object,
     key_team_id: str | None,
     listed_team_id: str | None,
+    router_aliases: object = None,
 ) -> CallerAliases:
     """Team aliases count only when listing the team the key authenticated as."""
     if listed_team_id is not None and listed_team_id != key_team_id:
-        return CallerAliases((key_aliases,), (key_aliases, litellm.model_alias_map, key_aliases))
-    return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
+        return CallerAliases(None, key_aliases, router_aliases)
+    return CallerAliases(team_aliases, key_aliases, router_aliases)
 
 
 def alias_map(aliases: object) -> Mapping[str, str]:
@@ -191,42 +227,148 @@ def alias_map(aliases: object) -> Mapping[str, str]:
     )
 
 
+def _router_alias_map(aliases: object) -> Mapping[str, str]:
+    try:
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+    except ValidationError:
+        return _NO_ALIASES
+    targets: Final = ((alias, resolve_model_group_alias(entries, alias)) for alias in entries if isinstance(alias, str))
+    return MappingProxyType({alias: target for alias, target in targets if target is not None})
+
+
+def _hidden_aliases(aliases: object) -> frozenset[str]:
+    try:
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+    except ValidationError:
+        return frozenset()
+    return frozenset(
+        alias
+        for alias, entry in entries.items()
+        if isinstance(alias, str)
+        and isinstance(entry, Mapping)
+        and cast(Mapping[str, object], entry).get("hidden") is True  # cast-ok: isinstance-checked alias entry
+    )
+
+
 def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(chain.from_iterable(alias_maps)))
 
 
-def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | None:
-    target: Final = reduce(lambda name, aliases: aliases.get(name, name), alias_maps, model_id)
-    return None if target == model_id else target
+@dataclass(frozen=True, slots=True)
+class _AliasLayer:
+    aliases: Mapping[str, str]
+    checks_target: bool
 
 
-def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
-    """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
-    already `listed` keeps its own row, so it is never rewritten."""
-    if model_id in listed:
-        return None
-    return _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
+def _alias_layers(aliases: CallerAliases) -> tuple[_AliasLayer, ...]:
+    """The maps `/chat/completions` rewrites its model through, in order, each marked when auth
+    checks the caller's access to the model it rewrites to instead of the requested one."""
+    router: Final = _AliasLayer(_router_alias_map(aliases.router), checks_target=True)
+    key: Final = _AliasLayer(alias_map(aliases.key), checks_target=True)
+    return (
+        router,
+        _AliasLayer(alias_map(aliases.team), checks_target=False),
+        key,
+        _AliasLayer(alias_map(litellm.model_alias_map), checks_target=False),
+        key,
+        router,
+    )
+
+
+def _through_layer(state: tuple[str, bool], layer: _AliasLayer) -> tuple[str, bool]:
+    name, checks_target = state
+    target: Final = layer.aliases.get(name, name)
+    return target, checks_target or (layer.checks_target and target != name)
+
+
+def _dispatch(model_id: str, layers: Sequence[_AliasLayer]) -> tuple[str, bool]:
+    """The model `/chat/completions` sends `model_id` to, and whether auth checks the caller's
+    access to that model instead of `model_id`."""
+    return reduce(_through_layer, layers, (model_id, False))
+
+
+def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
+    if name in lookup_by_response:
+        return lookup_by_response[name]
+    return name if name in lookup_ids else None
+
+
+def _listed_lookup_id(
+    response_id: str,
+    lookup_id: str,
+    layers: Sequence[_AliasLayer],
+    lookup_by_response: Mapping[str, str],
+    lookup_ids: Container[str],
+    deployed: Container[str],
+) -> str:
+    target, checks_target = _dispatch(response_id, layers)
+    if target == response_id or lookup_id in deployed:
+        return lookup_id
+    listed: Final = _lookup_id(target, lookup_by_response, lookup_ids)
+    if listed is not None:
+        return listed
+    return target if not checks_target and target in deployed else lookup_id
+
+
+def _added_lookup_id(
+    alias: str, layers: Sequence[_AliasLayer], lookup_by_response: Mapping[str, str], lookup_ids: Container[str]
+) -> str | None:
+    target, _ = _dispatch(alias, layers)
+    return None if target == alias else _lookup_id(target, lookup_by_response, lookup_ids)
 
 
 def alias_listing_entries(
     entries: Sequence[tuple[str, str]],
     aliases: CallerAliases,
+    deployed: Container[str],
 ) -> tuple[tuple[str, str], ...]:
-    """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
-    listed. An alias colliding with a listed id keeps the listed entry."""
-    maps: Final = tuple(alias_map(raw) for raw in aliases.rewrite)
-    own: Final = tuple(alias_map(raw) for raw in aliases.own)
+    """`entries` plus one row per key or team alias whose target is listed. A listed name
+    with no `deployed` group of its own is looked up under the model `/chat/completions`
+    sends it to when the caller may call that model through it, so the row describes the
+    model that answers."""
+    layers: Final = _alias_layers(aliases)
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
-    targets: Final = MappingProxyType(
-        {alias: _rewrite(alias, maps) for alias in _alias_names(own) if alias not in lookup_by_response}
+    retargeted: Final = tuple(
+        (response_id, _listed_lookup_id(response_id, lookup_id, layers, lookup_by_response, lookup_ids, deployed))
+        for response_id, lookup_id in entries
     )
     added: Final = tuple(
-        (alias, lookup_by_response.get(target, target))
-        for alias, target in targets.items()
-        if target is not None and (target in lookup_by_response or target in lookup_ids)
+        (alias, lookup_id)
+        for alias in _alias_names(tuple(alias_map(raw) for raw in aliases.own))
+        if alias not in lookup_by_response
+        and (lookup_id := _added_lookup_id(alias, layers, lookup_by_response, lookup_ids)) is not None
     )
-    return (*entries, *added)
+    return (*retargeted, *added)
+
+
+def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    """`entries` with every `listed` name read under its own lookup id again, so an alias
+    `alias_listing_entries` describes by its target keeps its own display name, the way a
+    `model_group_alias` does."""
+    own: Final = MappingProxyType(dict(listed))
+    return tuple((response_id, own.get(response_id, lookup_id)) for response_id, lookup_id in entries)
+
+
+def alias_target(
+    model_id: str,
+    aliases: CallerAliases,
+    entries: Sequence[tuple[str, str]],
+    deployed: Container[str],
+) -> str | None:
+    """The id `GET /v1/models/{model_id}` looks `model_id` up under when one of the caller's
+    aliases rewrites it, else None. A listed `model_id` resolves to the row
+    `alias_listing_entries` lists for it."""
+    layers: Final = _alias_layers(aliases)
+    lookup_by_response: Final = MappingProxyType(dict(entries))
+    listed_lookup_id: Final = lookup_by_response.get(model_id)
+    if listed_lookup_id is None:
+        target, _ = _dispatch(model_id, layers)
+        return None if target == model_id or model_id in _hidden_aliases(aliases.router) else target
+    lookup_id: Final = _listed_lookup_id(
+        model_id, listed_lookup_id, layers, lookup_by_response, frozenset(lookup_by_response.values()), deployed
+    )
+    return None if lookup_id == listed_lookup_id else lookup_id
 
 
 def claude_code_requested_group(

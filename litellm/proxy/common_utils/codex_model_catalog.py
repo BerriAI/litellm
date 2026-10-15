@@ -376,14 +376,14 @@ def codex_models_response_json(
 
 
 def _catalog_row(
-    row: ModelInfoResponse, lookup_id: str, llm_router: Router | None, team_id: str | None
+    row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
     return CodexCatalogRow(
         id=row["id"],
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
-        display_name=llm_router.get_configured_display_name(lookup_id) if llm_router is not None else None,
+        display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
         service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
     )
 
@@ -393,14 +393,21 @@ def codex_catalog_rows(
     entries: Sequence[tuple[str, str]],
     llm_router: Router | None,
     team_id: str | None = None,
+    label_entries: Sequence[tuple[str, str]] | None = None,
 ) -> tuple[CodexCatalogRow, ...]:
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
     team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
     reading its target's deployments under its own name; `team_id` is the requesting key's team, so the
     upstream model that picks Codex's stock entry and the tiers are read only off the deployments its
-    requests can route to."""
+    requests can route to. Display names are read under `label_entries`' ids when given."""
     lookup_ids: Final = MappingProxyType(dict(entries))
-    return tuple(_catalog_row(row, lookup_ids.get(row["id"], row["id"]), llm_router, team_id) for row in rows)
+    label_ids: Final = lookup_ids if label_entries is None else MappingProxyType(dict(label_entries))
+    return tuple(
+        _catalog_row(
+            row, lookup_ids.get(row["id"], row["id"]), label_ids.get(row["id"], row["id"]), llm_router, team_id
+        )
+        for row in rows
+    )
 
 
 def codex_model_list_body(
@@ -408,9 +415,10 @@ def codex_model_list_body(
     entries: Sequence[tuple[str, str]],
     llm_router: Router | None,
     team_id: str | None = None,
+    label_entries: Sequence[tuple[str, str]] | None = None,
 ) -> str:
     """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
-    body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router, team_id))
+    body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router, team_id, label_entries))
     if body.left_out:
         verbose_proxy_logger.warning(
             "Codex model catalog cut at %d bytes, left out: %s. Models offering a service tier are kept first, "
