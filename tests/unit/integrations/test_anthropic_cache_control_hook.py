@@ -25,9 +25,9 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
-    anthropic_messages_pt,
     convert_to_anthropic_tool_invoke,
 )
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, Message
@@ -1173,6 +1173,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
 
 _SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
 _GO_ON: Final = {"role": "user", "content": "Go on"}
+_SYSTEM_NOTE: Final = {"role": "system", "content": "Answer in one sentence."}
 _SEARCH_CALL: Final = {
     "id": "srvtoolu_01Search",
     "type": "function",
@@ -1187,14 +1188,38 @@ _WEATHER_CALL: Final = {
 }
 
 
-def _wire_cache_marks(messages: list[AllMessageValues]) -> int:
-    wire_messages: Final = anthropic_messages_pt(
-        copy.deepcopy(messages), model="claude-opus-5-5", llm_provider="anthropic"
+def _wire_cache_marks(messages: list[AllMessageValues], model: str = "claude-opus-5-5") -> int:
+    request: Final = AnthropicConfig().transform_request(
+        model=model,
+        messages=copy.deepcopy(messages),
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
     )
     blocks: Final = itertools.chain.from_iterable(
-        message["content"] for message in wire_messages if isinstance(message["content"], list)
+        message["content"] for message in request["messages"] if isinstance(message["content"], list)
     )
     return sum(1 for block in blocks if isinstance(block, dict) and "cache_control" in block)
+
+
+def _replayed_search_call(*tool_calls: dict[str, object]) -> AllMessageValues:
+    return cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": list(tool_calls),
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Search",
+                        "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                    }
+                ]
+            },
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -1217,42 +1242,49 @@ def _wire_cache_marks(messages: list[AllMessageValues]) -> int:
             1,
             id="client_answer_replaced_when_modify_params_answers_the_other_call",
         ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SYSTEM_NOTE,), True, 0, id="placeholder_replaced_when_a_later_system_message_is_sent"
+        ),
+        pytest.param((_SEARCH_CALL,), (_SYSTEM_NOTE,), False, 0, id="trailing_call_rebuilt_before_a_system_message"),
     ],
 )
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
 def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_receives_it(
     monkeypatch: pytest.MonkeyPatch,
     tool_calls: tuple[dict[str, object], ...],
     follow_ups: tuple[AllMessageValues, ...],
     modify_params: bool,
     expected_breakpoints: int,
+    model: str,
 ):
     monkeypatch.setattr(litellm, "modify_params", modify_params)
-    search_call: Final = cast(
-        AllMessageValues,
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": list(tool_calls),
-            "provider_specific_fields": {
-                "tool_results": [
-                    {
-                        "type": "tool_search_tool_result",
-                        "tool_use_id": "srvtoolu_01Search",
-                        "content": {"type": "tool_search_tool_search_result", "tool_references": []},
-                    }
-                ]
-            },
-        },
-    )
     messages: Final = [
         cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
-        search_call,
+        _replayed_search_call(*tool_calls),
         *follow_ups,
     ]
 
     census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
 
-    assert (census, _wire_cache_marks(messages)) == (expected_breakpoints, expected_breakpoints)
+    assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_after_a_system_message(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, model: str
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(_SEARCH_CALL),
+        cast(AllMessageValues, _SEARCH_ANSWER),
+        cast(AllMessageValues, _SYSTEM_NOTE),
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert census >= _wire_cache_marks(messages, model)
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])

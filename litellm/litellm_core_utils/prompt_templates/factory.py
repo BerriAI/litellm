@@ -26,6 +26,8 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     is_anthropic_tool_search_use,
     message_field,
     parts_of,
+    place_mid_conversation_system,
+    split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -1877,15 +1879,17 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
 
 
 def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
-    paired: Final = _paired_like_the_request_builder(messages) if litellm.modify_params else messages
-    return _tool_call_ids_in_tool_messages(paired) - server_tool_answers_replaced_by_their_result(paired)
+    sent: Final = _as_the_request_builder_sends_them(messages)
+    return _tool_call_ids_in_tool_messages(sent) - server_tool_answers_replaced_by_their_result(sent)
 
 
-def _paired_like_the_request_builder(messages: Sequence[object]) -> Sequence[object]:
+def _as_the_request_builder_sends_them(messages: Sequence[object]) -> Sequence[object]:
     if not all(callable(getattr(message, "get", None)) for message in messages):
         return messages
-    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: pairing reads messages via get
-    return _pair_tool_calls_with_results(chat_messages)
+    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: placement reads messages via get
+    _, conversation = split_leading_system_run(chat_messages)
+    placed: Final = place_mid_conversation_system(conversation, supports_mid_conversation_system=True)
+    return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
