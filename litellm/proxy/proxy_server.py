@@ -433,7 +433,11 @@ from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
-from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
+from litellm.proxy.common_utils.discoverable_model_filter import (
+    discoverable_rows,
+    undiscoverable_model_groups,
+    undiscoverable_model_names,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -466,13 +470,14 @@ from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
+    DeployedModelGroups,
     TeamModelNameTranslator,
     alias_listing_entries,
     alias_target,
     caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
-    is_claude_code_client,
+    label_entries,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -7950,7 +7955,7 @@ class ProxyConfig:
         user_api_key_dict: UserAPIKeyAuth | None,
         prisma_client: PrismaClient | None,
         proxy_logging_obj: ProxyLogging | None = None,
-    ) -> dict | None:
+    ) -> Mapping[str, object] | None:
         return await self._get_hierarchical_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
 
     async def _get_hierarchical_router_settings(
@@ -11878,6 +11883,25 @@ async def _names_hidden_by_listing_callbacks(
     )
 
 
+def _describable_model_groups(
+    listed_entries: Sequence[tuple[str, str]],
+    hidden_names: frozenset[str] | set[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str | None,
+) -> DeployedModelGroups:
+    listing_team_id: Final = team_id or user_api_key_dict.team_id
+    return DeployedModelGroups(
+        llm_router,
+        hidden_names | undiscoverable_model_groups(llm_router, user_api_key_dict, listing_team_id),
+        listing_team_id,
+        (
+            frozenset(lookup_id for _, lookup_id in listed_entries)
+            if ProxyLogging.callback_capabilities().listed_models_filters
+            else None
+        ),
+    )
+
+
 async def _entries_kept_by_listing_callbacks(
     entries: Sequence[tuple[str, str]], user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[tuple[str, str], ...]:
@@ -11965,21 +11989,20 @@ async def model_list(
         http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
     client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
-    view_router_settings: Final = (
-        await proxy_config.get_hierarchical_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
-        if wants_anthropic_format and is_claude_code_client(client_headers)
-        else None
-    )
-    view_aliases: Final = (
-        view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
+    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
     )
     caller_aliases: Final = caller_alias_maps(
-        user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        user_api_key_dict.aliases,
+        user_api_key_dict.team_model_aliases,
+        user_api_key_dict.team_id,
+        team_id,
+        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
     )
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (*caller_aliases.rewrite, view_aliases),
+        (*caller_aliases.rewrite, caller_aliases.router),
     )
 
     # Validate scope parameter if provided
@@ -12002,7 +12025,7 @@ async def model_list(
         )
 
     # Compute once — used in both branches below to hide paused models from the listing.
-    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set[str]()
 
     # Opt-in: also hide models whose deployments are all unhealthy per background
     # health checks. Empty when health state is unavailable or stale (fail open).
@@ -12119,12 +12142,15 @@ async def model_list(
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    entries: Final = alias_listing_entries(
-        await _entries_kept_by_listing_callbacks(
-            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
-        ),
-        caller_aliases,
+    listed_entries: Final = await _entries_kept_by_listing_callbacks(
+        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
     )
+    entries: Final = alias_listing_entries(
+        listed_entries,
+        caller_aliases,
+        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    )
+    labels: Final = label_entries(listed_entries, entries)
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
@@ -12139,14 +12165,14 @@ async def model_list(
     listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
     if client_version is not None:
         return Response(
-            content=codex_model_list_body(listing, entries, llm_router, team_id or user_api_key_dict.team_id),
+            content=codex_model_list_body(listing, entries, llm_router, team_id or user_api_key_dict.team_id, labels),
             media_type="application/json",
         )
 
     if wants_anthropic_format:
         return create_anthropic_model_list_response(
             listing,
-            display_names=configured_display_names(entries, llm_router),
+            display_names=configured_display_names(labels, llm_router),
             listed_ids=claude_code_view_ids(
                 listing,
                 client_headers,
@@ -12216,7 +12242,7 @@ async def model_info(
     # Mirror /v1/models' visibility filter so first-occurrence resolution
     # cannot land on a deployment the listing had hidden. Undiscoverable
     # models stay retrievable by id, they only drop out of the alias guard.
-    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set[str]()
     unhealthy_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
         general_settings=settings,
@@ -12224,6 +12250,16 @@ async def model_info(
     )
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    caller_aliases: Final = caller_alias_maps(
+        user_api_key_dict.aliases,
+        user_api_key_dict.team_model_aliases,
+        user_api_key_dict.team_id,
+        team_id,
+        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
+    )
     callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
         user_api_key_dict,
         tuple(
@@ -12241,17 +12277,14 @@ async def model_info(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
 
+    listed_entries: Final = TeamModelNameTranslator.listing_entries(
+        tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
+    )
     aliased_model_id: Final = alias_target(
         model_id,
-        caller_alias_maps(
-            user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
-        ),
-        frozenset(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(
-                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
-            )
-        ),
+        caller_aliases,
+        listed_entries,
+        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
@@ -12260,14 +12293,16 @@ async def model_info(
         general_settings=settings,
     )
 
-    # Validate that the requested model is accessible
-    validate_model_access(model_id=resolved_model_id, available_models=all_models)
+    if all(response_id != model_id for response_id, _ in listed_entries):
+        validate_model_access(model_id=resolved_model_id, available_models=all_models)
 
     # Get provider information from the router deployment
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment: Final = llm_router.get_deployment_by_model_group_name(resolved_model_id)
+    deployment: Final = llm_router.get_deployment_by_model_group_name(
+        llm_router.routable_model_group(resolved_model_id)
+    )
     if deployment is None:
         raise HTTPException(
             status_code=404,
