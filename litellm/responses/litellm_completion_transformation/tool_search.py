@@ -27,6 +27,7 @@ __all__ = [
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
     "is_server_tool_search_tool",
+    "runs_tool_search_on_the_server",
     "provider_builds_anthropic_request",
     "tool_search_call_ids",
     "unanswered_tool_search_call_ids",
@@ -50,6 +51,14 @@ class _ToolSearchFields(LiteLLMBaseModel):
 
 
 def is_server_tool_search_tool(tool: object) -> bool:
+    try:
+        parsed: Final = _ToolSearchFields.model_validate(tool)
+    except ValidationError:
+        return False
+    return parsed.type == "tool_search" and parsed.execution != "client"
+
+
+def runs_tool_search_on_the_server(tool: object) -> bool:
     try:
         parsed: Final = _ToolSearchFields.model_validate(tool)
     except ValidationError:

@@ -1176,7 +1176,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Sequence[object]:
         from litellm.responses.litellm_completion_transformation.tool_search import (
             anthropic_tool_search_chat_tool,
-            is_server_tool_search_tool,
+            runs_tool_search_on_the_server,
         )
 
         first_search_tool_index: Final = next(
@@ -1188,7 +1188,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return [tool for tool in tools if not _is_openai_tool_search_tool(tool)]
         model_runs_tool_search: Final = litellm.supports_tool_search(model, self._resolved_provider)
         search_runs_on_the_server: Final = all(
-            is_server_tool_search_tool(tool) for tool in tools if _is_openai_tool_search_tool(tool)
+            runs_tool_search_on_the_server(tool) for tool in tools if _is_openai_tool_search_tool(tool)
         )
         if not (model_runs_tool_search and search_runs_on_the_server):
             return tools_without_unsupported_tool_search(
