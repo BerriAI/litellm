@@ -129,6 +129,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.router_utils.reasoning_effort_capability import (
+    adaptive_thinking_beside_effort,
     deployment_rounds_reasoning_effort,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
@@ -5644,7 +5645,13 @@ def completion(
             "messages": messages,
             "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
-            "thinking": thinking if thinking_effort is None else None,
+            "thinking": (
+                thinking
+                if thinking_effort is None
+                else adaptive_thinking_beside_effort(
+                    thinking, resolved_reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                )
+            ),
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
                 include_server_side_tool_invocations

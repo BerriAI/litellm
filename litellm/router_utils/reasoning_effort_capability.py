@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
 
 ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
@@ -191,13 +192,29 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
     return reasoning_effort_from_thinking(thinking)
 
 
+def adaptive_thinking_beside_effort(
+    thinking: AnthropicThinkingParam | None, effort: object, *, model: str, custom_llm_provider: str
+) -> AnthropicThinkingParam | None:
+    if effort is None or effort == "none":
+        return None
+    translated: Final = with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+    )
+    return thinking if "output_config" in translated else None
+
+
 def _rounding(value: object) -> ReasoningEffortRounding | None:
     match value.strip().lower() if isinstance(value, str) else value:
         case "up":
             return "up"
         case "down":
             return "down"
+        case None:
+            return None
         case _:
+            verbose_logger.warning(
+                "Ignoring reasoning_effort_rounding=%s, expected 'up' or 'down'", _single_line(value)
+            )
             return None
 
 
