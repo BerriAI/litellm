@@ -3,13 +3,10 @@ DashScope (Alibaba Model Studio) async video task API: create, poll and download
 delete or remix endpoint, so those raise.
 """
 
-import base64
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from io import BufferedReader, BytesIO
 from math import log
-from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
@@ -19,9 +16,13 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAda
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
-from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import (
+    input_reference_url,
+    polled_video_models,
+    routed_video_models,
+)
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # house cached-client factory has no public alias and its stub leaves params untyped
@@ -32,7 +33,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
-    decode_video_id_with_provider,
     encode_video_id_with_provider,
     extract_original_video_id,
 )
@@ -86,7 +86,6 @@ _EMPTY_PARAMS: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig cont
 
 _TASK_RESPONSE_ADAPTER: Final = TypeAdapter(_TaskResponse)
 _PARAMETERS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 _STATUS_MAP: Final = MappingProxyType(
     {
@@ -383,39 +382,6 @@ def _is_priced_tier(resolution: object, priced_tiers: tuple[str, ...]) -> bool:
     return isinstance(resolution, str) and resolution.strip().upper() in priced_tiers
 
 
-def _read_all_bytes(file_obj: object) -> bytes:
-    if isinstance(file_obj, tuple):
-        file_tuple: Final = _FILE_TUPLE_ADAPTER.validate_python(file_obj)
-        return _read_all_bytes(file_tuple[1] if len(file_tuple) >= 2 else None)
-    if isinstance(file_obj, PurePath):
-        return Path(file_obj).read_bytes()
-    if isinstance(file_obj, (BytesIO, BufferedReader)):
-        current_position: Final = file_obj.tell()
-        file_obj.seek(0)
-        content: Final = file_obj.read()
-        file_obj.seek(current_position)
-        return content
-    if isinstance(file_obj, bytes):
-        return file_obj
-    if isinstance(file_obj, bytearray):
-        return bytes(file_obj)
-    read: Final = getattr(file_obj, "read", None)
-    if callable(read):
-        data: Final = read()
-        if isinstance(data, bytes):
-            return data
-    raise ValueError("input_reference must be a URL string, bytes, a path, a file object, or a file tuple")
-
-
-def _image_url(image: object) -> str:
-    if isinstance(image, str):
-        return image
-    content: Final = _read_all_bytes(image)
-    content_type: Final = ImageEditRequestUtils.get_image_content_type(content)
-    encoded: Final = base64.b64encode(content).decode("utf-8")
-    return f"data:{content_type};base64,{encoded}"
-
-
 def _media_reference_type(model: str) -> str | None:
     """Models without the field predate the media array and take the image on the flat ``img_url`` field."""
     info: Final = _dashscope_model_info(model)
@@ -556,58 +522,6 @@ def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> s
     if output.task_status == _UNKNOWN_TASK_STATUS:
         raise _task_not_found(raw_response)
     raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
-
-
-def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
-    litellm_params: Final[object] = getattr(logging_obj, "litellm_params", None)
-    try:
-        return _PARAMETERS_ADAPTER.validate_python(litellm_params)
-    except ValidationError:
-        return _EMPTY_PARAMS
-
-
-def _polled_models(logging_obj: object) -> tuple[str | None, str | None]:
-    """
-    The proxy routes by the models encoded in the polled id, so they must survive into the returned id. The served
-    group survives only when the router sent this poll to it, so an edited id cannot write any name it likes back.
-    """
-    video_id: Final = _logged_litellm_params(logging_obj).get("video_id")
-    if not isinstance(video_id, str):
-        return None, None
-    decoded: Final = decode_video_id_with_provider(video_id)
-    served: Final = decoded.get("served_model")
-    routed: Final = _poll_models(logging_obj)
-    return decoded.get("model_id") or None, served if routed is None or served in routed else None
-
-
-def _poll_models(logging_obj: object) -> tuple[str, str | None] | None:
-    """
-    A later status or content request checks the key's model access against the model encoded in the id, and
-    routes by it. DashScope serves the same model name from several regional hosts, so only the group that
-    served the task can send its polls back to the region that created it, while a key may be scoped to the
-    alias, routing group or wildcard name it asked for instead. The id carries both names: the one the router
-    was asked for on this hop, and the group that served it when that differs and is not a wildcard. The router
-    stamps both into litellm_metadata, and metadata carries a copy only when the caller sent none.
-    """
-    params: Final = _logged_litellm_params(logging_obj)
-    stamped: Final = (_stamped_poll_models(params.get(key)) for key in ("litellm_metadata", "metadata"))
-    return next((models for models in stamped if models), None)
-
-
-def _stamped_poll_models(metadata: object) -> tuple[str, str | None] | None:
-    try:
-        fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
-    except ValidationError:
-        return None
-    requested: Final = _id_safe_name(fields.get("model_group"))
-    served: Final = _id_safe_name(fields.get("deployment_model_name"))
-    if requested is None:
-        return None
-    return requested, None if served is None or served == requested or "*" in served else served
-
-
-def _id_safe_name(name: object) -> str | None:
-    return name if isinstance(name, str) and name and ";" not in name else None
 
 
 class DashScopeVideoConfig(BaseVideoConfig):
@@ -804,7 +718,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         input_reference: Final = video_create_optional_request_params.get("input_reference")
         if input_reference is None:
             return None, None
-        image_url: Final = _image_url(input_reference)
+        image_url: Final = input_reference_url(input_reference)
         media_type: Final = _media_reference_type(model)
         if media_type is None:
             return "img_url", image_url
@@ -823,7 +737,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         requested: Final = self._requested_parameters(request_data)
         video_obj: Final = _video_object_from_task(task, raw_response, model=model, requested=requested)
         if custom_llm_provider and video_obj.id:
-            requested_model, served_model = _poll_models(logging_obj) or (model, None)
+            requested_model, served_model = routed_video_models(logging_obj) or (model, None)
             video_obj.id = encode_video_id_with_provider(
                 video_obj.id, custom_llm_provider, requested_model, served_model
             )
@@ -869,7 +783,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         task: Final = _parse_task_response(raw_response)
-        model, served_model = _polled_models(logging_obj)
+        model, served_model = polled_video_models(logging_obj)
         video_obj: Final = _video_object_from_task(task, raw_response, model=model)
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model, served_model)

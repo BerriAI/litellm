@@ -13,7 +13,6 @@ from .common_utils import (
 )
 from .embedding import VolcEngineEmbeddingConfig
 from .responses.transformation import VolcEngineResponsesAPIConfig
-from .videos.transformation import VolcEngineVideoConfig
 
 # For backward compatibility, keep the old class name
 VolcEngineConfig: Final = VolcEngineChatConfig
@@ -24,7 +23,6 @@ __all__ = [
     "VolcEngineEmbeddingConfig",
     "VolcEngineError",
     "VolcEngineResponsesAPIConfig",
-    "VolcEngineVideoConfig",
     "get_volcengine_base_url",
     "get_volcengine_headers",
 ]

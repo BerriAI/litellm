@@ -1,920 +1,820 @@
-"""
-Tests for Volcengine Ark (Doubao-Seedance) video generation transformation.
-"""
-
 import base64
 import io
 import json
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 
 import litellm
+from litellm import Router
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.volcengine.videos.transformation import (
-    VolcEngineVideoConfig,
-    VolcEngineVideoError,
-    _parse_task,
-    _video_url_from_task,
-)
+from litellm.llms.openai.cost_calculation import video_generation_cost
+from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig, VolcEngineVideoError
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.utils import (
-    decode_video_id_with_provider,
-    encode_video_id_with_provider,
-)
+from litellm.types.videos.utils import decode_video_id_with_provider, encode_video_id_with_provider
+from litellm.utils import ProviderConfigManager
 from litellm.videos.main import avideo_content, avideo_generation
 
-PNG_BYTES = base64.b64decode(
+PNG_BYTES: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
+PNG_DATA_URL: Final = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
 
-API_BASE = "https://ark.cn-beijing.volces.com"
-TASKS_URL = f"{API_BASE}/api/v3/contents/generations/tasks"
-SEEDANCE_2_5 = "doubao-seedance-2-5-260628"
-SEEDANCE_2_0 = "doubao-seedance-2-0-260128"
-
-
-def _mock_response(payload: dict, status_code: int = 200) -> Mock:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = payload
-    mock_response.status_code = status_code
-    mock_response.headers = httpx.Headers()
-    return mock_response
+API_BASE: Final = "https://ark.cn-beijing.volces.com"
+TASKS_URL: Final = f"{API_BASE}/api/v3/contents/generations/tasks"
+SEEDANCE_2_5: Final = "doubao-seedance-2-5-260628"
+SEEDANCE_2_0: Final = "doubao-seedance-2-0-260128"
+SEEDANCE_2_0_FAST: Final = "doubao-seedance-2-0-fast-260128"
+TASK_ID: Final = "cgt-2026-abc"
 
 
-def _create(params: dict, model: str = SEEDANCE_2_5, prompt: str = "a cat on a roof"):
-    return VolcEngineVideoConfig().transform_video_create_request(
+def _response(payload: object, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, json=payload, request=httpx.Request("GET", TASKS_URL))
+
+
+def _text_response(text: str, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, text=text, request=httpx.Request("GET", TASKS_URL))
+
+
+def _create_body(
+    params: dict[str, object], model: str = SEEDANCE_2_5, drop_params: bool | None = None
+) -> dict[str, object]:
+    body, files, url = VolcEngineVideoConfig().transform_video_create_request(
         model=model,
-        prompt=prompt,
+        prompt="a cat on a roof",
         api_base=API_BASE,
         video_create_optional_request_params=params,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
+    assert (files, url) == ((), TASKS_URL)
+    return body
 
 
-def _poll(payload: dict, provider: str | None = "volcengine"):
+def _created(request_data: dict[str, object], model: str = SEEDANCE_2_5, logging_obj: object = None):
+    return VolcEngineVideoConfig().transform_video_create_response(
+        model=model,
+        raw_response=_response({"id": TASK_ID}),
+        logging_obj=logging_obj,  # pyright: ignore[reportArgumentType]  # the transform only reads litellm_params off it
+        custom_llm_provider="volcengine",
+        request_data=request_data,
+    )
+
+
+def _polled(payload: object, logging_obj: object = None):
     return VolcEngineVideoConfig().transform_video_status_retrieve_response(
-        raw_response=_mock_response(payload),
-        logging_obj=Mock(),
-        custom_llm_provider=provider,
+        raw_response=_response(payload),
+        logging_obj=logging_obj,  # pyright: ignore[reportArgumentType]  # the transform only reads litellm_params off it
+        custom_llm_provider="volcengine",
     )
 
 
-class TestVolcEngineVideoCreateRequest:
-    def test_prompt_becomes_the_text_content_item(self):
-        """Ark takes no top-level prompt: it only reads the typed content array."""
-        body, files, url = _create({})
+def _task(**fields: object) -> dict[str, object]:
+    return {"id": TASK_ID, "model": SEEDANCE_2_5, "status": "succeeded", **fields}
 
-        assert body["content"] == [{"type": "text", "text": "a cat on a roof"}]
-        assert "prompt" not in body
-        assert files == ()
-        assert url == TASKS_URL
 
-    def test_input_reference_becomes_a_first_frame_item(self):
-        body, _, _ = _create({"input_reference": "https://x/first.png"})
+@pytest.mark.parametrize(
+    "input_reference",
+    [
+        PNG_BYTES,
+        io.BytesIO(PNG_BYTES),
+        ("frame.png", PNG_BYTES, "image/png"),
+        ("frame.png", io.BytesIO(PNG_BYTES)),
+    ],
+    ids=["bytes", "file", "tuple", "tuple-with-file"],
+)
+def test_a_file_input_reference_becomes_a_data_uri_first_frame(input_reference: object):
+    body = _create_body({"input_reference": input_reference, "duration": 4})
 
-        assert body["content"] == [
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [
             {"type": "text", "text": "a cat on a roof"},
-            {"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"},
-        ]
-
-    def test_file_input_reference_becomes_a_data_uri(self):
-        body, _, _ = _create({"input_reference": io.BytesIO(PNG_BYTES)})
-
-        item = body["content"][1]
-        assert item["role"] == "first_frame"
-        assert item["image_url"]["url"].startswith("data:image/png;base64,")
-
-    def test_caller_content_array_wins_and_keeps_the_prompt(self):
-        """Roles on a caller-supplied array are the only way to express
-        reference-to-video and edit jobs, so it must not be rebuilt."""
-        supplied = [
-            {"type": "image_url", "image_url": {"url": "https://x/ref.png"}, "role": "reference_image"},
-            {"type": "video_url", "video_url": {"url": "https://x/ref.mp4"}, "role": "reference_video"},
-        ]
-        body, _, _ = _create({"content": supplied})
-
-        assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, *supplied]
-
-    def test_caller_content_with_its_own_text_item_is_not_duplicated(self):
-        supplied = [
-            {"type": "text", "text": "custom"},
-            {"type": "audio_url", "audio_url": {"url": "x"}, "role": "reference_audio"},
-        ]
-        body, _, _ = _create({"content": supplied})
-
-        assert body["content"] == supplied
-
-    def test_malformed_content_array_raises(self):
-        with pytest.raises(ValueError, match="content must be an array"):
-            _create({"content": ["not-an-item"]})
-
-    def test_provider_params_land_next_to_the_content_array(self):
-        body, _, _ = _create(
-            {"resolution": "1080p", "ratio": "9:16", "duration": 8, "generate_audio": True, "watermark": False}
-        )
-
-        assert body["resolution"] == "1080p"
-        assert body["ratio"] == "9:16"
-        assert body["duration"] == 8
-        assert body["generate_audio"] is True
-        assert body["watermark"] is False
-
-    def test_false_valued_flags_are_not_dropped(self):
-        """watermark=False and camera_fixed=False are meaningful; a truthiness
-        check instead of an is-None check would silently flip them."""
-        body, _, _ = _create({"watermark": False, "camera_fixed": False})
-
-        assert body["watermark"] is False
-        assert body["camera_fixed"] is False
-
-
-class TestVolcEngineVideoParamMapping:
-    def test_seconds_becomes_duration(self):
-        assert VolcEngineVideoConfig().map_openai_params({"seconds": "5"}, "m", True) == {"duration": 5}
-
-    def test_size_yields_ratio_and_resolution_tier(self):
-        """Ark takes a named tier, not a pixel size; dropping it leaves the
-        request on the model default and bills at that default's rate."""
-        mapped = VolcEngineVideoConfig().map_openai_params({"size": "1920x1080"}, "m", True)
-
-        assert mapped == {"ratio": "16:9", "resolution": "1080p"}
-
-    @pytest.mark.parametrize(
-        "size,expected_ratio,expected_resolution",
-        [
-            ("1280x720", "16:9", "720p"),
-            ("854x480", "16:9", "480p"),
-            ("1080x1920", "9:16", "1080p"),
-            ("1024x1024", "1:1", "1080p"),
-            ("3840x2160", "16:9", "4k"),
-            ("1080x1440", "3:4", "1080p"),
+            {"type": "image_url", "image_url": {"url": PNG_DATA_URL}, "role": "first_frame"},
         ],
+        "duration": 4,
+    }
+
+
+def test_a_path_input_reference_is_read_from_disk(tmp_path: Path):
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(PNG_BYTES)
+
+    body = _create_body({"input_reference": frame, "duration": 4})
+
+    assert body["content"] == [
+        {"type": "text", "text": "a cat on a roof"},
+        {"type": "image_url", "image_url": {"url": PNG_DATA_URL}, "role": "first_frame"},
+    ]
+
+
+def test_a_url_input_reference_is_passed_as_is_and_never_opened_as_a_path():
+    body = _create_body({"input_reference": "https://x/first.png", "duration": 4})
+
+    assert body["content"] == [
+        {"type": "text", "text": "a cat on a roof"},
+        {"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        (
+            [{"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"}],
+            [
+                {"type": "text", "text": "a cat on a roof"},
+                {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"},
+            ],
+        ),
+        (
+            [{"type": "text", "text": "own prompt"}, {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}}],
+            [{"type": "text", "text": "own prompt"}, {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}}],
+        ),
+    ],
+    ids=["prompt-prepended", "own-text-item-kept"],
+)
+def test_a_caller_content_array_wins_over_input_reference(content: list[object], expected: list[object]):
+    body = _create_body({"content": content, "input_reference": "https://x/ignored.png", "duration": 4})
+
+    assert body["content"] == expected
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}, "role": "reference_video"},
+        {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}},
+        {"type": "image_url", "image_url": {"url": "https://x/v.png"}, "role": "reference_video"},
+    ],
+    ids=["reference-video", "untagged-video", "mistagged-role"],
+)
+def test_a_video_input_is_rejected_because_its_cost_is_not_known_at_create(item: dict[str, object]):
+    with pytest.raises(UnsupportedParamsError, match="Video input"):
+        _ = _create_body({"content": [item], "duration": 4}, drop_params=True)
+
+
+def test_a_content_value_that_is_not_an_array_of_items_is_rejected():
+    with pytest.raises(UnsupportedParamsError, match="content must be an array"):
+        _ = _create_body({"content": "a string", "duration": 4})
+
+
+def test_an_omitted_duration_is_sent_as_five_seconds_so_ark_cannot_pick_the_length():
+    body = _create_body({})
+
+    assert body == {"model": SEEDANCE_2_5, "content": [{"type": "text", "text": "a cat on a roof"}], "duration": 5}
+
+
+@pytest.mark.parametrize("duration", [-1, "-1", 0, "abc", 4.5])
+def test_a_duration_ark_would_pick_or_that_is_not_whole_seconds_is_rejected(duration: object):
+    with pytest.raises(UnsupportedParamsError, match="duration must be a positive whole number"):
+        _ = _create_body({"duration": duration}, drop_params=True)
+
+
+def test_frames_is_rejected_because_it_bypasses_the_billed_duration():
+    with pytest.raises(UnsupportedParamsError, match="frames"):
+        _ = _create_body({"frames": 121, "duration": 4})
+
+
+def test_ark_fields_reach_the_body_and_false_flags_are_kept():
+    body = _create_body(
+        {
+            "duration": 4,
+            "resolution": "480p",
+            "ratio": "9:16",
+            "seed": 7,
+            "watermark": False,
+            "generate_audio": False,
+            "service_tier": "flex",
+            "litellm_internal": "not for ark",
+        }
     )
-    def test_size_snaps_onto_the_ratios_ark_accepts(self, size, expected_ratio, expected_resolution):
-        """854x480 reduces to 427:240 by gcd, which Ark rejects, so the closest
-        named ratio has to win instead."""
-        mapped = VolcEngineVideoConfig().map_openai_params({"size": size}, "m", True)
 
-        assert mapped["ratio"] == expected_ratio
-        assert mapped["resolution"] == expected_resolution
-
-    def test_explicit_ratio_and_resolution_beat_the_size_derived_ones(self):
-        mapped = VolcEngineVideoConfig().map_openai_params(
-            {"size": "1280x720", "ratio": "adaptive", "resolution": "1080p"}, "m", True
-        )
-
-        assert mapped == {"ratio": "adaptive", "resolution": "1080p"}
-
-    def test_parameters_block_is_merged_in(self):
-        mapped = VolcEngineVideoConfig().map_openai_params({"parameters": {"priority": 5}}, "m", True)
-
-        assert mapped == {"priority": 5}
-
-    def test_openai_only_fields_ark_does_not_define_are_dropped(self):
-        mapped = VolcEngineVideoConfig().map_openai_params({"user": "u", "characters": [{"id": "c"}]}, "m", True)
-
-        assert mapped == {}
-
-
-class TestVolcEngineVideoCreateResponse:
-    def test_task_id_becomes_a_queued_video(self):
-        config = VolcEngineVideoConfig()
-        video = config.transform_video_create_response(
-            model=SEEDANCE_2_5,
-            raw_response=_mock_response({"id": "cgt-2026-abc", "safety_identifier": None}),
-            logging_obj=Mock(),
-            custom_llm_provider="volcengine",
-        )
-
-        assert video.status == "queued"
-        assert video.model == SEEDANCE_2_5
-        assert decode_video_id_with_provider(video.id)["video_id"] == "cgt-2026-abc"
-        assert decode_video_id_with_provider(video.id)["model_id"] == SEEDANCE_2_5
-
-    def test_missing_task_id_raises_instead_of_returning_an_empty_video(self):
-        """A rejected create must not surface as a queued video with an empty id."""
-        config = VolcEngineVideoConfig()
-
-        with pytest.raises(VolcEngineVideoError, match="did not return a video task id"):
-            config.transform_video_create_response(
-                model=SEEDANCE_2_5,
-                raw_response=_mock_response({"error": {"code": "ModelNotOpen", "message": "model not activated"}}),
-                logging_obj=Mock(),
-            )
-
-    def _create_response(self, request_data: dict | None, payload: dict | None = None, model: str = SEEDANCE_2_5):
-        return VolcEngineVideoConfig().transform_video_create_response(
-            model=model,
-            raw_response=_mock_response(payload or {"id": "cgt-2026-abc"}),
-            logging_obj=Mock(),
-            request_data=request_data,
-        )
-
-    def test_create_response_carries_the_requested_usage(self):
-        """Only the create call is costed, and Ark's create response has no usage
-        block, so the requested values have to be reported here or every video
-        is logged at zero cost."""
-        video = self._create_response({"duration": 4, "resolution": "480p"})
-
-        assert video.usage == {"duration_seconds": 4.0, "video_resolution": "480p"}
-
-    def test_model_chosen_duration_is_not_reported_as_billable_seconds(self):
-        """duration -1 means Ark picks the length, so there is no honest number
-        to bill at create time."""
-        video = self._create_response({"duration": -1, "resolution": "720p"})
-
-        assert "duration_seconds" not in video.usage
-        assert video.usage["video_resolution"] == "720p"
-
-    def test_create_response_without_a_request_body_has_no_usage(self):
-        assert self._create_response(None).usage is None
-
-    def test_an_omitted_duration_bills_the_2_0_default_length(self):
-        """Leaving seconds off is not free: Ark runs the model's own default
-        length, which for the 2.0 family is 5s, so the create response has to
-        report it or the video is logged at zero spend."""
-        video = self._create_response({"resolution": "480p"}, model=SEEDANCE_2_0)
-
-        assert video.usage == {"duration_seconds": 5.0, "video_resolution": "480p"}
-
-    def test_an_omitted_duration_is_not_invented_for_2_5(self):
-        """The 2.5 family defaults duration to -1, so Ark picks the length and
-        there is no honest number to bill at create time."""
-        video = self._create_response({"resolution": "480p"}, model=SEEDANCE_2_5)
-
-        assert "duration_seconds" not in video.usage
-
-    def test_the_2_0_default_does_not_override_an_explicit_minus_one(self):
-        """A caller asking Ark to pick the length must not be billed the model
-        default instead."""
-        video = self._create_response({"duration": -1, "resolution": "480p"}, model=SEEDANCE_2_0)
-
-        assert "duration_seconds" not in video.usage
-
-    def test_create_response_echoes_the_requested_seconds_and_size(self):
-        video = self._create_response({"duration": 4, "resolution": "480p", "ratio": "16:9"}, model=SEEDANCE_2_0)
-
-        assert video.seconds == "4.0"
-        assert video.size == "864x496"
-
-    @pytest.mark.usefixtures("local_model_cost_map")
-    def test_the_create_call_is_not_billed_at_zero(self):
-        """Regression guard for the whole point of the usage block: feed what
-        the create response reports back through the cost calculator, which is
-        exactly what the proxy does when it logs spend."""
-        from litellm.llms.openai.cost_calculation import video_generation_cost
-        from litellm.utils import get_model_info
-
-        video = self._create_response({"duration": 4, "resolution": "1080p"})
-        cost = video_generation_cost(
-            model=SEEDANCE_2_5,
-            duration_seconds=video.usage["duration_seconds"],
-            custom_llm_provider="volcengine",
-            video_resolution=video.usage["video_resolution"],
-        )
-        info = get_model_info(model=f"volcengine/{SEEDANCE_2_5}", custom_llm_provider="volcengine")
-
-        assert cost == pytest.approx(info["output_cost_per_second_1080p"] * 4.0)
-        assert cost > 0
-
-
-class TestVolcEngineVideoStatus:
-    @pytest.mark.parametrize(
-        "ark_status,expected",
-        [
-            ("queued", "queued"),
-            ("running", "in_progress"),
-            ("succeeded", "completed"),
-            ("failed", "failed"),
-            ("cancelled", "cancelled"),
-            ("expired", "failed"),
-            ("Queued", "queued"),
-        ],
-    )
-    def test_status_is_mapped_onto_the_openai_vocabulary(self, ark_status, expected):
-        video = _poll({"id": "cgt-1", "status": ark_status})
-
-        assert video.status == expected
-
-    def test_completed_task_reports_delivered_geometry_and_duration(self):
-        """Billing reads Ark's own duration and resolution, not the requested
-        ones: duration=-1 and ratio=adaptive both let Ark deliver something
-        else, and the tier is what the per-second rate is keyed on."""
-        video = _poll(
-            {
-                "id": "cgt-1",
-                "status": "succeeded",
-                "model": SEEDANCE_2_5,
-                "created_at": 1718049470,
-                "updated_at": 1718049700,
-                "resolution": "1080p",
-                "ratio": "16:9",
-                "duration": "8",
-                "content": {"video_url": "https://tos/v.mp4"},
-                "usage": {"completion_tokens": 388800, "total_tokens": 388800},
-            }
-        )
-
-        assert video.usage["duration_seconds"] == 8.0
-        assert video.usage["video_resolution"] == "1080p"
-        assert video.usage["total_tokens"] == 388800
-        assert video.size == "1920x1080"
-        assert video.seconds == "8.0"
-        assert video.created_at == 1718049470
-        assert video.completed_at == 1718049700
-
-    def test_adaptive_ratio_does_not_produce_a_bogus_pixel_size(self):
-        video = _poll({"id": "cgt-1", "status": "succeeded", "resolution": "720p", "ratio": "adaptive"})
-
-        assert video.size is None
-        assert video.usage["video_resolution"] == "720p"
-
-    def test_portrait_delivery_reports_portrait_pixels(self):
-        video = _poll({"id": "cgt-1", "status": "succeeded", "resolution": "720p", "ratio": "9:16"})
-
-        assert video.size == "720x1280"
-
-    def test_480p_reports_the_width_ark_actually_produces(self):
-        """480 * 16 / 9 is 853.33 and the 2.5 family delivers 854x480, so
-        truncating would report a width the model never produces."""
-        video = _poll(
-            {"id": "cgt-1", "status": "succeeded", "model": SEEDANCE_2_5, "resolution": "480p", "ratio": "16:9"}
-        )
-
-        assert video.size == "854x480"
-
-    @pytest.mark.parametrize("ratio,expected", [("16:9", "864x496"), ("4:3", "752x560")])
-    def test_480p_size_follows_the_2_0_familys_own_frame(self, ratio, expected):
-        """The 2.0 family renders a 480p canvas the tier name does not imply
-        (16:9 is 864x496, not 854x480), so scaling the tier's nominal shortest
-        side up the ratio reports pixels the model never produces."""
-        video = _poll(
-            {
-                "id": "cgt-1",
-                "status": "succeeded",
-                "model": "doubao-seedance-2-0-260128",
-                "resolution": "480p",
-                "ratio": ratio,
-            }
-        )
-
-        assert video.size == expected
-
-    def test_720p_size_is_the_same_for_both_families(self):
-        """Only the 480p canvas differs; both families deliver 1280x720."""
-        video = _poll(
-            {
-                "id": "cgt-1",
-                "status": "succeeded",
-                "model": "doubao-seedance-2-0-260128",
-                "resolution": "720p",
-                "ratio": "16:9",
-            }
-        )
-
-        assert video.size == "1280x720"
-
-    @pytest.mark.parametrize("model,expected", [("doubao-seedance-2-0-260128", "496x864"), (SEEDANCE_2_5, "480x854")])
-    def test_portrait_480p_follows_the_same_family_frame(self, model, expected):
-        """The portrait frame is not just the landscape one transposed: the 2.5
-        family's 480p short side is 480, the 2.0 family's is 496."""
-        video = _poll({"id": "cgt-1", "status": "succeeded", "model": model, "resolution": "480p", "ratio": "9:16"})
-
-        assert video.size == expected
-
-    def test_a_ratio_off_the_table_still_reports_a_pixel_size(self):
-        """A (tier, ratio) the model has no measured frame for falls back to the
-        tier's nominal shortest side rather than dropping the size."""
-        video = _poll(
-            {"id": "cgt-1", "status": "succeeded", "model": SEEDANCE_2_5, "resolution": "1080p", "ratio": "4:3"}
-        )
-
-        assert video.size == "1440x1080"
-
-    def test_queued_task_has_no_completion_time(self):
-        video = _poll({"id": "cgt-1", "status": "queued", "updated_at": 1718049700})
-
-        assert video.completed_at is None
-
-    def test_failed_task_carries_the_error_block(self):
-        video = _poll(
-            {
-                "id": "cgt-1",
-                "status": "failed",
-                "error": {"code": "OutputVideoSensitiveContentDetected", "message": "flagged"},
-            }
-        )
-
-        assert video.status == "failed"
-        assert video.error == {"code": "OutputVideoSensitiveContentDetected", "message": "flagged"}
-
-
-class TestVolcEngineVideoContent:
-    def test_content_url_is_read_from_the_task(self):
-        task = _parse_task(
-            _mock_response({"id": "cgt-1", "status": "succeeded", "content": {"video_url": "https://tos/v.mp4"}})
-        )
-
-        assert _video_url_from_task(task) == "https://tos/v.mp4"
-
-    def test_pending_task_answers_not_found_so_the_router_does_not_retry(self):
-        task = _parse_task(_mock_response({"id": "cgt-1", "status": "running"}))
-
-        with pytest.raises(VolcEngineVideoError, match="still processing") as raised:
-            _video_url_from_task(task)
-
-        assert raised.value.status_code == 404
-
-    def test_failed_task_surfaces_the_upstream_message(self):
-        task = _parse_task(_mock_response({"id": "cgt-1", "status": "failed", "error": {"message": "quota exceeded"}}))
-
-        with pytest.raises(VolcEngineVideoError, match="quota exceeded") as raised:
-            _video_url_from_task(task)
-
-        assert raised.value.status_code == 400
-
-    def test_expired_task_points_at_the_retention_window(self):
-        task = _parse_task(_mock_response({"id": "cgt-1", "status": "expired"}))
-
-        with pytest.raises(VolcEngineVideoError, match="expire 7 days") as raised:
-            _video_url_from_task(task)
-
-        assert raised.value.status_code == 404
-
-    def test_content_request_polls_the_task(self):
-        url, params = VolcEngineVideoConfig().transform_video_content_request(
-            video_id="cgt-1", api_base=API_BASE, litellm_params=GenericLiteLLMParams(), headers={}
-        )
-
-        assert url == f"{TASKS_URL}/cgt-1"
-        assert params == {}
-
-
-class TestVolcEngineVideoDownload:
-    """Downloading a task that is not finished is the caller's mistake, so it has to reach them as a
-    client error. A synthesized 500 had the proxy retry the same poll twice and then count the
-    caller's own early download as a gateway fault."""
-
-    @staticmethod
-    async def _download(task_payload: dict):
-        def respond(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=task_payload)
-
-        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-            handler: Final = AsyncHTTPHandler()
-            await handler.close()
-            handler.client = http_client
-            return await avideo_content(
-                video_id="cgt-2026-abc",
-                custom_llm_provider="volcengine",
-                model=f"volcengine/{SEEDANCE_2_5}",
-                api_key="sk-test",
-                api_base=API_BASE,
-                client=handler,
-            )
-
-    @pytest.mark.asyncio
-    async def test_running_task_is_a_not_found_error(self):
-        with pytest.raises(litellm.NotFoundError) as raised:
-            await self._download({"id": "cgt-2026-abc", "status": "running"})
-
-        assert raised.value.status_code == 404
-        assert "still processing" in str(raised.value)
-
-    @pytest.mark.asyncio
-    async def test_failed_task_is_a_bad_request(self):
-        with pytest.raises(litellm.BadRequestError) as raised:
-            await self._download({"id": "cgt-2026-abc", "status": "failed", "error": {"message": "flagged"}})
-
-        assert raised.value.status_code == 400
-        assert "flagged" in str(raised.value)
-
-
-class TestVolcEngineVideoList:
-    def test_list_hits_the_task_collection_with_ark_paging(self):
-        """Ark paginates with page_num/page_size and has no cursor or order, so
-        limit maps to page_size and the filters ride on extra_query."""
-        url, params = VolcEngineVideoConfig().transform_video_list_request(
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-            limit=20,
-            extra_query={"filter.status": "succeeded"},
-        )
-
-        assert url == TASKS_URL
-        assert params == {"page_size": "20", "filter.status": "succeeded"}
-
-    def test_list_response_is_an_openai_list_body(self):
-        response = VolcEngineVideoConfig().transform_video_list_response(
-            raw_response=_mock_response(
-                {
-                    "total": 1,
-                    "items": [
-                        {
-                            "id": "cgt-1",
-                            "status": "succeeded",
-                            "model": SEEDANCE_2_5,
-                            "resolution": "720p",
-                            "ratio": "16:9",
-                            "duration": 5,
-                        }
-                    ],
-                }
-            ),
-            logging_obj=Mock(),
-            custom_llm_provider="volcengine",
-        )
-
-        assert response["object"] == "list"
-        assert response["total"] == 1
-        assert response["first_id"] == response["last_id"]
-        (item,) = response["data"]
-        assert item["status"] == "completed"
-        assert decode_video_id_with_provider(item["id"])["video_id"] == "cgt-1"
-
-    def test_empty_list_body_still_carries_the_object_type(self):
-        response = VolcEngineVideoConfig().transform_video_list_response(
-            raw_response=_mock_response({"total": 0, "items": []}),
-            logging_obj=Mock(),
-        )
-
-        assert response == {"object": "list", "data": [], "total": 0}
-
-
-class TestVolcEngineVideoDelete:
-    def test_delete_targets_the_task_url(self):
-        url, params = VolcEngineVideoConfig().transform_video_delete_request(
-            video_id=encode_video_id_with_provider("cgt-1", "volcengine", SEEDANCE_2_5),
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert url == f"{TASKS_URL}/cgt-1"
-        assert params == {}
-
-    def test_delete_response_reports_the_deleted_task(self):
-        video = VolcEngineVideoConfig().transform_video_delete_response(
-            raw_response=_mock_response({"id": "cgt-1", "model": SEEDANCE_2_5}), logging_obj=Mock()
-        )
-
-        assert video.id == "cgt-1"
-        assert video.status == "deleted"
-
-    def test_delete_response_tolerates_an_empty_body(self):
-        """Ark's delete has no documented body, so an empty 200 must not crash."""
-        raw_response = Mock(spec=httpx.Response)
-        raw_response.json.side_effect = ValueError("no body")
-
-        video = VolcEngineVideoConfig().transform_video_delete_response(raw_response=raw_response, logging_obj=Mock())
-
-        assert video.status == "deleted"
-
-
-class TestVolcEngineVideoEditAndExtension:
-    @staticmethod
-    def _video_id(source: str = "cgt-1") -> str:
-        return encode_video_id_with_provider(source, "volcengine", SEEDANCE_2_5)
-
-    def test_edit_pins_the_adaptive_geometry_ark_requires(self):
-        """Ark rejects an edit task that does not ask it to resolve the source
-        geometry itself, so ratio and duration cannot be left to the caller."""
-        url, body, files = VolcEngineVideoConfig().transform_video_edit_request(
-            prompt="make it brighter",
-            video_id=self._video_id(),
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-            extra_body={"video_url": "https://tos/source.mp4"},
-        )
-
-        assert url == TASKS_URL
-        assert files is None
-        assert body["ratio"] == "adaptive"
-        assert body["duration"] == -1
-        assert body["content"] == [
-            {"type": "text", "text": "make it brighter"},
-            {"type": "video_url", "video_url": {"url": "https://tos/source.mp4"}, "role": "reference_video"},
-        ]
-
-    def test_edit_recovers_the_model_and_the_source_url_from_the_video_id(self):
-        """The edit transform gets no model argument, so both the model and, when
-        the id wraps a URL, the source video have to come out of the video id."""
-        _, body, _ = VolcEngineVideoConfig().transform_video_edit_request(
-            prompt="p",
-            video_id=self._video_id("https://tos/source.mp4"),
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert body["model"] == SEEDANCE_2_5
-        assert body["content"][1]["video_url"]["url"] == "https://tos/source.mp4"
-
-    def test_edit_model_can_be_named_in_extra_body(self):
-        _, body, _ = VolcEngineVideoConfig().transform_video_edit_request(
-            prompt="p",
-            video_id="https://tos/source.mp4",
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-            extra_body={"model": SEEDANCE_2_5},
-        )
-
-        assert body["model"] == SEEDANCE_2_5
-
-    def test_edit_model_falls_back_to_the_routed_model(self):
-        """A caller editing an arbitrary video URL passes the model once, for
-        routing; making them repeat it in extra_body is a trap. The router's
-        copy carries litellm's provider prefix, which Ark does not take."""
-        _, body, _ = VolcEngineVideoConfig().transform_video_edit_request(
-            prompt="p",
-            video_id="https://tos/source.mp4",
-            api_base=API_BASE,
-            litellm_params={"model": f"volcengine/{SEEDANCE_2_5}"},  # pyright: ignore[reportArgumentType]  # the handler hands the transform a mapping, not the GenericLiteLLMParams the base declares
-            headers={},
-        )
-
-        assert body["model"] == SEEDANCE_2_5
-
-    def test_edit_model_falls_back_to_the_routed_model_object(self):
-        """litellm's own entrypoint builds a GenericLiteLLMParams, so the
-        fallback has to read both shapes."""
-        _, body, _ = VolcEngineVideoConfig().transform_video_edit_request(
-            prompt="p",
-            video_id="https://tos/source.mp4",
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(model=f"volcengine/{SEEDANCE_2_5}"),
-            headers={},
-        )
-
-        assert body["model"] == SEEDANCE_2_5
-
-    def test_edit_without_a_model_raises(self):
-        with pytest.raises(ValueError, match="need the model that produced the source video"):
-            VolcEngineVideoConfig().transform_video_edit_request(
-                prompt="p",
-                video_id="https://tos/source.mp4",
-                api_base=API_BASE,
-                litellm_params={},
-                headers={},
-            )
-
-    def test_edit_without_a_resolvable_source_url_raises(self):
-        """Ark's task query is a GET while litellm's edit prefetch hook only
-        POSTs, so a bare task id cannot be turned into a video URL."""
-        with pytest.raises(ValueError, match="need the source video URL"):
-            VolcEngineVideoConfig().transform_video_edit_request(
-                prompt="p",
-                video_id=self._video_id(),
-                api_base=API_BASE,
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-
-    def test_extension_carries_the_seconds_to_add(self):
-        url, body = VolcEngineVideoConfig().transform_video_extension_request(
-            prompt="keep going",
-            video_id=self._video_id("https://tos/source.mp4"),
-            seconds="5",
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert url == TASKS_URL
-        assert body["duration"] == 5
-        assert body["ratio"] == "adaptive"
-        assert body["content"][1]["role"] == "reference_video"
-
-    def test_extension_without_seconds_leaves_the_duration_to_ark(self):
-        _, body = VolcEngineVideoConfig().transform_video_extension_request(
-            prompt="keep going",
-            video_id=self._video_id("https://tos/source.mp4"),
-            seconds="",
-            api_base=API_BASE,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert "duration" not in body
-
-    def test_remix_raises_rather_than_guessing_an_endpoint(self):
-        with pytest.raises(NotImplementedError, match="not supported by Volcengine"):
-            VolcEngineVideoConfig().transform_video_remix_request(
-                video_id="v", prompt="p", api_base=API_BASE, litellm_params=GenericLiteLLMParams(), headers={}
-            )
-
-
-class TestVolcEngineVideoEnvironment:
-    @pytest.mark.parametrize(
-        "api_base",
-        [
-            None,
-            API_BASE,
-            f"{API_BASE}/",
-            f"{API_BASE}/api/v3",
-            f"{API_BASE}/api/compatible",
-            f"{API_BASE}/api/v3/responses",
-            f"{API_BASE}/v1",
-        ],
-    )
-    def test_api_base_is_normalized_to_the_host_root(self, api_base):
-        """Every Ark surface shares one credential, so the api_base may carry
-        whichever one the caller uses. Leaving the surface on the base produces
-        /api/compatible/api/v3/... and a 404 from Ark."""
-        assert VolcEngineVideoConfig().get_complete_url("m", api_base, {}) == API_BASE
-
-    def test_a_path_prefix_before_the_api_marker_survives(self):
-        """A self-hosted Ark-compatible gateway may sit under a path prefix."""
-        url = VolcEngineVideoConfig().get_complete_url("m", "https://gw.internal/ark/api/v3", {})
-
-        assert url == "https://gw.internal/ark"
-
-    def test_bearer_token_reaches_the_headers(self):
-        headers = VolcEngineVideoConfig().validate_environment({}, SEEDANCE_2_5, api_key="sk-ark")
-
-        assert headers["Authorization"] == "Bearer sk-ark"
-
-    def test_missing_api_key_raises(self, monkeypatch):
-        monkeypatch.delenv("ARK_API_KEY", raising=False)
-        monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
-
-        with pytest.raises(ValueError, match="Volcengine API key is required"):
-            VolcEngineVideoConfig().validate_environment({}, SEEDANCE_2_5)
-
-
-class TestVolcEngineVideoProviderWiring:
-    def test_provider_resolves_to_the_video_config(self):
-        """Without this registration litellm answers 'video generation is not
-        supported for volcengine' before any transform runs."""
-        import litellm
-        from litellm.utils import ProviderConfigManager
-
-        config = ProviderConfigManager.get_provider_video_config(
-            model=SEEDANCE_2_5, provider=litellm.LlmProviders("volcengine")
-        )
-
-        assert type(config) is VolcEngineVideoConfig
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "a cat on a roof"}],
+        "resolution": "480p",
+        "ratio": "9:16",
+        "seed": 7,
+        "watermark": False,
+        "generate_audio": False,
+        "service_tier": "flex",
+        "duration": 4,
+    }
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-class TestVolcEngineVideoPricing:
-    """
-    Ark bills per output token, so the per-second tiers are derived rather than
-    published as such. These assert the derivation holds rather than pinning a
-    list price that a vendor price change would break.
-    """
+def test_a_resolution_the_model_has_no_price_for_is_rejected():
+    with pytest.raises(UnsupportedParamsError, match="not offered at resolution '1080p', only at 480p, 720p"):
+        _ = _create_body({"duration": 4, "resolution": "1080p"}, model=SEEDANCE_2_0_FAST)
 
-    @pytest.mark.parametrize(
-        "model,tiers",
-        [
-            ("doubao-seedance-2-5-260628", {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080)}),
-            (
-                "doubao-seedance-2-0-260128",
-                {"480p": (864, 496), "720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)},
-            ),
-            ("doubao-seedance-2-0-fast-260128", {"480p": (864, 496), "720p": (1280, 720)}),
-            ("doubao-seedance-2-0-mini-260615", {"480p": (864, 496), "720p": (1280, 720)}),
-        ],
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_an_unpriced_resolution_is_dropped_under_drop_params():
+    body = _create_body(
+        {"duration": 4, "resolution": "1080p", "ratio": "16:9"}, model=SEEDANCE_2_0_FAST, drop_params=True
     )
-    def test_each_tier_rate_sits_at_its_pixel_ratio_to_the_base_rate(self, model, tiers):
-        """Ark bills tokens = w*h*24*seconds/1024, so a tier's per-second rate
-        must be the base rate scaled by its pixel count. The 2.0 family's 16:9
-        480p frame is 864x496, not the 854x480 the tier name implies, which is
-        what its 480p rate has to be scaled against. A tier whose key is
-        missing silently falls back to the base rate instead."""
-        from litellm.utils import get_model_info
 
-        info = get_model_info(model=f"volcengine/{model}", custom_llm_provider="volcengine")
-        base_rate: Final = info["output_cost_per_second"]
-        base_pixels: Final = 1280 * 720
+    assert body == {
+        "model": SEEDANCE_2_0_FAST,
+        "content": [{"type": "text", "text": "a cat on a roof"}],
+        "ratio": "16:9",
+        "duration": 4,
+    }
 
-        for tier, (width, height) in tiers.items():
-            rate = info[f"output_cost_per_second_{tier}"]
-            assert rate == pytest.approx(base_rate * width * height / base_pixels, rel=1e-5), tier
 
-    def test_cost_calculator_picks_the_reported_tier(self):
-        """The transform reports Ark's delivered resolution; if it did not, every
-        video would bill at the base tier regardless of what was generated."""
-        from litellm.llms.openai.cost_calculation import video_generation_cost
-        from litellm.utils import get_model_info
+def test_a_mistyped_ark_field_is_rejected():
+    with pytest.raises(UnsupportedParamsError, match="invalid seed"):
+        _ = _create_body({"duration": 4, "seed": "abc", "watermark": False})
 
-        info = get_model_info(model="volcengine/doubao-seedance-2-5-260628", custom_llm_provider="volcengine")
-        cost = video_generation_cost(
-            model="doubao-seedance-2-5-260628",
-            duration_seconds=4.0,
+
+def test_a_mistyped_ark_field_is_dropped_under_drop_params():
+    body = _create_body({"duration": 4, "seed": "abc", "watermark": False}, drop_params=True)
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "a cat on a roof"}],
+        "watermark": False,
+        "duration": 4,
+    }
+
+
+@pytest.mark.parametrize(
+    "size,expected",
+    [
+        ("1920x1080", {"ratio": "16:9", "resolution": "1080p"}),
+        ("854x480", {"ratio": "16:9", "resolution": "480p"}),
+        ("864x496", {"ratio": "16:9", "resolution": "480p"}),
+        ("720x1280", {"ratio": "9:16", "resolution": "720p"}),
+        ("1024x768", {"ratio": "4:3", "resolution": "720p"}),
+        ("960x960", {"ratio": "1:1", "resolution": "1080p"}),
+        ("1470x630", {"ratio": "21:9", "resolution": "720p"}),
+        ("3840x2160", {"ratio": "16:9", "resolution": "4k"}),
+    ],
+)
+def test_size_maps_onto_an_ark_ratio_and_tier(size: str, expected: dict[str, str]):
+    assert VolcEngineVideoConfig().map_openai_params({"size": size}, SEEDANCE_2_5, False) == expected
+
+
+def test_explicit_ratio_and_resolution_beat_the_size_derived_ones():
+    mapped = VolcEngineVideoConfig().map_openai_params(
+        {"size": "1280x720", "seconds": "4", "ratio": "1:1", "resolution": "480p", "parameters": {"seed": 3}},
+        SEEDANCE_2_5,
+        False,
+    )
+
+    assert mapped == {"ratio": "1:1", "resolution": "480p", "duration": 4, "seed": 3}
+
+
+@pytest.mark.parametrize(
+    "params,message",
+    [
+        ({"seconds": "4.5"}, "seconds must be a whole number"),
+        ({"size": "big"}, "size must be WIDTHxHEIGHT"),
+        ({"size": "16:9"}, "size must be WIDTHxHEIGHT"),
+        ({"parameters": "seed=3"}, "parameters must be an object"),
+        ({"characters": [{"id": "c"}]}, "'characters' is not supported"),
+        ({"image": "https://x/a.png"}, "'image' is not supported"),
+    ],
+)
+def test_a_value_ark_cannot_take_raises_unless_drop_params(params: dict[str, object], message: str):
+    with pytest.raises(UnsupportedParamsError, match=message):
+        _ = VolcEngineVideoConfig().map_openai_params(params, SEEDANCE_2_5, False)
+
+    assert VolcEngineVideoConfig().map_openai_params(params, SEEDANCE_2_5, True) == {}
+
+
+def test_request_metadata_is_not_mapped_into_the_body():
+    mapped = VolcEngineVideoConfig().map_openai_params(
+        {"user": "u", "extra_headers": {"x": "y"}, "seconds": 4}, SEEDANCE_2_5, False
+    )
+
+    assert mapped == {"duration": 4}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model,request_data,seconds,size,usage",
+    [
+        (
+            SEEDANCE_2_5,
+            {"duration": 4, "resolution": "480p", "ratio": "16:9"},
+            "4.0",
+            "854x480",
+            {"duration_seconds": 4.0, "video_resolution": "480p"},
+        ),
+        (
+            SEEDANCE_2_0,
+            {"duration": 5, "resolution": "480p", "ratio": "16:9"},
+            "5.0",
+            "864x496",
+            {"duration_seconds": 5.0, "video_resolution": "480p"},
+        ),
+        (SEEDANCE_2_5, {"duration": 5}, "5.0", None, {"duration_seconds": 5.0}),
+    ],
+    ids=["2.5-480p", "2.0-480p-renders-its-own-frame", "no-geometry"],
+)
+def test_the_create_response_reports_what_the_task_bills(
+    model: str, request_data: dict[str, object], seconds: str, size: str | None, usage: dict[str, object]
+):
+    video = _created(request_data, model=model)
+
+    assert video.model_dump(include={"status", "seconds", "size", "usage", "model"}) == {
+        "status": "queued",
+        "seconds": seconds,
+        "size": size,
+        "usage": usage,
+        "model": model,
+    }
+
+
+@pytest.mark.parametrize(
+    "usage,expected_cost",
+    [
+        ({"duration_seconds": 4.0, "video_resolution": "480p"}, 4 * 0.1),
+        ({"duration_seconds": 5.0, "video_resolution": "720p"}, 5 * 0.2),
+        ({"duration_seconds": 5.0}, 5 * 0.2),
+    ],
+)
+def test_the_create_usage_bills_its_duration_at_its_tier_rate(usage: dict[str, object], expected_cost: float):
+    model_info = {
+        "output_cost_per_second": 0.2,
+        "output_cost_per_second_480p": 0.1,
+        "output_cost_per_second_720p": 0.2,
+    }
+    video = _created({"duration": int(usage["duration_seconds"]), "resolution": usage.get("video_resolution")})
+
+    cost = video_generation_cost(
+        model=SEEDANCE_2_5,
+        duration_seconds=video.usage["duration_seconds"],
+        model_info=model_info,  # pyright: ignore[reportArgumentType]  # a hand-written rate card stands in for ModelInfo
+        video_resolution=video.usage.get("video_resolution"),
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_the_created_id_carries_the_requested_and_served_model_groups():
+    logging_obj = Mock(
+        litellm_params={"litellm_metadata": {"model_group": "seedance", "deployment_model_name": "seedance-account-b"}}
+    )
+
+    video = _created({"duration": 5}, logging_obj=logging_obj)
+
+    assert decode_video_id_with_provider(video.id) == {
+        "custom_llm_provider": "volcengine",
+        "model_id": "seedance",
+        "video_id": TASK_ID,
+        "served_model": "seedance-account-b",
+    }
+
+
+def test_a_create_without_router_metadata_carries_the_model():
+    video = _created({"duration": 5}, logging_obj=Mock(litellm_params={}))
+
+    assert decode_video_id_with_provider(video.id) == {
+        "custom_llm_provider": "volcengine",
+        "model_id": SEEDANCE_2_5,
+        "video_id": TASK_ID,
+    }
+
+
+@pytest.mark.parametrize(
+    "raw_response,status_code,message",
+    [
+        (_response({"error": {"code": "InvalidParameter", "message": "bad ratio"}}), 400, "bad ratio"),
+        (_response({"error": {"code": "Forbidden", "message": "no access"}}, 403), 403, "no access"),
+        (_text_response("<html>bad gateway</html>"), 502, "Unexpected Volcengine video response"),
+    ],
+    ids=["error-on-200", "error-status-kept", "not-json"],
+)
+def test_a_create_response_without_a_task_id_raises_instead_of_queueing_an_empty_video(
+    raw_response: httpx.Response, status_code: int, message: str
+):
+    with pytest.raises(VolcEngineVideoError, match=message) as raised:
+        _ = VolcEngineVideoConfig().transform_video_create_response(
+            model=SEEDANCE_2_5,
+            raw_response=raw_response,
+            logging_obj=None,  # pyright: ignore[reportArgumentType]  # the transform only reads litellm_params off it
             custom_llm_provider="volcengine",
-            video_resolution="1080p",
+            request_data={"duration": 5},
         )
 
-        assert cost == pytest.approx(info["output_cost_per_second_1080p"] * 4.0)
-        assert cost > info["output_cost_per_second_720p"] * 4.0
+    assert raised.value.status_code == status_code
 
-    def test_unlabelled_resolution_falls_back_to_the_base_tier(self):
-        """An unknown tier must not bill at zero."""
-        from litellm.llms.openai.cost_calculation import video_generation_cost
-        from litellm.utils import get_model_info
 
-        info = get_model_info(model="volcengine/doubao-seedance-2-5-260628", custom_llm_provider="volcengine")
-        cost = video_generation_cost(
-            model="doubao-seedance-2-5-260628",
-            duration_seconds=3.0,
+@pytest.mark.parametrize(
+    "ark_status,expected",
+    [
+        ("queued", "queued"),
+        ("running", "in_progress"),
+        ("succeeded", "completed"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("expired", "failed"),
+    ],
+)
+def test_the_ark_status_maps_onto_the_openai_vocabulary(ark_status: str, expected: str):
+    assert _polled(_task(status=ark_status)).status == expected
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_completed_task_reports_its_delivered_geometry_duration_and_tokens():
+    video = _polled(
+        _task(
+            created_at=1791989938,
+            updated_at=1791990031,
+            resolution="480p",
+            ratio="16:9",
+            duration=4,
+            usage={"completion_tokens": 40594, "total_tokens": 40594},
+            model=SEEDANCE_2_0,
+            content={"video_url": "https://tos/v.mp4"},
+        )
+    )
+
+    assert video.model_dump(exclude={"id"}) | {"id": decode_video_id_with_provider(video.id)["video_id"]} == {
+        "id": TASK_ID,
+        "object": "video",
+        "status": "completed",
+        "created_at": 1791989938,
+        "completed_at": 1791990031,
+        "expires_at": None,
+        "error": None,
+        "progress": None,
+        "remixed_from_video_id": None,
+        "seconds": "4.0",
+        "size": "864x496",
+        "model": SEEDANCE_2_0,
+        "usage": {"duration_seconds": 4.0, "video_resolution": "480p", "total_tokens": 40594},
+    }
+
+
+@pytest.mark.parametrize(
+    "resolution,ratio,expected",
+    [
+        ("720p", "9:16", "720x1280"),
+        ("1080p", "16:9", "1920x1080"),
+        ("480p", "adaptive", None),
+    ],
+)
+def test_a_frame_the_cost_map_does_not_list_is_scaled_from_the_tier(resolution: str, ratio: str, expected: str | None):
+    assert _polled(_task(resolution=resolution, ratio=ratio, model="doubao-seedance-unlisted")).size == expected
+
+
+def test_a_failed_task_carries_its_error_block():
+    video = _polled(_task(status="failed", error={"code": "OutputVideoSensitiveContentDetected", "message": "flagged"}))
+
+    assert (video.status, video.error, video.completed_at) == (
+        "failed",
+        {"code": "OutputVideoSensitiveContentDetected", "message": "flagged"},
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload,message",
+    [
+        (_task(status="paused"), "Unknown Volcengine task status: paused"),
+        ({"status": "running"}, "Unexpected Volcengine video response"),
+        ({"id": TASK_ID}, "Unexpected Volcengine video response"),
+    ],
+    ids=["unmapped-status", "no-id", "no-status"],
+)
+def test_a_poll_litellm_cannot_read_raises_instead_of_returning_a_job_to_poll_forever(payload: object, message: str):
+    with pytest.raises(VolcEngineVideoError, match=message) as raised:
+        _ = _polled(payload)
+
+    assert raised.value.status_code == 502
+
+
+def test_a_poll_keeps_the_ids_requested_and_served_model_when_the_router_served_it():
+    video_id = encode_video_id_with_provider(TASK_ID, "volcengine", "seedance", served_model="seedance-account-b")
+    logging_obj = Mock(
+        litellm_params={
+            "video_id": video_id,
+            "litellm_metadata": {"model_group": "seedance", "deployment_model_name": "seedance-account-b"},
+        }
+    )
+
+    video = _polled(_task(status="running"), logging_obj=logging_obj)
+
+    assert video.id == video_id
+    assert video.model == "seedance"
+
+
+def test_a_poll_drops_a_served_model_the_router_did_not_route_to():
+    edited = encode_video_id_with_provider(
+        TASK_ID, "volcengine", "seedance-account-a", served_model="seedance-account-b"
+    )
+    logging_obj = Mock(litellm_params={"video_id": edited, "litellm_metadata": {"model_group": "seedance-account-a"}})
+
+    video = _polled(_task(status="running"), logging_obj=logging_obj)
+
+    assert video.id == encode_video_id_with_provider(TASK_ID, "volcengine", "seedance-account-a")
+
+
+async def _download(task_payload: dict[str, object], video_bytes: bytes = b"mp4") -> bytes:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "tos.example":
+            return httpx.Response(200, content=video_bytes)
+        return httpx.Response(200, json=task_payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.close()
+        handler.client = http_client
+        return await avideo_content(
+            video_id=TASK_ID,
             custom_llm_provider="volcengine",
-            video_resolution=None,
-        )
-
-        assert cost == pytest.approx(info["output_cost_per_second"] * 3.0)
-        assert cost > 0
-
-
-class TestVolcEngineVideoEndToEndRequest:
-    """
-    Drive the real litellm entrypoint rather than calling the transform directly.
-
-    ``video_generation()`` runs map_openai_params first and passes only the
-    *mapped* params to transform_video_create_request, so anything the mapper
-    drops never reaches the request builder. Asserting on the JSON the handler
-    actually serialized also catches body fragments that aren't JSON-encodable.
-    """
-
-    @staticmethod
-    async def _wire_request(**kwargs) -> dict:
-        sent: Final[list[httpx.Request]] = []
-
-        def respond(request: httpx.Request) -> httpx.Response:
-            sent.append(request)
-            return httpx.Response(200, json={"id": "cgt-2026-abc", "safety_identifier": None})
-
-        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-            handler: Final = AsyncHTTPHandler()
-            await handler.close()
-            handler.client = http_client
-            await avideo_generation(api_key="sk-test", api_base=API_BASE, client=handler, **kwargs)
-
-        (request,) = sent
-        return {"serialized": json.loads(request.content), "headers": dict(request.headers), "url": str(request.url)}
-
-    @pytest.mark.asyncio
-    async def test_seconds_and_size_reach_the_body_as_duration_and_tier(self):
-        captured = await self._wire_request(
-            model=f"volcengine/{SEEDANCE_2_5}", prompt="a train", seconds="5", size="1920x1080"
-        )
-
-        assert captured["serialized"] == {
-            "model": SEEDANCE_2_5,
-            "content": [{"type": "text", "text": "a train"}],
-            "resolution": "1080p",
-            "ratio": "16:9",
-            "duration": 5,
-        }
-        assert captured["url"] == TASKS_URL
-
-    @pytest.mark.asyncio
-    async def test_input_reference_survives_param_mapping_into_the_body(self):
-        """Regression: if the mapper drops input_reference an image-to-video call
-        silently degrades to text-to-video."""
-        captured = await self._wire_request(
-            model=f"volcengine/{SEEDANCE_2_5}", prompt="make it move", input_reference="https://x/first.png"
-        )
-
-        assert captured["serialized"]["content"][1] == {
-            "type": "image_url",
-            "image_url": {"url": "https://x/first.png"},
-            "role": "first_frame",
-        }
-        assert "input_reference" not in captured["serialized"]
-
-    @pytest.mark.asyncio
-    async def test_extra_body_content_array_reaches_the_wire(self):
-        """Reference-to-video has no OpenAI-shaped parameter, so extra_body is
-        the only way to express it."""
-        captured = await self._wire_request(
             model=f"volcengine/{SEEDANCE_2_5}",
-            prompt="use these",
-            extra_body={
-                "content": [
-                    {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"},
-                    {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}, "role": "reference_audio"},
-                ]
-            },
+            api_key="sk-test",
+            api_base=API_BASE,
+            client=handler,
         )
 
-        assert captured["serialized"]["content"] == [
+
+@pytest.mark.asyncio
+async def test_the_download_fetches_the_signed_url_through_the_callers_client():
+    content = await _download(_task(content={"video_url": "https://tos.example/v.mp4"}), video_bytes=b"the-video")
+
+    assert content == b"the-video"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,message",
+    [
+        (_task(status="queued"), "still processing"),
+        (_task(status="running"), "still processing"),
+        (_task(status="failed", error={"message": "flagged"}), "flagged"),
+        (_task(status="failed"), "ended as failed"),
+        (_task(status="cancelled"), "ended as cancelled"),
+        (_task(status="expired"), "Task expired"),
+    ],
+)
+async def test_a_download_with_no_video_yet_is_a_bad_request_so_it_is_neither_retried_nor_cools_the_deployment(
+    payload: dict[str, object], message: str
+):
+    with pytest.raises(litellm.BadRequestError, match=message) as raised:
+        _ = await _download(payload)
+
+    assert raised.value.status_code == 400
+
+
+def test_the_list_maps_ark_paging_and_filters():
+    url, params = VolcEngineVideoConfig().transform_video_list_request(
+        api_base=API_BASE,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+        limit=20,
+        extra_query={"filter.status": "succeeded"},
+    )
+
+    assert (url, params) == (TASKS_URL, {"page_size": "20", "filter.status": "succeeded"})
+
+
+def test_the_list_response_is_an_openai_list_body():
+    response = VolcEngineVideoConfig().transform_video_list_response(
+        raw_response=_response({"total": 1, "items": [_task(status="running")]}),
+        logging_obj=Mock(),  # pyright: ignore[reportArgumentType]  # unused by the transform
+        custom_llm_provider="volcengine",
+    )
+
+    encoded = encode_video_id_with_provider(TASK_ID, "volcengine", SEEDANCE_2_5)
+    assert {key: value for key, value in response.items() if key != "data"} == {
+        "object": "list",
+        "total": 1,
+        "first_id": encoded,
+        "last_id": encoded,
+    }
+    assert [(item["id"], item["status"]) for item in response["data"]] == [(encoded, "in_progress")]
+
+
+def test_an_empty_list_still_carries_the_object_type():
+    response = VolcEngineVideoConfig().transform_video_list_response(
+        raw_response=_response({"total": 0, "items": []}),
+        logging_obj=Mock(),  # pyright: ignore[reportArgumentType]  # unused by the transform
+    )
+
+    assert response == {"object": "list", "data": [], "total": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["avideo_edit", "avideo_extension"])
+async def test_edit_and_extension_are_a_bad_request_because_a_video_input_cannot_be_billed_at_create(call: str):
+    with pytest.raises(litellm.BadRequestError, match="Ark bills a task with a video input") as raised:
+        _ = await getattr(litellm, call)(
+            video_id="https://x/source.mp4",
+            prompt="make it brighter",
+            seconds="5",
+            model=f"volcengine/{SEEDANCE_2_5}",
+            custom_llm_provider="volcengine",
+            api_key="sk-test",
+            api_base=API_BASE,
+        )
+
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        None,
+        API_BASE,
+        f"{API_BASE}/",
+        f"{API_BASE}/api/v3",
+        f"{API_BASE}/api/compatible",
+        f"{API_BASE}/api/v3/responses",
+        f"{API_BASE}/v1",
+    ],
+)
+def test_any_ark_surface_on_the_shared_credential_normalizes_to_the_host_root(api_base: str | None):
+    assert VolcEngineVideoConfig().get_complete_url("m", api_base, {}) == API_BASE
+
+
+def test_a_path_prefix_before_the_api_marker_survives():
+    assert (
+        VolcEngineVideoConfig().get_complete_url("m", "https://gw.internal/ark/api/v3", {}) == "https://gw.internal/ark"
+    )
+
+
+def test_a_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="Volcengine API key is required"):
+        _ = VolcEngineVideoConfig().validate_environment({}, SEEDANCE_2_5)
+
+
+def test_volcengine_resolves_to_the_video_config():
+    config = ProviderConfigManager.get_provider_video_config(
+        model=SEEDANCE_2_5, provider=litellm.LlmProviders.VOLCENGINE
+    )
+
+    assert type(config) is VolcEngineVideoConfig
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model,tiers",
+    [
+        (SEEDANCE_2_5, {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080)}),
+        (SEEDANCE_2_0, {"480p": (864, 496), "720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}),
+        (SEEDANCE_2_0_FAST, {"480p": (864, 496), "720p": (1280, 720)}),
+        ("doubao-seedance-2-0-mini-260615", {"480p": (864, 496), "720p": (1280, 720)}),
+    ],
+)
+def test_each_tier_rate_is_the_base_rate_scaled_by_its_rendered_pixels(model: str, tiers: dict[str, tuple[int, int]]):
+    info = litellm.get_model_info(model=model, custom_llm_provider="volcengine")
+    base_rate: Final = info["output_cost_per_second"]
+
+    assert {tier: info[f"output_cost_per_second_{tier}"] for tier in tiers} == {
+        tier: pytest.approx(base_rate * width * height / (1280 * 720), rel=1e-5)
+        for tier, (width, height) in tiers.items()
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", [SEEDANCE_2_5, SEEDANCE_2_0, SEEDANCE_2_0_FAST, "doubao-seedance-2-0-mini-260615"])
+def test_the_16_9_frame_listed_for_each_tier_is_the_one_its_rate_was_derived_from(model: str):
+    info = litellm.get_model_info(model=model, custom_llm_provider="volcengine")
+    frames = info["provider_specific_entry"]["volcengine_video_frames"]
+    base_rate: Final = info["output_cost_per_second"]
+
+    for tier, by_ratio in frames.items():
+        width, height = (int(side) for side in by_ratio["16:9"].split("x"))
+        assert info[f"output_cost_per_second_{tier}"] == pytest.approx(
+            base_rate * width * height / (1280 * 720), rel=1e-5
+        ), tier
+
+
+async def _wire_body(**kwargs: object) -> dict[str, object]:
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"id": TASK_ID})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.close()
+        handler.client = http_client
+        _ = await avideo_generation(api_key="sk-test", api_base=API_BASE, client=handler, **kwargs)
+
+    (request,) = sent
+    assert (str(request.url), request.headers["authorization"]) == (TASKS_URL, "Bearer sk-test")
+    return json.loads(request.content)
+
+
+@pytest.mark.asyncio
+async def test_seconds_size_and_extra_body_content_reach_the_wire():
+    body = await _wire_body(
+        model=f"volcengine/{SEEDANCE_2_5}",
+        prompt="use these",
+        seconds="4",
+        size="854x480",
+        extra_body={
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"}]
+        },
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [
             {"type": "text", "text": "use these"},
             {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"},
-            {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}, "role": "reference_audio"},
+        ],
+        "ratio": "16:9",
+        "resolution": "480p",
+        "duration": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_extra_body_duration_of_minus_one_is_rejected_before_anything_is_sent():
+    with pytest.raises(UnsupportedParamsError, match="Ark-picked length"):
+        _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"duration": -1})
+
+
+ACCOUNT_A_HOST: Final = "https://ark-a.example"
+ACCOUNT_B_HOST: Final = "https://ark-b.example"
+
+
+def _two_account_router(**router_kwargs: object) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance-a",
+                "litellm_params": {
+                    "model": f"volcengine/{SEEDANCE_2_5}",
+                    "api_key": "key-a",
+                    "api_base": ACCOUNT_A_HOST,
+                },
+            },
+            {
+                "model_name": "seedance-b",
+                "litellm_params": {
+                    "model": f"volcengine/{SEEDANCE_2_5}",
+                    "api_key": "key-b",
+                    "api_base": ACCOUNT_B_HOST,
+                },
+            },
+        ],
+        **router_kwargs,  # pyright: ignore[reportArgumentType]  # forwarded Router options
+    )
+
+
+def _proxy_poll_model(router: Router, video_id: str) -> str | None:
+    decoded: Final = decode_video_id_with_provider(video_id)
+    requested: Final = router.resolve_model_name_from_model_id(
+        decoded.get("model_id"), decoded.get("custom_llm_provider")
+    )
+    served: Final = decoded.get("served_model")
+    return router.resolve_served_model_name(requested, served) if requested and served else requested
+
+
+@pytest.mark.parametrize("caller_metadata", [None, {"tags": ["proxy-request"]}])
+@respx.mock
+def test_a_video_is_polled_on_the_ark_account_that_created_it(caller_metadata: dict[str, object] | None):
+    router = _two_account_router()
+    _ = respx.post(f"{ACCOUNT_B_HOST}/api/v3/contents/generations/tasks").mock(
+        return_value=httpx.Response(200, json={"id": TASK_ID})
+    )
+    task_get = respx.get(f"{ACCOUNT_B_HOST}/api/v3/contents/generations/tasks/{TASK_ID}").mock(
+        return_value=httpx.Response(200, json=_task(status="running"))
+    )
+
+    created = router.video_generation(model="seedance-b", prompt="a cat", seconds="4", metadata=caller_metadata)
+    _ = router.video_status(model=_proxy_poll_model(router, created.id), video_id=created.id)
+
+    assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer key-b"]
+
+
+@respx.mock
+def test_a_video_created_through_a_routing_group_is_polled_on_the_member_that_created_it():
+    router = _two_account_router(
+        routing_groups=[
+            {"group_name": "seedance", "models": ["seedance-a", "seedance-b"], "routing_strategy": "simple-shuffle"}
         ]
+    )
+    for host in (ACCOUNT_A_HOST, ACCOUNT_B_HOST):
+        _ = respx.post(f"{host}/api/v3/contents/generations/tasks").mock(
+            return_value=httpx.Response(200, json={"id": TASK_ID})
+        )
+        _ = respx.get(f"{host}/api/v3/contents/generations/tasks/{TASK_ID}").mock(
+            return_value=httpx.Response(200, json=_task(status="running"))
+        )
 
-    @pytest.mark.asyncio
-    async def test_bearer_token_reaches_the_wire(self):
-        captured = await self._wire_request(model=f"volcengine/{SEEDANCE_2_5}", prompt="p")
+    for _ in range(8):
+        created = router.video_generation(model="seedance", prompt="a cat", seconds="4")
+        polled = router.video_status(model=_proxy_poll_model(router, created.id), video_id=created.id)
+        assert polled.id == created.id
 
-        headers = {k.lower(): v for k, v in captured["headers"].items()}
-        assert headers["authorization"] == "Bearer sk-test"
-        assert headers["content-type"] == "application/json"
+    hosts = [call.request.url.host for call in respx.calls]
+    assert hosts[1::2] == hosts[0::2]
