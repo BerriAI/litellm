@@ -1,12 +1,17 @@
+import asyncio
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.caching_handler import (
+    _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await background cache writes
+)
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import RESPONSE_CACHE_EXCLUDED_PROVIDERS
-from litellm.rust_bridge.host.cache import access
+from litellm.rust_bridge.host.cache import CacheAccess, access, alookup, astore, lookup, store
 from litellm.types.caching import CachingSupportedCallTypes, LiteLLMCacheType
 
 REQUEST: Final[dict[str, object]] = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
@@ -15,6 +20,16 @@ REQUEST: Final[dict[str, object]] = {"model": "gpt-4o", "messages": [{"role": "u
 def configure(monkeypatch: pytest.MonkeyPatch, cache: Cache) -> Cache:
     monkeypatch.setattr(litellm, "cache", cache)
     return cache
+
+
+def _cache_access(cache: Cache, memory_tier: DualCache | None = None, tiered_writes: bool = True) -> CacheAccess:
+    return CacheAccess(
+        cache=cache,
+        read=True,
+        write=True,
+        memory_tier=memory_tier,
+        tiered_writes=tiered_writes,
+    )
 
 
 def grants(kwargs: dict[str, object], call_type: str) -> tuple[bool, bool] | None:
@@ -93,3 +108,94 @@ def test_only_a_redis_cache_gets_a_worker_memory_tier(
     assert local is not None and local.memory_tier is None
     assert redis is not None and isinstance(redis.memory_tier, DualCache)
     assert redis.tiered_writes is tiered
+
+
+@pytest.mark.parametrize("cache_key", (None, "preset-key"), ids=("generated-key", "preset-key"))
+def test_lookup_returns_cached_response_and_key(cache_key: str | None) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache_access: Final = _cache_access(cache)
+    response: Final = {"id": "cached"}
+    request: Final = REQUEST if cache_key is None else {**REQUEST, "cache_key": cache_key}
+    expected_key: Final = cache.get_cache_key(**REQUEST) if cache_key is None else cache_key
+
+    store(cache_access, response, request)
+    hit: Final = lookup(cache_access, request)
+
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == expected_key
+
+
+def test_lookup_skips_responses_without_output() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache_access: Final = _cache_access(cache)
+    response: Final = {"choices": []}
+
+    store(cache_access, response, REQUEST)
+    assert lookup(cache_access, REQUEST) is None
+
+    cache.add_cache(response, **REQUEST)
+    assert lookup(cache_access, REQUEST) is None
+
+
+@pytest.mark.asyncio
+async def test_async_lookup_uses_memory_tier_and_discards_empty_responses() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    memory_tier: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache_access: Final = _cache_access(cache, memory_tier)
+
+    assert await alookup(cache_access, REQUEST) is None
+
+    response: Final = {"id": "cached"}
+    await cache.async_add_cache(response, dynamic_cache_object=memory_tier, **REQUEST)
+    hit: Final = await alookup(cache_access, REQUEST)
+
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == cache.get_cache_key(**REQUEST)
+
+    empty_key: Final = "empty-response"
+    empty_request: Final = {**REQUEST, "cache_key": empty_key}
+    await cache.async_add_cache({"choices": []}, dynamic_cache_object=memory_tier, **empty_request)
+
+    assert await alookup(cache_access, empty_request) is None
+    assert await memory_tier.in_memory_cache.async_get_cache(empty_key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_store_routes_writes_and_skips_responses_without_output() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    memory_tier: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache_access: Final = _cache_access(cache, memory_tier)
+    response: Final = {"id": "cached"}
+
+    await astore(cache_access, response, REQUEST)
+    pending_writes: Final = tuple(_PENDING_CACHE_WRITES)
+    await asyncio.gather(*pending_writes)
+    hit: Final = await alookup(cache_access, REQUEST)
+
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == cache.get_cache_key(**REQUEST)
+
+    empty_key: Final = "empty-response"
+    empty_request: Final = {**REQUEST, "cache_key": empty_key}
+    await astore(cache_access, {"choices": []}, empty_request)
+
+    assert await alookup(cache_access, empty_request) is None
+    assert await memory_tier.in_memory_cache.async_get_cache(empty_key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_store_omits_the_memory_tier_when_tiered_writes_are_disabled() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    memory_tier: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache_access: Final = _cache_access(cache, memory_tier, tiered_writes=False)
+    response: Final = {"id": "cached"}
+
+    await astore(cache_access, response, REQUEST)
+    pending_writes: Final = tuple(_PENDING_CACHE_WRITES)
+    await asyncio.gather(*pending_writes)
+
+    assert await cache.async_get_cache(**REQUEST) == response
+    assert await memory_tier.async_get_cache(cache.get_cache_key(**REQUEST)) is None
