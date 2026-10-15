@@ -13,7 +13,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import (
+    OBJECT_MAPPING_ADAPTER,
+    AnthropicModelInfo,
+    carried_thinking_keys,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -114,7 +118,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=model, optional_params=mapped_params, custom_llm_provider="bedrock"
+            model=model, optional_params=mapped_params, custom_llm_provider="bedrock", drop_params=drop_params
         )
         translated_thinking: Final = mapped_params.get("thinking")
         if (
@@ -122,8 +126,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            mapped_params["thinking"] = thinking_with_display
+            mapped_params["thinking"] = {
+                **carried_thinking_keys(
+                    OBJECT_MAPPING_ADAPTER.validate_python(translated_thinking),
+                    rebuilt_keys=frozenset(("display",)),
+                    drop_params=drop_params,
+                ),
+                "display": "updates",
+            }
 
         return mapped_params
 

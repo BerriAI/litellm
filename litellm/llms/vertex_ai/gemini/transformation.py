@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     GenerationConfig,
     PartType,
     RequestBody,
@@ -64,13 +65,14 @@ from ..common_utils import (
     get_supports_system_message,
 )
 
-# Typed as Any to avoid introducing a module-load-time cyclic import to
-# vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
-# the first time GCS metadata needs to be fetched.
-_GCS_METADATA_VERTEX_BASE: object | None = None
+# VertexBase is imported only for type checking to avoid introducing a
+# module-load-time cyclic import to vertex_llm_base. The instance is lazily
+# constructed by _get_vertex_base() the first time GCS metadata needs to be fetched.
+_GCS_METADATA_VERTEX_BASE: "VertexBase | None" = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
+_DECODED_JSON: Final = TypeAdapter(object)
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -86,7 +88,7 @@ def _apply_gemini_mime_type_aliases(mime_type: str) -> str:
     return _GEMINI_MIME_TYPE_ALIASES.get(normalized, normalized)
 
 
-def _get_vertex_base() -> Any:
+def _get_vertex_base() -> "VertexBase":
     """Lazily return the shared VertexBase instance to avoid a module-load-time cyclic import."""
     global _GCS_METADATA_VERTEX_BASE
     if _GCS_METADATA_VERTEX_BASE is None:
@@ -105,6 +107,8 @@ def _get_gcs_metadata_http_handler() -> HTTPHandler:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    from ..vertex_llm_base import VertexBase
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -323,7 +327,7 @@ def _openai_messages_may_need_sync_gcs_metadata_fetch(
 def _get_gcs_object_content_type(
     image_url: str,
     vertex_project: str | None = None,
-    vertex_credentials: object = None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
 ) -> str | None:
     """
     Resolve content type from GCS object metadata.
@@ -400,7 +404,7 @@ def _get_gcs_object_content_type(
         return None
 
     try:
-        payload: Final = response.json()
+        payload: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError as e:
         if explicit_vertex_auth_provided:
             raise litellm.BadRequestError(
@@ -476,7 +480,7 @@ def _process_gemini_media(
     model: str | None = None,
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
-    vertex_credentials: object = None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -1228,6 +1232,9 @@ def transform_request_body(
                     data["serviceTier"] = service_tier.lower()
             else:
                 data["serviceTier"] = service_tier
+
+        if continuation_token := optional_params.pop("continuation_token", None):
+            data["continuationToken"] = continuation_token
 
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:

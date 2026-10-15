@@ -258,6 +258,51 @@ def restore_mcp_manager_singleton():
         module.global_mcp_server_manager = manager
 
 
+@pytest.mark.parametrize(
+    "auth_type",
+    [
+        MCPAuth.none,
+        MCPAuth.api_key,
+        MCPAuth.bearer_token,
+        MCPAuth.basic,
+        MCPAuth.oauth_delegate,
+        MCPAuth.true_passthrough,
+    ],
+)
+@pytest.mark.parametrize("explicit_key", [False, True])
+def test_validated_admission_jwt_is_not_forwarded_as_an_extra_header(auth_type: MCPAuth, explicit_key: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    server: Final = MCPServer(
+        server_id="header-boundary",
+        name="header-boundary",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    raw: Final = {
+        "Authorization": "Bearer validated-jwt",
+        "x-tenant": "tenant-control",
+        **({"x-litellm-api-key": "sk-admission"} if explicit_key else {}),
+    }
+    user: Final = UserAPIKeyAuth(api_key="stored-key-hash", jwt_claims={"sub": "caller"})
+    expected: Final = {
+        "x-tenant": "tenant-control",
+        **({"Authorization": "Bearer validated-jwt"} if explicit_key else {}),
+    }
+    _, upstream_headers = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=raw,
+        user_api_key_auth=user,
+    )
+    assert upstream_headers == expected
+    assert _openapi_forwarded_extra_headers(server, raw, user) == expected
+
+
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
@@ -333,6 +378,22 @@ class TestMCPServerManager:
 
         with patch.object(manager, "_get_general_settings", return_value={}):
             assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
+
+    def test_get_mcp_server_by_identifier_matches_alias_case_and_server_id(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="alpha-id",
+            name="alpha",
+            server_name="alpha",
+            alias="alpha-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_identifier("ALPHA") is server
+        assert manager.get_mcp_server_by_identifier("alpha-alias") is server
+        assert manager.get_mcp_server_by_identifier("alpha-id") is server
+        assert manager.get_mcp_server_by_identifier("unknown") is None
 
     async def test_create_mcp_client_stdio(self, monkeypatch):
         """Test creating MCP client for stdio transport"""
@@ -13720,7 +13781,7 @@ class TestSessionResourceScopeIntersect:
 
         auth = UserAPIKeyAuth(user_id="scoped-user")
         auth.mcp_admitted_user_subject = True
-        auth.mcp_session_resource_server_id = scope
+        auth.mcp_session_resource_server_ids = None if scope is None else (scope,)
         return auth
 
     def test_scope_reader_is_none_for_keys_and_unscoped_subjects(self):
@@ -13734,7 +13795,14 @@ class TestSessionResourceScopeIntersect:
     def test_scope_reader_returns_sealed_scope_for_admitted_subjects(self):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
-        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == frozenset({"b"})
+
+    def test_scope_reader_returns_all_sealed_server_ids(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        auth = self._admitted_auth("first")
+        auth.mcp_session_resource_server_ids = ("first", "second")
+        assert MCPServerManager._admitted_session_resource_scope(auth) == frozenset({"first", "second"})
 
     @pytest.mark.asyncio
     async def test_admin_registry_seed_still_bounded_by_session_resource_scope(self):
@@ -13766,8 +13834,40 @@ class TestSessionResourceScopeIntersect:
             ),
         ):
             assert await manager.get_allowed_mcp_servers(auth) == ["granted-id"]
-            auth.mcp_session_resource_server_id = None
+            auth.mcp_session_resource_server_ids = None
             assert set(await manager.get_allowed_mcp_servers(auth)) == {"granted-id", "other-id"}
+
+    @pytest.mark.asyncio
+    async def test_admin_registry_seed_keeps_both_servers_in_a_multi_server_session(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        for server_id in ("alpha-id", "beta-id", "gamma-id"):
+            manager.registry[server_id] = MCPServer(
+                server_id=server_id,
+                name=server_id,
+                server_name=server_id,
+                url="https://example.com/mcp",
+                transport=MCPTransport.http,
+            )
+        auth = self._admitted_auth("alpha-id")
+        auth.mcp_session_resource_server_ids = ("alpha-id", "beta-id")
+        auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            assert set(await manager.get_allowed_mcp_servers(auth)) == {"alpha-id", "beta-id"}
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):
@@ -14745,6 +14845,27 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
 
     _ADMISSION_KEY: Final = "sk-litellm-virtual-key"
     _USER_TOKEN: Final = "user-idp-jwt"
+
+    @pytest.mark.parametrize("explicit_admission", [None, "", "Bearer mapped-jwt"])
+    @pytest.mark.parametrize("oauth_headers", [None, {"Authorization": "Bearer mapped-jwt"}])
+    def test_validated_jwt_remains_the_subject_after_virtual_key_mapping(
+        self, explicit_admission: str | None, oauth_headers: dict[str, str] | None
+    ) -> None:
+        auth: Final = UserAPIKeyAuth(api_key="hashed-mapped-key", user_id="caller", jwt_claims={"sub": "caller"})
+        headers: Final = {
+            "Authorization": "Bearer mapped-jwt",
+            **({"x-litellm-api-key": explicit_admission} if explicit_admission is not None else {}),
+        }
+        assert MCPServerManager.extract_subject_token(oauth_headers, headers, auth) == "mapped-jwt"
+
+    @pytest.mark.parametrize("explicit_admission", [False, True])
+    def test_litellm_key_is_not_a_subject_even_with_jwt_claims(self, explicit_admission: bool) -> None:
+        auth: Final = UserAPIKeyAuth(api_key="hashed-key", jwt_claims={"sub": "caller"})
+        headers: Final = {
+            "Authorization": f"Bearer {self._ADMISSION_KEY}",
+            **({"x-litellm-api-key": self._ADMISSION_KEY} if explicit_admission else {}),
+        }
+        assert MCPServerManager.extract_subject_token(None, headers, auth) is None
 
     @staticmethod
     def _token_exchange_server(server_id: str) -> MCPServer:

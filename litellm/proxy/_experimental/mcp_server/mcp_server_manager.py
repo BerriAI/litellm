@@ -74,6 +74,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import (
+    SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
     UpstreamSessionClosedError,
@@ -195,6 +196,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -284,6 +286,11 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+def _www_authenticate_header(headers: Mapping[str, str]) -> str | None:
+    return headers.get("WWW-Authenticate") or headers.get("www-authenticate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1189,6 +1196,8 @@ def should_strip_caller_authorization(
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
     """
+    if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
+        return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
         # OBO: the inbound Authorization is the subject token. It is exchanged at the IdP and only the
         # exchanged token is sent upstream, so the raw caller bearer must never be forwarded.
@@ -1246,6 +1255,16 @@ def _authorization_is_litellm_admission_credential(
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
     return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+
+
+def _authorization_is_admission_jwt(
+    raw_headers: Mapping[str, str] | None, user_api_key_auth: UserAPIKeyAuth | None
+) -> bool:
+    return bool(
+        user_api_key_auth
+        and user_api_key_auth.jwt_claims
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    )
 
 
 def _server_auth_header_for(
@@ -1708,7 +1727,7 @@ def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final[object] = json.loads(data)
+            parsed: Final = _UNTYPED_VALUE.validate_python(json.loads(data))
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -1824,6 +1843,13 @@ def _mcp_discovery_cache_ttl() -> float:
         verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
         return 60.0
     return ttl
+
+
+def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
+    """The MCP client raises its own CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE) when a session's
+    teardown outlives its budget while the listing task keeps running. That one is the server's fault,
+    anything else is a real cancellation."""
+    return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
 
 
 class MCPServerManager:
@@ -2910,7 +2936,7 @@ class MCPServerManager:
             verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
-                for method in ["get", "post", "put", "delete", "patch"]:
+                for method in ("get", "post", "put", "delete", "patch"):
                     if method not in path_item:
                         continue
 
@@ -3512,7 +3538,9 @@ class MCPServerManager:
         byom_cache_key: Final = self.get_byom_submitted_servers_cache_key(submitter_user_id)
         submitted_server_ids: list[str] | None = None
         try:
-            cached_submitted_server_ids: Final = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            cached_submitted_server_ids: Final = _UNTYPED_VALUE.validate_python(
+                await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            )
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
@@ -3589,8 +3617,8 @@ class MCPServerManager:
         return open_ids
 
     @staticmethod
-    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
-        """The single server an admitted session subject's bearer was scoped to at authorize
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> frozenset[str] | None:
+        """The servers an admitted session subject's bearer was scoped to at authorize
         time (RFC 8707 resource), or None for every other principal shape and for unscoped
         sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
         the exception fallback, and applied AFTER every union (grants, operator-open,
@@ -3598,7 +3626,8 @@ class MCPServerManager:
         fault therefore never widens a scoped bearer to the allow-all set."""
         if user_api_key_auth is None or not is_mcp_admitted_user_subject(user_api_key_auth):
             return None
-        return user_api_key_auth.mcp_session_resource_server_id
+        resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
+        return None if resource_server_ids is None else frozenset(resource_server_ids)
 
     async def get_allowed_mcp_servers(
         self,
@@ -3713,7 +3742,7 @@ class MCPServerManager:
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
+            return [server_id for server_id in combined_servers if scope is None or server_id in scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
@@ -3723,7 +3752,7 @@ class MCPServerManager:
             return [
                 server_id
                 for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if not explicit_grants_only and (scope is None or server_id == scope)
+                if not explicit_grants_only and (scope is None or server_id in scope)
             ]
 
     @with_service_target(MCP_SERVERS_TARGET)
@@ -3994,10 +4023,12 @@ class MCPServerManager:
     ) -> str | None:
         """The caller's upstream identity token, or ``None`` when the bearer is a LiteLLM key.
 
-        Rejects the key admission validated and, because virtual keys always carry the ``sk-`` prefix,
-        any other LiteLLM key a client puts in ``Authorization`` next to ``x-litellm-api-key``.
+        Validated JWT claims survive virtual-key mapping, so JWT admission still supplies a subject.
+        Virtual keys are rejected even when the auth context carries JWT claims.
         """
-        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth):
+        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) and not (
+            user_api_key_auth and user_api_key_auth.jwt_claims
+        ):
             return None
         bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
         if bearer is not None and bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
@@ -4245,7 +4276,7 @@ class MCPServerManager:
         subject_token: Final = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         match server.auth_type:
             case MCPAuth.oauth2_token_exchange:
-                if not self._extract_bearer_token(oauth2_headers, None):
+                if not self._extract_bearer_token(oauth2_headers, raw_headers):
                     return
             case MCPAuth.oauth2_id_jag:
                 if subject_token is not None:
@@ -4545,6 +4576,7 @@ class MCPServerManager:
                     status_code=e.status_code,
                     www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
+                    public_detail=e.detail if server.auth_type == MCPAuth.oauth2_token_exchange else None,
                 ) from e
             verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
@@ -5165,7 +5197,7 @@ class MCPServerManager:
 
         header_value: str | None = None
         if exc.response is not None:
-            header_value = exc.response.headers.get("WWW-Authenticate") or exc.response.headers.get("www-authenticate")
+            header_value = _www_authenticate_header(exc.response.headers)
         status_attempt: Final = (
             f"GET {origin}: HTTP {exc.response.status_code}"
             if exc.response is not None
@@ -5569,7 +5601,10 @@ class MCPServerManager:
             verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
-            verbose_logger.warning("Task cancelled while listing tools from %s", server_name)
+            if _listing_task_was_cancelled(e):
+                verbose_logger.debug("Task cancelled while listing tools from %s", server_name)
+                raise
+            verbose_logger.warning("Listing tools from %s was abandoned by the client session: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
@@ -6296,7 +6331,7 @@ class MCPServerManager:
         *,
         client: MCPClient,
         call_tool_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None,
         mcp_server: MCPServer,
         server_auth_header: str | dict[str, str] | None,
         extra_headers: dict[str, str] | None,
@@ -6363,7 +6398,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str] | None,
         proxy_logging_obj: ProxyLogging | None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
@@ -6840,7 +6875,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
@@ -7295,6 +7330,19 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_by_identifier(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
+        server: Final = self.get_mcp_server_by_name(identifier, client_ip)
+        if server is not None:
+            return server
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to(server, identifier)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> Mapping[str, MCPServer]:
         """

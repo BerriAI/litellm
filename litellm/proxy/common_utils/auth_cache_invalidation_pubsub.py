@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
+    from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -24,6 +25,7 @@ AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
 _MAX_IN_FLIGHT_PUBLISHES: Final = 16
+_BULK_EVICTION_WAIT_SECONDS: Final = 2.0
 _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
@@ -84,6 +86,32 @@ async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: 
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
+async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[str, ...]) -> None:
+    try:
+        client: Final = pubsub_capable_client(redis_cache)
+        channel: Final = auth_cache_invalidation_channel(redis_cache)
+        pipeline: Final = client.pipeline(transaction=False)
+        for cache_key in cache_keys:
+            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
+        async with _in_flight_publishes:
+            _ = await pipeline.execute()
+    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
+        verbose_proxy_logger.warning("auth cache invalidation publish for %d keys failed: %s", len(cache_keys), e)
+
+
+def _has_room_for_publish(key_count: int) -> bool:
+    _pending_publishes.difference_update({task for task in _pending_publishes if task.done()})
+    if len(_pending_publishes) < _MAX_PENDING_PUBLISHES:
+        return True
+    verbose_proxy_logger.warning(
+        "auth cache invalidation publish for %d keys dropped: %d publishes already waiting on redis; "
+        "other workers keep their cached copy until its TTL expires",
+        key_count,
+        len(_pending_publishes),
+    )
+    return False
+
+
 async def publish_auth_cache_invalidation(
     cache_key: str, new_value: float | None = None, ttl: float | None = None
 ) -> None:
@@ -107,16 +135,7 @@ async def publish_auth_cache_invalidation(
     drain the shared connection pool.
     """
     redis_cache: Final = coordination_redis_cache()
-    if redis_cache is None:
-        return
-    _pending_publishes.difference_update({task for task in _pending_publishes if task.done()})
-    if len(_pending_publishes) >= _MAX_PENDING_PUBLISHES:
-        verbose_proxy_logger.warning(
-            "auth cache invalidation publish for %s dropped: %d publishes already waiting on redis; "
-            "other workers keep their cached copy until its TTL expires",
-            cache_key,
-            len(_pending_publishes),
-        )
+    if redis_cache is None or not _has_room_for_publish(1):
         return
     task: Final = asyncio.create_task(
         _publish_to_redis(
@@ -125,6 +144,62 @@ async def publish_auth_cache_invalidation(
     )
     _pending_publishes.add(task)
     await asyncio.sleep(0)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def broadcast_evictions(cache_keys: Sequence[str]) -> None:
+    """
+    Tell every other worker to drop these keys, in one pipelined Redis round trip.
+
+    For bulk callers that already dropped the keys here and from Redis (``evict_local`` and
+    ``evict_shared``). A publish task per key would pass the pending cap above on a roster of a few
+    hundred members, and every dropped key would stay cached on the other workers until its TTL.
+    The caller waits for the round trip at most ``_BULK_EVICTION_WAIT_SECONDS``, so a Redis that
+    never answers cannot hang the request.
+    """
+    redis_cache: Final = coordination_redis_cache()
+    if redis_cache is None or not cache_keys or not _has_room_for_publish(len(cache_keys)):
+        return
+    task: Final = asyncio.create_task(_publish_batch_to_redis(redis_cache, tuple(cache_keys)))
+    _pending_publishes.add(task)
+    _ = await asyncio.wait((task,), timeout=_BULK_EVICTION_WAIT_SECONDS)
+
+
+def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    """
+    Drop cached objects from this worker's memory alone, before any Redis round trip, so a deleted
+    key stops authenticating on the handling worker the instant its rows are gone, whatever Redis
+    is doing.
+    """
+    for cache_key in cache_keys:
+        _drop_from_memory(cache_key, user_api_key_cache)
+
+
+def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
+    user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def evict_shared(cache_keys: Sequence[str], cache: "DualCache") -> None:
+    """
+    Drop cached objects from the cache's memory and, when it has one, its Redis layer, in one
+    chunked round trip.
+
+    Runs right after ``evict_local``: with ``enable_redis_auth_cache`` on, a miss on this worker
+    refills from Redis, so an entry dropped from memory alone comes straight back. Best-effort and
+    bounded like ``broadcast_evictions``: the rows are already gone, so a Redis that errors or never
+    answers must not fail the caller.
+    """
+    if not cache_keys:
+        return
+    try:
+        await asyncio.wait_for(cache.async_delete_cache_keys(cache_keys), timeout=_BULK_EVICTION_WAIT_SECONDS)
+    except Exception as e:  # noqa: BLE001  # best-effort: a Redis error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to drop %d cached entries from Redis; stale objects may be served until their TTL expires: %s",
+            len(cache_keys),
+            e,
+        )
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -219,7 +294,7 @@ class AuthCacheInvalidationSubscriber:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        self._user_api_key_cache.in_memory_cache_for(parsed.cache_key).delete_cache(parsed.cache_key)
+        _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)
 

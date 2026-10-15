@@ -16,6 +16,8 @@ from typing import (
     runtime_checkable,
 )
 
+from pydantic import TypeAdapter
+
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
@@ -885,7 +887,10 @@ def is_gemini_supported_mime_type(mime_type: str) -> bool:
     )
 
 
-def get_content_type_from_file_object(file_object: dict | None) -> str:
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def get_content_type_from_file_object(file_object: object) -> str:
     """
     Determine content type from file object (from database or API response).
 
@@ -901,15 +906,19 @@ def get_content_type_from_file_object(file_object: dict | None) -> str:
     if not file_object:
         return "application/octet-stream"
 
-    # Handle JSON string
-    if isinstance(file_object, str):
-        import json
+    if not isinstance(file_object, str):
+        return _content_type_from_decoded_file_object(file_object)
 
-        try:
-            file_object = json.loads(file_object)
-        except json.JSONDecodeError:
-            return "application/octet-stream"
+    import json
 
+    try:
+        decoded_file_object: Final = _DECODED_JSON.validate_python(json.loads(file_object))
+    except json.JSONDecodeError:
+        return "application/octet-stream"
+    return _content_type_from_decoded_file_object(decoded_file_object)
+
+
+def _content_type_from_decoded_file_object(file_object: object) -> str:
     if not isinstance(file_object, dict):
         return "application/octet-stream"
 

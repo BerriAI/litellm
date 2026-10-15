@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -49,7 +50,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
-    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
+    _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     _build_team_list_where_conditions,
@@ -2047,9 +2048,10 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     assert tx.query_raw.call_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "test-team-lock"), (
         "expected the team's advisory lock to be acquired before the members_with_roles read"
     )
-    assert not any("FOR UPDATE" in str(call.args[0]) for call in tx.query_raw.call_args_list), (
-        "a row lock here can deadlock with the access-group endpoints; only the advisory lock is safe"
-    )
+    assert not any(
+        "FOR UPDATE" in str(call.args[0]) and "LiteLLM_TeamTable" in str(call.args[0])
+        for call in tx.query_raw.call_args_list
+    ), "a team row lock here can deadlock with the access-group endpoints; only the advisory lock is safe"
 
     assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
 
@@ -2116,6 +2118,61 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
 
     assert [user.user_id for user in updated_users] == ["bob"]
     assert [tm.budget_id for tm in updated_team_memberships] == ["budget-pool"]
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_locks_every_named_user_row_in_id_order_before_the_first_member_write():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    events: list[object] = []
+    email_match = MagicMock()
+    email_match.user_id = "alice-id"
+
+    async def query_raw(sql: str, *args: object) -> list[dict[str, object]]:
+        if "FOR UPDATE" in sql:
+            events.append(("locked", list(cast(list[str], args[0]))))
+            return []
+        return [{"members_with_roles": []}]
+
+    async def write_members(**_: object) -> tuple[list[object], list[object]]:
+        events.append("member writes")
+        return [], []
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(side_effect=query_raw)
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[email_match])
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-order", members_with_roles=[])
+    )
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
+        new=AsyncMock(side_effect=write_members),
+    ):
+        await _add_team_members_to_team(
+            data=TeamMemberAddRequest(
+                team_id="team-order",
+                member=[
+                    Member(user_id="u2", role="user"),
+                    Member(user_email="alice@example.com", role="user"),
+                    Member(user_id="u10", role="user"),
+                    Member(user_id="u1", role="user"),
+                ],
+            ),
+            complete_team_data=LiteLLM_TeamTable(team_id="team-order", members_with_roles=[]),
+            prisma_client=cast(object, prisma_client),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert events == [("locked", ["alice-id", "u1", "u10", "u2"]), "member writes"]
 
 
 @pytest.mark.asyncio
@@ -9031,6 +9088,52 @@ async def test_delete_team_persists_deleted_teams(
 
 
 @pytest.mark.asyncio
+async def test_delete_team_is_refused_while_the_team_holds_a_ptu_share(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    from litellm import Router
+    from litellm.proxy._types import DeleteTeamRequest
+
+    shared_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-azure", "api_base": "https://x"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-1": 30, "team-2": 20},
+                },
+            }
+        ]
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        side_effect=lambda where: LiteLLM_TeamTable(team_id=where["team_id"], members_with_roles=[], metadata={})
+    )
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", shared_router)
+    admin = UserAPIKeyAuth(user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+
+    with pytest.raises(HTTPException) as refused:
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=["team-3", "team-2"]),
+            http_request=MagicMock(),
+            user_api_key_dict=admin,
+            litellm_changed_by="admin-user",
+        )
+
+    assert refused.value.status_code == 400
+    assert "team-2" in str(refused.value.detail) and "shared-ptu" in str(refused.value.detail)
+    mock_prisma_client.db.litellm_deletedteamtable.create_many.assert_not_called()
+    mock_prisma_client.delete_data.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_delete_team_sweeps_references_outside_members_with_roles(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -9120,12 +9223,9 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
         litellm_changed_by="admin-user",
     )
 
-    # array_remove strips just the deleted id in one statement; a read-filter-write of the whole
-    # array would drop any team a concurrent /team/member_add appended between read and write
-    assert "array_remove" in _STRIP_DELETED_TEAM_FROM_USERS_SQL
     assert mock_execute_raw.await_args_list == [
-        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
-        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
+        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
+        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
     ], (
         "the unlocked sweep must run once to catch pre-existing drift, and the locked sweep "
         "(alongside the delete, under the same advisory lock member_add takes) must run again "
@@ -9395,6 +9495,37 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     assert fresh_cache.get_cache(key="team_alias:doomed-team") is not None
 
 
+class _BroadcastPipeline:
+    def __init__(self, redis: "_BroadcastRecordingRedis") -> None:
+        self._redis = redis
+        self._messages: list[str] = []
+
+    def publish(self, channel: str, message: str) -> "_BroadcastPipeline":
+        self._messages.append(message)
+        return self
+
+    async def execute(self) -> None:
+        for message in self._messages:
+            await self._redis.publish("", message)
+
+
+class _BroadcastRecordingRedis:
+    namespace = None
+
+    def __init__(self) -> None:
+        self.broadcast_keys: list[str] = []
+
+    def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
+        return self
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.broadcast_keys.append(json.loads(message)["cache_key"])
+        return 1
+
+    def pipeline(self, transaction: bool = True) -> _BroadcastPipeline:
+        return _BroadcastPipeline(self)
+
+
 @pytest.mark.asyncio
 async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     monkeypatch,
@@ -9436,12 +9567,11 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
     _wire_team_delete_tx(mock_prisma_client)
 
-    published = []
+    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 
-    async def record_publish(cache_key):
-        published.append(cache_key)
-
-    monkeypatch.setattr("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", record_publish)
+    redis = _BroadcastRecordingRedis()
+    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
@@ -9458,9 +9588,11 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
         litellm_changed_by="admin-user",
     )
 
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
     # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
     # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
-    assert published == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+    assert redis.broadcast_keys == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
 
 
 @pytest.mark.asyncio
@@ -17881,6 +18013,177 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+# --- PTU-equivalent consumption on /team/daily/activity ------------------------------------
+
+
+_ONE_PTU_HOUR_OF_INPUT: Final = AZURE_PTU_CAPACITY["gpt-4.1"].normalized_tokens_per_ptu_hour
+
+
+def _db_with_one_ptu_hour_of_team_spend(team_id: str) -> MagicMock:
+    """The team's daily spend table holds one day of three requests on the PTU group, carrying
+    one PTU-hour of gpt-4.1 uncached input; the read path behind the endpoint runs as written."""
+    row: Final = SimpleNamespace(
+        date="2026-09-23",
+        team_id=team_id,
+        api_key="ptu-key",
+        model="azure/gpt-4.1",
+        model_group="gpt-4.1-ptu",
+        custom_llm_provider="azure",
+        mcp_namespaced_tool_name=None,
+        endpoint="/chat/completions",
+        spend=0.0,
+        prompt_tokens=_ONE_PTU_HOUR_OF_INPUT,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
+        api_requests=3,
+        successful_requests=3,
+        failed_requests=0,
+    )
+    db_client: Final = MagicMock()
+    db_client.db.litellm_dailyteamspend.count = AsyncMock(return_value=1)
+    db_client.db.litellm_dailyteamspend.find_many = AsyncMock(return_value=[row])
+    db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    db_client.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    return db_client
+
+
+def _shared_ptu_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attribution_enabled", [True, False])
+async def test_team_daily_activity_reports_ptu_hours_only_while_attribution_is_on(
+    mock_admin_auth, monkeypatch, attribution_enabled
+):
+    """An hour of one PTU's input rate on gpt-4.1, in uncached input tokens, is one PTU-hour;
+    the figure appears beside tokens only once the PTU flag is on, and the token totals are
+    untouched either way."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if attribution_enabled else "False")
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-a")),
+        patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-a",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    expected_ptu_hours = 1.0 if attribution_enabled else 0.0
+    assert result.metadata.total_ptu_hours == expected_ptu_hours
+    assert result.results[0].metrics.ptu_hours == expected_ptu_hours
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == expected_ptu_hours
+    assert result.metadata.total_tokens == _ONE_PTU_HOUR_OF_INPUT
+    assert result.results[0].metrics.total_tokens == _ONE_PTU_HOUR_OF_INPUT
+
+
+@pytest.mark.asyncio
+async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_name(mock_admin_auth, monkeypatch):
+    """A deployment registered for one team is renamed to a unique internal name and keeps the
+    name callers use in ``team_public_model_name``, which is the name the activity rows carry,
+    so its sizing row is still found."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    team_scoped_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu-3f9c1b",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "team-a-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "team_id": "team-a",
+                    "team_public_model_name": "gpt-4.1-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-a")),
+        patch("litellm.proxy.proxy_server.llm_router", team_scoped_router),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-a",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert result.metadata.total_ptu_hours == 1.0
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == 1.0
+
+
+@pytest.mark.asyncio
+async def test_team_daily_activity_reports_no_ptu_hours_to_a_team_holding_no_share(mock_admin_auth, monkeypatch):
+    """The deployment is split between team-a and team-b, so team-c's page alone converts none of
+    its tokens on the group even though the group is sized."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-c")),
+        patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-c",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert result.metadata.total_ptu_hours == 0.0
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == 0.0
+    assert result.results[0].metrics.total_tokens == _ONE_PTU_HOUR_OF_INPUT
 
 
 @pytest.mark.parametrize(

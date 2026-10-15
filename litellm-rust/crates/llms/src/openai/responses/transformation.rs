@@ -165,32 +165,44 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        if !input.is_string() && !input.is_array() {
-            return Err(Error::InvalidRequest(
-                "responses input must be a string or an array".into(),
-            ));
-        }
-        if params
-            .get("stream")
-            .is_some_and(|stream| !stream.is_boolean())
-        {
-            return Err(Error::InvalidRequest("stream must be a boolean".into()));
-        }
-        Ok(Value::Object(
-            params
-                .into_iter()
-                .chain([
-                    ("model".into(), Value::String(model.into())),
-                    ("input".into(), input),
-                ])
-                .collect(),
-        ))
+        responses_request(model, input, params)
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
-        serde_json::from_value(body)
-            .map_err(|error| Error::InvalidResponse(error.to_string().into()))
+        responses_response(body)
     }
+}
+
+/// The OpenAI Responses request body, shared by every OpenAI-compatible host.
+pub fn responses_request(
+    model: &str,
+    input: Value,
+    params: Map<String, Value>,
+) -> Result<Value, Error> {
+    if !input.is_string() && !input.is_array() {
+        return Err(Error::InvalidRequest(
+            "responses input must be a string or an array".into(),
+        ));
+    }
+    if params
+        .get("stream")
+        .is_some_and(|stream| !stream.is_boolean())
+    {
+        return Err(Error::InvalidRequest("stream must be a boolean".into()));
+    }
+    Ok(Value::Object(
+        params
+            .into_iter()
+            .chain([
+                ("model".into(), Value::String(model.into())),
+                ("input".into(), input),
+            ])
+            .collect(),
+    ))
+}
+
+pub fn responses_response(body: Value) -> Result<ResponsesApiResponse, Error> {
+    serde_json::from_value(body).map_err(|error| Error::InvalidResponse(error.to_string().into()))
 }
 
 #[cfg(test)]
