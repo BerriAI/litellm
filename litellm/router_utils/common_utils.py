@@ -411,12 +411,10 @@ PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def _catalog_carries(name: str) -> bool:
-    return any(name in entry for entry in GetModelCostMap.loaded_model_cost_map().values())
-
-
 def is_model_capability_field(name: str) -> bool:
-    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (name.startswith("supports_") and _catalog_carries(name))
+    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (
+        name.startswith("supports_") and name in GetModelCostMap.loaded_model_cost_map_fields()
+    )
 
 
 def without_model_capability_flags(deployment: Deployment) -> Deployment:
