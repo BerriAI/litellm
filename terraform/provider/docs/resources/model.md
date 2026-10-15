@@ -118,11 +118,15 @@ The following arguments are supported:
 
 * `base_model` - (Required) string. The actual model identifier from the provider (e.g., "gpt-4", "claude-2").
 
+* `pricing_base_model` - (Optional) string. A pricing key fed to `model_info.base_model` **independently of routing**. When set, `litellm_params.model` still routes via `base_model`, but LiteLLM looks up cost against this key. Useful when the routing/deployment name differs from the cost-map key — e.g. an Azure deployment routed as `azure/gpt-4.1` whose real tier is Data Zone: set `pricing_base_model = "us/gpt-4.1-2025-04-14"` so it is billed at the Data Zone rate. When unset, `base_model` drives pricing as before.
+
 * `litellm_credential_name` - (Optional) string. Name of a LiteLLM credential to use for this model.
 
 * `tier` - (Optional) string. The usage tier for this model. Valid values are `"free"` or `"paid"`. Default: `"free"`.
 
 * `team_id` - (Optional) string. Associate the model with a specific team.
+
+* `display_name` - (Optional) string. Human-readable name stored in `model_info.display_name` and returned as `display_name` by `/v1/models`, so clients such as Claude Code and Claude Desktop show it in their model picker instead of `model_name`. When unset, clients fall back to `model_name`.
 
 * `mode` - (Optional) string. The intended use of the model. Valid values are:
   * `completion`

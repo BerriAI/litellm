@@ -1,7 +1,17 @@
-import { CloseOutlined, PlayCircleOutlined } from "@ant-design/icons";
-import { Button, Modal, Select, Input } from "antd";
-import React, { useEffect, useState } from "react";
+import { Play } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 const DEFAULT_PROMPT = `Evaluate whether this guardrail's decision was correct.
 Analyze the user input, the guardrail action taken, and determine if it was appropriate.
@@ -73,79 +83,81 @@ export function EvaluationSettingsModal({
     }
   };
 
-  const modelSelectOptions = modelOptions.map((m) => ({
-    value: m.model_group,
-    label: m.model_group,
-  }));
+  const modelSelectOptions = useMemo(
+    () => modelOptions.map((m) => ({ value: m.model_group, label: m.model_group })),
+    [modelOptions],
+  );
 
   return (
-    <Modal
-      title="Evaluation Settings"
-      open={open}
-      onCancel={onClose}
-      width={640}
-      footer={null}
-      closeIcon={<CloseOutlined />}
-      destroyOnClose
-    >
-      <p className="text-sm text-gray-500 mb-4">
-        {guardrailName
-          ? `Configure AI evaluation for ${guardrailName}`
-          : "Configure AI evaluation for re-running on logs"}
-      </p>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>Evaluation Settings</DialogTitle>
+          <DialogDescription>
+            {guardrailName
+              ? `Configure AI evaluation for ${guardrailName}`
+              : "Configure AI evaluation for re-running on logs"}
+          </DialogDescription>
+        </DialogHeader>
 
-      <div className="space-y-4">
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium text-gray-700">Evaluation Prompt</label>
-            <button type="button" onClick={handleResetPrompt} className="text-xs text-indigo-600 hover:text-indigo-700">
-              Reset to default
-            </button>
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label htmlFor="evaluation-prompt" className="text-sm font-medium text-foreground">
+                Evaluation Prompt
+              </label>
+              <Button variant="link" size="xs" onClick={handleResetPrompt}>
+                Reset to default
+              </Button>
+            </div>
+            <Textarea
+              id="evaluation-prompt"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={6}
+              className="field-sizing-fixed font-mono text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              System prompt sent to the evaluation model. Output is structured via response_format.
+            </p>
           </div>
-          <Input.TextArea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={6}
-            className="font-mono text-sm"
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            System prompt sent to the evaluation model. Output is structured via response_format.
-          </p>
+
+          <div>
+            <label htmlFor="evaluation-schema" className="mb-1.5 block text-sm font-medium text-foreground">
+              Response Schema
+            </label>
+            <p className="mb-1 text-xs text-muted-foreground">response_format: json_schema</p>
+            <Textarea
+              id="evaluation-schema"
+              value={schema}
+              onChange={(e) => setSchema(e.target.value)}
+              rows={6}
+              className="field-sizing-fixed font-mono text-sm"
+            />
+          </div>
+
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-foreground">Model</p>
+            <SearchSelect
+              options={modelSelectOptions}
+              value={model ?? undefined}
+              onValueChange={(value) => setModel(value || null)}
+              placeholder={loadingModels ? "Loading models…" : "Select a model"}
+              emptyText={!accessToken ? "Sign in to see models" : "No models available"}
+            />
+          </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Response Schema</label>
-          <p className="text-xs text-gray-400 mb-1">response_format: json_schema</p>
-          <Input.TextArea
-            value={schema}
-            onChange={(e) => setSchema(e.target.value)}
-            rows={6}
-            className="font-mono text-sm"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Model</label>
-          <Select
-            placeholder={loadingModels ? "Loading models…" : "Select a model"}
-            value={model ?? undefined}
-            onChange={setModel}
-            options={modelSelectOptions}
-            style={{ width: "100%" }}
-            showSearch
-            optionFilterProp="label"
-            loading={loadingModels}
-            notFoundContent={!accessToken ? "Sign in to see models" : "No models available"}
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-gray-100">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleRun} disabled={!model}>
-          Run Evaluation
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter className="border-t border-border pt-4">
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleRun} disabled={!model}>
+            <Play className="size-4" />
+            Run Evaluation
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

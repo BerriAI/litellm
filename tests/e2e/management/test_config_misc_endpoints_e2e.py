@@ -3,9 +3,22 @@
 One method per registry cell, each asserting the real contract against a live
 proxy: read-only inventory routes return their documented shape, stateless
 validators compute their verdict from the request, and the write routes persist
-so a read-back reflects the change. The two routes that mutate global proxy state
-(cache settings and router settings, both driven from the admin UI) are exercised
-with a benign, self-restoring change so a shared proxy is left as it was found.
+so a read-back reflects the change. Router settings, which mutate global proxy
+state, are exercised with a benign, self-restoring change so a shared proxy is left
+as it was found.
+
+Cache settings, the Vault config override and the allowed-IP routes are deliberately
+not covered here. All three reconfigure the whole proxy: /cache/settings persists what
+it receives into a row that outranks the YAML cache_params and is re-applied on a timer,
+/config_overrides/hashicorp_vault swaps the process-wide secret manager, and
+/add/allowed_ip mutates the live general_settings["allowed_ips"] that
+auth_utils._check_valid_ip reads, so the first call locks every other client out of the
+shared proxy. The allowlist is an exact string match with no CIDR support, and no route
+reports the caller's address as the proxy sees it, so a test cannot allowlist itself
+first; /delete/allowed_ip sits behind the same auth dependency, so the cleanup is locked
+out too and the proxy stays poisoned for the rest of the build. None of the three can be
+exercised safely against the shared proxy the suites run on, so they need an isolated
+proxy before a test lands. Do not add a read-then-write-back test for any of them.
 """
 
 from __future__ import annotations
@@ -19,6 +32,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
@@ -124,34 +138,6 @@ class ComplianceResponse(BaseModel):
     checks: list[ComplianceCheck]
 
 
-# ---- cache settings --------------------------------------------------------
-
-
-class CacheSettingsValue(BaseModel):
-    type: str
-    host: str = ""
-    port: str = ""
-
-
-class CacheSettingsUpdateBody(BaseModel):
-    cache_settings: CacheSettingsValue
-
-
-class CacheCurrentValues(BaseModel):
-    type: str | None = None
-    host: str | None = None
-    port: str | None = None
-
-
-class CacheGetResponse(BaseModel):
-    current_values: CacheCurrentValues
-
-
-class CacheUpdateResponse(BaseModel):
-    status: str
-    settings: CacheSettingsValue
-
-
 # ---- fallback management ---------------------------------------------------
 
 
@@ -207,7 +193,7 @@ class JwtKeyMappingResponse(BaseModel):
 
 
 class RouterSettingsPatch(BaseModel):
-    num_retries: int
+    retry_after: int
 
 
 class ConfigUpdateBody(BaseModel):
@@ -219,7 +205,7 @@ class ConfigUpdateResponse(BaseModel):
 
 
 class RouterCurrentValues(BaseModel):
-    num_retries: int | None = None
+    retry_after: int | None = None
 
 
 class RouterSettingsResponse(BaseModel):
@@ -246,6 +232,7 @@ class McpServerResponse(BaseModel):
 
 class TestInventoryRoutes:
     @pytest.mark.covers("mgmt.callback.list.happy_path")
+    @meta(Subject(domain=Domain.OBSERVABILITY))
     def test_callbacks_list_reports_active_logging_callbacks(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -262,6 +249,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.tool_management.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_tool_list_returns_catalog_with_consistent_total(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -276,6 +264,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.workflow.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_workflow_runs_list_returns_consistent_count(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -290,6 +279,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.credential_migration.check.happy_path")
+    @meta(Subject(domain=Domain.DEPLOY_OPS))
     def test_credential_migration_check_reports_residual_scan(self, client: ManagementClient) -> None:
         report = unwrap(
             client.proxy.transport.get(
@@ -310,6 +300,7 @@ class TestInventoryRoutes:
 
 class TestCostEstimate:
     @pytest.mark.covers("mgmt.cost_tracking.estimate.happy_path")
+    @meta(Subject(domain=Domain.COST_MAP))
     def test_estimate_computes_cost_from_token_counts(self, client: ManagementClient) -> None:
         estimate = unwrap(
             client.proxy.transport.post(
@@ -340,6 +331,7 @@ class TestCostEstimate:
 
 class TestComplianceRoutes:
     @pytest.mark.covers("mgmt.compliance.gdpr.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_gdpr_check_derives_verdict_from_the_request(self, client: ManagementClient) -> None:
         result = unwrap(
             client.proxy.transport.post(
@@ -369,72 +361,9 @@ class TestComplianceRoutes:
         )
 
 
-class TestCacheSettings:
-    @pytest.mark.covers("mgmt.cache_settings.update.happy_path")
-    def test_update_persists_cache_backend_to_get(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
-        """Exercise the update route without changing global state: capture the live
-        cache backend and write exactly that back, so the config the proxy ends on is
-        byte-for-byte the one it started with. A teardown restore of the same captured
-        settings is the safety net if the body fails partway. The update route is only
-        meaningful against a configured cache, so an unconfigured proxy fails loudly
-        here rather than being silently switched to redis."""
-        before = self._read_settings(client)
-        assert before.type is not None, (
-            "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
-        )
-        captured = CacheSettingsValue(type=before.type, host=before.host or "", port=before.port or "")
-        resources.defer(lambda: self._write_settings(client, captured))
-
-        updated = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=captured),
-                response_type=CacheUpdateResponse,
-            )
-        )
-        assert updated.status == "success", f"/cache/settings update status {updated.status!r}, expected 'success'"
-        assert updated.settings.type == captured.type, (
-            f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
-        )
-
-        def reflected() -> CacheCurrentValues | None:
-            current = self._read_settings(client)
-            return current if current.type == captured.type else None
-
-        after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.host == captured.host and after.port == captured.port, (
-            f"/cache/settings persisted host/port {after.host!r}/{after.port!r}, "
-            f"wrote {captured.host!r}/{captured.port!r}"
-        )
-
-    @staticmethod
-    def _read_settings(client: ManagementClient) -> CacheCurrentValues:
-        return unwrap(
-            client.proxy.transport.get(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                params=NoBody(),
-                response_type=CacheGetResponse,
-            )
-        ).current_values
-
-    @staticmethod
-    def _write_settings(client: ManagementClient, settings: CacheSettingsValue) -> None:
-        _ = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=settings),
-                response_type=CacheUpdateResponse,
-            )
-        )
-
-
 class TestFallbackManagement:
     @pytest.mark.covers("mgmt.fallback_management.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING))
     def test_create_persists_and_is_read_back(self, client: ManagementClient, resources: ResourceManager) -> None:
         primary = f"e2e-fallback-primary-{unique_marker()}"
         secondary = f"e2e-fallback-secondary-{unique_marker()}"
@@ -489,6 +418,7 @@ class TestFallbackManagement:
 
 class TestJwtKeyMapping:
     @pytest.mark.covers("mgmt.jwt_key_mapping.new.happy_path")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_new_persists_mapping_and_is_read_back(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -540,22 +470,31 @@ class TestJwtKeyMapping:
 
 class TestRouterSettings:
     @pytest.mark.covers("mgmt.router_settings.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING, route=Route.PROXY_CONFIG))
     def test_config_update_persists_router_setting_to_get(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         """/config/update is the only write path for router_settings (there is no
         dedicated router-settings write route). The change is restored on teardown so
-        the shared proxy keeps its original retry policy."""
-        original = self._read_num_retries(client)
-        assert original is not None, "GET /router/settings did not report num_retries; cannot prove a change"
-        resources.defer(lambda: self._write_num_retries(client, original))
+        the shared proxy keeps its original retry policy.
 
-        target = original + 5
+        retry_after is the subject because it satisfies all three constraints at once:
+        no lane's config file declares it, so the database owns it and the write is not
+        refused as config-owned; it is in RUNTIME_UPDATABLE_ROUTER_SETTINGS, so
+        /config/update accepts it; and it is in ROUTER_SETTINGS_FIELDS backed by an
+        always-set Router attribute, so GET /router/settings reports it for the
+        read-back. Bumping it by one second is the smallest change that proves the
+        round-trip without slowing a concurrent test that hits a retry."""
+        original = self._read_retry_after(client)
+        assert original is not None, "GET /router/settings did not report retry_after; cannot prove a change"
+        resources.defer(lambda: self._write_retry_after(client, original))
+
+        target = original + 1
         response = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=target)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=target)),
                 response_type=ConfigUpdateResponse,
             )
         )
@@ -565,20 +504,20 @@ class TestRouterSettings:
 
         _ = _poll(
             client,
-            lambda: True if self._read_num_retries(client) == target else None,
-            f"GET /router/settings never reported num_retries {target} after /config/update",
+            lambda: True if self._read_retry_after(client) == target else None,
+            f"GET /router/settings never reported retry_after {target} after /config/update",
         )
 
-        self._write_num_retries(client, original)
+        self._write_retry_after(client, original)
         restored = _poll(
             client,
-            lambda: original if self._read_num_retries(client) == original else None,
-            f"GET /router/settings never returned to the original num_retries {original} after the restore",
+            lambda: original if self._read_retry_after(client) == original else None,
+            f"GET /router/settings never returned to the original retry_after {original} after the restore",
         )
-        assert restored == original, f"router num_retries left at {restored}, expected the original {original}"
+        assert restored == original, f"router retry_after left at {restored}, expected the original {original}"
 
     @staticmethod
-    def _read_num_retries(client: ManagementClient) -> int | None:
+    def _read_retry_after(client: ManagementClient) -> int | None:
         return unwrap(
             client.proxy.transport.get(
                 "/router/settings",
@@ -586,15 +525,15 @@ class TestRouterSettings:
                 params=NoBody(),
                 response_type=RouterSettingsResponse,
             )
-        ).current_values.num_retries
+        ).current_values.retry_after
 
     @staticmethod
-    def _write_num_retries(client: ManagementClient, value: int) -> None:
+    def _write_retry_after(client: ManagementClient, value: int) -> None:
         _ = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=value)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=value)),
                 response_type=ConfigUpdateResponse,
             )
         )
@@ -602,6 +541,7 @@ class TestRouterSettings:
 
 class TestMcpServerSubmission:
     @pytest.mark.covers("mgmt.mcp_server.register.happy_path")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_register_submits_pending_server(self, client: ManagementClient, resources: ResourceManager) -> None:
         """A non-admin, team-scoped key submits an MCP server for review; the proxy
         stores it as pending_review without loading it into the runtime registry."""
@@ -635,6 +575,7 @@ class TestMcpServerSubmission:
         )
 
     @pytest.mark.covers("mgmt.mcp_server.approve.persists")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_approve_activates_submission_and_persists(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

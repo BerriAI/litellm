@@ -2,38 +2,39 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 # Skills API Request Types
 class CreateSkillRequest(TypedDict, total=False):
     """Request parameters for creating a skill"""
 
-    display_title: Optional[str]
+    display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: Optional[List[Any]]
+    files: list[Any] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
 class ListSkillsParams(TypedDict, total=False):
     """Query parameters for listing skills"""
 
-    limit: Optional[int]
+    limit: int | None
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    page: Optional[str]
+    page: str | None
     """Pagination token for fetching a specific page of results"""
 
-    source: Optional[str]
+    source: str | None
     """Filter skills by source ('custom' or 'anthropic')"""
 
 
 # Skills API Response Types
-class Skill(BaseModel):
+class Skill(LiteLLMBaseModel):
     """Represents a skill from the Anthropic Skills API"""
 
     id: str
@@ -42,10 +43,10 @@ class Skill(BaseModel):
     created_at: str
     """ISO 8601 timestamp of when the skill was created"""
 
-    display_title: Optional[str] = None
+    display_title: str | None = None
     """Display title for the skill"""
 
-    latest_version: Optional[str] = None
+    latest_version: str | None = None
     """The latest version identifier for the skill"""
 
     source: str
@@ -57,21 +58,30 @@ class Skill(BaseModel):
     updated_at: str
     """ISO 8601 timestamp of when the skill was last updated"""
 
+    description: str | None = None
+    """Description of the skill. Populated for the LiteLLM-hosted registry
+    (custom_llm_provider="litellm_proxy"); Anthropic's list endpoint does not
+    return a description, so this is None there."""
 
-class ListSkillsResponse(BaseModel):
+    search_score: float | None = None
+    """Semantic similarity to the ``query`` passed to ``GET /v1/skills``. None
+    unless a query was given."""
+
+
+class ListSkillsResponse(LiteLLMBaseModel):
     """Response from listing skills"""
 
-    data: List[Skill]
+    data: list[Skill]
     """List of skills"""
 
-    next_page: Optional[str] = None
+    next_page: str | None = None
     """Pagination token for the next page"""
 
     has_more: bool = False
     """Whether there are more skills available"""
 
 
-class DeleteSkillResponse(BaseModel):
+class DeleteSkillResponse(LiteLLMBaseModel):
     """Response from deleting a skill"""
 
     id: str
@@ -85,20 +95,20 @@ class DeleteSkillResponse(BaseModel):
 class CreateSkillVersionRequest(TypedDict, total=False):
     """Request parameters for creating a skill version"""
 
-    display_title: Optional[str]
+    display_title: str | None
     """Display title for this version"""
 
-    description: Optional[str]
+    description: str | None
     """Description of this version"""
 
-    instructions: Optional[str]
+    instructions: str | None
     """Instructions for this version"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, Any] | None
     """Additional metadata"""
 
 
-class SkillVersion(BaseModel):
+class SkillVersion(LiteLLMBaseModel):
     """Represents a skill version"""
 
     id: str
@@ -110,42 +120,42 @@ class SkillVersion(BaseModel):
     created_at: str
     """ISO 8601 timestamp of when the version was created"""
 
-    display_title: Optional[str] = None
+    display_title: str | None = None
     """Display title for this version"""
 
-    description: Optional[str] = None
+    description: str | None = None
     """Description of this version"""
 
-    instructions: Optional[str] = None
+    instructions: str | None = None
     """Instructions for this version"""
 
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
     """Additional metadata"""
 
     type: str = "skill.version"
     """Object type"""
 
 
-class ListSkillVersionsResponse(BaseModel):
+class ListSkillVersionsResponse(LiteLLMBaseModel):
     """Response from listing skill versions"""
 
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: List[SkillVersion]
+    data: list[SkillVersion]
     """List of skill versions"""
 
-    first_id: Optional[str] = None
+    first_id: str | None = None
     """ID of the first version in the list"""
 
-    last_id: Optional[str] = None
+    last_id: str | None = None
     """ID of the last version in the list"""
 
     has_more: bool = False
     """Whether there are more versions available"""
 
 
-class DeleteSkillVersionResponse(BaseModel):
+class DeleteSkillVersionResponse(LiteLLMBaseModel):
     """Response from deleting a skill version"""
 
     id: str

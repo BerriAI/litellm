@@ -1,8 +1,9 @@
 from datetime import datetime
-from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class MCPToolsetTool(TypedDict):
@@ -10,25 +11,25 @@ class MCPToolsetTool(TypedDict):
     tool_name: str
 
 
-class MCPToolset(BaseModel):
+class MCPToolset(LiteLLMBaseModel):
     toolset_id: str
     toolset_name: str
-    description: Optional[str] = None
-    tools: List[MCPToolsetTool] = []
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+    description: str | None = None
+    tools: list[MCPToolsetTool] = Field(default=[])
+    created_at: datetime | None = None
+    created_by: str | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
 
 
-class NewMCPToolsetRequest(BaseModel):
+class NewMCPToolsetRequest(LiteLLMBaseModel):
     toolset_name: str
-    description: Optional[str] = None
-    tools: List[MCPToolsetTool] = []
+    description: str | None = None
+    tools: list[MCPToolsetTool] = Field(default=[])
 
 
-class UpdateMCPToolsetRequest(BaseModel):
+class UpdateMCPToolsetRequest(LiteLLMBaseModel):
     toolset_id: str
-    toolset_name: Optional[str] = None
-    description: Optional[str] = None
-    tools: Optional[List[MCPToolsetTool]] = None
+    toolset_name: str | None = None
+    description: str | None = None
+    tools: list[MCPToolsetTool] | None = None

@@ -3,7 +3,7 @@ Base configuration for A2A protocol providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
 
 
 class BaseA2AProviderConfig(ABC):
@@ -18,10 +18,10 @@ class BaseA2AProviderConfig(ABC):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, object],
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle non-streaming A2A request.
 
@@ -34,16 +34,15 @@ class BaseA2AProviderConfig(ABC):
         Returns:
             A2A SendMessageResponse dict
         """
-        pass
 
     @abstractmethod
     async def handle_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, object],
+        api_base: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """
         Handle streaming A2A request.
 

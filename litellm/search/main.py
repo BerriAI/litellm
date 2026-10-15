@@ -4,10 +4,13 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from types import MappingProxyType
+from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,12 +26,20 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+_SEARCH_KWARGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _search_pricing_params(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    cost_per_query: Final = kwargs.get("input_cost_per_query")
+    return MappingProxyType({} if cost_per_query is None else {"input_cost_per_query": cost_per_query})
+
+
 def _build_search_optional_params(
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-) -> Dict[str, Any]:
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+) -> dict[str, object]:
     """
     Helper function to build optional_params dict from Perplexity Search API parameters.
 
@@ -41,7 +52,7 @@ def _build_search_optional_params(
     Returns:
         Dict with non-None optional parameters
     """
-    optional_params: Dict[str, Any] = {}
+    optional_params: Final[dict[str, object]] = {}
 
     if max_results is not None:
         optional_params["max_results"] = max_results
@@ -57,16 +68,16 @@ def _build_search_optional_params(
 
 @client
 async def asearch(
-    query: Union[str, List[str]],
+    query: str | list[str],
     search_provider: str,
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -114,12 +125,12 @@ async def asearch(
             print(f"Snippet: {result.snippet}")
         ```
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["asearch"] = True
 
-        func = partial(
+        func: Final = partial(
             search,
             query=query,
             search_provider=search_provider,
@@ -134,9 +145,9 @@ async def asearch(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -148,7 +159,7 @@ async def asearch(
 
         return response
     except Exception as e:
-        model_name = f"{search_provider}/search"
+        model_name: Final = f"{search_provider}/search"
         raise litellm.exception_type(
             model=model_name,
             custom_llm_provider=search_provider,
@@ -160,18 +171,18 @@ async def asearch(
 
 @client
 def search(
-    query: Union[str, List[str]],
+    query: str | list[str],
     search_provider: str,
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
+) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
     """
     Synchronous Search function.
 
@@ -225,11 +236,11 @@ def search(
                 print(f"Date: {result.date}")
         ```
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("asearch", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("asearch", False) is True
 
         # Validate query parameter
         if not isinstance(query, (str, list)):
@@ -239,17 +250,17 @@ def search(
             raise ValueError("All items in query list must be strings")
 
         # Get provider config
-        search_provider_config: Optional[BaseSearchConfig] = ProviderConfigManager.get_provider_search_config(
+        search_provider_config: Final[BaseSearchConfig | None] = ProviderConfigManager.get_provider_search_config(
             provider=SearchProviders(search_provider),
         )
 
         if search_provider_config is None:
             raise ValueError(f"Search is not supported for provider: {search_provider}")
 
-        verbose_logger.debug(f"Search call - provider: {search_provider}")
+        verbose_logger.debug("Search call - provider: %s", search_provider)
 
         # Build optional_params from explicit parameters
-        optional_params = _build_search_optional_params(
+        optional_params: Final = _build_search_optional_params(
             max_results=max_results,
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
@@ -257,24 +268,25 @@ def search(
         )
 
         # Filter out internal LiteLLM parameters from kwargs
-        filtered_kwargs = filter_out_litellm_params(kwargs=kwargs)
+        search_kwargs: Final = _SEARCH_KWARGS.validate_python(kwargs)
+        filtered_kwargs: Final = filter_out_litellm_params(kwargs=search_kwargs)
 
         # Add remaining kwargs to optional_params (for provider-specific params)
         for key, value in filtered_kwargs.items():
             if key not in optional_params:
                 optional_params[key] = value
 
-        verbose_logger.debug(f"Search optional_params: {optional_params}")
+        verbose_logger.debug("Search optional_params: %s", optional_params)
 
         # Validate environment and get headers
-        headers = search_provider_config.validate_environment(
+        headers: Final = search_provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
             headers=extra_headers or {},
         )
 
         # Get complete URL
-        complete_url = search_provider_config.get_complete_url(
+        complete_url: Final = search_provider_config.get_complete_url(
             api_base=api_base,
             optional_params=optional_params,
             api_key=api_key,
@@ -289,12 +301,13 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "api_base": complete_url,
+                **_search_pricing_params(search_kwargs),
             },
             custom_llm_provider=search_provider,
         )
 
         # Call the handler
-        response = base_llm_http_handler.search(
+        response: Final = base_llm_http_handler.search(
             query=query,
             optional_params=optional_params,
             timeout=timeout or request_timeout,

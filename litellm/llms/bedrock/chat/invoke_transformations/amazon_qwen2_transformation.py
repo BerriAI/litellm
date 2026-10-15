@@ -7,9 +7,11 @@ The main difference is in the response format: Qwen2 uses "text" field while Qwe
 Qwen2 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, List, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
     AmazonQwen3Config,
@@ -19,6 +21,12 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class AmazonQwen2Config(AmazonQwen3Config):
@@ -38,12 +46,12 @@ class AmazonQwen2Config(AmazonQwen3Config):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform Qwen2 Bedrock response to OpenAI format
@@ -51,33 +59,33 @@ class AmazonQwen2Config(AmazonQwen3Config):
         Qwen2 uses "text" field, but we also support "generation" field for compatibility.
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
-            generated_text = response_data.get("generation", "") or response_data.get("text", "")
+            generated_text = _TEXT.validate_python(response_data.get("generation", "") or response_data.get("text", ""))
 
             # Clean up the response (remove assistant start token if present)
-            if generated_text.startswith("<|im_start|>assistant\n"):
-                generated_text = generated_text[len("<|im_start|>assistant\n") :]
-            if generated_text.endswith("<|im_end|>"):
-                generated_text = generated_text[: -len("<|im_end|>")]
+            generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
+            generated_text = generated_text.removesuffix("<|im_end|>")
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:
-                choice = model_response.choices[0]
+                choice: Final = model_response.choices[0]
                 choice.message.content = generated_text
                 choice.finish_reason = "stop"
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data = response_data["usage"]
+                usage_data: Final = _JSON_OBJECT.validate_python(response_data["usage"])
                 setattr(
                     model_response,
                     "usage",
-                    Usage(
-                        prompt_tokens=usage_data.get("prompt_tokens", 0),
-                        completion_tokens=usage_data.get("completion_tokens", 0),
-                        total_tokens=usage_data.get("total_tokens", 0),
+                    Usage.model_validate(
+                        {
+                            "prompt_tokens": usage_data.get("prompt_tokens", 0),
+                            "completion_tokens": usage_data.get("completion_tokens", 0),
+                            "total_tokens": usage_data.get("total_tokens", 0),
+                        }
                     ),
                 )
 

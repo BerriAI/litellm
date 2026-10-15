@@ -8,7 +8,7 @@ import React, { useCallback, useMemo, useState } from "react";
 
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
@@ -43,10 +43,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
-      // Prefix search matches the Redis-style mental model (namespace scan):
-      // typing "user:" finds "user:profile", "user:prefs", etc.
       return fetchMemoryList(accessToken, {
-        keyPrefix: debouncedSearch || undefined,
+        search: debouncedSearch || undefined,
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
       });
@@ -61,7 +59,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   // All three write endpoints share the same success/error plumbing:
   //   - on success: invalidate the list query so every cached page
   //     refetches from scratch (pagination + filter-aware).
-  //   - on error: surface the message via `MessageManager.error`.
+  //   - on error: surface the message via `toast.error`.
 
   const invalidateList = useCallback(
     () => queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] }),
@@ -74,11 +72,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return createMemory(accessToken, args);
     },
     onSuccess: (row) => {
-      MessageManager.success(`Created ${row.key}`);
+      toast.success(`Created ${row.key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      MessageManager.error(`Save failed: ${err.message}`);
+      toast.error(`Save failed: ${err.message}`);
     },
   });
 
@@ -89,11 +87,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return updateMemory(accessToken, key, payload);
     },
     onSuccess: (row) => {
-      MessageManager.success(`Updated ${row.key}`);
+      toast.success(`Updated ${row.key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      MessageManager.error(`Save failed: ${err.message}`);
+      toast.error(`Save failed: ${err.message}`);
     },
   });
 
@@ -103,11 +101,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return deleteMemory(accessToken, key).then(() => key);
     },
     onSuccess: (key) => {
-      MessageManager.success(`Deleted ${key}`);
+      toast.success(`Deleted ${key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      MessageManager.error(`Delete failed: ${err.message}`);
+      toast.error(`Delete failed: ${err.message}`);
     },
   });
 
@@ -149,7 +147,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       try {
         metadataPayload = JSON.parse(metadataText);
       } catch {
-        MessageManager.error("Metadata must be valid JSON (or leave empty).");
+        toast.error("Metadata must be valid JSON (or leave empty).");
         return false;
       }
     }

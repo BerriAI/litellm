@@ -1,6 +1,8 @@
-from typing import List, Optional
+from collections.abc import Iterable, Mapping
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
@@ -8,12 +10,26 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
+USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_MODEL_ID: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
+    """xAI bills in ticks of a dollar: https://docs.x.ai/developers/cost-tracking"""
+    if not isinstance(cost_in_usd_ticks, int) or isinstance(cost_in_usd_ticks, bool):
+        return None
+    if cost_in_usd_ticks < 0:
+        return None
+    return cost_in_usd_ticks / USD_TICKS_PER_DOLLAR
+
 
 class XAIModelInfo(BaseLLMModelInfo):
     def get_provider_info(
         self,
         model: str,
-    ) -> Optional[ProviderSpecificModelInfo]:
+    ) -> ProviderSpecificModelInfo | None:
         """
         Default values all models of this provider support.
         """
@@ -25,11 +41,11 @@ class XAIModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -41,14 +57,14 @@ class XAIModelInfo(BaseLLMModelInfo):
         return headers
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or get_secret_str("XAI_API_BASE") or "https://api.x.ai"
 
     @staticmethod
     def get_api_key(
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         legacy_generic_before_env: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve xAI API keys while preserving endpoint-specific legacy order.
 
@@ -64,17 +80,17 @@ class XAIModelInfo(BaseLLMModelInfo):
         return api_key or litellm.xai_key or get_secret_str("XAI_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model.replace("xai/", "")
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:
             raise ValueError(
                 "XAI API base or key is not set. Set XAI_API_BASE and provide an xAI API key via api_key, litellm.xai_key, or XAI_API_KEY."
             )
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -86,11 +102,11 @@ class XAIModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from XAI. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models = response.json()["data"]
+        models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
-        litellm_model_names = []
+        litellm_model_names: Final = []
         for model in models:
-            stripped_model_name = model["id"]
+            stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
             litellm_model_name = "xai/" + stripped_model_name
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names

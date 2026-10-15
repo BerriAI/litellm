@@ -1,8 +1,11 @@
 import functools
 import json
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -10,14 +13,50 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
+STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerToken(TypedDict, total=False):
+    text: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerChunkData(TypedDict, total=False):
+    token: ReadOnly[_SageMakerToken | None]
+    index: ReadOnly[int | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerMessagesChunkData(TypedDict, total=False):
+    choices: ReadOnly[Required[list[Mapping[str, object]]]]
+
+
+class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _SageMakerMessagesChunkDataRoot(RootModel[_SageMakerMessagesChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _parse_sagemaker_chunk_data(data: str) -> _SageMakerChunkData:
+    return _SageMakerChunkDataRoot.model_validate(json.loads(data)).root
+
+
+def _parse_sagemaker_messages_chunk_data(data: str) -> _SageMakerMessagesChunkData:
+    return _SageMakerMessagesChunkDataRoot.model_validate(json.loads(data)).root
+
 
 def _load_sagemaker_response_stream_shape():
     try:
         from botocore.loaders import Loader
         from botocore.model import ServiceModel
 
-        loader = Loader()
-        service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
+        loader: Final = Loader()
+        service_dict: Final = STR_KEYED_MAPPING.validate_python(
+            loader.load_service_model("sagemaker-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
@@ -39,38 +78,70 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
+def with_inference_component_hint(error_message: str) -> str:
+    if "Inference Component Name header is required" in error_message:
+        return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
+    if "Inference Component Name header is not allowed" in error_message:
+        return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
+    return error_message
+
+
+class _ClientErrorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    message: str | None = Field(default=None, alias="Message")
+
+
+class _ClientErrorMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    http_status_code: int = Field(default=500, alias="HTTPStatusCode")
+
+
+class _ClientErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
+    response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
+
+
+def client_error_details(error: Exception) -> tuple[int, str]:
+    try:
+        response: Final = _ClientErrorResponse.model_validate(getattr(error, "response", None))
+    except ValidationError:
+        return 500, str(error)
+    return response.response_metadata.http_status_code, response.error.message or str(error)
+
+
 class SagemakerError(BaseLLMException):
     def __init__(
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 class AWSEventStreamDecoder:
-    def __init__(self, model: str, is_messages_api: Optional[bool] = None) -> None:
+    def __init__(self, model: str, is_messages_api: bool | None = None) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
         self.parser = EventStreamJSONParser()
-        self.content_blocks: List = []
+        self.content_blocks: list = []
         self.is_messages_api = is_messages_api
 
-    def _chunk_parser_messages_api(self, chunk_data: dict) -> StreamingChatCompletionChunk:
-        openai_chunk = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
+    def _chunk_parser_messages_api(self, chunk_data: _SageMakerMessagesChunkData) -> StreamingChatCompletionChunk:
+        openai_chunk: Final = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
 
         return openai_chunk
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(self, chunk_data: _SageMakerChunkData) -> GChunk:
         verbose_logger.debug("in sagemaker chunk parser, chunk_data %s", chunk_data)
-        _token = chunk_data.get("token", {}) or {}
-        _index = chunk_data.get("index", None) or 0
-        is_finished = False
-        finish_reason = ""
+        _token: Final = chunk_data.get("token", {}) or {}
+        _index: Final = chunk_data.get("index", None) or 0
+        is_finished: Final = False
+        finish_reason: Final = ""
 
-        _text = _token.get("text", "")
+        _text: Final = _token.get("text", "")
         if _text == "<|endoftext|>":
             return GChunk(
                 text="",
@@ -88,11 +159,11 @@ class AWSEventStreamDecoder:
             usage=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         accumulated_json = ""
 
         for chunk in iterator:
@@ -101,7 +172,7 @@ class AWSEventStreamDecoder:
                 message = self._parse_message_from_event(event)
                 if message:
                     # remove data: prefix and "\n\n" at the end
-                    message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
+                    message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
                     message = message.replace("\n\n", "")
 
                     # Accumulate JSON data
@@ -109,11 +180,12 @@ class AWSEventStreamDecoder:
 
                     # Try to parse the accumulated JSON
                     try:
-                        _data = json.loads(accumulated_json)
                         if self.is_messages_api:
-                            yield self._chunk_parser_messages_api(chunk_data=_data)
+                            yield self._chunk_parser_messages_api(
+                                chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                            )
                         else:
-                            yield self._chunk_parser(chunk_data=_data)
+                            yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
                         # Reset accumulated_json after successful parsing
                         accumulated_json = ""
                     except json.JSONDecodeError:
@@ -123,23 +195,24 @@ class AWSEventStreamDecoder:
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
-                _data = json.loads(accumulated_json)
                 if self.is_messages_api:
-                    yield self._chunk_parser_messages_api(chunk_data=_data)
+                    yield self._chunk_parser_messages_api(
+                        chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                    )
                 else:
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
+                verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
                 yield None
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
+    ) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         accumulated_json = ""
 
         async for chunk in iterator:
@@ -150,47 +223,49 @@ class AWSEventStreamDecoder:
                     if message:
                         verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
                         # remove data: prefix and "\n\n" at the end
-                        message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
+                        message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
                         message = message.replace("\n\n", "")
 
                         # Accumulate JSON data
                         accumulated_json += message
 
                         # Try to parse the accumulated JSON
-                        _data = json.loads(accumulated_json)
                         if self.is_messages_api:
-                            yield self._chunk_parser_messages_api(chunk_data=_data)
+                            yield self._chunk_parser_messages_api(
+                                chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                            )
                         else:
-                            yield self._chunk_parser(chunk_data=_data)
+                            yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
                         # Reset accumulated_json after successful parsing
                         accumulated_json = ""
                 except json.JSONDecodeError:
                     # If it's not valid JSON yet, continue to the next event
                     continue
                 except UnicodeDecodeError as e:
-                    verbose_logger.warning(f"UnicodeDecodeError: {e}. Attempting to combine with next event.")
+                    verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
                     continue
                 except Exception as e:
-                    verbose_logger.error(f"Error parsing message: {e}. Attempting to combine with next event.")
+                    verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
                     continue
 
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
-                _data = json.loads(accumulated_json)
                 if self.is_messages_api:
-                    yield self._chunk_parser_messages_api(chunk_data=_data)
+                    yield self._chunk_parser_messages_api(
+                        chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                    )
                 else:
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
+                verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
                 yield None
             except Exception as e:
-                verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
+                verbose_logger.error("Final error parsing accumulated JSON: %s", e)
 
-    def _parse_message_from_event(self, event) -> Optional[str]:
-        response_stream_shape = get_sagemaker_response_stream_shape()
+    def _parse_message_from_event(self, event) -> str | None:
+        response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(
                 status_code=500,
@@ -199,8 +274,8 @@ class AWSEventStreamDecoder:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, response_stream_shape)
+        response_dict: Final = event.to_response_dict()
+        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
@@ -209,10 +284,10 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()

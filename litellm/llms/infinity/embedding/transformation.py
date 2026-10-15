@@ -1,6 +1,8 @@
-from typing import List, Optional, Union
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -10,6 +12,9 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import InfinityError
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
 
 
 class InfinityEmbeddingConfig(BaseEmbeddingConfig):
@@ -22,12 +27,12 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity embeddings")
@@ -41,16 +46,16 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY")
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -109,13 +114,13 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise InfinityError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -124,14 +129,13 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
-            prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
-            total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
+        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        usage: Final = Usage(
+            prompt_tokens=_INT.validate_python(usage_payload.get("prompt_tokens", 0) or 0),
+            total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),
         )
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return InfinityError(message=error_message, status_code=status_code, headers=headers)

@@ -156,4 +156,12 @@ describe("SidebarUsageCard", () => {
     await user.click(rail);
     expect(onExpandRail).toHaveBeenCalledOnce();
   });
+
+  it("keeps the collapsed rail tinted on hover instead of the outline variant's foreground", async () => {
+    renderWithClient(<SidebarUsageCard accessToken="token" collapsed onExpandRail={vi.fn()} />);
+
+    const rail = await screen.findByTitle("Enterprise usage");
+    expect(rail).toHaveClass("hover:text-sidebar-primary/80");
+    expect(rail).not.toHaveClass("hover:text-foreground");
+  });
 });

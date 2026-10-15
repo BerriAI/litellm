@@ -1,4 +1,4 @@
-import { useSearchParams } from "next/navigation";
+import { parseAsString, useQueryState, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
 export interface ModelDetailRouting {
@@ -9,43 +9,53 @@ export interface ModelDetailRouting {
   close: () => void;
 }
 
-function navigateWithParams(mutate: (params: URLSearchParams) => void): void {
-  const params = new URLSearchParams(window.location.search);
-  mutate(params);
-  const qs = params.toString();
-  const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  window.history.pushState(null, "", url);
-}
-
 export function useModelDetailRouting(): ModelDetailRouting {
-  const searchParams = useSearchParams();
+  const [{ model, team }, setParams] = useQueryStates(
+    { model: parseAsString, team: parseAsString },
+    { history: "push" },
+  );
 
-  const openModel = useCallback((id: string) => {
-    navigateWithParams((params) => {
-      params.delete("team");
-      params.set("model", id);
-    });
-  }, []);
+  const openModel = useCallback(
+    (id: string) => {
+      void setParams({ model: id, team: null });
+    },
+    [setParams],
+  );
 
-  const openTeam = useCallback((id: string) => {
-    navigateWithParams((params) => {
-      params.delete("model");
-      params.set("team", id);
-    });
-  }, []);
+  const openTeam = useCallback(
+    (id: string) => {
+      void setParams({ model: null, team: id });
+    },
+    [setParams],
+  );
 
   const close = useCallback(() => {
-    navigateWithParams((params) => {
-      params.delete("model");
-      params.delete("team");
-    });
-  }, []);
+    void setParams({ model: null, team: null });
+  }, [setParams]);
 
   return {
-    modelId: searchParams?.get("model") ?? null,
-    teamId: searchParams?.get("team") ?? null,
+    modelId: model,
+    teamId: team,
     openModel,
     openTeam,
     close,
   };
+}
+
+export interface ModelGroupFilterRouting {
+  modelGroup: string | null;
+  setModelGroup: (modelGroup: string | null) => void;
+}
+
+export function useModelGroupFilterRouting(): ModelGroupFilterRouting {
+  const [modelGroup, setParam] = useQueryState("model_group", parseAsString);
+
+  const setModelGroup = useCallback(
+    (next: string | null) => {
+      void setParam(next);
+    },
+    [setParam],
+  );
+
+  return { modelGroup, setModelGroup };
 }

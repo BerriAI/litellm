@@ -5,16 +5,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { transformRequestCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface TransformRequestPanelProps {
   accessToken: string | null;
-}
-
-interface TransformResponse {
-  raw_request_api_base: string;
-  raw_request_body: Record<string, any>;
-  raw_request_headers: Record<string, string>;
 }
 
 const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessToken }) => {
@@ -75,7 +69,7 @@ ${formattedBody}
       try {
         requestBody = JSON.parse(originalRequestJSON);
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in request body");
+        toast.fromError("Invalid JSON in request body");
         setIsLoading(false);
         return;
       }
@@ -88,7 +82,7 @@ ${formattedBody}
 
       // Make the API call using fetch
       if (!accessToken) {
-        NotificationsManager.fromBackend("No access token found");
+        toast.fromError("No access token found");
         setIsLoading(false);
         return;
       }
@@ -106,17 +100,17 @@ ${formattedBody}
 
         // Update state with the formatted curl command
         setTransformedResponse(formattedCurl);
-        NotificationsManager.success("Request transformed successfully");
+        toast.success("Request transformed successfully");
       } else {
         // Handle the case where the API returns a different format
         // Try to extract the parts from a string response if needed
         const rawText = typeof data === "string" ? data : JSON.stringify(data);
         setTransformedResponse(rawText);
-        NotificationsManager.info("Transformed request received in unexpected format");
+        toast.info("Transformed request received in unexpected format");
       }
     } catch (err) {
       console.error("Error transforming request:", err);
-      NotificationsManager.fromBackend("Failed to transform request");
+      toast.fromError("Failed to transform request");
     } finally {
       setIsLoading(false);
     }
@@ -197,7 +191,7 @@ ${formattedBody}
                 className="absolute top-2 right-2"
                 onClick={() => {
                   navigator.clipboard.writeText(transformedResponse || "");
-                  NotificationsManager.success("Copied to clipboard");
+                  toast.success("Copied to clipboard");
                 }}
               >
                 <Copy />

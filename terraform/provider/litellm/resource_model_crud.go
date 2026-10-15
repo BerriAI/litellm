@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ func retryModelRead(d *schema.ResourceData, m interface{}, maxRetries int) error
 const (
 	endpointModelNew    = "/model/new"
 	endpointModelUpdate = "/model/update"
+	endpointModelPatch  = "/model/%s/update"
 	endpointModelInfo   = "/model/info"
 	endpointModelDelete = "/model/delete"
 )
@@ -67,6 +69,14 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	customLLMProvider := d.Get("custom_llm_provider").(string)
 	baseModel := d.Get("base_model").(string)
 	modelName := fmt.Sprintf("%s/%s", customLLMProvider, baseModel)
+
+	// Pricing base_model, decoupled from routing. When pricing_base_model is
+	// set it feeds model_info.base_model (the cost-lookup key) WITHOUT changing
+	// the routing string above; otherwise base_model drives pricing as before.
+	pricingBaseModel := baseModel
+	if v, ok := d.GetOk("pricing_base_model"); ok && v.(string) != "" {
+		pricingBaseModel = v.(string)
+	}
 
 	// Generate a UUID for new models
 	modelID := d.Id()
@@ -238,12 +248,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
 		ModelInfo: ModelInfo{
-			ID:        modelID,
-			DBModel:   true,
-			BaseModel: baseModel,
-			Tier:      d.Get("tier").(string),
-			Mode:      d.Get("mode").(string),
-			TeamID:    d.Get("team_id").(string),
+			ID:          modelID,
+			DBModel:     true,
+			BaseModel:   pricingBaseModel,
+			Tier:        d.Get("tier").(string),
+			Mode:        d.Get("mode").(string),
+			TeamID:      d.Get("team_id").(string),
+			DisplayName: d.Get("display_name").(string),
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -267,11 +278,30 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
+	if isUpdate && d.HasChange("display_name") {
+		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
+			return fmt.Errorf("failed to update model display_name: %w", err)
+		}
+	}
+
 	d.SetId(modelID)
 
 	log.Printf("[INFO] Model created with ID %s. Starting retry mechanism to read the model...", modelID)
 	// Read back the resource with retries to ensure the state is consistent
 	return retryModelRead(d, m, 5)
+}
+
+// /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
+func patchModelDisplayName(client *Client, modelID, displayName string) error {
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
+		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = handleAPIResponse(resp, nil, client)
+	return err
 }
 
 func resourceLiteLLMModelCreate(d *schema.ResourceData, m interface{}) error {
@@ -306,10 +336,20 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("rpm", GetIntValue(modelResp.LiteLLMParams.RPM, d.Get("rpm").(int)))
 	d.Set("model_api_base", GetStringValue(modelResp.LiteLLMParams.APIBase, d.Get("model_api_base").(string)))
 	d.Set("api_version", GetStringValue(modelResp.LiteLLMParams.APIVersion, d.Get("api_version").(string)))
-	d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
+	// base_model / pricing_base_model read-back. When pricing_base_model is
+	// configured, model_info.base_model holds the PRICING key, so recover the
+	// routing base_model from state (not returned by the API) and read
+	// pricing_base_model from model_info.
+	if pbm, ok := d.GetOk("pricing_base_model"); ok && pbm.(string) != "" {
+		d.Set("base_model", d.Get("base_model").(string))
+		d.Set("pricing_base_model", GetStringValue(modelResp.ModelInfo.BaseModel, pbm.(string)))
+	} else {
+		d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
+	}
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
+	d.Set("display_name", modelResp.ModelInfo.DisplayName)
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))

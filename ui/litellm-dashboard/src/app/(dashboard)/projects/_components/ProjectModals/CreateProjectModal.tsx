@@ -1,74 +1,77 @@
-import { Modal, Form, Button, Typography } from "antd";
-import { FolderAddOutlined } from "@ant-design/icons";
-import MessageManager from "@/components/molecules/message_manager";
+"use client";
+
+import { useState } from "react";
+import { FolderPlus } from "lucide-react";
+
+import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useCreateProject, ProjectCreateParams } from "@/app/(dashboard)/hooks/projects/useCreateProject";
-import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
-import { buildProjectApiParams } from "./projectFormUtils";
+import { ProjectBaseForm } from "./ProjectBaseForm";
+import { emptyProjectFormValues, projectFormSchema } from "./projectFormSchema";
+import { buildProjectCreateParams } from "./projectFormUtils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface CreateProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
-  const [form] = Form.useForm<ProjectFormValues>();
+function CreateProjectForm({ onClose }: { onClose: () => void }) {
+  const form = useZodForm(projectFormSchema, { defaultValues: emptyProjectFormValues });
   const createMutation = useCreateProject();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      const params: ProjectCreateParams = {
-        ...buildProjectApiParams(values),
-        team_id: values.team_id,
-      };
+  const handleSubmit = form.handleSubmit((values) => {
+    const params: ProjectCreateParams = {
+      ...buildProjectCreateParams(values),
+      team_id: values.team_id,
+    };
 
-      createMutation.mutate(params, {
-        onSuccess: () => {
-          MessageManager.success("Project created successfully");
-          form.resetFields();
-          onClose();
-        },
-        onError: (error) => {
-          MessageManager.error(error.message || "Failed to create project");
-        },
-      });
-    } catch (error) {
-      console.error("Validation failed:", error);
-    }
-  };
+    createMutation.mutate(params, {
+      onSuccess: () => {
+        toast.success("Project created successfully");
+        form.reset(emptyProjectFormValues);
+        onClose();
+      },
+      onError: (error) => {
+        toast.error(error.message || "Failed to create project");
+      },
+    });
+  });
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(emptyProjectFormValues);
     onClose();
   };
 
   return (
-    <Modal
-      title={
-        <Typography.Text strong style={{ fontSize: 18 }}>
-          Create New Project
-        </Typography.Text>
-      }
-      open={isOpen}
-      onCancel={handleCancel}
-      width={720}
-      destroyOnHidden
-      footer={[
-        <Button key="cancel" onClick={handleCancel}>
+    <form onSubmit={(event) => event.preventDefault()}>
+      <ProjectBaseForm form={form} advancedOpen={advancedOpen} onAdvancedOpenChange={setAdvancedOpen} />
+
+      <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
+        <Button type="button" variant="outline" onClick={handleCancel}>
           Cancel
-        </Button>,
-        <Button
-          key="submit"
-          type="primary"
-          icon={<FolderAddOutlined />}
-          loading={createMutation.isPending}
-          onClick={handleSubmit}
-        >
+        </Button>
+        <Button type="button" onClick={() => void handleSubmit()} disabled={createMutation.isPending}>
+          {createMutation.isPending ? <UiLoadingSpinner /> : <FolderPlus />}
           Create Project
-        </Button>,
-      ]}
-    >
-      <ProjectBaseForm form={form} />
-    </Modal>
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg">Create New Project</DialogTitle>
+        </DialogHeader>
+        <CreateProjectForm onClose={onClose} />
+      </DialogContent>
+    </Dialog>
   );
 }

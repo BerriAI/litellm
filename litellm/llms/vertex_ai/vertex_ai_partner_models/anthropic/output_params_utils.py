@@ -10,10 +10,15 @@ import; extracting the helper into a leaf module resolves the warning and
 keeps the parent module's import surface narrow.
 """
 
+from collections.abc import Mapping
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
+
 # Keys inside ``output_config`` that Vertex AI Claude rejects regardless of
 # the target model. Add an entry only when a 400 "Extra inputs are not
 # permitted" is reproducible against the live Vertex endpoint for every model.
-VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset()
+VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: Final[frozenset] = frozenset()
 
 
 def _model_accepts_output_config_effort(model: str) -> bool:
@@ -26,7 +31,25 @@ def _model_accepts_output_config_effort(model: str) -> bool:
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    return AnthropicConfig._model_supports_effort_param(model, "vertex_ai")
+    return AnthropicConfig.model_supports_effort_param(model, "vertex_ai")
+
+
+_OUTPUT_CONFIG: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_output_config(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OUTPUT_CONFIG.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _fold_output_format_into_output_config(
+    output_config: Mapping[str, object] | None, output_format: object
+) -> Mapping[str, object] | None:
+    if output_format is None:
+        return output_config
+    return {**(output_config or {}), "format": output_format}
 
 
 def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
@@ -42,18 +65,21 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
       * Keys in ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS`` are always filtered.
       * ``output_config`` left empty after filtering is removed so the request
         body has no empty dict.
-      * ``output_format`` is forwarded as-is (Vertex AI Claude accepts it).
+      * ``output_format`` is moved into ``output_config.format``, because
+        Vertex AI Claude rejects the top-level field as deprecated. When both
+        are set, ``output_format`` wins, as it does in the Anthropic adapter.
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
-    output_config = data.get("output_config")
+    request: Final[dict[str, object]] = data  # mutable-ok: the caller's request body is sanitized in place
+    output_config: Final = _fold_output_format_into_output_config(
+        _as_output_config(request.get("output_config")), request.pop("output_format", None)
+    )
     if output_config is None:
-        return
-    if not isinstance(output_config, dict):
-        data.pop("output_config", None)
+        request.pop("output_config", None)
         return
 
-    drop_keys = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
+    drop_keys: Final = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
     if "effort" in output_config and not _model_accepts_output_config_effort(model):
         from litellm._logging import verbose_logger
 
@@ -64,8 +90,8 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
         )
         drop_keys.add("effort")
 
-    sanitized = {k: v for k, v in output_config.items() if k not in drop_keys}
+    sanitized: Final = {k: v for k, v in output_config.items() if k not in drop_keys}
     if sanitized:
-        data["output_config"] = sanitized
+        request["output_config"] = sanitized
     else:
-        data.pop("output_config", None)
+        request.pop("output_config", None)

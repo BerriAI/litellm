@@ -11,12 +11,15 @@ here because only this suite uses them.
 
 from __future__ import annotations
 
+import time
 import warnings
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import NoBody, Result, get_external, is_ok
+from e2e_config import settle_propagation
+from e2e_http import NoBody, Result, Success, get_external, is_ok
+from e2e_metadata import STEP_FRAMES, step
 from proxy_client import ProxyClient
 
 
@@ -85,7 +88,7 @@ class A2ABridgeParams(BaseModel):
 
     custom_llm_provider: str
     model: str
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class AgentRegisterBody(BaseModel):
@@ -289,14 +292,54 @@ class A2AResponse(BaseModel):
 class A2AClient:
     proxy: ProxyClient
 
+    @step("Register the A2A agent {body.agent_name} through /v1/agents")
     def register_agent(self, body: AgentRegisterBody) -> Result[AgentResponse]:
-        return self.proxy.transport.post(
+        """Register an agent and, on success, wait until the data plane serves it.
+
+        /v1/agents is a control-plane route; the /a2a/{agent_id} routes that serve
+        the card and run message/send are data plane, and only see the agent after
+        the next DB reload. A card read or message/send issued the instant this
+        returns can therefore 404 on the agent it just created. Waiting here keeps
+        every caller from having to poll, the same way ProxyClient.create_model
+        waits for a new model to become servable -- including the settle that
+        covers the other replicas, since one successful card read only proves the
+        replica that answered it has the agent.
+        """
+        result = self.proxy.transport.post(
             "/v1/agents",
             headers=self.proxy.transport.master,
             json=body,
             response_type=AgentResponse,
         )
+        if isinstance(result, Success):
+            written_at = time.monotonic()
+            self._await_agent_servable(result.data.agent_id)
+            settle_propagation(written_at)
+        return result
 
+    def _await_agent_servable(self, agent_id: str) -> None:
+        """Block until the data plane serves `agent_id`'s card, or fail loudly at
+        poll_timeout (a real propagation problem, surfaced here rather than as a
+        downstream 404 on whichever /a2a call the test happened to make first)."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.proxy.transport.get(
+                f"/a2a/{agent_id}/.well-known/agent-card.json",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=ServedAgentCard,
+            )
+            if isinstance(result, Success):
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"agent {agent_id!r} was registered but never became servable on the "
+                    f"data plane within {self.proxy.poll_timeout}s of POST /v1/agents "
+                    f"(control/data-plane propagation issue); last card read: {result}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
+    @step("Read the A2A agent back from /v1/agents/{{agent_id}}")
     def get_agent(self, agent_id: str) -> Result[AgentResponse]:
         return self.proxy.transport.get(
             f"/v1/agents/{agent_id}",
@@ -305,6 +348,7 @@ class A2AClient:
             response_type=AgentResponse,
         )
 
+    @step("Delete the A2A agent")
     def delete_agent(self, agent_id: str) -> None:
         result = self.proxy.transport.delete(
             f"/v1/agents/{agent_id}",
@@ -313,8 +357,9 @@ class A2AClient:
             response_type=NoBody,
         )
         if not is_ok(result):
-            warnings.warn(f"delete_agent({agent_id!r}) failed: {result}", stacklevel=2)
+            warnings.warn(f"delete_agent({agent_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
+    @step("Read the A2A agent's card from /a2a/{{agent_id}}/.well-known/agent-card.json with the given key")
     def agent_card(self, agent_id: str, key: str) -> Result[ServedAgentCard]:
         return self.proxy.transport.get(
             f"/a2a/{agent_id}/.well-known/agent-card.json",
@@ -323,6 +368,7 @@ class A2AClient:
             response_type=ServedAgentCard,
         )
 
+    @step("Send an A2A message to /a2a/{{agent_id}} with {body.params.message.parts}")
     def send_message(self, agent_id: str, key: str, body: A2AJsonRpcRequest) -> Result[A2AResponse]:
         return self.proxy.transport.post(
             f"/a2a/{agent_id}",
@@ -336,6 +382,7 @@ def build_a2a_client(proxy: ProxyClient) -> A2AClient:
     return A2AClient(proxy=proxy)
 
 
+@step("Fetch a published A2A agent card from its /.well-known endpoint")
 def fetch_agent_card(url: str, *, timeout: float = 20.0) -> Result[UpstreamAgentCard]:
     """Fetch a live A2A agent card from its /.well-known endpoint and parse it into the
     registration model, so a test can register a real published card verbatim rather
