@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 use litellm_auth_types::{Error, ErrorDetail, InputSource, SecretValue, Sourced};
 use serde_json::{Map, Value};
@@ -80,9 +80,10 @@ pub fn get_vertex_ai_project_from_credentials(
         CredentialSource::Inline(configured) => configured.expose().to_string(),
         CredentialSource::Trusted(configured) => {
             let configured = configured.expose();
-            match std::fs::read_to_string(configured) {
-                Ok(contents) if Path::new(configured).is_file() => contents,
-                _ => configured.to_string(),
+            if is_inline_json(configured) {
+                configured.to_string()
+            } else {
+                std::fs::read_to_string(configured).ok()?
             }
         }
         CredentialSource::ApplicationCredentials(path) => std::fs::read_to_string(path).ok()?,
@@ -103,6 +104,14 @@ pub fn get_vertex_ai_location(
         .location()
         .map(str::to_string)
         .or_else(|| VertexParams::LOCATION.resolve(&|_| None, env_lookup))
+}
+
+const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
+
+pub(crate) fn is_inline_json(configured: &str) -> bool {
+    configured
+        .trim_start_matches(INLINE_JSON_LEADING_NOISE)
+        .starts_with('{')
 }
 
 #[derive(Clone, Debug)]

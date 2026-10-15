@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import pathlib
 from typing import Final
 from unittest.mock import MagicMock, call, patch
 
@@ -2198,6 +2199,11 @@ class TestVertexBase:
             assert not mock_get_lock.called, "Fast path should not acquire lock"
 
 
+_ENCODED_VERTEX_KEY: Final = base64.b64encode(
+    json.dumps({"type": "service_account", "private_key_id": "kid-123", "private_key": "MIIEvQIBADA???>>>"}).encode()
+).decode()
+
+
 class TestVertexCredentialsSource:
     """A `vertex_credentials` path that cannot be read must not be reported as malformed JSON.
 
@@ -2207,45 +2213,99 @@ class TestVertexCredentialsSource:
     JSONDecodeError blaming the key material.
     """
 
-    def test_missing_credentials_file_names_the_read_failure(self, tmp_path, caplog):
+    FILE_FAILURE: Final = "Unable to load the vertex credentials file"
+
+    def test_missing_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
         missing = tmp_path / "vertexai.json"
 
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            with pytest.raises(ValueError, match="No such file or directory") as exc_info:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
                 VertexBase().load_auth(credentials=str(missing), project_id="p")
 
         message = str(exc_info.value)
         assert "not valid JSON" not in message
         assert str(missing) not in message
-        assert str(missing) in caplog.text
+        assert repr(str(missing)) in caplog.text
+        assert "No such file or directory" in caplog.text
 
-    def test_unreadable_credentials_file_names_the_read_failure(self, tmp_path, caplog):
+    def test_unreadable_credentials_file_names_the_read_failure_in_the_log(self, tmp_path, caplog):
         # Present but not openable as a file, the same shape as a path on a mount
         # that has stopped serving reads.
         unreadable = tmp_path / "vertexai.json"
         unreadable.mkdir()
 
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
                 VertexBase().load_auth(credentials=str(unreadable), project_id="p")
 
-        message = str(exc_info.value)
-        assert "not valid JSON" not in message
-        assert str(unreadable) not in message
-        assert str(unreadable) in caplog.text
+        assert str(unreadable) not in str(exc_info.value)
+        assert repr(str(unreadable)) in caplog.text
+        assert "Is a directory" in caplog.text
+        assert "not valid JSON" not in caplog.text
 
-    def test_malformed_credentials_file_keeps_the_private_key_hint(self, tmp_path, caplog):
+    def test_malformed_credentials_file_logs_the_private_key_hint(self, tmp_path, caplog):
         malformed = tmp_path / "vertexai.json"
         malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
 
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
                 VertexBase().load_auth(credentials=str(malformed), project_id="p")
 
-        message = str(exc_info.value)
-        assert "private_key" in message
-        assert str(malformed) not in message
-        assert str(malformed) in caplog.text
+        assert str(malformed) not in str(exc_info.value)
+        assert repr(str(malformed)) in caplog.text
+        assert "is not valid JSON" in caplog.text
+        assert "private_key" in caplog.text
+
+    def test_every_file_failure_gives_the_caller_the_same_message(self, tmp_path):
+        """Callers allowed to send `vertex_credentials` must not learn what is on the proxy's disk."""
+        directory = tmp_path / "directory.json"
+        directory.mkdir()
+        malformed = tmp_path / "malformed.json"
+        malformed.write_text("{not json")
+        not_an_object = tmp_path / "list.json"
+        not_an_object.write_text("[1, 2]")
+        paths = (tmp_path / "missing.json", directory, malformed, not_an_object)
+
+        def message_for(path: pathlib.Path) -> str:
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(path), project_id="p")
+            return str(exc_info.value)
+
+        assert {message_for(path) for path in paths} == {
+            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason. "
+            "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
+        }
+
+    def test_a_credentials_file_holding_json_that_is_not_an_object_says_so_in_the_log(self, tmp_path, caplog):
+        double_encoded = tmp_path / "vertexai.json"
+        double_encoded.write_text(json.dumps(json.dumps({"type": "service_account"})))
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(double_encoded), project_id="p")
+
+        assert "is JSON but not a JSON object" in caplog.text
+        assert "not valid JSON" not in caplog.text
+
+    def test_a_path_with_a_newline_cannot_forge_a_log_line(self, tmp_path, caplog):
+        forged = str(tmp_path / "vertexai.json") + "\nLiteLLM:ERROR: forged entry"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=forged, project_id="p")
+
+        assert "\nLiteLLM:ERROR: forged entry" not in caplog.text
+        assert "\\nLiteLLM:ERROR: forged entry" in caplog.text
+
+    def test_a_value_too_long_to_be_a_path_is_logged_by_length_only(self, caplog):
+        not_a_path = "not a path, " * 25
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=not_a_path, project_id="p")
+
+        assert "not a path, not a path" not in caplog.text
+        assert f"{len(not_a_path)}-character value" in caplog.text
 
     def test_malformed_inline_credentials_do_not_echo_the_credential(self):
         inline = (
@@ -2258,13 +2318,15 @@ class TestVertexCredentialsSource:
         ) as exc_info:
             VertexBase().load_auth(credentials=inline, project_id="p")
 
-        assert "MIIEvQIBADA" not in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "unescaped newlines in private_key" in message
 
     def test_a_credential_misconfigured_as_a_path_is_not_echoed(self):
         """A value that is neither a path nor JSON must not come back in the message."""
         pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
 
-        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
+        with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
             VertexBase().load_auth(credentials=pem, project_id="p")
 
         message = str(exc_info.value)
@@ -2312,18 +2374,19 @@ class TestVertexCredentialsSource:
         pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
 
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            with pytest.raises(ValueError, match="Unable to read the vertex credentials file"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
                 VertexBase().load_auth(credentials=pem, project_id="p")
 
         assert "MIIEvQIBADA" not in caplog.text
         assert "REDACTED" in caplog.text
 
-    def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self):
+    def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self, caplog):
         """open() rejects some paths with a bare ValueError before any filesystem call."""
-        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
-            VertexBase().load_auth(credentials="creds" + chr(0) + ".json", project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="creds" + chr(0) + ".json", project_id="p")
 
-        assert "embedded null" in str(exc_info.value)
+        assert "embedded null" in caplog.text
 
     def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path, monkeypatch):
         """Shape dispatch must not strand a real file that happens to be named like JSON.
@@ -2348,28 +2411,47 @@ class TestVertexCredentialsSource:
         assert project_id == "from-braced-file"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
 
-    def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, caplog):
-        encoded = base64.b64encode(
-            json.dumps({"type": "service_account", "private_key_id": "kid-123", "private_key": "MIIEvQIBADA"}).encode()
-        ).decode()
-
+    @pytest.mark.parametrize(
+        "encoded",
+        [
+            pytest.param(_ENCODED_VERTEX_KEY, id="padded"),
+            pytest.param(_ENCODED_VERTEX_KEY.rstrip("="), id="unpadded"),
+            pytest.param('"' + _ENCODED_VERTEX_KEY + '"', id="quoted"),
+            pytest.param("base64:" + _ENCODED_VERTEX_KEY, id="prefixed"),
+            pytest.param(_ENCODED_VERTEX_KEY.replace("+", "-").replace("/", "_"), id="urlsafe"),
+            pytest.param("\n".join(_ENCODED_VERTEX_KEY[i : i + 64] for i in range(0, len(_ENCODED_VERTEX_KEY), 64)), id="wrapped"),
+        ],
+    )
+    def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, encoded, caplog):
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
             with pytest.raises(ValueError, match="is base64-encoded JSON") as exc_info:
                 VertexBase().load_auth(credentials=encoded, project_id="p")
 
-        assert encoded not in str(exc_info.value)
-        assert encoded[8:40] not in caplog.text
+        assert _ENCODED_VERTEX_KEY[8:40] not in str(exc_info.value)
+        assert _ENCODED_VERTEX_KEY[8:40] not in caplog.text
 
     @pytest.mark.parametrize(
-        "wrapped",
+        ("wrapped", "expected"),
         [
-            pytest.param(json.dumps(json.dumps({"type": "service_account"})), id="double-encoded"),
-            pytest.param("'" + json.dumps({"type": "service_account"}) + "'", id="single-quoted"),
-            pytest.param("\ufeff" + json.dumps({"type": "service_account"}), id="byte-order-mark"),
+            pytest.param(
+                json.dumps(json.dumps({"type": "service_account"})),
+                "The `vertex_credentials` value is JSON but not a JSON object, it may be quoted or encoded twice",
+                id="double-encoded",
+            ),
+            pytest.param(
+                "'" + json.dumps({"type": "service_account"}) + "'",
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="single-quoted",
+            ),
+            pytest.param(
+                "\ufeff" + json.dumps({"type": "service_account"}),
+                "is not valid JSON: .* Remove the quotes or byte-order mark before the opening",
+                id="byte-order-mark",
+            ),
         ],
     )
-    def test_wrapped_inline_json_is_reported_as_inline_not_as_a_file(self, wrapped):
-        with pytest.raises(ValueError, match="The inline `vertex_credentials` value is not valid JSON"):
+    def test_wrapped_inline_json_is_reported_as_inline_not_as_a_file(self, wrapped, expected):
+        with pytest.raises(ValueError, match=expected):
             VertexBase().load_auth(credentials=wrapped, project_id="p")
 
     @pytest.mark.parametrize("empty", ["", "  \n"])
@@ -2377,21 +2459,25 @@ class TestVertexCredentialsSource:
         with pytest.raises(ValueError, match="The `vertex_credentials` value is empty"):
             VertexBase().load_auth(credentials=empty, project_id="p")
 
-    def test_a_malformed_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch):
+    def test_a_malformed_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
         (tmp_path / "{vertex}.json").write_text('{"type": "service_account",')
         monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(ValueError, match="The vertex credentials file is not valid JSON"):
-            VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
 
-    def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path):
+        assert "'{vertex}.json' is not valid JSON" in caplog.text
+
+    def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path, caplog):
         not_text = tmp_path / "vertexai.json"
         not_text.write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
 
-        with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
-            VertexBase().load_auth(credentials=str(not_text), project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(not_text), project_id="p")
 
-        assert "UTF-8" in str(exc_info.value)
+        assert "is not UTF-8 text" in caplog.text
 
 
 def test_get_access_token_reraises_malformed_service_account_credentials_without_caching(caplog):

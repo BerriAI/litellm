@@ -25,12 +25,13 @@ class VertexCredentialsFileUnreadable:
 @dataclass(frozen=True, slots=True)
 class VertexCredentialsFileNotJson:
     path: str
-    detail: str
+    problem: str
 
 
 @dataclass(frozen=True, slots=True)
 class VertexCredentialsInlineNotJson:
     detail: str
+    hint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +40,13 @@ class VertexCredentialsUnusable:
 
 
 @dataclass(frozen=True, slots=True)
-class _NotAJsonObject:
+class _InvalidJson:
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonNotAnObject:
+    pass
 
 
 VertexCredentialsFailure: TypeAlias = (
@@ -53,17 +59,30 @@ VertexCredentialsSource: TypeAlias = VertexCredentialsJson | VertexCredentialsFa
 _VertexCredentialsFile: TypeAlias = (
     VertexCredentialsJson | VertexCredentialsFileUnreadable | VertexCredentialsFileNotJson
 )
+_ParsedJson: TypeAlias = Mapping[str, object] | _InvalidJson | _JsonNotAnObject
 
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _INLINE_JSON_LEADING_NOISE: Final = " \t\r\n﻿\"'"
+_BASE64_PREFIX: Final = "base64:"
+_MAX_LOGGED_PATH_LENGTH: Final = 260
+_NOT_A_JSON_OBJECT: Final = "is JSON but not a JSON object, it may be quoted or encoded twice"
+_PRIVATE_KEY_HINT: Final = "Check for unescaped newlines in private_key."
+_LEADING_NOISE_HINT: Final = "Remove the quotes or byte-order mark before the opening `{`."
+_FILE_FAILURE_MESSAGE: Final = (
+    "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason. "
+    "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
+)
 
 
-def _parse_json_object(raw: str) -> Mapping[str, object] | _NotAJsonObject:
+def _parse_json_object(raw: str | bytes) -> _ParsedJson:
     try:
         return _JSON_OBJECT_ADAPTER.validate_json(raw)
     except ValidationError as e:
-        return _NotAJsonObject("; ".join(detail["msg"] for detail in e.errors()))
+        errors: Final = e.errors()
+        if any(error["type"] == "json_invalid" for error in errors):
+            return _InvalidJson("; ".join(error["msg"] for error in errors))
+        return _JsonNotAnObject()
 
 
 def _read_json_file(path: str) -> _VertexCredentialsFile:
@@ -71,16 +90,20 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
         with open(path, encoding="utf-8") as f:
             contents: Final = f.read()
     except OSError as e:
-        return VertexCredentialsFileUnreadable(path, f"{e.strerror or e} ({type(e).__name__})")
+        return VertexCredentialsFileUnreadable(path, f"{e.strerror or 'OS error'} ({type(e).__name__})")
     except UnicodeDecodeError:
-        return VertexCredentialsFileNotJson(path, "file is not UTF-8 text")
+        return VertexCredentialsFileNotJson(path, "is not UTF-8 text")
     except ValueError as e:
         return VertexCredentialsFileUnreadable(path, f"{e} ({type(e).__name__})")
 
     parsed: Final = _parse_json_object(contents)
-    if isinstance(parsed, _NotAJsonObject):
-        return VertexCredentialsFileNotJson(path, parsed.detail)
-    return VertexCredentialsJson(parsed)
+    match parsed:
+        case _InvalidJson(detail=detail):
+            return VertexCredentialsFileNotJson(path, f"is not valid JSON: {detail}. {_PRIVATE_KEY_HINT}")
+        case _JsonNotAnObject():
+            return VertexCredentialsFileNotJson(path, _NOT_A_JSON_OBJECT)
+        case _:
+            return VertexCredentialsJson(parsed)
 
 
 def _is_inline_credentials_json(credentials: str) -> bool:
@@ -88,29 +111,33 @@ def _is_inline_credentials_json(credentials: str) -> bool:
 
 
 def _is_base64_encoded_json(credentials: str) -> bool:
+    encoded: Final = "".join(credentials.split()).strip("\"'").removeprefix(_BASE64_PREFIX)
+    standard_alphabet: Final = encoded.replace("-", "+").replace("_", "/")
     try:
-        decoded: Final = base64.b64decode("".join(credentials.split()), validate=True)
+        decoded: Final = base64.b64decode(standard_alphabet + "=" * (-len(encoded) % 4), validate=True)
     except ValueError:
         return False
-    return decoded.lstrip().startswith(b"{")
+    return isinstance(_parse_json_object(decoded), Mapping)
 
 
 def _load_inline_credentials(credentials: str) -> VertexCredentialsSource:
     inline: Final = _parse_json_object(credentials)
-    if not isinstance(inline, _NotAJsonObject):
+    if isinstance(inline, Mapping):
         return VertexCredentialsJson(inline)
 
     from_file_named_like_json: Final = _read_json_file(credentials)
-    if isinstance(from_file_named_like_json, VertexCredentialsFileUnreadable):
-        return VertexCredentialsInlineNotJson(inline.detail)
-    return from_file_named_like_json
+    if not isinstance(from_file_named_like_json, VertexCredentialsFileUnreadable):
+        return from_file_named_like_json
 
-
-def _load_credentials_file(credentials: str) -> VertexCredentialsSource:
-    from_file: Final = _read_json_file(credentials)
-    if isinstance(from_file, VertexCredentialsFileUnreadable) and _is_base64_encoded_json(credentials):
-        return VertexCredentialsUnusable("is base64-encoded JSON, not the JSON itself")
-    return from_file
+    match inline:
+        case _JsonNotAnObject():
+            return VertexCredentialsUnusable(_NOT_A_JSON_OBJECT)
+        case _InvalidJson(detail=detail) if credentials.lstrip().startswith("{"):
+            return VertexCredentialsInlineNotJson(detail, _PRIVATE_KEY_HINT)
+        case _InvalidJson(detail=detail):
+            return VertexCredentialsInlineNotJson(detail, _LEADING_NOISE_HINT)
+        case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
+            assert_never(inline)  # pragma: no cover
 
 
 def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
@@ -123,31 +150,30 @@ def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
     )
     if inline_first:
         return _load_inline_credentials(credentials)
-    return _load_credentials_file(credentials)
+    if _is_base64_encoded_json(credentials):
+        return VertexCredentialsUnusable("is base64-encoded JSON, not the JSON itself")
+    return _read_json_file(credentials)
+
+
+def _path_for_log(path: str) -> str:
+    if len(path) > _MAX_LOGGED_PATH_LENGTH:
+        return f"<a {len(path)}-character value>"
+    return repr(redact_string(path))
 
 
 def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoReturn:
     match failure:
         case VertexCredentialsFileUnreadable():
             verbose_logger.error(
-                "Vertex: cannot read the credentials file at %s: %s", redact_string(failure.path), failure.reason
+                "Vertex: cannot read the credentials file at %s: %s", _path_for_log(failure.path), failure.reason
             )
-            raise ValueError(
-                f"Unable to read the vertex credentials file: {failure.reason}. LiteLLM's log names the path. "
-                "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
-            )
+            raise ValueError(_FILE_FAILURE_MESSAGE)
         case VertexCredentialsFileNotJson():
-            verbose_logger.error(
-                "Vertex: credentials file at %s is not valid JSON: %s", redact_string(failure.path), failure.detail
-            )
-            raise ValueError(
-                f"The vertex credentials file is not valid JSON: {failure.detail}. LiteLLM's log names the path. "
-                "Check for unescaped newlines in private_key."
-            )
+            verbose_logger.error("Vertex: the credentials file at %s %s", _path_for_log(failure.path), failure.problem)
+            raise ValueError(_FILE_FAILURE_MESSAGE)
         case VertexCredentialsInlineNotJson():
             raise ValueError(
-                f"The inline `vertex_credentials` value is not valid JSON: {failure.detail}. "
-                "Check for unescaped newlines in private_key."
+                f"The inline `vertex_credentials` value is not valid JSON: {failure.detail}. {failure.hint}"
             )
         case VertexCredentialsUnusable():
             raise ValueError(

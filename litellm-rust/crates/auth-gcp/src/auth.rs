@@ -1,4 +1,4 @@
-use std::{future::Future, path::Path, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use litellm_auth_types::{CredentialPlacement, Error, ErrorDetail, http::apply_credential};
@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     config::{
-        CredentialSource, VertexConfig, credential_source, get_vertex_ai_project, non_empty_env,
+        CredentialSource, VertexConfig, credential_source, get_vertex_ai_project, is_inline_json,
+        non_empty_env,
     },
     constants::{
         CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT, VERTEX_AI_API_KEY_ENV,
@@ -177,10 +178,10 @@ impl VertexProviderLoader for GcpProviderLoader {
                 ),
                 CredentialSource::Trusted(configured) => {
                     let configured = configured.expose();
-                    let service_account = if Path::new(configured).is_file() {
-                        CustomServiceAccount::from_file(configured)
-                    } else {
+                    let service_account = if is_inline_json(configured) {
                         CustomServiceAccount::from_json(configured)
+                    } else {
+                        CustomServiceAccount::from_file(configured)
                     }
                     .map_err(auth_acquisition_error)?;
                     Arc::new(service_account)
@@ -262,6 +263,33 @@ mod tests {
         #[case] accepted: bool,
     ) {
         assert_eq!(validate_request_credentials(credentials).is_ok(), accepted);
+    }
+
+    #[rstest::rstest]
+    #[case::missing_file(
+        "/nonexistent/vertex-key.json",
+        "failed to open application credentials file"
+    )]
+    #[case::malformed_json(
+        " {\"type\": \"service_account\",",
+        "failed to deserialize ApplicationCredentials"
+    )]
+    #[case::quoted_json(
+        "'{\"type\": \"service_account\"}'",
+        "failed to deserialize ApplicationCredentials"
+    )]
+    #[tokio::test]
+    async fn trusted_credentials_are_read_as_a_file_unless_they_are_json(
+        #[case] configured: &str,
+        #[case] expected: &str,
+    ) {
+        let Err(error) = GcpProviderLoader
+            .load(CredentialSource::Trusted(SecretValue::new(configured)))
+            .await
+        else {
+            panic!("{configured:?} should not load");
+        };
+        assert!(error.to_string().contains(expected), "{error}");
     }
 
     #[rstest::rstest]
