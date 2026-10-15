@@ -1477,13 +1477,17 @@ def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
     """
     import typing
 
-    from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfoBase
+    from litellm.types.utils import (
+        DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS,
+        CustomPricingLiteLLMParams,
+        ModelInfoBase,
+    )
 
     pricing_markers = ("cost", "price", "uplift", "vector_size", "tiered_pricing")
     builtin_pricing_fields = {
         name for name in typing.get_type_hints(ModelInfoBase) if any(marker in name for marker in pricing_markers)
     }
-    denylisted_fields = set(CustomPricingLiteLLMParams.model_fields.keys())
+    denylisted_fields = set(CustomPricingLiteLLMParams.model_fields.keys()) | DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS
 
     uncovered = sorted(builtin_pricing_fields - denylisted_fields)
     assert not uncovered, (

@@ -20,6 +20,7 @@ from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
+from .storage_cost import context_cache_storage_token_hours
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -451,6 +452,9 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        logging_obj.record_context_cache_storage(
+            context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+        )
         return (
             non_cached_messages,
             optional_params,
@@ -605,6 +609,9 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        logging_obj.record_context_cache_storage(
+            context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+        )
         return (
             non_cached_messages,
             optional_params,
