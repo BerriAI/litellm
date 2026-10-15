@@ -2522,7 +2522,7 @@ async def _aresponses_websocket(
             api_base=resolved_api_base,
         )
 
-    resolved_api_key: Final = dynamic_api_key or api_key or litellm_params.api_key
+    resolved_api_key: Final = api_key or dynamic_api_key
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
     _explicit_keys: Final = {

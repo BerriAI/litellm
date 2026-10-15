@@ -2908,6 +2908,47 @@ class TestResponsesWebSocketCredentials:
         assert headers["api-key"] == "azure-env-key"
         assert "openai-global-key" not in " ".join(headers.values())
 
+    @pytest.mark.asyncio
+    async def test_explicit_key_beats_the_env_key_of_a_provider_guessed_from_api_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+        from asyncio import Future, get_running_loop
+        from collections.abc import AsyncIterator
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.responses import main as responses_main
+
+        upstream_key: Final[Future[object]] = get_running_loop().create_future()
+
+        async def no_events() -> AsyncIterator[object]:
+            return
+            yield
+
+        async def fake_aresponses(*_args: object, **kwargs: object) -> AsyncIterator[object]:
+            upstream_key.set_result(kwargs.get("api_key"))
+            return no_events()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
+        monkeypatch.setenv("LITELLM_RUST", "false")
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
+
+        await responses_main._aresponses_websocket.__wrapped__(
+            model="deepseek-astra",
+            api_base="https://api.deepseek.com/v1",
+            api_key="deployment-key",
+            first_message=json.dumps({"type": "response.create", "model": "deepseek-astra", "input": "Reply OK"}),
+            websocket=websocket,
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert upstream_key.done(), "the request never reached the upstream provider"
+        assert upstream_key.result() == "deployment-key"
+
 
 class TestNativeWebSocketUrlConstruction:
     """Test that native WebSocket URLs include the model query parameter.
