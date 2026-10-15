@@ -6,10 +6,11 @@ import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
-from typing import Final
+from typing import Final, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from pydantic import TypeAdapter
 from starlette.requests import Request
 
 from litellm.caching.caching import DualCache
@@ -67,6 +68,21 @@ VSCODE_REDIRECT_URIS: Final = (
     "http://127.0.0.1:33418/",
 )
 MAX_LENGTH_REDIRECT_URIS: Final = tuple(f"https://client.example/{index}/".ljust(256, "a") for index in range(4))
+GEMINI_CONNECTOR_ID: Final = "user_bound_custom-mcp-114763309876543210987-0f8b3c2a-6d1e-4f7a-9b2c-5e4d3a2b1c0f"
+GEMINI_REDIRECT_URIS: Final = tuple(
+    f"https://{host}.googleusercontent.com/{kind}/{GEMINI_CONNECTOR_ID}"
+    for kind in ("r", "a")
+    for host in ("oauth-redirect-sandbox", "oauth-redirect-test", "oauth-redirect")
+)
+
+
+class _RegistrationBody(TypedDict):
+    client_id: str
+    redirect_uris: list[str]
+    token_endpoint_auth_method: str
+
+
+_REGISTRATION_BODY: Final = TypeAdapter(_RegistrationBody)
 CODE_VERIFIER = "verifier-" + "v" * 43
 CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
 
@@ -155,16 +171,57 @@ async def test_register_four_callbacks_preserves_metadata(redirect_uris: tuple[s
 
 
 @pytest.mark.asyncio
-async def test_register_rejects_five_valid_callbacks() -> None:
+async def test_register_gemini_six_callbacks_preserves_metadata() -> None:
+    """The Gemini app's custom MCP connector registers six callbacks (sandbox, test and prod
+    hosts, each under /r/ and /a/). They fit well inside the sealed client_id size cap."""
     response: Final = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
         token_exchange_available=True,
-        request_body={"redirect_uris": [*VSCODE_REDIRECT_URIS, "http://127.0.0.1:33419/"]},
+        request_body={
+            "client_name": "Google",
+            "redirect_uris": list(GEMINI_REDIRECT_URIS),
+            "response_types": ["code"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_method": "client_secret_post",
+        },
+    )
+    assert response.status_code == 201
+    body: Final = _REGISTRATION_BODY.validate_json(bytes(response.body))
+    assert body["redirect_uris"] == list(GEMINI_REDIRECT_URIS)
+    assert body["token_endpoint_auth_method"] == "none"
+    assert len(body["client_id"]) <= MAX_CLIENT_ID_LENGTH
+    record: Final = open_gateway_dcr_client(body["client_id"])
+    assert record is not None
+    assert record.redirect_uris == GEMINI_REDIRECT_URIS
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_seven_valid_callbacks() -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
+        request_body={"redirect_uris": [*GEMINI_REDIRECT_URIS, "http://127.0.0.1:33419/"]},
     )
     assert response.status_code == 400
-    assert json.loads(response.body) == {
+    assert json.loads(bytes(response.body)) == {
         "error": "invalid_redirect_uri",
-        "error_description": "redirect_uris must be a list of 1 to 4 URIs",
+        "error_description": "redirect_uris must be a list of 1 to 6 URIs",
+    }
+
+
+@pytest.mark.asyncio
+async def test_register_six_max_length_callbacks_hits_encoded_size_guard() -> None:
+    """Raising the count does not raise the byte budget: six 256-character callbacks still
+    seal past MAX_CLIENT_ID_LENGTH and are refused as oversized metadata."""
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
+        request_body={"redirect_uris": [f"https://client.example/{index}/".ljust(256, "a") for index in range(6)]},
+    )
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body)) == {
+        "error": "invalid_client_metadata",
+        "error_description": "registered metadata is too large",
     }
 
 

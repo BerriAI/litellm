@@ -133,13 +133,16 @@ _REFRESH_REPLAYED_DESCRIPTION: Final = "the refresh token was already used"
 _REVOKED_REFRESH_FAMILY_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_family_revoked:"
 _REFRESH_FAMILY_REVOKED_DESCRIPTION: Final = "the refresh token was revoked"
 
-MAX_REDIRECT_URIS: Final = 4
+MAX_REDIRECT_URIS: Final = 6
 MAX_REDIRECT_URI_LENGTH: Final = 256
 MAX_CLIENT_ID_LENGTH: Final = 2048
 """Registration bounds. They exist to bound the sealed client_id, which rides inside
 every session-token claim set. Four 256-character ASCII URIs seal to roughly 1.5KB;
-the encoded client_id is checked against its own cap before registration succeeds.
-VS Code registers four callbacks for its web and desktop environments."""
+the encoded client_id is checked against its own cap before registration succeeds, so
+that cap, not the URI count, is what bounds the byte size.
+VS Code registers four callbacks for its web and desktop environments; the Gemini app's
+custom MCP connector registers six (sandbox, test and production hosts, each under
+``/r/`` and ``/a/``), which seal to roughly 1.2KB."""
 
 MAX_STATE_LENGTH: Final = 1024
 """Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code
