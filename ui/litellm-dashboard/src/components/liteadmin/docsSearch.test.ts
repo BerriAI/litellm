@@ -13,6 +13,7 @@ const INDEX_FIXTURE = `# LiteLLM
 Some prose that is not an entry.
 
 - [Setting Team Budgets](https://docs.litellm.ai/docs/proxy/team_budgets.md): Give each team a spend budget
+- [How Model Access Works](https://docs.litellm.ai/docs/proxy/model_access_guide.md)
 - [Vector stores](https://docs.litellm.ai/docs/vector_stores/index.md): Store and search embeddings
 - [Docs home](https://docs.litellm.ai/docs/index.md): Documentation index
 - [Blog](https://litellm.ai/blog): Not on the docs site
@@ -27,6 +28,11 @@ describe("parseDocsIndex", () => {
         title: "Setting Team Budgets",
         url: "https://docs.litellm.ai/docs/proxy/team_budgets",
         description: "Give each team a spend budget",
+      },
+      {
+        title: "How Model Access Works",
+        url: "https://docs.litellm.ai/docs/proxy/model_access_guide",
+        description: "",
       },
       {
         title: "Vector stores",

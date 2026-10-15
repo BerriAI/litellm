@@ -11,28 +11,27 @@ export interface DocEntry {
   readonly description: string;
 }
 
-const ENTRY_PATTERN = /^- \[([^\]]+)\]\(([^)\s]+)\)\s*:\s*(.*)$/;
+const ENTRY_PATTERN = /^- \[([^\]]+)\]\(([^)\s]+)\)\s*(?::\s*(.*))?$/;
+
+const normalizeDocsUrl = (rawUrl: string): string | null => {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:" || parsed.host !== "docs.litellm.ai") return null;
+  } catch {
+    return null;
+  }
+  const noMarkdown = rawUrl.replace(/\.md$/, "");
+  if (!noMarkdown.endsWith("/index")) return noMarkdown;
+  const parent = noMarkdown.slice(0, -"/index".length);
+  return parent === "https://docs.litellm.ai/docs" ? `${parent}/` : parent;
+};
 
 export function parseDocsIndex(text: string): readonly DocEntry[] {
   return text.split("\n").flatMap((line) => {
     const match = ENTRY_PATTERN.exec(line.trim());
-    if (!match) return [];
-    const [, title, rawUrl, description] = match;
-    let host: string;
-    try {
-      const parsed = new URL(rawUrl);
-      host = parsed.host;
-      if (parsed.protocol !== "https:") return [];
-    } catch {
-      return [];
-    }
-    if (host !== "docs.litellm.ai") return [];
-    let url = rawUrl.replace(/\.md$/, "");
-    if (url.endsWith("/index")) {
-      url = url.slice(0, -"/index".length);
-      if (url === "https://docs.litellm.ai/docs") url += "/";
-    }
-    return [{ title, url, description }];
+    const url = match ? normalizeDocsUrl(match[2]) : null;
+    if (!match || url === null) return [];
+    return [{ title: match[1], url, description: match[3] ?? "" }];
   });
 }
 
@@ -104,7 +103,7 @@ const bundledEntries: readonly DocEntry[] = [
 
 let docsIndexPromise: Promise<readonly DocEntry[]> | null = null;
 
-function loadDocsIndex(signal: AbortSignal, fetchIndex: () => Promise<string>): Promise<readonly DocEntry[]> {
+function loadDocsIndex(fetchIndex: () => Promise<string>): Promise<readonly DocEntry[]> {
   docsIndexPromise ??= fetchIndex()
     .then(parseDocsIndex)
     .catch((error: unknown) => {
@@ -122,19 +121,24 @@ export interface DocsSearchToolOptions {
 
 const truncate = (text: string): string => (text.length > 200 ? `${text.slice(0, 200)}…` : text);
 
+const loadCorpus = async (
+  options: DocsSearchToolOptions,
+  fetchIndex: (signal: AbortSignal) => Promise<string>,
+): Promise<{ entries: readonly DocEntry[]; source: "docs" | "bundled" }> => {
+  try {
+    const fetched = await loadDocsIndex(() => fetchIndex(options.signal));
+    return {
+      entries: [...fetched, ...bundledEntries.filter((b) => !fetched.some((f) => f.url === b.url))],
+      source: "docs",
+    };
+  } catch {
+    return { entries: bundledEntries, source: "bundled" };
+  }
+};
+
 export async function runDocsSearch(options: DocsSearchToolOptions, query: string) {
   options.beforeTool();
-  const fetchIndex = options.fetchIndex ?? fetchDocsIndex;
-  let entries: readonly DocEntry[];
-  let source: "docs" | "bundled";
-  try {
-    const fetched = await loadDocsIndex(options.signal, () => fetchIndex(options.signal));
-    entries = [...fetched, ...bundledEntries.filter((b) => !fetched.some((f) => f.url === b.url))];
-    source = "docs";
-  } catch {
-    entries = bundledEntries;
-    source = "bundled";
-  }
+  const { entries, source } = await loadCorpus(options, options.fetchIndex ?? fetchDocsIndex);
   return {
     operation: "docs_search",
     success: true,
