@@ -75,8 +75,9 @@ from litellm.types.llms.openai import AllMessageValues
         ({"role": "system", "content": "You are helpful."},),
         ({"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},),
         ({"role": "system", "content": None},),
+        ({"role": "system", "content": ({"type": "text", "text": "You are helpful."},)},),
     ),
-    ids=("no_system", "string_content", "list_content", "none_content"),
+    ids=("no_system", "string_content", "list_content", "none_content", "tuple_content"),
 )
 def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
     system_messages: tuple[dict[str, object], ...],

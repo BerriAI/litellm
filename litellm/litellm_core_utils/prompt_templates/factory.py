@@ -5444,10 +5444,11 @@ _CONTENT_BLOCKS: Final = TypeAdapter(list[object])
 
 
 def _content_with_function_prompt(content: object, function_prompt: str) -> str | Sequence[object]:
+    if content is None:
+        return function_prompt
     if isinstance(content, str):
         return f"{content} {function_prompt}"
-    existing_blocks: Final = _CONTENT_BLOCKS.validate_python(content) if isinstance(content, list) else ()
-    return [*existing_blocks, {"type": "text", "text": f" {function_prompt}"}]
+    return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
 
 
 # Function call template
