@@ -991,12 +991,9 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _exact_base_model_max_input_tokens(base_model: str, custom_llm_provider: str) -> int | None:
-    lookup_name: Final = (
-        base_model if base_model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{base_model}"
-    )
+def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
     try:
-        model_info: Final = litellm.get_model_info(model=lookup_name)
+        model_info: Final = litellm.get_model_info(model=base_model)
     except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
         return None
     if is_generalized_model_info(model_info):
@@ -1031,7 +1028,7 @@ def _base_model_widened_window(
         return MappingProxyType({})
     if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
         return MappingProxyType({})
-    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model, custom_llm_provider)
+    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
     if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
         return MappingProxyType({})
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
@@ -11385,7 +11382,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
-        For every other provider, a model_info base_model naming the same model as `model:` can only widen its context window.
+        For every other provider, a base_model naming the same model as `model:` can only widen its context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11492,7 +11489,11 @@ class Router:
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **_base_model_widened_window(model_info, _declared_base_model(user_model_info), custom_llm_provider),
+            **_base_model_widened_window(
+                model_info,
+                _declared_base_model(user_model_info) or _declared_base_model(litellm_params.model_extra or {}),
+                custom_llm_provider,
+            ),
             **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
             **MappingProxyType({key: value for key, value in user_model_info.items() if value is not None}),
         }

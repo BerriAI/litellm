@@ -3411,7 +3411,7 @@ def test_router_capacity_widens_to_a_larger_base_model_window(
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
     expected: Final = (
-        explicit_limit if explicit_limit is not None else (8192 if base_location == "model_info" else 1024)
+        explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
     )
     assert _effective_max_input_tokens(router) == expected
     assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
@@ -3480,7 +3480,8 @@ _SAME_MODEL_QUALIFIED_ROUTE: Final = "bedrock/converse/anthropic.claude-routerca
     ("route", "base_model", "expected"),
     (
         (_SAME_MODEL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
-        (_SAME_MODEL_ROUTE, "us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
+        (_SAME_MODEL_ROUTE, "us-east-1/anthropic.claude-routercapacitytest-9-9", 1024),
+        (_SAME_MODEL_ROUTE, "anthropic.claude-routercapacitytest-9-9", 1024),
         (_SAME_MODEL_GLOBAL_ROUTE, "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
         (_SAME_MODEL_ROUTE, "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1", 8192),
         (_SAME_MODEL_GLOBAL_ROUTE, "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1", 8192),
@@ -3507,6 +3508,8 @@ def test_router_capacity_widens_only_for_an_exact_base_model_entry_of_the_same_m
             "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@first": larger_window,
             "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9@second": larger_window,
             "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9": larger_window,
+            "anthropic.claude-routercapacitytest-9-9": _capacity_test_metadata("bedrock", 1024),
+            "bedrock/anthropic.claude-routercapacitytest-9-9": larger_window,
             "bedrock/anthropic.claude-routercapacitytest-9-9@global:us-east-1": larger_window,
             "bedrock/us-east-1/anthropic.claude-routercapacitytest-*": larger_window,
             "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9": larger_window,
@@ -3517,4 +3520,39 @@ def test_router_capacity_widens_only_for_an_exact_base_model_entry_of_the_same_m
     router: Final = _capacity_test_router(route, base_model, "model_info", None)
     assert _effective_max_input_tokens(router) == expected
     assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_router_capacity_reads_a_model_info_base_model_before_a_litellm_params_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            _SAME_MODEL_ROUTE: _capacity_test_metadata("bedrock", 1024),
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9": _capacity_test_metadata("bedrock", 8192),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "capacity-test",
+                "litellm_params": {
+                    "model": _SAME_MODEL_ROUTE,
+                    "base_model": "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9",
+                },
+                "model_info": {
+                    "id": "capacity-test",
+                    "base_model": "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9",
+                },
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    assert _effective_max_input_tokens(router) == 1024
+    assert _deployments_allowed_for_2048_input_tokens(router) == 0
     _invalidate_model_cost_lowercase_map()
