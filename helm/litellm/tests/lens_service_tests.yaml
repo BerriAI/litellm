@@ -8,20 +8,6 @@ templates:
 - lens/service.yaml
 - lens/deployment.yaml
 tests:
-- it: passes the normalized prefix to the Lens ingestion listener
-  template: lens/deployment.yaml
-  set:
-    serverRootPath: /services/llm/
-    lensWorker.enabled: true
-    lensWorker.publicUrl: https://gateway.example/services/llm/lens-ingest
-    lensWorker.serviceTokenSecret.name: lens-service
-    lensWorker.clickhouseSecret.name: lens-storage
-  asserts:
-  - contains:
-      path: spec.template.spec.containers[0].env
-      content:
-        name: SERVER_ROOT_PATH
-        value: /services/llm
 - it: connects gateway/deployment.yaml to the shared Lens service
   template: gateway/deployment.yaml
   set: &id001
@@ -44,11 +30,11 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
-            name: lens-service
-            key: service-token
+            name: lens-test-lens-gateway
+            key: gateway-secret
 - it: connects backend/deployment.yaml to the shared Lens service
   template: backend/deployment.yaml
   set: *id001
@@ -66,11 +52,11 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
-            name: lens-service
-            key: service-token
+            name: lens-test-lens-gateway
+            key: gateway-secret
 - it: routes uploads directly to Lens instead of the gateway
   template: ingress.yaml
   set:

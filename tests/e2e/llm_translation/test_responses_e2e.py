@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import threading
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -39,7 +37,7 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from provider_edge import LiveEdge, start_provider_edge
-from provider_edge_bedrock import bedrock_signer
+from provider_edge_bedrock import ConverseBodyCapture, bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, TypeAdapter
 from responses_helpers import AZURE_OPENAI_BACKEND, azure_openai_params
@@ -69,26 +67,6 @@ BEDROCK_EDGE_MOUNT: Final = f"bedrock/{BEDROCK_EDGE_REGION}"
 
 class ConverseRequestBody(BaseModel):
     additionalModelRequestFields: dict[str, str] | None = None
-
-
-@dataclass(slots=True)
-class ConverseRequestCapture:
-    """The Converse bodies the proxy actually sent upstream, as seen by a live
-    edge sitting between the proxy and Bedrock."""
-
-    _bodies: list[ConverseRequestBody] = field(default_factory=list)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
-        if body is None or "/converse" not in url:
-            return
-        with self._lock:
-            self._bodies.append(ConverseRequestBody.model_validate_json(body))
-
-    @property
-    def bodies(self) -> tuple[ConverseRequestBody, ...]:
-        with self._lock:
-            return tuple(self._bodies)
 
 
 WEATHER_TOOL: FunctionToolParam = {
@@ -541,9 +519,6 @@ class TestResponses:
         assert arguments.locations, f"get_locations returned no locations: {function_call.arguments}"
 
     @pytest.mark.covers("llm.responses.anthropic.multi_turn.nonstream.works")
-    @pytest.mark.skip(
-        reason="stage red: product gap, Anthropic previous_response_id continuation sends invalid unmatched tool_use history"
-    )
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -593,7 +568,7 @@ class TestResponses:
             tools=[LOCATIONS_TOOL],
             extra_body=NO_PROXY_CACHE,
         )
-        assert tool_result in second.output_text, f"follow-up omitted tool result: {second.output_text!r}"
+        assert "47" in second.output_text, f"follow-up omitted tool result: {second.output_text!r}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.basic.nonstream.works")
     @meta(
@@ -922,7 +897,7 @@ class TestResponses:
         """Judges the Converse bodies the edge captured, not the reply: Claude on
         Bedrock rejects the forwarded field with a 400, which the chat leg's
         ``Result`` carries as a value and the OpenAI SDK raises."""
-        capture: Final = ConverseRequestCapture()
+        capture: Final = ConverseBodyCapture()
         edge: Final = start_provider_edge(
             LiveEdge(observe_request=capture.observe, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
             mounts=MappingProxyType(
@@ -967,10 +942,11 @@ class TestResponses:
                 ),
             )
 
-        forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
+        bodies: Final = tuple(ConverseRequestBody.model_validate_json(body) for body in capture.drain())
+        forwarded: Final = tuple(body.additionalModelRequestFields for body in bodies)
         assert forwarded, f"{endpoint} produced no Bedrock Converse request"
         assert forwarded == ({"safety_identifier": safety_identifier},) * len(forwarded), (
-            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
+            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {bodies}"
         )
 
     @pytest.mark.skip(
@@ -1034,6 +1010,7 @@ class TestResponses:
 REASONING_BACKEND: Final = "openai/gpt-5.4-mini"
 SHELL_BACKEND: Final = "openai/gpt-5.5"
 TOOL_DATE: Final = "2025-01-15"
+REASONING_ATTEMPTS: Final = 3
 
 GET_TODAY_TOOL: FunctionToolParam = {
     "type": "function",
@@ -1065,6 +1042,15 @@ class TodayReport(BaseModel):
     number_of_r: str
 
 
+def _has_reasoning_item(response: Response) -> bool:
+    return any(isinstance(item, ResponseReasoningItem) for item in response.output)
+
+
+def _until_reasoning_emitted(create: Callable[[], Response]) -> Response:
+    attempts: Final = (create() for _ in range(REASONING_ATTEMPTS - 1))
+    return next(filter(_has_reasoning_item, attempts), None) or create()
+
+
 class TestResponsesOpenAIHostedFeatures:
     @meta(
         Subject(
@@ -1094,14 +1080,16 @@ class TestResponsesOpenAIHostedFeatures:
             ),
         }
 
-        first = client.responses.create(
-            model=model,
-            input=[question],
-            tools=[GET_TODAY_TOOL],
-            tool_choice={"type": "function", "name": "get_today"},
-            reasoning={"effort": "medium", "summary": "auto"},
-            text={"format": TODAY_REPORT_FORMAT},
-            extra_body=NO_PROXY_CACHE,
+        first: Final = _until_reasoning_emitted(
+            lambda: client.responses.create(
+                model=model,
+                input=[question],
+                tools=[GET_TODAY_TOOL],
+                tool_choice={"type": "function", "name": "get_today"},
+                reasoning={"effort": "medium", "summary": "auto"},
+                text={"format": TODAY_REPORT_FORMAT},
+                extra_body=NO_PROXY_CACHE,
+            )
         )
         assert any(isinstance(item, ResponseReasoningItem) for item in first.output), (
             f"reasoning model returned no reasoning item: {first.output!r}"

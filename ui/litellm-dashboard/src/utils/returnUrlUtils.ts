@@ -21,6 +21,31 @@ export function getLoginUrl(baseUrl: string = ""): string {
   return `${base ? base.replace(/\/+$/, "") : resolveApiBase({ serverRootPath })}/ui/login/`;
 }
 
+export function normalizeBackendPageUrlToUiOrigin(
+  url: string,
+  runtimeBackendUrl: string | null,
+  uiOrigin: string | null,
+  relativePath = false,
+): string {
+  if (!runtimeBackendUrl || !uiOrigin) {
+    return url;
+  }
+
+  try {
+    const backendOrigin = new URL(runtimeBackendUrl).origin;
+    const currentUiOrigin = new URL(uiOrigin).origin;
+    const pageUrl = new URL(url);
+    if (backendOrigin === currentUiOrigin || pageUrl.origin !== backendOrigin) {
+      return url;
+    }
+
+    const pagePath = `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`;
+    return relativePath && !pagePath.startsWith("//") ? pagePath : `${currentUiOrigin}${pagePath}`;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Gets the current URL with all query parameters.
  * Returns null if running on server-side.
@@ -205,7 +230,7 @@ function isDevEnvironment(): boolean {
  * @param url - The URL to validate
  * @returns true if the URL is safe to redirect to
  */
-export function isValidReturnUrl(url: string): boolean {
+export function isValidReturnUrl(url: string, runtimeBackendUrl: string | null = null): boolean {
   if (!url) {
     return false;
   }
@@ -223,6 +248,10 @@ export function isValidReturnUrl(url: string): boolean {
   try {
     const returnUrlObj = new URL(url);
     const currentHostname = window.location.hostname;
+
+    if (runtimeBackendUrl && returnUrlObj.origin === new URL(runtimeBackendUrl).origin) {
+      return true;
+    }
 
     // Hostname must always match
     if (returnUrlObj.hostname !== currentHostname) {
@@ -280,11 +309,11 @@ export function normalizeUrlForCompare(url: string): string {
  * 2. If redirect_to param is invalid/missing, check cookie
  * 3. Only clear cookie when we have a valid URL to return
  */
-export function consumeReturnUrl(): string | null {
+export function consumeReturnUrl(runtimeBackendUrl: string | null = null): string | null {
   // Check URL param first
   const paramUrl = getReturnUrlFromParams();
   if (paramUrl) {
-    if (isValidReturnUrl(paramUrl)) {
+    if (isValidReturnUrl(paramUrl, runtimeBackendUrl)) {
       clearStoredReturnUrl();
       return paramUrl;
     }
@@ -297,7 +326,7 @@ export function consumeReturnUrl(): string | null {
   // Fall back to cookie
   const storedUrl = getStoredReturnUrl();
   if (storedUrl) {
-    if (isValidReturnUrl(storedUrl)) {
+    if (isValidReturnUrl(storedUrl, runtimeBackendUrl)) {
       clearStoredReturnUrl();
       return storedUrl;
     }

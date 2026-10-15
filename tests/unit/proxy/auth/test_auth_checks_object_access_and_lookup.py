@@ -647,6 +647,35 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     assert mock_prisma_client.get_data.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_get_key_object_miss_keeps_the_looked_up_value_out_of_the_401_and_the_log(caplog):
+    """This 401 reaches unauthenticated callers through the auth pipeline, so its
+    message must not name the hash it looked up, the table it looked it up in, or
+    the endpoint that mints keys. Failure logging also calls this helper with the raw
+    key a caller sent, a provider key included, so a miss must not log that value."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with caplog.at_level("INFO", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
+        await get_key_object(
+            hashed_token="a-secret-looking-hash",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+        )
+
+    assert int(exc_info.value.code) == 401
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in ("a-secret-looking-hash", "VerificationToken", "/key/generate"):
+        assert leaked not in exc_info.value.message
+    assert "a-secret-looking-hash" not in caplog.text
+
+
 class _InFlightCountingPrisma:
     def __init__(self) -> None:
         self.in_flight = 0
@@ -7704,6 +7733,47 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
 
 @pytest.mark.asyncio
+async def test_get_team_member_default_budget_reraises_lookup_error_when_requested() -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+
+    lookup_error: Final = RuntimeError("budget database unavailable")
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=lookup_error)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await get_team_member_default_budget(
+            budget_id="default-budget",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            raise_on_lookup_error=True,
+        )
+
+    assert exc_info.value is lookup_error
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_default_budget_returns_none_on_lookup_error_by_default() -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        side_effect=RuntimeError("budget database unavailable")
+    )
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+
+    budget: Final = await get_team_member_default_budget(
+        budget_id="default-budget",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert budget is None
+
+
+@pytest.mark.asyncio
 async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
@@ -8813,6 +8883,30 @@ async def test_get_access_object_db_fetch_returns_validated_access_group():
     assert isinstance(result, LiteLLM_AccessGroupTable)
     assert result.access_group_id == "ag-1"
     assert result.access_model_names == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_get_access_object_distinguishes_absent_group_from_unreadable_row():
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError, get_access_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    absent_client = MagicMock()
+    absent_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=None)
+    with pytest.raises(AccessGroupNotFoundError) as absent_info:
+        await get_access_object("typo-group", absent_client, mock_cache)
+    assert absent_info.value.status_code == 404
+    assert "Access group doesn't exist in db" in str(absent_info.value.detail)
+
+    unreadable_client = MagicMock()
+    unreadable_client.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=ConnectionError("db unreachable"))
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_access_object("real-group", unreadable_client, mock_cache)
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, AccessGroupNotFoundError)
 
 
 @pytest.mark.asyncio
@@ -10928,6 +11022,61 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+def _router_serving(model_names: list[str]) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-test"}}
+            for name in model_names
+        ]
+    )
+
+
+def test_can_project_access_model_expands_all_team_models_sentinel():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    result: Final = can_project_access_model(
+        model="gpt-5.6-sol",
+        project_object=project,
+        llm_router=_router_serving(["gpt-5.6-sol"]),
+    )
+
+    assert result is True
+
+
+def test_can_project_access_model_denies_model_outside_router_names():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol-eu",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+
+
+def test_can_project_access_model_keeps_sentinel_denied_without_team_id():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id=None, models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
 
 
 @pytest.mark.asyncio

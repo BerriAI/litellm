@@ -1,11 +1,13 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -24,6 +26,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -74,6 +77,36 @@ def validate_responses_api_response(response: ResponsesAPIResponse, final_chunk:
         assert len(cast(list[object], response_fields["output"])) > 0
 
     return True
+
+
+_CLAUDE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "call_id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "arguments": '{"query": "weather"}',
+}
+
+
+_BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the tool catalog",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+
+
+def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tool.items() if key != "defer_loading"}
+
+
+def _openai_model(supports_tool_search: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and info.get("supports_tool_search", False) is supports_tool_search
+    )
 
 
 class TestOpenAIResponsesAPIConfig:
@@ -142,11 +175,14 @@ class TestOpenAIResponsesAPIConfig:
             (17, 17),
             (256, 256),
             (None, None),
+            (0, 0),
+            (-1, -1),
         ],
     )
     def test_enforce_min_max_output_tokens(self, value, expected):
-        """Below the minimum clamps to 16; the boundary, larger values, and None
-        are returned unchanged so no previously-valid request regresses."""
+        """Positive values below the minimum clamp to 16; the boundary, larger values,
+        None, and non-positive values are returned unchanged so the provider rejects
+        an invalid value instead of the proxy silently rewriting it."""
         assert self.config._enforce_min_max_output_tokens(value) == expected
 
     def validate_responses_api_request_params(self, params, expected_fields):
@@ -190,6 +226,248 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    @pytest.mark.parametrize(
+        "tool_type",
+        ["tool_search_tool_bm25_20251119", "tool_search_tool_regex_20251119"],
+    )
+    def test_transform_maps_anthropic_search_tool_and_preserves_deferred_functions(self, tool_type: str) -> None:
+        tools: Final = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+            {"type": tool_type, "name": "tool_search"},
+            {
+                "type": "function",
+                "name": "get_stock_price",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    def test_transform_deduplicates_anthropic_search_tools(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    @pytest.mark.parametrize("execution", [None, "client", "server"])
+    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(
+        self, execution: str | None
+    ) -> None:
+        caller_tool_search: Final[dict[str, object]] = {
+            "type": "tool_search",
+            **({"execution": execution} if execution is not None else {}),
+        }
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            caller_tool_search,
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [tools[1], caller_tool_search]
+
+    def test_transform_leaves_tools_without_anthropic_search_unchanged(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search", "execution": "client"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+
+    def test_transform_forwards_anthropic_search_tool_and_history_unchanged_to_another_gateway(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+        ]
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OTHER_HOST,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert result["input"] == history
+
+    def _transform_tools(self, model: str, tools: list[dict[str, object]], drop_params: bool) -> object:
+        return self.config.transform_responses_api_request(
+            model=model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=drop_params),
+            headers={},
+        )["tools"]
+
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self) -> None:
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+        namespace: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "description": "Finance tools",
+            "tools": [{**_DEFERRED_WEATHER, "name": "get_quote"}],
+        }
+
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=False), [_BM25_TOOL, _DEFERRED_WEATHER, eager, namespace], True
+        )
+
+        assert tools == [
+            _undeferred(_DEFERRED_WEATHER),
+            eager,
+            {**namespace, "tools": [_undeferred({**_DEFERRED_WEATHER, "name": "get_quote"})]},
+        ]
+
+    def test_drop_params_drops_tool_search_when_no_tool_is_deferred(self) -> None:
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=True), [_BM25_TOOL, _undeferred(_DEFERRED_WEATHER)], True
+        )
+
+        assert tools == [_undeferred(_DEFERRED_WEATHER)]
+
+    @pytest.mark.parametrize(
+        ("sent", "expected"),
+        [
+            pytest.param(
+                [{"type": "tool_search"}, _DEFERRED_WEATHER], [{"type": "tool_search"}, _DEFERRED_WEATHER], id="alone"
+            ),
+            pytest.param(
+                [_CLIENT_TOOL_SEARCH, _BM25_TOOL, _undeferred(_DEFERRED_WEATHER)],
+                [_CLIENT_TOOL_SEARCH, _undeferred(_DEFERRED_WEATHER)],
+                id="beside-anthropic-search",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(
+        self, sent: list[dict[str, object]], expected: list[dict[str, object]]
+    ) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), sent, True)
+
+        assert tools == expected
+
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"type": None, "name": "x"}, id="null-type"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": "oops"}, id="string-members"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": ["x"]}, id="string-member"),
+        ],
+    )
+    def test_malformed_tool_beside_the_search_tool_reaches_openai_as_sent(
+        self, malformed: dict[str, object], drop_params: bool
+    ) -> None:
+        model: Final = _openai_model(supports_tool_search=True)
+
+        tools: Final = self._transform_tools(model, [_BM25_TOOL, malformed], drop_params)
+
+        assert malformed in tools
+
+    @pytest.mark.parametrize(
+        "deferred",
+        [
+            pytest.param(_DEFERRED_WEATHER, id="function"),
+            pytest.param(
+                {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_DEFERRED_WEATHER]},
+                id="namespace-member",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self, deferred: dict[str, object]) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=True), [_BM25_TOOL, deferred], True)
+
+        assert tools == [{"type": "tool_search", "execution": "server"}, deferred]
+
+    def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
+        answered_search_call: Final = {
+            **_CLAUDE_SEARCH_CALL,
+            "call_id": "srvtoolu_02Answered",
+            "name": "tool_search_tool_regex",
+        }
+        history: Final = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            _CLAUDE_SEARCH_CALL,
+            answered_search_call,
+            {"type": "function_call_output", "call_id": "srvtoolu_02Answered", "output": "get_weather"},
+            {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_BM25_TOOL, _DEFERRED_WEATHER]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
+
+    def test_transform_keeps_history_as_sent_when_no_anthropic_search_tool_is_mapped(self) -> None:
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_undeferred(_DEFERRED_WEATHER)]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == history
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
@@ -1115,6 +1393,19 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert result["tools"][0]["parameters"] == {"type": "object"}
+
+    def test_azure_leaves_anthropic_search_tool_unchanged(self) -> None:
+        tool: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"] == [tool]
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
@@ -2297,6 +2588,314 @@ class TestToolSchemaRegexPatternWiring:
         assert result["tools"][0] is tool
 
 
+_OPENAI_API: Final = GenericLiteLLMParams(api_base="https://api.openai.com/v1")
+_OTHER_HOST: Final = GenericLiteLLMParams(api_base="https://gateway.example/v1")
+_EXPLICIT_OPT_IN: Final = {"prompt_cache_options": {"mode": "explicit"}}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _marked_input(cache_control: dict[str, str] | None) -> list[dict[str, object]]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return [
+        {
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", **mark},
+            ],
+        },
+        {"type": "message", "role": "user", "content": "look", **mark},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking", **mark}]},
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "found", **mark},
+        {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_2",
+            "output": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "last"}],
+            **mark,
+        },
+    ]
+
+
+def _marked_tool(cache_control: dict[str, str] | None) -> dict[str, object]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}, **mark}
+
+
+def _openai_like_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+    return OpenAILikeResponsesConfig()
+
+
+def _generated_sail_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    sail = JSONProviderRegistry.get("sail")
+    assert sail is not None
+    return create_responses_config_class(sail)()
+
+
+class TestCacheControlBecomesPromptCacheBreakpoint:
+    """Clients that speak Anthropic's dialect mark blocks with `cache_control`. On a deployment that
+    reads OpenAI's `prompt_cache_breakpoint` the mark moves onto the same block instead of being
+    stripped, so explicit-mode prompt caching keeps working through the proxy."""
+
+    @pytest.fixture(autouse=True)
+    def _no_openai_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None)
+
+    def _transform(
+        self,
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+        cache_control: dict[str, str] | None,
+        extra_params: dict[str, object] | None = None,
+        config: OpenAIResponsesAPIConfig | None = None,
+    ) -> dict[str, object]:
+        return (config or OpenAIResponsesAPIConfig()).transform_responses_api_request(
+            model=model,
+            input=_marked_input(cache_control),
+            response_api_optional_request_params={"tools": [_marked_tool(cache_control)], **(extra_params or {})},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        ("litellm_params", "extra_params"),
+        [
+            pytest.param(_OPENAI_API, {}, id="api.openai.com"),
+            pytest.param(
+                GenericLiteLLMParams(base_url="https://api.openai.com/v1"), {}, id="api.openai.com-as-base_url"
+            ),
+            pytest.param(GenericLiteLLMParams(), {}, id="default-host"),
+            pytest.param(_OTHER_HOST, _EXPLICIT_OPT_IN, id="other-host-opted-in"),
+        ],
+    )
+    def test_marks_reach_gpt_5_6_as_explicit_breakpoints_on_the_same_blocks(
+        self, litellm_params: GenericLiteLLMParams, extra_params: dict[str, object]
+    ) -> None:
+        result = self._transform("gpt-5.6", litellm_params, {**_EPHEMERAL, "ttl": "1h"}, extra_params)
+
+        assert result["input"] == [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_2",
+                "output": [
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+        ]
+        assert result["tools"] == [_marked_tool(None)]
+        assert result.get("prompt_cache_options") == extra_params.get("prompt_cache_options")
+
+    def test_per_part_marks_win_over_the_item_mark_and_keep_their_own_block(self) -> None:
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "a", "cache_control": _EPHEMERAL},
+                        {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                        {"type": "input_text", "text": "b"},
+                    ],
+                    "cache_control": _EPHEMERAL,
+                }
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                    {"type": "input_text", "text": "b", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        ("model", "litellm_params"),
+        [
+            pytest.param("gpt-4o", _OPENAI_API, id="model-older-than-gpt-5.6"),
+            pytest.param("gpt-5.6", _OTHER_HOST, id="other-host-not-opted-in"),
+            pytest.param(
+                "gpt-5.6", GenericLiteLLMParams(base_url="https://gateway.example/v1"), id="other-host-as-base_url"
+            ),
+        ],
+    )
+    def test_marks_are_still_stripped_where_the_deployment_does_not_read_breakpoints(
+        self, model: str, litellm_params: GenericLiteLLMParams
+    ) -> None:
+        marked = self._transform(model, litellm_params, _EPHEMERAL)
+        unmarked = self._transform(model, litellm_params, None)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked)
+
+    def test_non_openai_subclass_still_strips_on_a_gpt_5_6_deployment(self) -> None:
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        config = HostedVLLMResponsesAPIConfig()
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    @pytest.mark.parametrize(
+        "make_config", [_openai_like_responses_config, _generated_sail_responses_config], ids=["openai_like", "sail"]
+    )
+    def test_a_config_naming_its_provider_as_a_plain_str_still_strips_on_a_gpt_5_6_deployment(
+        self, make_config: Callable[[], OpenAIResponsesAPIConfig]
+    ) -> None:
+        config = make_config()
+        assert type(config.custom_llm_provider) is str
+
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    def test_a_breakpoint_the_client_wrote_on_the_same_block_wins_over_the_mark_ttl_included(self) -> None:
+        kept = {"mode": "explicit", "ttl": "30m"}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "a",
+                            "prompt_cache_breakpoint": kept,
+                            "cache_control": _EPHEMERAL,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [{"type": "input_text", "text": "a", "prompt_cache_breakpoint": kept}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}]},
+        ]
+
+    def test_marks_on_parts_openai_does_not_cache_are_dropped_and_the_item_mark_skips_them(self) -> None:
+        audio = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {"role": "user", "content": [{**audio, "cache_control": _EPHEMERAL}], "cache_control": _EPHEMERAL},
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "a"}, {**audio, "cache_control": _EPHEMERAL}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [audio]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    audio,
+                ],
+            },
+        ]
+
+    def test_items_and_content_of_a_shape_openai_will_reject_pass_through_to_the_strip(self) -> None:
+        """Validating the body is upstream's job. The swap leaves what it cannot read alone, so the
+        caller gets OpenAI's 400 for it instead of a failure inside the proxy."""
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                "a bare string where an item belongs",
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": {"result": 1},
+                    "cache_control": _EPHEMERAL,
+                },
+                {"role": "user", "content": "look", "cache_control": _EPHEMERAL},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            "a bare string where an item belongs",
+            {"type": "function_call_output", "call_id": "call_1", "output": {"result": 1}},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+        ]
+
+    def test_compact_request_swaps_marks_the_same_way(self) -> None:
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-5.6",
+            input=[{"role": "user", "content": "look", "cache_control": _EPHEMERAL}],
+            response_api_optional_request_params=dict(_EXPLICIT_OPT_IN),
+            litellm_params=_OTHER_HOST,
+            headers={},
+            api_base="https://gateway.example/v1/responses",
+        )
+
+        assert data["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            }
+        ]
+
+
 class TestReasoningFollowsModelSupport:
     """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
     on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
@@ -3445,3 +4044,127 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
+    first_input: Final = "remember the first turn"
+    second_input: Final = "continue the conversation"
+    first_id: Final = "resp_previous_turn"
+    second_id: Final = "resp_follow_up"
+    response_payloads: Final = (
+        {
+            "id": first_id,
+            "object": "response",
+            "created_at": 1734366691,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_first",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "first answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+        {
+            "id": second_id,
+            "object": "response",
+            "created_at": 1734366692,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_second",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "second answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    )
+    provider_url: Final = "https://api.openai.com/v1/responses"
+
+    with respx.mock() as router:
+        route: Final = router.post(provider_url).mock(
+            side_effect=[
+                httpx.Response(status_code=200, json=response_payloads[0]),
+                httpx.Response(status_code=200, json=response_payloads[1]),
+            ]
+        )
+        first_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=first_input,
+        )
+        assert isinstance(first_response, ResponsesAPIResponse)
+        second_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=second_input,
+            previous_response_id=first_response.id,
+        )
+        calls: Final = route.calls
+
+    assert isinstance(second_response, ResponsesAPIResponse)
+    assert first_response.output[0].content[0].text == "first answer"
+    assert second_response.output[0].content[0].text == "second answer"
+    assert len(calls) == 2
+    request_adapter: Final = TypeAdapter(dict[str, JsonValue])
+    request_bodies: Final = tuple(request_adapter.validate_json(call.request.content) for call in calls)
+    assert request_bodies[0]["input"] == first_input
+    assert request_bodies[1]["input"] == second_input
+    assert request_bodies[1]["previous_response_id"] == first_id
+
+
+def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
+    test_input: Final = [
+        {"role": "user", "content": "test"},
+        {
+            "id": "rs_123",
+            "summary": [{"text": "test", "type": "summary_text"}],
+            "type": "reasoning",
+            "content": None,
+            "encrypted_content": None,
+            "status": None,
+        },
+        {
+            "arguments": "{}",
+            "call_id": "call_123",
+            "name": "get_today",
+            "type": "function_call",
+            "id": "fc_123",
+            "status": "completed",
+        },
+    ]
+
+    validated_input: Final = OpenAIResponsesAPIConfig()._validate_input_param(test_input)
+
+    assert len(validated_input) == 3
+    reasoning_item: Final = validated_input[1]
+    assert reasoning_item["type"] == "reasoning"
+    assert "status" not in reasoning_item
+    assert "content" not in reasoning_item
+    assert "encrypted_content" not in reasoning_item
+    assert reasoning_item["id"] == "rs_123"
+    assert reasoning_item["summary"] == [{"text": "test", "type": "summary_text"}]
+
+    function_call_item: Final = validated_input[2]
+    assert function_call_item["type"] == "function_call"
+    assert function_call_item["status"] == "completed"

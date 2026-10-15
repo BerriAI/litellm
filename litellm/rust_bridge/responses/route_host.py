@@ -12,16 +12,13 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, Respons
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
 
 
-def connection_defaults(_provider: str) -> tuple[str | None, str | None]:
-    return litellm.api_key or litellm.openai_key, litellm.api_base
+def connection_defaults(provider: str) -> tuple[str | None, str | None]:
+    provider_key: Final = litellm.openai_key if provider == "openai" else None
+    return litellm.api_key or provider_key, litellm.api_base
 
 
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_validate(value)
-
-
-def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
-    return request
 
 
 def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
@@ -30,7 +27,7 @@ def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
         error,
         str(request["model"]),
         provider,
-        arguments(request),
+        request,
         optional_str(request.get("api_base")) or optional_str(request.get("base_url")),
     )
 

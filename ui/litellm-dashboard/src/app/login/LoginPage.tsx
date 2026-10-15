@@ -3,7 +3,13 @@
 import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
+import {
+  exchangeLoginCode,
+  getProxyBaseUrl,
+  getRuntimeBackendBaseUrl,
+  getUiPageUrl,
+  switchToWorkerUrl,
+} from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -119,9 +125,9 @@ function LoginPageContent() {
     const rawToken = getCookieFromDocument("token");
     if (rawToken && !isJwtExpired(rawToken)) {
       // User already logged in - redirect to return URL or default
-      const returnUrl = consumeReturnUrl();
+      const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
       if (returnUrl) {
-        router.replace(returnUrl);
+        router.replace(getUiPageUrl(returnUrl, true));
       } else {
         router.replace(uiHref("").replace(/\/$/, ""));
       }
@@ -160,11 +166,11 @@ function LoginPageContent() {
             router.push(`${uiHref("")}?login=success`);
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
-            const returnUrl = consumeReturnUrl();
+            const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
             if (returnUrl) {
-              router.push(returnUrl);
+              router.push(getUiPageUrl(returnUrl, true));
             } else {
-              router.push(data.redirect_url);
+              router.push(getUiPageUrl(data.redirect_url, true));
             }
           }
         },

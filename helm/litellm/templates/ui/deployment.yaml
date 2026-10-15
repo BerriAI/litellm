@@ -1,3 +1,5 @@
+{{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
+{{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
 {{- if .Values.ui.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -61,9 +63,9 @@ spec:
             - name: LITELLM_LOG
               value: {{ .Values.ui.logLevel | quote }}
             {{- end }}
-            {{- if .Values.ui.backendUrl }}
+            {{- if and .Values.ui.backendUrl $hasComponentHosts }}
             - name: LITELLM_BACKEND_URL
-              value: {{ .Values.ui.backendUrl | quote }}
+              value: {{ include "litellm.ui.backendOrigin" . | quote }}
             {{- end }}
             {{- with .Values.ui.extraEnv }}
             {{- toYaml . | nindent 12 }}
