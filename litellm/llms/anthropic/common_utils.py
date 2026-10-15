@@ -1620,9 +1620,9 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
-_ANTHROPIC_THINKING_PARAM_KEYS: Final = (
+_ADAPTIVE_THINKING_KEYS: Final = (
     AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
-)
+) - {"budget_tokens"}
 
 
 def carried_thinking_keys(
@@ -1632,7 +1632,7 @@ def carried_thinking_keys(
     return {
         key: value
         for key, value in thinking.items()
-        if key not in rebuilt_keys and (key in _ANTHROPIC_THINKING_PARAM_KEYS or not drops_unknown_keys)
+        if key not in rebuilt_keys and (key in _ADAPTIVE_THINKING_KEYS or not drops_unknown_keys)
     }
 
 

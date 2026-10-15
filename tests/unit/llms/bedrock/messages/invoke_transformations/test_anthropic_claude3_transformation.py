@@ -3731,18 +3731,26 @@ def test_bedrock_messages_keeps_block_binding_with_display_updates(
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize(
-    ("model", "requested_thinking", "extra_params", "expected_thinking"),
+    ("model", "requested_thinking", "rejected_keys", "extra_params", "expected_thinking"),
     (
-        ("eu.anthropic.claude-opus-5", {"type": "enabled", "budget_tokens": 2048}, {}, {"type": "adaptive"}),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {},
+            {"type": "adaptive"},
+        ),
         (
             "us.anthropic.claude-opus-4-6",
             {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
             {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
             {"type": "adaptive"},
         ),
         (
             "eu.anthropic.claude-opus-5",
             {"type": "adaptive", "display": "updates"},
+            {"not_a_thinking_key": True, "budget_tokens": 2048},
             {},
             {"type": "adaptive", "display": "updates"},
         ),
@@ -3753,6 +3761,7 @@ def test_bedrock_messages_keeps_block_binding_with_display_updates(
 def test_bedrock_messages_thinking_drops_unknown_keys_only_under_drop_params(
     model: str,
     requested_thinking: dict[str, object],
+    rejected_keys: dict[str, object],
     extra_params: dict[str, object],
     expected_thinking: dict[str, object],
     drop_params_source: str | None,
@@ -3766,15 +3775,15 @@ def test_bedrock_messages_thinking_drops_unknown_keys_only_under_drop_params(
         messages=[{"role": "user", "content": "Reply with OK"}],
         anthropic_messages_optional_request_params={
             "max_tokens": 4096,
-            "thinking": {**requested_thinking, "block_binding": BLOCK_BINDING, "not_a_thinking_key": True},
+            "thinking": {**requested_thinking, "block_binding": BLOCK_BINDING, **rejected_keys},
             **extra_params,
         },
         litellm_params=GenericLiteLLMParams(drop_params=drop_params_source == "request"),
         headers={},
     )
 
-    expected_unknown_keys: Final = {} if drop_params_source else {"not_a_thinking_key": True}
-    assert result.get("thinking") == {**expected_thinking, "block_binding": BLOCK_BINDING, **expected_unknown_keys}
+    kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
+    assert result.get("thinking") == {**expected_thinking, "block_binding": BLOCK_BINDING, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

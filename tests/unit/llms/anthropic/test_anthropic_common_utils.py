@@ -2700,7 +2700,9 @@ class TestWifZeroBehaviorChange:
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
         assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
 
-    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env: None, tmp_path: Path):
+    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(
+        self, clean_anthropic_env: None, tmp_path: Path
+    ):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -4292,32 +4294,66 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "requested_thinking", "expected_thinking"),
+    ("custom_llm_provider", "model", "requested_thinking", "rejected_keys", "expected_thinking"),
     (
-        ("anthropic", "claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        (
+            "anthropic",
+            "claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
         (
             "bedrock",
             "converse/us.anthropic.claude-opus-5-5",
             {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
             {"type": "adaptive"},
         ),
-        ("bedrock", "invoke/us.anthropic.claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        (
+            "bedrock",
+            "invoke/us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
         (
             "bedrock",
             "invoke/us.anthropic.claude-opus-5-5",
             {"type": "adaptive", "display": "updates"},
+            {"not_a_thinking_key": True, "budget_tokens": 2048},
             {"type": "adaptive", "display": "updates"},
         ),
-        ("vertex_ai", "claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
-        ("databricks", "databricks-claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        (
+            "vertex_ai",
+            "claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+        (
+            "databricks",
+            "databricks-claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
     ),
-    ids=("anthropic", "bedrock_converse", "bedrock_invoke", "bedrock_invoke_display_updates", "vertex_ai", "databricks"),
+    ids=(
+        "anthropic",
+        "bedrock_converse",
+        "bedrock_invoke",
+        "bedrock_invoke_display_updates",
+        "vertex_ai",
+        "databricks",
+    ),
 )
 @pytest.mark.parametrize("drop_params_source", ("request", "global", None))
 def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     custom_llm_provider: str,
     model: str,
     requested_thinking: dict[str, object],
+    rejected_keys: dict[str, object],
     expected_thinking: dict[str, object],
     drop_params_source: str | None,
     monkeypatch: pytest.MonkeyPatch,
@@ -4328,12 +4364,12 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     optional_params: Final = litellm.utils.get_optional_params(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        thinking={**requested_thinking, "block_binding": block_binding, "not_a_thinking_key": True},
+        thinking={**requested_thinking, "block_binding": block_binding, **rejected_keys},
         drop_params=drop_params_source == "request",
     )
 
-    expected_unknown_keys: Final = {} if drop_params_source else {"not_a_thinking_key": True}
-    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **expected_unknown_keys}
+    kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
+    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
