@@ -75,17 +75,14 @@ class _Rows:
 
 
 class _UserTable:
-    def __init__(self, users: Sequence[_UserRow]) -> None:
+    def __init__(self, users: Sequence[_UserRow], after_read: Callable[[dict[str, _UserRow]], None]) -> None:
         self.rows: dict[str, _UserRow] = {u.user_id: u for u in users}
+        self._after_read = after_read
 
     async def find_many(self, where: Mapping[str, object]) -> list[_UserRow]:
-        return [u for u in self.rows.values() if _matches(u.model_dump(), where)]
-
-    async def update(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, Sequence[str]]]) -> _UserRow:
-        row = self.rows[where["user_id"]]
-        updated = row.model_copy(update={"teams": list(data["teams"]["set"])})
-        self.rows[row.user_id] = updated
-        return updated
+        found = [u for u in self.rows.values() if _matches(u.model_dump(), where)]
+        self._after_read(self.rows)
+        return found
 
     async def delete_many(self, where: Mapping[str, object]) -> int:
         doomed = [uid for uid, u in self.rows.items() if _matches(u.model_dump(), where)]
@@ -122,8 +119,9 @@ class _Db:
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
         jwt_mappings: Sequence[Mapping[str, object]] = (),
+        after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
-        self.litellm_usertable = _UserTable(users)
+        self.litellm_usertable = _UserTable(users, after_user_read)
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _Rows([{"team_id": t, "user_id": u} for t, u in memberships])
         self.litellm_verificationtoken = _Rows(tokens)
@@ -178,6 +176,14 @@ class _Tx:
             return []
         return [{"members_with_roles": json.dumps([m.model_dump() for m in team.members_with_roles])}]
 
+    async def execute_raw(self, sql: str, team_id: str, user_ids: Sequence[str]) -> int:
+        assert "array_remove(teams, $1)" in sql
+        rows = self.litellm_usertable.rows
+        detached = [user_id for user_id in user_ids if user_id in rows]
+        for user_id in detached:
+            rows[user_id] = rows[user_id].model_copy(update={"teams": [t for t in rows[user_id].teams if t != team_id]})
+        return len(detached)
+
 
 class _FakePrisma:
     def __init__(
@@ -193,8 +199,9 @@ class _FakePrisma:
         fail_locks: frozenset[str] = frozenset(),
         fail_commit: bool = False,
         on_user_lock: Callable[[_Db], None] = lambda _: None,
+        after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
-        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings)
+        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings, after_user_read)
         self._on_lock = on_lock
         self._on_user_lock = on_user_lock
         self._fail_locks = fail_locks
@@ -700,6 +707,44 @@ async def test_bulk_member_delete_removes_by_id_and_email_and_keeps_the_rest():
     assert sorted(t["token"] for t in prisma.db.litellm_verificationtoken.rows) == ["keep-key", "other-team-key"]
     assert [t["token"] for t in prisma.db.litellm_deletedverificationtoken.rows] == ["team-key"]
     assert prisma.locks == ["t1"] and prisma.roster_reads == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_member_delete_keeps_a_team_a_push_added_the_member_to_after_the_delete_read_them():
+    pushed = itertools.count()
+
+    def push_commits_after_the_read(rows: dict[str, _UserRow]) -> None:
+        if next(pushed):
+            return
+        rows["u1"] = rows["u1"].model_copy(update={"teams": [*rows["u1"].teams, "g1"]})
+
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1")],
+        teams=[_team("t1", "u1", "keep"), _team("g1", "u1")],
+        memberships=[("t1", "u1")],
+        after_user_read=push_commits_after_the_read,
+    )
+
+    results = await _remove(prisma, "t1", [{"user_id": "u1"}])
+
+    assert results[0].success is True
+    assert _roster(prisma, "t1") == ["keep"]
+    assert prisma.db.litellm_usertable.rows["u1"].teams == ["g1"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_member_delete_locks_the_members_rows_in_id_order_before_detaching_them():
+    prisma = _FakePrisma(
+        users=[_user("u2", "t1"), _user("u10", "t1"), _user("u1", "t1")],
+        teams=[_team("t1", "u1", "u2", "u10")],
+    )
+
+    results = await _remove(prisma, "t1", [{"user_id": "u2"}, {"user_id": "u10"}, {"user_id": "u1"}])
+
+    assert all(result.success for result in results)
+    assert prisma.user_locks == [{"u1": ["t1"], "u10": ["t1"], "u2": ["t1"]}]
+    assert list(prisma.user_locks[0]) == ["u1", "u10", "u2"]
+    assert all(user.teams == [] for user in prisma.db.litellm_usertable.rows.values())
 
 
 @pytest.mark.asyncio

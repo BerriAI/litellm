@@ -41,7 +41,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL, USER_ROWS_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    DETACH_TEAM_FROM_USERS_SQL,
+    TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import (
     OrganizationMembershipRepository,
@@ -79,14 +83,6 @@ class _OrgAdminFilter(TypedDict):
 
 class _RosterData(TypedDict):
     members_with_roles: ReadOnly[str]
-
-
-class _TeamsSet(TypedDict):
-    set: ReadOnly[tuple[str, ...]]
-
-
-class _TeamsData(TypedDict):
-    teams: ReadOnly[_TeamsSet]
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +238,7 @@ async def _remove_members_from_team(
     team_id: str,
     members: Sequence[MemberDeleteRequest],
     user_api_key_dict: UserAPIKeyAuth,
+    locked_user_ids: frozenset[str],
 ) -> _TeamRemoval:
     await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
     roster: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
@@ -282,9 +279,11 @@ async def _remove_members_from_team(
             "members_with_roles": json.dumps(tuple(m.model_dump() for m in kept_members))
         }
         await _team_tx_db(tx).update(where=_eq_filter("team_id", team_id), data=roster_data)
-    for row in stale_rows:
-        teams_data: _TeamsData = {"teams": {"set": tuple(t for t in row.teams if t != team_id)}}
-        await _user_tx_db(tx).update(where=_eq_filter("user_id", row.user_id), data=teams_data)
+    stale_ids: Final = frozenset(u.user_id for u in stale_rows)
+    if stale_ids - locked_user_ids:
+        _ = await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(stale_ids - locked_user_ids))
+    if stale_ids:
+        _ = await tx.execute_raw(DETACH_TEAM_FROM_USERS_SQL, team_id, sorted(stale_ids))
     await _membership_tx_db(tx).delete_many(where=_team_users_filter(team_id, cleanup_ids))
     if keys:
         await persist_deleted_verification_tokens(
@@ -352,7 +351,9 @@ async def bulk_remove_team_members(
     kept_indexes: Final = tuple(i for i in range(len(data.members)) if i not in duplicates)
     members: Final = tuple(data.members[i] for i in kept_indexes)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
-        removal: Final = await _remove_members_from_team(prisma_client, tx, team_id, members, user_api_key_dict)
+        removal: Final = await _remove_members_from_team(
+            prisma_client, tx, team_id, members, user_api_key_dict, frozenset()
+        )
     if removal.deleted_keys:
         KeyManagementEventHooks.create_key_deleted_audit_logs(
             keys_being_deleted=removal.deleted_keys,
@@ -512,6 +513,7 @@ async def _delete_users_tx(
                         if tid in teams_of[u.user_id] | current_teams_of.get(u.user_id, frozenset())
                     ),
                     user_api_key_dict,
+                    user_ids,
                 )
                 for tid in team_ids
             }

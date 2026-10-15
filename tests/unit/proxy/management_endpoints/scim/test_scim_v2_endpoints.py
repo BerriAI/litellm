@@ -3577,9 +3577,11 @@ def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user) -
         "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
         AsyncMock(),
     )
-    return mocker.patch(  # test-quality-ok: the locked user row delete is module-level, not injectable into the endpoint
-        "litellm.proxy.management_endpoints.scim.scim_v2.delete_users_from_current_teams",
-        AsyncMock(return_value=1),
+    return (
+        mocker.patch(  # test-quality-ok: the locked user row delete is module-level, not injectable into the endpoint
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_users_from_current_teams",
+            AsyncMock(return_value=1),
+        )
     )
 
 
@@ -4210,9 +4212,7 @@ async def test_unprovisioned_group_members_are_created_concurrently_up_to_the_bu
     newcomers = [f"newcomer-{index:02d}" for index in range(3 * BULK_NEW_USER_CONCURRENCY)]
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])],
     )
 
     _, final_members, _ = await _process_group_patch_operations(
@@ -4250,9 +4250,7 @@ async def test_group_push_creates_its_new_members_only_when_they_all_fit_the_lic
     newcomers: Final = [f"newcomer-{index}" for index in range(newcomer_count)]
     patch_ops: Final = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])],
     )
     push: Final = _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -4392,7 +4390,8 @@ async def test_create_group_whose_roster_write_fails_leaves_no_team_so_the_retry
     mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.new_team", AsyncMock(side_effect=create_team))
     filled: Final = RosterSync(
         team=LiteLLM_TeamTable(
-            team_id=group_id, members_with_roles=[Member(user_id="user1", role="user"), Member(user_id="user2", role="user")]
+            team_id=group_id,
+            members_with_roles=[Member(user_id="user1", role="user"), Member(user_id="user2", role="user")],
         ),
         added=frozenset({"user1", "user2"}),
         removed=frozenset(),
@@ -6016,7 +6015,9 @@ def _put_group_whose_member_is_deleted_mid_push(mocker: MockerFixture, group_id:
             return MembersMissing(team_id=team_id, user_ids=("user2",))
         return RosterSync(
             team=existing_team.model_copy(
-                update={"members_with_roles": [Member(user_id="user1", role="user"), Member(user_id="user2", role="user")]}
+                update={
+                    "members_with_roles": [Member(user_id="user1", role="user"), Member(user_id="user2", role="user")]
+                }
             ),
             added=frozenset({"user2"}),
             removed=frozenset(),
@@ -6073,6 +6074,35 @@ async def test_update_group_creates_a_member_deleted_mid_push_again(mocker: Mock
 
     assert created == {"user2"}
     assert [member.value for member in response.members or []] == ["user1", "user2"]
+
+
+@pytest.mark.asyncio
+async def test_update_group_creates_members_deleted_between_its_retries_again(
+    mocker: MockerFixture, scim_upsert_user_enabled
+):
+    group_id: Final = "test-team-123"
+    created: Final = _put_group_whose_member_is_deleted_mid_push(mocker, group_id)
+    members: Final = [Member(user_id=user_id, role="user") for user_id in ("user1", "user2", "user3")]
+
+    async def sync(team_id: str, **kwargs: object) -> RosterSync | MembersMissing:
+        missing = next((user_id for user_id in ("user2", "user3") if user_id not in created), None)
+        if missing is not None:
+            return MembersMissing(team_id=team_id, user_ids=(missing,))
+        return RosterSync(
+            team=LiteLLM_TeamTable(team_id=team_id, members_with_roles=members),
+            added=frozenset({"user2", "user3"}),
+            removed=frozenset(),
+        )
+
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.sync_team_roster", AsyncMock(side_effect=sync))
+    group: Final = _engineering_group(group_id).model_copy(
+        update={"members": [SCIMMember(value=member.user_id) for member in members]}
+    )
+
+    response: Final = await update_group(group_id=group_id, group=group)
+
+    assert created == {"user2", "user3"}
+    assert [member.value for member in response.members or []] == ["user1", "user2", "user3"]
 
 
 @pytest.mark.asyncio

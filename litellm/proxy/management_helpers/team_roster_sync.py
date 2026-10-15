@@ -13,7 +13,6 @@ from litellm._uuid import uuid
 from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     await_inflight_team_membership_load,
-    delete_cache_key_objects,
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
 )
@@ -35,7 +34,11 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _emit_team_members_metric,  # pyright: ignore[reportPrivateUsage]  # same gauge /team/member_add moves
     _schedule_team_membership_audit_log,  # pyright: ignore[reportPrivateUsage]  # same audit row /team/member_add writes
 )
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL, USER_ROWS_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    DETACH_TEAM_FROM_USERS_SQL,
+    TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 
@@ -46,10 +49,6 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
-_DETACH_TEAM_SQL: Final = (
-    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
-    " WHERE user_id = ANY($2::text[])"
-)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
@@ -242,7 +241,7 @@ async def _remove_members(
     jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
         hashed_tokens=tuple(key.token for key in keys), prisma_client=prisma_client
     )
-    await tx.execute_raw(_DETACH_TEAM_SQL, team_id, list(user_ids))
+    await tx.execute_raw(DETACH_TEAM_FROM_USERS_SQL, team_id, list(user_ids))
     await delete_many_in(
         _membership_tx_db(tx), "user_id", user_ids, atomicity="caller_transaction", where={"team_id": team_id}
     )
@@ -271,21 +270,22 @@ async def _settle_caches(
         *(await_inflight_team_membership_load(user_id=user_id, team_id=team.team_id) for user_id in changed_user_ids)
     )
     deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
-    member_keys: Final = (*removal.jwt_mapping_cache_keys, *_member_cache_keys(team.team_id, changed_user_ids))
-    evict_local(cache_keys=(*deleted_tokens, *member_keys), user_api_key_cache=user_api_key_cache)
-    await evict_shared(cache_keys=member_keys, cache=user_api_key_cache)
+    evicted: Final = (
+        *deleted_tokens,
+        *removal.jwt_mapping_cache_keys,
+        *_member_cache_keys(team.team_id, changed_user_ids),
+    )
+    evict_local(cache_keys=evicted, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=evicted, cache=user_api_key_cache)
+    if proxy_logging_obj is not None:
+        await evict_shared(cache_keys=deleted_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
     await delete_cache_team_object(
         team_id=team.team_id,
         team_alias=team.team_alias,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    await delete_cache_key_objects(
-        hashed_tokens=deleted_tokens,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    await broadcast_evictions(cache_keys=member_keys)
+    await broadcast_evictions(cache_keys=evicted)
 
 
 def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:

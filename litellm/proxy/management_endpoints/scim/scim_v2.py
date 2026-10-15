@@ -3103,21 +3103,27 @@ def _synced_roster_or_raise(group_id: str, outcome: RosterSyncOutcome) -> Roster
 
 
 async def _sync_group_roster(
-    group_id: str, plan: RosterPlan, created_via: str, prisma_client: PrismaClient
+    group_id: str,
+    plan: RosterPlan,
+    created_via: str,
+    prisma_client: PrismaClient,
+    created_again: frozenset[str] = frozenset(),
 ) -> RosterSync:
     """Bring the group's team roster to the plan in one locked bulk transaction.
 
     A member whose user row was deleted after the members were resolved is created
-    again and the write retried once, as the per-member write did. With
+    again and the write retried, as the per-member write did. Deletes that land
+    between retries name new members each time, so the write retries until it lands
+    or a member it already created again goes missing a second time. With
     scim_upsert_user False it is refused like any member that is not a user yet.
 
     Raises:
         HTTPException: 400 when scim_upsert_user is False and a member's user row is gone,
-        404 when the team is gone, 500 when an admitted member's user row is still missing
-        after the retry, so the identity provider retries the whole request.
+        404 when the team is gone, 500 when a member created again is deleted again before
+        the write lands, so the identity provider retries the whole request.
     """
     outcome: Final = await _write_group_roster(group_id, plan, prisma_client)
-    if not isinstance(outcome, MembersMissing):
+    if not isinstance(outcome, MembersMissing) or created_again.intersection(outcome.user_ids):
         return _synced_roster_or_raise(group_id, outcome)
     if not await _get_scim_upsert_user_setting():
         raise _member_not_provisioned_error(outcome.user_ids[0])
@@ -3127,7 +3133,7 @@ async def _sync_group_roster(
         sanitize_for_log(group_id),
     )
     _ = await _create_group_member_users(outcome.user_ids, created_via, prisma_client)
-    return _synced_roster_or_raise(group_id, await _write_group_roster(group_id, plan, prisma_client))
+    return await _sync_group_roster(group_id, plan, created_via, prisma_client, created_again.union(outcome.user_ids))
 
 
 async def _fill_new_group(group_id: str, member_ids: frozenset[str], prisma_client: PrismaClient) -> RosterSync:

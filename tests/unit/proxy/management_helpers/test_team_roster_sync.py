@@ -734,6 +734,44 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
     assert not any(key in redis.entries for key in member_keys)
 
 
+class _SlowToAcknowledgeRedisCache(_AuthRedisCache):
+    def __init__(self, entries: dict[str, object]) -> None:
+        super().__init__(entries)
+        self.acknowledge = asyncio.Event()
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        await super().delete_cache_keys(keys)
+        await self.acknowledge.wait()
+
+
+@pytest.mark.asyncio
+async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_eviction_waits_on_redis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    token = hashlib.sha256(b"key-bob").hexdigest()
+    redis = _SlowToAcknowledgeRedisCache({token: {"token": token}})
+    cache = UserApiKeyCache()
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    cache.in_memory_cache_for(token).set_cache(key=token, value={"token": token})
+    prisma = _FakePrisma(
+        users=[_user("bob", TEAM)],
+        teams=[_team(_member("bob"))],
+        memberships=[(TEAM, "bob")],
+        tokens=[{"token": token, "user_id": "bob", "team_id": TEAM}],
+    )
+
+    sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
+    await asyncio.sleep(0.1)
+    served_while_waiting = await cache.async_get_cache(key=token)
+    redis.acknowledge.set()
+    outcome = await sync
+
+    assert isinstance(outcome, RosterSync) and outcome.removed == frozenset({"bob"})
+    assert served_while_waiting is None
+    assert token not in redis.entries
+
+
 def _removal_of(removed: Sequence[str]) -> tuple[_FakePrisma, set[str]]:
     token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
     prisma = _FakePrisma(

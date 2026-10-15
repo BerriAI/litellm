@@ -40,6 +40,11 @@ USER_ROWS_LOCK_SQL: Final = (
     'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
 )
 
+DETACH_TEAM_FROM_USERS_SQL: Final = (
+    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
+    " WHERE user_id = ANY($2::text[])"
+)
+
 _READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 
 # The groups the team is on either side of the reconcile, so the cache step is driven by
