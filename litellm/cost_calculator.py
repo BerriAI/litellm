@@ -1739,6 +1739,11 @@ def completion_cost(
                     audio_transcription_file_duration = _hidden.get(
                         "audio_transcription_duration",
                         getattr(completion_response, "duration", 0.0),
+                    ) or (
+                        completion_response.usage.seconds
+                        if isinstance(completion_response, TranscriptionResponse)
+                        and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
+                        else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):

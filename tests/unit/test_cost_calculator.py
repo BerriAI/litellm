@@ -6426,6 +6426,37 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
+@pytest.mark.parametrize(
+    ("measured_duration", "expected_seconds"),
+    [(None, 2.0), (1.35, 1.35)],
+    ids=["undecodable_upload_bills_provider_seconds", "measured_duration_still_wins"],
+)
+def test_transcription_cost_falls_back_to_provider_billed_seconds(
+    monkeypatch: pytest.MonkeyPatch, measured_duration: float | None, expected_seconds: float
+) -> None:
+    model: Final = "test-transcribe-per-second"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    provider_body: Final = {"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}}
+    transcription: Final = convert_to_model_response_object(
+        response_object=(
+            provider_body
+            if measured_duration is None
+            else {**provider_body, "_audio_transcription_duration": measured_duration}
+        ),
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": "openai"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(completion_response=transcription, model=model, call_type="atranscription")
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
