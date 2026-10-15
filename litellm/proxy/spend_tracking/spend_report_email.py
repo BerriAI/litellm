@@ -1,6 +1,8 @@
 import html
 import importlib
+import itertools
 import os
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
@@ -16,6 +18,7 @@ EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ROW_LIST_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _STR_SEQUENCE_ADAPTER: Final = TypeAdapter(list[str])
+_STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
@@ -57,24 +60,40 @@ def _normalize_group_by(v: object) -> tuple[SpendReportGroupBy, ...]:
     return filtered if filtered else ("team",)
 
 
-def _clean_email_item(item: object) -> str | None:
-    if isinstance(item, str):
-        cleaned: Final = item.replace("\r", "").replace("\n", "").strip()
-        return cleaned if cleaned else None
-    return None
+_EMAIL_REGEX: Final = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$")
 
 
-def _normalize_email_list(v: object) -> tuple[str, ...]:
+def _split_email_item(item: str) -> tuple[str, ...]:
+    return tuple(item.split(","))
+
+
+def _extract_raw_candidates(v: object) -> tuple[str, ...]:
     if isinstance(v, str):
-        single_clean: Final = _clean_email_item(v)
-        return (single_clean,) if single_clean else ()
+        return tuple(v.split(","))
     if isinstance(v, (list, tuple)):
         try:
-            items: Final = _STR_SEQUENCE_ADAPTER.validate_python(v)
-            return tuple(cleaned for item in items if (cleaned := _clean_email_item(item)) is not None)
+            items: Final[tuple[str, ...]] = _STR_TUPLE_ADAPTER.validate_python(v)
+            return tuple(itertools.chain.from_iterable(_split_email_item(item) for item in items))
         except ValidationError:
             return ()
     return ()
+
+
+def _clean_and_validate_email(raw: str) -> str | None:
+    clean: Final = raw.replace("\r", "").replace("\n", "").strip()
+    if not clean:
+        return None
+    if not _EMAIL_REGEX.match(clean):
+        raise ValueError(f"Invalid email address format: {clean}")
+    return clean
+
+
+def _normalize_email_list(v: object) -> tuple[str, ...]:
+    if v is None:
+        return ()
+    raw_candidates: Final = _extract_raw_candidates(v)
+    validated: Final = tuple(clean for raw in raw_candidates if (clean := _clean_and_validate_email(raw)) is not None)
+    return tuple(dict.fromkeys(validated))
 
 
 class SpendReportEmailAlert(BaseModel):
@@ -868,10 +887,9 @@ async def send_spend_report_email(
     prisma_client: object | None = None,
     email_sender: Callable[..., Awaitable[None]] | None = None,
 ) -> SpendReportSendResult:
-    if not recipient_emails:
+    resolved_recipients: Final[tuple[str, ...]] = _normalize_email_list(recipient_emails)
+    if not resolved_recipients:
         raise ValueError("No recipient emails configured for spend report email")
-
-    resolved_recipients: Final[Sequence[str]] = recipient_emails
 
     resolved_dates: Final = _resolve_report_date_range(frequency, start_date, end_date)
     resolved_start_date: Final = resolved_dates[0]
@@ -902,9 +920,9 @@ async def send_spend_report_email(
 
     team_subject_suffix: Final = f" - Team: {team_id}" if team_id else ""
     subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"
-    for raw_email in resolved_recipients:
+    for clean_email in resolved_recipients:
         await actual_sender(
-            receiver_email=str(raw_email).replace("\r", "").replace("\n", "").strip(),
+            receiver_email=clean_email,
             subject=subject,
             html=html_content,
         )

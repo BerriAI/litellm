@@ -1202,3 +1202,68 @@ def test_sql_queries_read_daily_team_spend() -> None:
         assert 'FROM "LiteLLM_SpendLogs"' not in query
         assert "s.date >= $1 AND s.date <= $2" in query
 
+
+def test_recipient_emails_comma_separated_parsing_in_alert() -> None:
+    alert_from_string: Final = SpendReportEmailAlert(
+        recipient_emails="alice@example.com, bob@example.com",
+    )
+    assert alert_from_string.recipient_emails == ("alice@example.com", "bob@example.com")
+
+    alert_from_list_with_commas: Final = SpendReportEmailAlert(
+        recipient_emails=["alice@example.com, bob@example.com", "carol@example.com"],
+    )
+    assert alert_from_list_with_commas.recipient_emails == (
+        "alice@example.com",
+        "bob@example.com",
+        "carol@example.com",
+    )
+
+    with pytest.raises(ValueError, match="Invalid email address format"):
+        SpendReportEmailAlert(recipient_emails="valid@example.com, not-an-email")
+
+
+def test_recipient_emails_comma_separated_parsing_in_send_request() -> None:
+    from litellm.proxy.spend_tracking.spend_report_email import SpendReportEmailSendRequest
+
+    req_from_string: Final = SpendReportEmailSendRequest(
+        recipient_emails="alice@example.com, bob@example.com",
+    )
+    assert req_from_string.recipient_emails == ("alice@example.com", "bob@example.com")
+
+    req_from_list_with_commas: Final = SpendReportEmailSendRequest(
+        recipient_emails=["alice@example.com, bob@example.com"],
+    )
+    assert req_from_list_with_commas.recipient_emails == ("alice@example.com", "bob@example.com")
+
+    req_none: Final = SpendReportEmailSendRequest(recipient_emails=None)
+    assert req_none.recipient_emails is None
+
+    with pytest.raises(ValueError, match="Invalid email address format"):
+        SpendReportEmailSendRequest(recipient_emails="invalid-email")
+
+
+@pytest.mark.asyncio
+async def test_send_spend_report_email_parses_comma_separated_recipients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent_to: Final[list[str]] = []
+
+    async def mock_sender(receiver_email: str, subject: str, html: str) -> None:
+        sent_to.append(receiver_email)
+
+    mock_prisma: Final = MagicMock()
+    mock_db: Final = MagicMock()
+    mock_prisma.db = mock_db
+    mock_db.query_raw = AsyncMock(return_value=[])
+
+    result: Final = await send_spend_report_email(
+        frequency="daily",
+        recipient_emails=["user1@example.com, user2@example.com", "user3@example.com"],
+        prisma_client=mock_prisma,
+        email_sender=mock_sender,
+    )
+
+    assert result.recipients == ("user1@example.com", "user2@example.com", "user3@example.com")
+    assert sent_to == ["user1@example.com", "user2@example.com", "user3@example.com"]
+
+
