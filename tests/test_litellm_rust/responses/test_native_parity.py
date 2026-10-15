@@ -5,6 +5,7 @@ recorded OpenAI response, then compares what reached the provider, what the call
 callback logged. The native leg fails instead of silently falling back to Python
 """
 
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -33,6 +34,8 @@ _COMPARED_HEADERS: Final = (
     "openai-project",
     "user-agent",
 )
+_SIGV4_TIME: Final = re.compile(r"/\d{8}/")
+_SIGV4_SIGNATURE: Final = re.compile(r"Signature=[0-9a-f]{64}")
 _COMPARED_LOG_FIELDS: Final = (
     "call_type",
     "custom_llm_provider",
@@ -175,6 +178,20 @@ FIREWORKS_INSTRUCTION_INPUT: Final[list[JsonValue]] = [
     {"role": "developer", "content": "Now be verbose"},
 ]
 HOSTED_VLLM_MODEL: Final = "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"
+MANTLE_MODEL: Final = "bedrock_mantle/openai.gpt-5.5"
+MANTLE_CODEX_INPUT: Final[list[JsonValue]] = [
+    {"type": "additional_tools", "tools": [{"type": "mcp", "server_label": "docs"}, {"type": "image_generation"}]},
+    {"type": "context_compaction", "encrypted_content": "gAAAAB0a1b2c3d"},
+    {"type": "agent_message", "content": [{"type": "input_text", "text": "Planning"}]},
+    {"type": "local_shell_call", "call_id": "call_ls", "action": {"type": "exec", "command": ["ls", "-la"]}},
+    {"type": "function_call_output", "call_id": "call_ls", "output": "README.md"},
+    {"role": "user", "content": "Continue"},
+]
+MANTLE_TOOLS: Final[list[JsonValue]] = [
+    dict(WEATHER_TOOL),
+    {"type": "web_search"},
+    {"type": "code_interpreter", "container": {"type": "auto"}},
+]
 
 XAI_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
@@ -391,6 +408,31 @@ CASES: Final = (
             "max_output_tokens": 4,
         },
     ),
+    Case("bedrock_mantle_openai_path", {"model": MANTLE_MODEL, "input": "hi"}),
+    Case(
+        "bedrock_mantle_regional_v1_path",
+        {"model": "bedrock_mantle/us-west-2/openai.gpt-oss-120b", "input": "hi", "aws_bedrock_project_id": "proj_1"},
+    ),
+    Case(
+        "bedrock_mantle_codex_history_and_tools",
+        {"model": MANTLE_MODEL, "input": MANTLE_CODEX_INPUT, "tools": MANTLE_TOOLS},
+    ),
+    Case(
+        "bedrock_mantle_sigv4",
+        {
+            "model": MANTLE_MODEL,
+            "input": "hi",
+            "api_key": None,
+            "aws_region_name": "us-west-2",
+            "aws_access_key_id": "AKIDEXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        },
+    ),
+    Case(
+        "bedrock_mantle_service_tier_stays_on_python",
+        {"model": MANTLE_MODEL, "input": "hi", "service_tier": "flex", "drop_params": True},
+        falls_back=True,
+    ),
     Case("azure_o_series_stays_on_python", {"model": "azure/o_series/my-o3", "input": "hi"}, falls_back=True),
     Case(
         "tool_schema_repair_stays_on_python",
@@ -405,6 +447,11 @@ CASES: Final = (
 
 def _kwargs(case: Case, server: RecordingServer, recorder: RecordingLogger) -> dict[str, object]:
     return {"model": MODEL, "api_key": "sk-test", "api_base": server.base_url, "callbacks": [recorder], **case.kwargs}
+
+
+def _comparable_header(value: str) -> str:
+    """A SigV4 signature covers the signing time, so only its scope and signed headers compare"""
+    return _SIGV4_TIME.sub("/<date>/", _SIGV4_SIGNATURE.sub("Signature=<signature>", value))
 
 
 def _response(result: object) -> Mapping[str, JsonValue]:
@@ -442,7 +489,7 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
         request_path=sent.path,
         request_body=_OBJECT.validate_python(sent.body),
         request_headers=MappingProxyType(
-            {name: value for name, value in sent.headers.items() if name in _COMPARED_HEADERS}
+            {name: _comparable_header(value) for name, value in sent.headers.items() if name in _COMPARED_HEADERS}
         ),
         response=_response(result),
         logged=MappingProxyType({name: standard.get(name) for name in _COMPARED_LOG_FIELDS}),

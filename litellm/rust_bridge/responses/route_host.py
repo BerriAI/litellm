@@ -8,6 +8,7 @@ from typing import Final, cast  # noqa: TID251  # narrows caller json the checke
 import litellm
 from litellm import get_llm_provider
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.databricks.responses.transformation import DatabricksResponsesAPIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
@@ -19,9 +20,25 @@ from litellm.rust_bridge.public_call import inference_decline_reason, optional_s
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
 _NATIVE_PARAMETERS: Final = (*PARAMETERS, "api_version")
+_MANTLE_PARAMETERS: Final = (
+    *_NATIVE_PARAMETERS,
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+    "aws_bedrock_project_id",
+)
 _CONFIGS: Final[Mapping[str, OpenAIResponsesAPIConfig]] = MappingProxyType(
     {
         "openai": OpenAIResponsesAPIConfig(),
@@ -36,7 +53,7 @@ _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:
-    if provider == "databricks":
+    if provider in ("databricks", "bedrock_mantle"):
         return None, None
     provider_key: Final = {"openai": litellm.openai_key, "azure": litellm.azure_key}.get(provider)
     return litellm.api_key or provider_key, litellm.api_base
@@ -50,6 +67,21 @@ def provider_connection(
         model=model, custom_llm_provider=custom_llm_provider, api_key=api_key, api_base=api_base
     )
     return provider_key, provider_base
+
+
+def provider_params(model: str, custom_llm_provider: str | None) -> tuple[tuple[str, object], ...]:
+    """The provider settings Python reads from the model cost map, as litellm params"""
+    resolved, provider = _resolved_model({"model": model, "custom_llm_provider": custom_llm_provider})
+    if provider != "bedrock_mantle":
+        return ()
+    config: Final = _mantle_config(resolved)
+    return () if config is None else (("use_openai_responses_path", config.use_openai_path),)
+
+
+def _mantle_config(model: str) -> BedrockMantleResponsesAPIConfig | None:
+    """The config Python's dispatch picks from the model cost map, or None for chat-only models"""
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(LlmProviders.BEDROCK_MANTLE, model)
+    return config if isinstance(config, BedrockMantleResponsesAPIConfig) else None
 
 
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:
@@ -80,14 +112,20 @@ def decline_reason(request: Mapping[str, object]) -> str | None:
         model, provider = _resolved_model(request)
     except litellm.exceptions.BadRequestError:
         return "native Responses could not resolve the provider"
-    config: Final = _CONFIGS.get(provider)
+    config: Final = _responses_config(provider, model)
     if config is None:
         return "native HTTP responses provider"
     return (
-        inference_decline_reason(_NATIVE_PARAMETERS, request)
+        inference_decline_reason(_MANTLE_PARAMETERS if provider == "bedrock_mantle" else _NATIVE_PARAMETERS, request)
         or _provider_decline_reason(provider, model, request)
         or _model_rules_decline_reason(config, model, request)
     )
+
+
+def _responses_config(provider: str, model: str) -> OpenAIResponsesAPIConfig | None:
+    if provider != "bedrock_mantle":
+        return _CONFIGS.get(provider)
+    return _mantle_config(model)
 
 
 def _provider_decline_reason(provider: str, model: str, request: Mapping[str, object]) -> str | None:

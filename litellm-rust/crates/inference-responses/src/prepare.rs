@@ -5,6 +5,9 @@ use litellm_host::interceptors::{ProviderIdentity, RequestContext};
 use litellm_llms::{
     azure::responses::transformation::AZURE_RESPONSES_CONFIG,
     base_llm::responses::transformation::BaseResponsesApiConfig,
+    bedrock_mantle::responses::transformation::{
+        BedrockMantleResponsesApiConfig, split_region_prefix,
+    },
     databricks::responses::transformation::DATABRICKS_RESPONSES_CONFIG,
     fireworks_ai::responses::transformation::FIREWORKS_AI_RESPONSES_CONFIG,
     hosted_vllm::responses::transformation::HOSTED_VLLM_RESPONSES_CONFIG,
@@ -12,6 +15,7 @@ use litellm_llms::{
     openrouter::responses::transformation::OPENROUTER_RESPONSES_CONFIG,
     xai::responses::transformation::XAI_RESPONSES_CONFIG,
 };
+use litellm_router_types::LitellmParams;
 use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 
@@ -25,8 +29,12 @@ pub(super) async fn prepare(
     call: ResponsesCall,
     secrets: &dyn SecretSource,
 ) -> Result<ProviderResponsesRequest, Error> {
-    let ResponsesProvider { identity, config } =
-        resolve_provider(&call.model, call.custom_llm_provider.as_deref())?;
+    let ResponsesProvider { identity, config } = resolve_provider(
+        &call.model,
+        call.custom_llm_provider.as_deref(),
+        call.api_base.as_deref(),
+        &call.litellm_params,
+    )?;
     let provider = identity.provider.as_str();
     let model = identity.model.as_str();
     let snapshot = secrets
@@ -67,7 +75,7 @@ pub(super) async fn prepare(
 
 pub(super) struct ResponsesProvider {
     pub identity: ProviderIdentity,
-    pub config: &'static dyn BaseResponsesApiConfig,
+    pub config: Box<dyn BaseResponsesApiConfig + Send>,
 }
 
 /// Python's `get_llm_provider`: a bare model is OpenAI's, and with an explicit OpenRouter
@@ -75,6 +83,8 @@ pub(super) struct ResponsesProvider {
 pub(super) fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
+    api_base: Option<&str>,
+    params: &LitellmParams,
 ) -> Result<ResponsesProvider, Error> {
     let explicit = custom_llm_provider.filter(|provider| !provider.is_empty());
     let (provider, resolved) = match get_custom_llm_provider(model, explicit) {
@@ -87,24 +97,34 @@ pub(super) fn resolve_provider(
     if resolved.is_empty() {
         return Err(Error::InvalidProvider(model.into()));
     }
-    let (config, wire_model): (&'static dyn BaseResponsesApiConfig, String) =
-        match provider.parse::<LlmProviders>() {
-            Ok(LlmProviders::Openai) if resolved.contains('/') => {
-                return Err(Error::InvalidProvider(model.into()));
-            }
-            Ok(LlmProviders::Openai) => (&OpenAiResponsesApiConfig, resolved.into()),
-            Ok(LlmProviders::Openrouter) if explicit.is_some() && !resolved.contains('/') => (
-                &OPENROUTER_RESPONSES_CONFIG,
-                format!("openrouter/{resolved}"),
-            ),
-            Ok(LlmProviders::Openrouter) => (&OPENROUTER_RESPONSES_CONFIG, resolved.into()),
-            Ok(LlmProviders::Azure) => (&AZURE_RESPONSES_CONFIG, resolved.into()),
-            Ok(LlmProviders::Xai) => (&XAI_RESPONSES_CONFIG, resolved.into()),
-            Ok(LlmProviders::Databricks) => (&DATABRICKS_RESPONSES_CONFIG, resolved.into()),
-            Ok(LlmProviders::FireworksAi) => (&FIREWORKS_AI_RESPONSES_CONFIG, resolved.into()),
-            Ok(LlmProviders::HostedVllm) => (&HOSTED_VLLM_RESPONSES_CONFIG, resolved.into()),
-            _ => return Err(Error::Unsupported("native HTTP responses provider")),
-        };
+    let (config, wire_model): (Box<dyn BaseResponsesApiConfig + Send>, String) = match provider
+        .parse::<LlmProviders>(
+    ) {
+        Ok(LlmProviders::Openai) if resolved.contains('/') => {
+            return Err(Error::InvalidProvider(model.into()));
+        }
+        Ok(LlmProviders::Openai) => (Box::new(OpenAiResponsesApiConfig), resolved.into()),
+        Ok(LlmProviders::Openrouter) if explicit.is_some() && !resolved.contains('/') => (
+            Box::new(OPENROUTER_RESPONSES_CONFIG),
+            format!("openrouter/{resolved}"),
+        ),
+        Ok(LlmProviders::Openrouter) => (Box::new(OPENROUTER_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::Azure) => (Box::new(AZURE_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::Xai) => (Box::new(XAI_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::Databricks) => (Box::new(DATABRICKS_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::FireworksAi) => (Box::new(FIREWORKS_AI_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::HostedVllm) => (Box::new(HOSTED_VLLM_RESPONSES_CONFIG), resolved.into()),
+        Ok(LlmProviders::BedrockMantle) => {
+            let (region, wire) = split_region_prefix(resolved);
+            (
+                Box::new(BedrockMantleResponsesApiConfig::new(
+                    api_base, region, params,
+                )),
+                wire.into(),
+            )
+        }
+        _ => return Err(Error::Unsupported("native HTTP responses provider")),
+    };
     Ok(ResponsesProvider {
         identity: ProviderIdentity {
             model: wire_model,
@@ -165,6 +185,12 @@ mod tests {
         "accounts/fireworks/models/qwen3"
     )]
     #[case::xai_prefix("xai/grok-4", None, "xai", "grok-4")]
+    #[case::bedrock_mantle_region_prefix(
+        "bedrock_mantle/us-west-2/openai.gpt-5.5",
+        None,
+        "bedrock_mantle",
+        "openai.gpt-5.5"
+    )]
     #[case::hosted_vllm_keeps_the_vendor(
         "hosted_vllm/meta-llama/Llama-3.1-8B",
         None,
@@ -177,7 +203,8 @@ mod tests {
         #[case] provider: &str,
         #[case] wire_model: &str,
     ) {
-        let resolved = resolve_provider(model, custom_llm_provider).unwrap();
+        let resolved =
+            resolve_provider(model, custom_llm_provider, None, &LitellmParams::default()).unwrap();
         assert_eq!(resolved.identity.provider, provider);
         assert_eq!(resolved.identity.model, wire_model);
     }
@@ -190,7 +217,7 @@ mod tests {
     #[case::conflicting_prefix("openrouter/anthropic/claude", Some("openai"))]
     fn everything_else_is_rejected(#[case] model: &str, #[case] custom_llm_provider: Option<&str>) {
         assert!(matches!(
-            resolve_provider(model, custom_llm_provider),
+            resolve_provider(model, custom_llm_provider, None, &LitellmParams::default()),
             Err(Error::InvalidProvider(_) | Error::Unsupported(_))
         ));
     }

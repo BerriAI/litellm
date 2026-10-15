@@ -2,6 +2,7 @@
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_llms_types::formats::responses::ResponsesApiResponse;
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -89,7 +90,7 @@ impl BaseResponsesApiConfig for XaiResponsesApiConfig {
         mut params: Map<String, Value>,
     ) -> Result<Value, Error> {
         params.remove("metadata");
-        if let Some(tools) = params.get_mut("tools").filter(|tools| python_truthy(tools)) {
+        if let Some(tools) = params.get_mut("tools").filter(|tools| json_truthy(tools)) {
             let listed = match tools.take() {
                 Value::Array(tools) => tools,
                 tool => vec![tool],
@@ -120,17 +121,6 @@ fn resolved(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .or_else(|| lookup(name).filter(|value| !value.is_empty()))
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(number) => number.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(values) => !values.is_empty(),
-    }
 }
 
 /// Python's `xai_reported_cost_in_usd`: only a non-negative integer tick count is a cost

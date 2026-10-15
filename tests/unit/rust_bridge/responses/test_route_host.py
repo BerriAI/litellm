@@ -10,6 +10,7 @@ from litellm.rust_bridge.responses.route_host import (
     decline_reason,
     map_failure,
     provider_connection,
+    provider_params,
     response,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -316,3 +317,81 @@ def test_databricks_connection_defaults_ignore_the_global_settings(monkeypatch: 
     monkeypatch.setattr(litellm, "api_key", "global")
     monkeypatch.setattr(litellm, "api_base", "https://global.invalid")
     assert connection_defaults("databricks") == (None, None)
+
+
+_MANTLE_MODEL_COST: Final = {
+    "bedrock_mantle/openai.gpt-openai-path": {"mode": "responses", "use_openai_responses_path": True},
+    "bedrock_mantle/openai.gpt-v1-path": {"mode": "chat", "supported_endpoints": ["/v1/responses"]},
+    "bedrock_mantle/openai.gpt-chat-only": {"mode": "chat"},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        pytest.param("bedrock_mantle/openai.gpt-openai-path", (("use_openai_responses_path", True),), id="openai"),
+        pytest.param(
+            "bedrock_mantle/us-west-2/openai.gpt-v1-path", (("use_openai_responses_path", False),), id="regional_v1"
+        ),
+        pytest.param("openai/gpt-openai-path", (), id="other_provider"),
+    ],
+)
+def test_provider_params_carry_the_mantle_path_from_the_cost_map(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: tuple[tuple[str, object], ...]
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _MANTLE_MODEL_COST)
+    assert provider_params(model, None) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    [
+        pytest.param({}, None, id="responses_model"),
+        pytest.param({"model": "bedrock_mantle/openai.gpt-v1-path"}, None, id="supported_endpoint"),
+        pytest.param(
+            {"aws_region_name": "us-west-2", "aws_role_name": "arn:aws:iam::1:role/r", "aws_bedrock_project_id": "p"},
+            None,
+            id="aws_settings",
+        ),
+        pytest.param(
+            {"aws_session_tags": {"team": "a"}},
+            "native inference does not implement aws_session_tags",
+            id="aws_session_tags",
+        ),
+        pytest.param(
+            {"model": "bedrock_mantle/openai.gpt-chat-only"}, "native HTTP responses provider", id="chat_only_model"
+        ),
+        pytest.param(
+            {"service_tier": "flex"},
+            "native Responses does not implement the model's sampling rules",
+            id="service_tier",
+        ),
+        pytest.param(
+            {"reasoning": {"summary": "detailed"}},
+            "native Responses does not implement the model's sampling rules",
+            id="openai_path_reasoning_summary",
+        ),
+        pytest.param(
+            {"model": "bedrock_mantle/openai.gpt-v1-path", "reasoning": {"summary": "detailed"}},
+            None,
+            id="v1_path_reasoning_summary",
+        ),
+    ],
+)
+def test_bedrock_mantle_requests_outside_the_native_config_stay_on_python(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object], expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _MANTLE_MODEL_COST)
+    request: Final = {"model": "bedrock_mantle/openai.gpt-openai-path", "input": "hi", **request_fields}
+    assert decline_reason(request) == expected
+
+
+def test_aws_settings_stay_on_python_for_other_providers() -> None:
+    request: Final = {"model": "gpt-4.1", "input": "hi", "api_key": "sk-test", "aws_region_name": "us-west-2"}
+    assert decline_reason(request) == "native inference does not implement aws_region_name"
+
+
+def test_bedrock_mantle_connection_defaults_ignore_the_global_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_key", "global")
+    monkeypatch.setattr(litellm, "api_base", "https://global.invalid")
+    assert connection_defaults("bedrock_mantle") == (None, None)

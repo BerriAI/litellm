@@ -34,6 +34,7 @@ fn call(stream: bool) -> ResponsesCall {
         api_base: None,
         custom_llm_provider: None,
         api_version: None,
+        litellm_params: Default::default(),
         extra_headers: None,
         timeout: Some(Duration::from_secs(60)),
     }

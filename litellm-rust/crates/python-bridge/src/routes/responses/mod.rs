@@ -47,7 +47,9 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
         None => !model.contains('/'),
         Some(resolved) => match resolved.custom_llm_provider {
             "openai" => !resolved.model.contains('/'),
-            "azure" | "xai" | "hosted_vllm" | "fireworks_ai" | "databricks" => true,
+            "azure" | "xai" | "hosted_vllm" | "fireworks_ai" | "databricks" | "bedrock_mantle" => {
+                true
+            }
             _ => false,
         },
     };
