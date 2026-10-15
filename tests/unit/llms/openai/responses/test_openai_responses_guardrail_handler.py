@@ -1874,6 +1874,36 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             )
         assert undeliverable.value.reason == "no stream event carries the rewritten call_id call_999"
 
+    @pytest.mark.asyncio
+    async def test_masking_guardrail_hides_a_faked_custom_tool_call_input_from_every_event(self):
+        from litellm.responses.streaming_iterator import build_synthetic_response_events
+
+        events: Final = list(
+            build_synthetic_response_events(
+                transformed=ResponsesAPIResponse(
+                    id="resp_faked",
+                    created_at=0,
+                    status="completed",
+                    model="gpt-6-luna",
+                    object="response",
+                    output=[CUSTOM_TOOL_CALL_ITEM],
+                ),
+                logging_obj=None,
+                chunk_size=5,
+            )
+        )
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        sent: Final = "".join(event.model_dump_json() for event in events)
+        assert "persimmon" not in sent
+        assert "echo [MASKED]" in sent
+
     @staticmethod
     def _bridged_function_call_stream_events() -> List[dict]:
         reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}

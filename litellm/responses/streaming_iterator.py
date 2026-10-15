@@ -1608,6 +1608,10 @@ def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
             return {**payload, "content": [], "status": "in_progress"}
         case "function_call":
             return {**payload, "arguments": "", "status": "in_progress"}
+        case "custom_tool_call":
+            return {**payload, "input": ""}
+        case "reasoning":
+            return {**payload, "summary": []}
         case _:
             return payload
 
@@ -1616,6 +1620,8 @@ def opening_part_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     match payload.get("type"):
         case "output_text":
             return {**payload, "text": ""}
+        case "refusal":
+            return {**payload, "refusal": ""}
         case _:
             return payload
 
@@ -1697,11 +1703,43 @@ def build_synthetic_response_events(
                     arguments=arguments,
                 )
             )
+        elif item_type == "custom_tool_call":
+            tool_input = str(output_item_payload.get("input") or "")
+            for i in range(0, len(tool_input), chunk_size):
+                events.append(
+                    openai_types.GenericEvent.model_validate(
+                        {
+                            "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "delta": tool_input[i : i + chunk_size],
+                        }
+                    )
+                )
+            events.append(
+                openai_types.GenericEvent.model_validate(
+                    {
+                        "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value,
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "input": tool_input,
+                    }
+                )
+            )
         elif item_type == "reasoning":
             summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
             for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
+                events.append(
+                    openai_types.ResponsePartAddedEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                        item_id=item_id,
+                        output_index=output_index,
+                        summary_index=summary_index,
+                        part={**summary_payload, "text": ""},
+                    )
+                )
                 for i in range(0, len(summary_text), chunk_size):
                     events.append(
                         openai_types.ReasoningSummaryTextDeltaEvent(
