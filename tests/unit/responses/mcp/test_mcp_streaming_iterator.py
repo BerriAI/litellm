@@ -468,6 +468,31 @@ async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_executed_mcp_call_arguments_reach_a_snapshot_reader_once(monkeypatch):
+    _mock_mcp_environment(monkeypatch)
+    follow_up = _FakeAsyncStream(_lifecycle_round("resp-final", _text_message("Alpha.")))
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=[follow_up]))
+    arguments = '{"repoName": "berriai/litellm"}'
+    iterator = _make_iterator(
+        [
+            _created_chunk("resp-interim"),
+            _completed_chunk([_function_call("call_1", "read_wiki_contents", arguments)], response_id="resp-interim"),
+        ]
+    )
+
+    chunks = [chunk async for chunk in iterator]
+
+    opened = [
+        c.item.arguments
+        for c in chunks
+        if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _item_type(c.item) == "mcp_call"
+    ]
+    deltas = [c.delta for c in chunks if c.type == ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA]
+    assert len(opened) == 1
+    assert opened[0] + "".join(deltas) == arguments
+
+
+@pytest.mark.asyncio
 async def test_stream_without_auto_execute_is_forwarded_unchanged(monkeypatch):
     """With approval required there is one round, and it passes through untouched."""
     _mock_mcp_environment(monkeypatch)

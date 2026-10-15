@@ -1754,6 +1754,8 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _block_continuation_events(
         exc: "ModifyResponseException", responses_so_far: Sequence[object]
     ) -> Sequence[ResponsesAPIStreamingResponse]:
+        from litellm.responses.streaming_iterator import opening_item_payload, opening_part_payload
+
         response_id, model, output_index = _continuation_identity(exc, responses_so_far)
         item: Final = _blocked_output_item(exc)
         item_id: Final = item.id
@@ -1769,14 +1771,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=item,
+                item=BaseLiteLLMOpenAIResponseObject.model_validate(opening_item_payload(item.model_dump())),
             ),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
                 item_id=item_id,
                 output_index=output_index,
                 content_index=0,
-                part=BaseLiteLLMOpenAIResponseObject.model_validate(part),
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(opening_part_payload(part)),
             ),
             OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
