@@ -26,6 +26,10 @@ KIMI: Final = "kimi-k3"
 CLAUDE: Final = "claude-opus-5-5"
 GPT: Final = "gpt-6.1-sol"
 GLM: Final = "zai-glm-5-3"
+FIREWORKS_KIMI: Final = f"accounts/fireworks/models/{KIMI}"
+OPENROUTER_KIMI: Final = f"moonshotai/{KIMI}"
+GEMINI: Final = "gemini-3-pro-preview"
+ZAI_GLM: Final = "glm-5"
 ECHOED_KEY_MODEL: Final = f"{KIMI}-echoed-key"
 BEDROCK_CLAUDE: Final = f"us.anthropic.{CLAUDE}"
 AZURE_API_VERSION: Final = "2025-04-01-preview"
@@ -95,6 +99,19 @@ def _converse_stream_reply(marker: str) -> Reply:
     return Reply(body=b"".join(frames), content_type=_EVENT_STREAM)
 
 
+def _gemini_reply(marker: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": answer(marker)}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 5, "totalTokenCount": 14},
+            }
+        ).encode()
+    )
+
+
 def provider_reply(request: Request) -> Reply:
     marker: Final = marker_of(request)
     scripted: Final = _SCRIPTED_STATUS.search(request.body.decode(errors="replace"))
@@ -104,6 +121,8 @@ def provider_reply(request: Request) -> Reply:
     path: Final = path_of(request)
     model: Final = str(body.get("model", ""))
     stream: Final = body.get("stream") is True
+    if path.endswith(":generateContent"):
+        return _gemini_reply(marker)
     if path.endswith("/converse"):
         return _converse_reply(marker)
     if path.endswith("/converse-stream"):
@@ -131,6 +150,25 @@ def backend(kind: str, wire_url: str) -> Backend:
     match kind:
         case "azure_ai":
             return Backend(f"azure_ai/{KIMI}", MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY}))
+        case "azure_ai_drop_params":
+            return Backend(
+                f"azure_ai/{KIMI}",
+                MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY, "drop_params": True}),
+            )
+        case "fireworks_ai":
+            return Backend(
+                f"fireworks_ai/{FIREWORKS_KIMI}",
+                MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY}),
+            )
+        case "openrouter":
+            return Backend(
+                f"openrouter/{OPENROUTER_KIMI}",
+                MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY}),
+            )
+        case "gemini":
+            return Backend(f"gemini/{GEMINI}", MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY}))
+        case "zai":
+            return Backend(f"zai/{ZAI_GLM}", MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY}))
         case "azure_ai_claude":
             return Backend(f"azure_ai/{CLAUDE}", MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY}))
         case "hosted_vllm":

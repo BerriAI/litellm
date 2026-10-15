@@ -16,11 +16,15 @@ from integration.routing._reasoning_effort_levels_support import (
     CLAUDE,
     CLAUDE_LEVELS,
     ECHOED_KEY_MODEL,
+    FIREWORKS_KIMI,
+    GEMINI,
     GLM,
     GPT,
     GPT_LEVELS,
     KIMI,
     KIMI_LEVELS,
+    OPENROUTER_KIMI,
+    ZAI_GLM,
     answer,
     body_of,
     chat_messages,
@@ -43,6 +47,13 @@ _BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 2048
 _ADAPTIVE: Final[dict[str, JsonValue]] = {"type": "adaptive"}
 _STRING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "2048"}
 _XHIGH_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 9000}
+_BOOL_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": True}
+_NULL_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": None}
+_LIST_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": [2048]}
+_EMPTY_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": ""}
+_LONG_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "9" * 5000}
+_MISSING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled"}
+_DISABLED: Final[dict[str, JsonValue]] = {"type": "disabled"}
 _KIMI_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(KIMI_LEVELS)})
 _CLAUDE_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(CLAUDE_LEVELS)})
 _GPT_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(GPT_LEVELS)})
@@ -147,6 +158,61 @@ def _bridged_messages(effort: str | None, *, model: str = KIMI) -> Expected:
     return expected
 
 
+def _openrouter_messages(effort: str | None) -> Expected:
+    def expected(marker: str) -> dict[str, JsonValue]:
+        return {**_bridged_messages(effort, model=OPENROUTER_KIMI)(marker), "usage": {"include": True}}
+
+    return expected
+
+
+def _bridged_stream_messages(effort: str | None) -> Expected:
+    def expected(marker: str) -> dict[str, JsonValue]:
+        sent: Final[dict[str, JsonValue]] = {
+            "model": KIMI,
+            "messages": chat_messages(marker),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "max_tokens": 4096,
+        }
+        return sent if effort is None else {**sent, "reasoning_effort": effort}
+
+    return expected
+
+
+def _azure_messages(effort: str | None) -> Expected:
+    def expected(marker: str) -> dict[str, JsonValue]:
+        sent: Final[dict[str, JsonValue]] = {
+            "model": GPT,
+            "messages": chat_messages(marker),
+            "max_completion_tokens": 4096,
+        }
+        return sent if effort is None else {**sent, "reasoning_effort": effort}
+
+    return expected
+
+
+def _gemini_messages(level: str | None) -> Expected:
+    def expected(marker: str) -> dict[str, JsonValue]:
+        thinking: Final[dict[str, JsonValue]] = (
+            {} if level is None else {"thinkingConfig": {"thinkingLevel": level, "includeThoughts": True}}
+        )
+        return {
+            "contents": [{"role": "user", "parts": [{"text": prompt(marker)}]}],
+            "generationConfig": {"max_output_tokens": 4096, **thinking},
+        }
+
+    return expected
+
+
+def _responses_bridged_messages_without_effort() -> Expected:
+    return lambda marker: {
+        "model": GPT,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt(marker)}]}],
+        "include": ["reasoning.encrypted_content"],
+        "max_output_tokens": 4096,
+    }
+
+
 def _responses_bridged_messages(effort: str) -> Expected:
     return lambda marker: {
         "model": GPT,
@@ -208,6 +274,7 @@ _VLLM_RESPONSES: Final = "/v1/responses"
 _OPENAI_RESPONSES: Final = "/v1/responses"
 _AZURE_RESPONSES: Final = f"/openai/responses?api-version={AZURE_API_VERSION}"
 _UNSUPPORTED: Final = "does not support parameters"
+_GEMINI: Final = f"/models/{GEMINI}:generateContent"
 
 CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
     {
@@ -1118,6 +1185,270 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _bridged_messages("high", model=CLAUDE),
             _VLLM_CHAT,
         ),
+        "messages-azure_ai-string-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _STRING_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-undeclared-string-budget-400": Cell(
+            MESSAGES, "azure_ai", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-string-budget-drop-params": Cell(
+            MESSAGES,
+            "azure_ai",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _bridged_messages(None),
+            _AZURE_AI_CHAT,
+        ),
+        "messages-azure_ai-undeclared-string-budget-drop-params": Cell(
+            MESSAGES,
+            "azure_ai",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _bridged_messages(None),
+            _AZURE_AI_CHAT,
+        ),
+        "messages-azure_ai-string-budget-deployment-drop-params": Cell(
+            MESSAGES,
+            "azure_ai_drop_params",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET},
+            _bridged_messages(None),
+            _AZURE_AI_CHAT,
+        ),
+        "messages-azure_ai-undeclared-string-budget-deployment-drop-params": Cell(
+            MESSAGES,
+            "azure_ai_drop_params",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET},
+            _bridged_messages(None),
+            _AZURE_AI_CHAT,
+        ),
+        "messages-azure_ai-bool-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _BOOL_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-null-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _NULL_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-list-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _LIST_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-empty-string-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _EMPTY_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-5kb-budget-400": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _LONG_BUDGET}, None, _AZURE_AI_CHAT, 400, "thinking"
+        ),
+        "messages-azure_ai-stream-string-budget-400": Cell(
+            MESSAGES,
+            "azure_ai",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET, "stream": True},
+            None,
+            _AZURE_AI_CHAT,
+            400,
+            "thinking",
+            stream=True,
+        ),
+        "messages-azure_ai-stream-string-budget-drop-params": Cell(
+            MESSAGES,
+            "azure_ai",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET, "stream": True, "drop_params": True},
+            _bridged_stream_messages(None),
+            _AZURE_AI_CHAT,
+            stream=True,
+        ),
+        "messages-azure_ai-missing-budget-to-low": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _MISSING_BUDGET}, _bridged_messages("low"), _AZURE_AI_CHAT
+        ),
+        "messages-azure_ai-disabled-thinking-sends-none": Cell(
+            MESSAGES, "azure_ai", _KIMI_INFO, {"thinking": _DISABLED}, _bridged_messages("none"), _AZURE_AI_CHAT
+        ),
+        "messages-azure-budget-control": Cell(
+            MESSAGES, "azure", _UNDECLARED, {"thinking": _BUDGET}, _azure_messages("medium"), _AZURE_CHAT
+        ),
+        "messages-azure-string-budget-400": Cell(
+            MESSAGES, "azure", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _AZURE_CHAT, 400, "thinking"
+        ),
+        "messages-azure-string-budget-drop-params": Cell(
+            MESSAGES,
+            "azure",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _azure_messages(None),
+            _AZURE_CHAT,
+        ),
+        "messages-azure-bool-budget-400": Cell(
+            MESSAGES, "azure", _UNDECLARED, {"thinking": _BOOL_BUDGET}, None, _AZURE_CHAT, 400, "thinking"
+        ),
+        "messages-azure-declared-string-budget-400": Cell(
+            MESSAGES, "azure", _GPT_INFO, {"thinking": _STRING_BUDGET}, None, _AZURE_CHAT, 400, "budget_tokens"
+        ),
+        "messages-azure-declared-string-budget-drop-params": Cell(
+            MESSAGES,
+            "azure",
+            _GPT_INFO,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _azure_messages(None),
+            _AZURE_CHAT,
+        ),
+        "messages-mistral-string-budget-400": Cell(
+            MESSAGES, "mistral", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _VLLM_CHAT, 400, "thinking"
+        ),
+        "messages-openai-budget-control": Cell(
+            MESSAGES,
+            "openai",
+            _UNDECLARED,
+            {"thinking": _BUDGET},
+            _responses_bridged_messages("medium"),
+            _OPENAI_RESPONSES,
+        ),
+        "messages-openai-string-budget-400": Cell(
+            MESSAGES, "openai", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _OPENAI_RESPONSES, 400, "thinking"
+        ),
+        "messages-openai-string-budget-drop-params": Cell(
+            MESSAGES,
+            "openai",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _responses_bridged_messages_without_effort(),
+            _OPENAI_RESPONSES,
+        ),
+        "messages-fireworks-budget-control": Cell(
+            MESSAGES,
+            "fireworks_ai",
+            _UNDECLARED,
+            {"thinking": _BUDGET},
+            _bridged_messages("medium", model=FIREWORKS_KIMI),
+            _VLLM_CHAT,
+        ),
+        "messages-fireworks-string-budget-400": Cell(
+            MESSAGES, "fireworks_ai", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _VLLM_CHAT, 400, "thinking"
+        ),
+        "messages-fireworks-string-budget-drop-params": Cell(
+            MESSAGES,
+            "fireworks_ai",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _bridged_messages(None, model=FIREWORKS_KIMI),
+            _VLLM_CHAT,
+        ),
+        "messages-fireworks-declared-string-budget-400": Cell(
+            MESSAGES,
+            "fireworks_ai",
+            {"reasoning_effort_levels": ["low", "high"]},
+            {"thinking": _STRING_BUDGET},
+            None,
+            _VLLM_CHAT,
+            400,
+            "thinking",
+        ),
+        "messages-fireworks-bool-budget-400": Cell(
+            MESSAGES, "fireworks_ai", _UNDECLARED, {"thinking": _BOOL_BUDGET}, None, _VLLM_CHAT, 400, "thinking"
+        ),
+        "messages-openrouter-budget-control": Cell(
+            MESSAGES,
+            "openrouter",
+            _UNDECLARED,
+            {"thinking": _BUDGET},
+            _openrouter_messages("medium"),
+            _VLLM_CHAT,
+        ),
+        "messages-openrouter-string-budget-drop-params": Cell(
+            MESSAGES,
+            "openrouter",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _openrouter_messages(None),
+            _VLLM_CHAT,
+        ),
+        "messages-gemini-budget-control": Cell(
+            MESSAGES, "gemini", _UNDECLARED, {"thinking": _BUDGET}, _gemini_messages("medium"), _GEMINI
+        ),
+        "messages-gemini-string-budget-400": Cell(
+            MESSAGES, "gemini", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _GEMINI, 400, "thinking"
+        ),
+        "messages-gemini-bool-budget-400": Cell(
+            MESSAGES, "gemini", _UNDECLARED, {"thinking": _BOOL_BUDGET}, None, _GEMINI, 400, "thinking"
+        ),
+        "messages-zai-bool-budget-400": Cell(
+            MESSAGES, "zai", _UNDECLARED, {"thinking": _BOOL_BUDGET}, None, _VLLM_CHAT, 400
+        ),
+        "messages-zai-bool-budget-drop-params": Cell(
+            MESSAGES,
+            "zai",
+            _UNDECLARED,
+            {"thinking": _BOOL_BUDGET, "drop_params": True},
+            _bridged_messages(None, model=ZAI_GLM),
+            _VLLM_CHAT,
+        ),
+        "messages-vllm-undeclared-string-budget-400": Cell(
+            MESSAGES, "hosted_vllm", _UNDECLARED, {"thinking": _STRING_BUDGET}, None, _VLLM_CHAT, 400, "budget_tokens"
+        ),
+        "messages-vllm-string-budget-drop-params": Cell(
+            MESSAGES,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _bridged_messages(None),
+            _VLLM_CHAT,
+        ),
+        "messages-vllm-string-budget-deployment-drop-params": Cell(
+            MESSAGES,
+            "hosted_vllm_drop_params",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET},
+            _bridged_messages(None),
+            _VLLM_CHAT,
+        ),
+        "messages-vllm-list-budget-400": Cell(
+            MESSAGES, "hosted_vllm", _KIMI_INFO, {"thinking": _LIST_BUDGET}, None, _VLLM_CHAT, 400, "budget_tokens"
+        ),
+        "messages-vllm-bool-budget-400": Cell(
+            MESSAGES, "hosted_vllm", _KIMI_INFO, {"thinking": _BOOL_BUDGET}, None, _VLLM_CHAT, 400, "budget_tokens"
+        ),
+        "messages-vllm-claude-name-declared-string-budget-400": Cell(
+            MESSAGES,
+            "hosted_vllm_claude",
+            {"reasoning_effort_levels": ["low", "high", "max"]},
+            {"thinking": _STRING_BUDGET},
+            None,
+            _VLLM_CHAT,
+            400,
+            "budget_tokens",
+        ),
+        "chat-vllm-claude-name-declared-adaptive-thinking-sends-no-effort": Cell(
+            CHAT,
+            "hosted_vllm_claude",
+            {"reasoning_effort_levels": ["low", "high", "max"]},
+            {"thinking": _ADAPTIVE},
+            _openai_compatible(None, model=CLAUDE),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-explicit-effort-wins-over-null-budget": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"reasoning_effort": "medium", "thinking": _NULL_BUDGET},
+            _openai_compatible("high"),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-explicit-effort-wins-over-list-budget": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"reasoning_effort": "medium", "thinking": _LIST_BUDGET},
+            _openai_compatible("high"),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-explicit-effort-wins-over-5kb-budget": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"reasoning_effort": "medium", "thinking": _LONG_BUDGET},
+            _openai_compatible("high"),
+            _VLLM_CHAT,
+        ),
     }
 )
 
@@ -1263,6 +1594,77 @@ def test_a_duplicated_effort_key_rounds_the_value_the_proxy_parsed(gateway: Gate
     assert response.status_code == 200, response.text
     assert object_value(response.json())["id"] == f"chatcmpl-{marker}"
     assert sent_effort(_single(received, marker)) == "low"
+
+
+def _raw_messages_post(gateway: Gateway, model: str, marker: str, budgets: str) -> httpx.Response:
+    raw: Final = (
+        f'{{"model": "{model}", "max_tokens": 4096, "messages": [{{"role": "user", "content": "{prompt(marker)}"}}],'
+        f' "thinking": {{"type": "enabled", {budgets}}}}}'
+    )
+    return gateway.client.post(
+        MESSAGES,
+        content=raw.encode(),
+        headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
+    )
+
+
+def test_a_duplicated_budget_key_on_messages_is_judged_by_the_value_the_proxy_parsed(gateway: Gateway) -> None:
+    malformed_last: Final = new_marker()
+    numeric_last: Final = new_marker()
+    with wire_server(provider_reply) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(scenario, "azure_ai", wire, _KIMI_INFO)
+        rejected: Final = _raw_messages_post(
+            gateway, model, malformed_last, '"budget_tokens": 9000, "budget_tokens": "2048"'
+        )
+        answered: Final = _raw_messages_post(
+            gateway, model, numeric_last, '"budget_tokens": "2048", "budget_tokens": 9000'
+        )
+        received: Final = wire.drain()
+    assert rejected.status_code == 400, rejected.text
+    assert "thinking" in rejected.text
+    assert answered.status_code == 200, answered.text
+    assert answer(numeric_last) in answered.text
+    assert [marker_of(request) for request in received] == [numeric_last]
+    assert sent_effort(received[0]) == "high"
+
+
+def test_anthropic_sdk_gets_a_400_for_a_malformed_budget_to_a_non_claude_deployment_and_an_answer_under_drop_params(
+    gateway: Gateway,
+) -> None:
+    rejected_marker: Final = new_marker()
+    sync_marker: Final = new_marker()
+    stream_marker: Final = new_marker()
+    malformed: Final = {"thinking": {"type": "enabled", "budget_tokens": "2048"}}
+    with wire_server(provider_reply) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(scenario, "azure_ai", wire, _KIMI_INFO)
+        client: Final = anthropic.Anthropic(base_url=_proxy_url(gateway), api_key=gateway.key, max_retries=0)
+        with pytest.raises(anthropic.BadRequestError) as rejected:
+            client.messages.create(
+                model=model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt(rejected_marker)}],
+                extra_body=malformed,
+            )
+        message: Final = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt(sync_marker)}],
+            extra_body={**malformed, "drop_params": True},
+        )
+        with client.messages.stream(
+            model=model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt(stream_marker)}],
+            extra_body={**malformed, "drop_params": True},
+        ) as stream:
+            streamed_text: Final = "".join(stream.text_stream)
+        received: Final = wire.drain()
+    assert rejected.value.status_code == 400
+    assert "thinking" in str(rejected.value)
+    assert [block.text for block in message.content if block.type == "text"] == [answer(sync_marker)]
+    assert streamed_text == answer(stream_marker)
+    assert sorted(marker_of(request) for request in received) == sorted((sync_marker, stream_marker))
+    assert [sorted(set(body_of(request)) & {"thinking", "reasoning_effort"}) for request in received] == [[], []]
 
 
 def _served_by(response: httpx.Response) -> str:
