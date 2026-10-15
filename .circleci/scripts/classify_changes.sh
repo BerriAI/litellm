@@ -30,6 +30,7 @@ while IFS= read -r file || [ -n "$file" ]; do
     ui/* | tests/e2e/ui/*) has_client=true ;;
     docs/* | *.md | *.mdx) : ;;
     .github/* | .circleci/*) has_ci=true; has_backend=true ;;
+    terraform/provider/*) : ;;
     *) has_backend=true ;;
   esac
   case "$file" in

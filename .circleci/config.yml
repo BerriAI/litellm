@@ -1256,7 +1256,20 @@ jobs:
     working_directory: ~/project
     parallelism: << parameters.parallelism >>
     steps:
-      - setup_litellm_test_deps
+      - checkout
+      - when:
+          condition:
+            equal: [browser, << parameters.suite >>]
+          steps:
+            - skip_if_unrelated_changes:
+                category: client
+      - unless:
+          condition:
+            equal: [browser, << parameters.suite >>]
+          steps:
+            - skip_if_unrelated_changes
+      - setup_litellm_test_deps:
+          checkout: false
       - when:
           condition:
             equal: [browser, << parameters.suite >>]
@@ -1359,6 +1372,7 @@ jobs:
       UV_PYTHON_DOWNLOADS: never
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - install_uv
       - run:
           name: Install the locked shard verifier and coverage dependencies

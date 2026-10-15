@@ -149,6 +149,14 @@ def test_docs_only_pr_skips(tmp_path: Path) -> None:
     assert decision == "decision=skip"
 
 
+def test_terraform_provider_only_pr_skips(tmp_path: Path) -> None:
+    decision, _ = _run(
+        tmp_path,
+        files=["terraform/provider/litellm/resource_model.go", "terraform/provider/go.mod"],
+    )
+    assert decision == "decision=skip"
+
+
 def test_non_pull_request_event_runs(tmp_path: Path) -> None:
     decision, stdout = _run(tmp_path, files=[UI_FILE], pr_number="")
     assert decision == "decision=run"

@@ -7,6 +7,8 @@ category, it prints `run` or `skip`. The gating contract we lock in here:
   * docs-only changes (``*.md``, ``*.mdx``, ``docs/``) run nothing
   * client-only changes (``ui/``) run client jobs but skip backend jobs
   * any backend change runs both client and backend jobs
+  * terraform provider only changes (``terraform/provider/``) run neither, while
+    ``terraform/litellm/`` stays backend because unit tests read it
   * ``ui`` tracks ``ui/`` plus CI config, so a backend-only change skips it
     where ``client`` would still run, while a change to the workflows that
     define the dashboard jobs still exercises them
@@ -94,6 +96,23 @@ CI = [".github/workflows/test-unit.yml"]
         ("backend", BACKEND + CLIENT, "run"),
         ("client", BACKEND + CLIENT, "run"),
         ("ui", BACKEND + CLIENT, "run"),
+        # terraform provider only: skips every category
+        ("backend", ["terraform/provider/litellm/resource_model.go"], "skip"),
+        ("client", ["terraform/provider/litellm/resource_model.go"], "skip"),
+        ("ui", ["terraform/provider/litellm/resource_model.go"], "skip"),
+        (
+            "backend",
+            [
+                "terraform/provider/litellm/resource_model.go",
+                "terraform/provider/go.mod",
+                "terraform/provider/CHANGELOG.md",
+            ],
+            "skip",
+        ),
+        # terraform/litellm carries tf files unit tests read, so it stays backend
+        ("backend", ["terraform/litellm/aws/ecs.tf"], "run"),
+        ("backend", ["terraform/provider/main.go"] + BACKEND, "run"),
+        ("client", ["terraform/provider/main.go"] + CLIENT, "run"),
         ("cost-map-only", ["model_prices_and_context_window.json"], "run"),
         ("cost-map-only", ["litellm/model_prices_and_context_window_backup.json"], "run"),
         ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
