@@ -465,6 +465,7 @@ def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5
                 {
                     "type": "input_image",
                     "image_url": "data:image/png;base64,c2hvdA==",
+                    "detail": "auto",
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 },
             ],

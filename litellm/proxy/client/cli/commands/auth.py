@@ -106,7 +106,7 @@ class _OptionalCliContextObjView(Protocol):
     def obj(self) -> CliContextObj | None: ...
 
 
-def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+def cli_context_obj(view: _CliContextObjView) -> CliContextObj:
     return view.obj
 
 
@@ -898,7 +898,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     if config_claude:
         settings_path: Final = claude_settings_path(os.environ)
@@ -1048,7 +1048,7 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)

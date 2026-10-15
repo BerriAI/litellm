@@ -1801,6 +1801,9 @@ class PromptTokensDetailsWrapper(
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
+
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -3164,6 +3167,7 @@ InternalCallOrigin = Literal[
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
     "background_response_cost_poll",
+    "background_response_status_poll",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
@@ -3173,6 +3177,7 @@ SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
+BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_status_poll"
 
 
 class StandardLoggingHeuristicV2Forecast(TypedDict):
@@ -3665,6 +3670,46 @@ class StandardAuditLogPayload(TypedDict):
     object_id: str
     before_value: str | None
     updated_values: str | None
+
+
+class StandardBatchLineItemUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class StandardBatchLineItemMetadata(TypedDict):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_org_id: ReadOnly[str | None]
+
+
+class StandardBatchLineItem(TypedDict):
+    """One line of a finished batch, the request line next to the output or error line the provider wrote for it."""
+
+    batch_id: ReadOnly[str]
+    custom_id: ReadOnly[str | None]
+    status: ReadOnly[Literal["success", "failure"]]
+    request: ReadOnly[Mapping[str, object] | None]
+    response: ReadOnly[Mapping[str, object] | None]
+    usage: ReadOnly[StandardBatchLineItemUsage | None]
+    response_cost: ReadOnly[float]
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    metadata: ReadOnly[StandardBatchLineItemMetadata]
+
+
+class StandardBatchLineItemsPayload(TypedDict):
+    """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+
+    batch_id: ReadOnly[str]
+    finished_at: ReadOnly[int]
+    part: ReadOnly[int]
+    lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
 
 
 class ClassifierAudit(TypedDict, total=False):
@@ -4263,6 +4308,7 @@ class LlmProviders(str, Enum):
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
+    DATABRICKS_AGENT = "databricks_agent"
     EMPOWER = "empower"
     GITHUB = "github"
     RAGFLOW = "ragflow"
@@ -4337,6 +4383,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
@@ -4740,3 +4787,12 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+
+
+class ProviderRoutingHints(TypedDict, total=False):
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+
+
+class BaseUrlRoutingHint(TypedDict, total=False):
+    base_url: ReadOnly[str | None]

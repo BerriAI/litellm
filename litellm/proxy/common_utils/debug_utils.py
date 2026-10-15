@@ -8,7 +8,7 @@ import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -329,7 +329,7 @@ def _summary_process_memory(process: _ProcessHandle | None) -> tuple[_SummaryPro
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Get simplified memory usage summary for the proxy.
 
@@ -700,7 +700,7 @@ async def get_memory_details(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
     top_n: int = Query(20, description="Number of top object types to return"),
     include_process_info: bool = Query(True, description="Include process memory info"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Get detailed memory diagnostics for deep debugging.
 
@@ -760,7 +760,7 @@ async def configure_gc_thresholds_endpoint(
     generation_0: int = Query(700, description="Generation 0 threshold (default: 700)"),
     generation_1: int = Query(10, description="Generation 1 threshold (default: 10)"),
     generation_2: int = Query(10, description="Generation 2 threshold (default: 10)"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Configure Python garbage collection thresholds.
 

@@ -173,6 +173,50 @@ async def test_async_copilot_requests_bypass_response_cache(copilot_response_cac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_databricks_agent_replies_are_never_served_from_the_response_cache(
+    copilot_response_cache: Cache, stream: bool
+) -> None:
+    workspace: Final = "https://adb-cache.azuredatabricks.net"
+    replies: Final = iter(("first agent answer", "second agent answer"))
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        text: Final = next(replies)
+        if json.loads(request.content).get("stream"):
+            frame: Final = {"type": "response.output_text.delta", "item_id": "m", "delta": text}
+            return httpx.Response(200, content=f"data: {json.dumps(frame)}\n\n".encode(), request=request)
+        message: Final = {"type": "message", "id": "m", "content": [{"type": "output_text", "text": text}]}
+        return httpx.Response(200, json={"output": [message]}, request=request)
+
+    async def answer() -> str:
+        response: Final = await litellm.acompletion(
+            model="databricks_agent/support-agent",
+            messages=[{"role": "user", "content": "same question"}],
+            api_base=workspace,
+            api_key="dbx-pat",
+            client=client,
+            stream=stream,
+            caching=True,
+        )
+        if isinstance(response, CustomStreamWrapper):
+            return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        return cast(str, response.choices[0].message.content)  # cast-ok: a ModelResponse's message content
+
+    client: Final = AsyncHTTPHandler(transport=_CopilotCacheAsyncTransport(respond))
+    async with client.client:
+        first: Final = await answer()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        second: Final = await answer()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert (first, second) == ("first agent answer", "second agent answer")
+    assert len(requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
 async def test_existing_provider_response_cache_still_hits(copilot_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": "cached provider control"}]
     first: Final = await litellm.acompletion(

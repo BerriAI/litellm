@@ -931,6 +931,40 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
     assert excinfo.value.generated_content == ""
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(logging_obj: Logging, sync_mode: bool):
+    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    provider_headers: Final = {"retry-after": "3", "x-request-id": "req-abc123"}
+
+    def _raise_rate_limit(**kwargs: object) -> NoReturn:
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=provider_headers)
+
+    async def _araise_rate_limit(**kwargs: object) -> NoReturn:
+        _raise_rate_limit(**kwargs)
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit if sync_mode else _araise_rate_limit,
+    )
+
+    async def _read_first_chunk() -> object:
+        return next(response) if sync_mode else await response.__anext__()
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _read_first_chunk()
+
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.litellm_response_headers.get("retry-after") == "3"
+    assert excinfo.value.litellm_response_headers.get("x-request-id") == "req-abc123"
+
+
 def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
 

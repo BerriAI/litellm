@@ -185,7 +185,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=model, optional_params=mapped_params, custom_llm_provider="vertex_ai"
+            model=model, optional_params=mapped_params, custom_llm_provider="vertex_ai", drop_params=drop_params
         )
 
         return mapped_params

@@ -2074,8 +2074,8 @@ def test_documented_json_video_edit_routes_and_decodes_the_reference(gateway: Ga
 
 def test_multipart_bracketed_video_reference_reaches_upstream_as_a_decoded_id(gateway: Gateway) -> None:
     pytest.skip(
-        "BUG: multipart video[id]=<encoded id> to /v1/videos/edits and /v1/videos/extensions returns 404 and "
-        "never reaches the provider because the handler only reads a top-level video field"
+        "BUG: multipart video[id]=<encoded id> to /v1/videos/edits and /v1/videos/extensions is never decoded, "
+        "so the request skips the encoded deployment and goes to the default OpenAI api_base"
     )
     seen: Final[list[Request]] = []
     with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
