@@ -769,6 +769,12 @@ describe("Customers management", () => {
     const onUrlUpdate = vi.fn();
     const customer: EndUser = {
       ...activeCustomer,
+      object_permission: {
+        ...activeCustomer.object_permission!,
+        vector_stores: ["vector-1"],
+        search_tools: ["search-1"],
+        skills: ["skill-1"],
+      },
       allowed_model_region: "eu",
       default_model: "default-model",
       litellm_budget_table: {
@@ -791,7 +797,10 @@ describe("Customers management", () => {
     expect(screen.getByText("$100.00")).toBeInTheDocument();
     expect(screen.getByText("Reset: monthly")).toBeInTheDocument();
     expect(screen.getByText("Rate Limits")).toBeInTheDocument();
-    expect(screen.getByText("Object Permissions")).toBeInTheDocument();
+    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    for (const unenforced of ["Vector Stores", "Search tools", "Skills", "vector-1", "search-1", "skill-1"]) {
+      expect(screen.queryByText(unenforced)).not.toBeInTheDocument();
+    }
     expect(screen.getByText("All models the key can use")).toBeInTheDocument();
     expect(screen.getByText("EU")).toBeInTheDocument();
     expect(screen.getByText("default-model")).toBeInTheDocument();

@@ -286,6 +286,7 @@ export default function CustomersTable({
                   CUSTOMER_FILTER_FIELDS.map((field) => (
                     <DataTableFilterField key={field.id} label={field.label}>
                       <Select
+                        items={[{ value: "all", label: "All" }, ...field.options]}
                         value={(get(field.id) as string) || "all"}
                         onValueChange={(value) => set(field.id, value === "all" ? undefined : value)}
                       >

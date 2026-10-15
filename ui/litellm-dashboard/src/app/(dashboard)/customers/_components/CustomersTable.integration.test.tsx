@@ -63,9 +63,11 @@ describe("CustomersTable controls", () => {
     renderWithProviders(<CustomersTable {...props} data={rows} />, { onUrlUpdate });
     await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
     await user.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("combobox", { name: "Budget" })).toHaveTextContent(/^All\b/);
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Status" }), "Active");
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget" }), "Has budget");
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP access" }), "Has MCP access");
+    expect(screen.getByRole("combobox", { name: "Budget" })).toHaveTextContent(/^Has budget\b/);
     await user.click(screen.getByRole("button", { name: "Apply Filters" }));
 
     await waitFor(() => expect(screen.queryByRole("row", { name: /customer-02/ })).not.toBeInTheDocument());

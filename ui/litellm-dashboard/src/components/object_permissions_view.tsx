@@ -7,7 +7,6 @@ import type { InheritedGrant } from "./permissions/inheritedGrants";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
-  entityType?: "key" | "customer";
   inheritedMcpServers?: InheritedGrant[];
   inheritedAgents?: InheritedGrant[];
   variant?: "card" | "inline";
@@ -17,7 +16,6 @@ interface ObjectPermissionsViewProps {
 
 export function ObjectPermissionsView({
   objectPermission,
-  entityType,
   inheritedMcpServers = [],
   inheritedAgents = [],
   variant = "card",
@@ -39,7 +37,6 @@ export function ObjectPermissionsView({
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
       <MCPServerPermissions
         mcpServers={mcpServers}
-        entityType={entityType}
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}
@@ -56,7 +53,7 @@ export function ObjectPermissionsView({
         <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (
           <p className="mt-1 block text-xs text-muted-foreground">
-            No restriction. All configured search tools are allowed
+            No restriction — all configured search tools are allowed for this team.
           </p>
         ) : (
           <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>
