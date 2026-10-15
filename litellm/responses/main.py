@@ -1451,6 +1451,8 @@ def responses(
                 custom_llm_provider=custom_llm_provider,
                 deployment_model_info=deployment_model_info,
                 model_group=model_group_from_metadata(routing_kwargs.get("litellm_metadata")),
+                drop_params=litellm.drop_params is True
+                or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
             ).value,
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (

@@ -489,6 +489,7 @@ def _sent(
     *,
     model: str = "my-kimi",
     provider: str = "hosted_vllm",
+    drop_params: bool = False,
 ) -> RequestedReasoningEffort:
     return resolve_deployment_reasoning_effort(
         requested,
@@ -496,6 +497,7 @@ def _sent(
         custom_llm_provider=provider,
         deployment_model_info=deployment_model_info,
         model_group="kimi-k3",
+        drop_params=drop_params,
     ).value
 
 
@@ -533,7 +535,12 @@ class TestResolveDeploymentReasoningEffort:
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "up"}) == "high"
         assert _sent("medium") == "low"
 
-    @pytest.mark.parametrize("invalid", ["sideways", "DOWN", 1, None])
+    @pytest.mark.parametrize("spelling", ["DOWN", " Down "])
+    def test_the_rounding_setting_ignores_case_and_surrounding_spaces(self, monkeypatch, spelling):
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": spelling}) == "low"
+
+    @pytest.mark.parametrize("invalid", ["sideways", 1, None])
     def test_an_invalid_rounding_falls_back_to_the_next_setting(self, monkeypatch, invalid):
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "low"
@@ -547,6 +554,34 @@ class TestResolveDeploymentReasoningEffort:
         assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
             "medium"
         )
+
+    @pytest.mark.parametrize(
+        "requested, expected",
+        [
+            ("turbo", None),
+            ({"effort": "turbo", "summary": "auto"}, {"summary": "auto"}),
+            ("none", "none"),
+            ("medium", "high"),
+        ],
+    )
+    def test_drop_params_drops_a_level_the_deployment_does_not_declare(self, requested, expected):
+        assert _sent(requested, drop_params=True) == expected
+
+    def test_drop_params_drops_none_only_where_the_deployment_leaves_it_out(self):
+        assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}, drop_params=True) is None
+        assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}) == "none"
+
+    def test_a_dropped_unrecognized_level_is_not_written_to_the_log(self, caplog):
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent("turbo\nforged line", drop_params=True)
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "reasoning_effort unrecognized sent as None (rounding up) to deployment deployment-1, "
+            "model group kimi-k3, model hosted_vllm/my-kimi"
+        ]
 
     def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(self, caplog):
         verbose_logger.addHandler(caplog.handler)

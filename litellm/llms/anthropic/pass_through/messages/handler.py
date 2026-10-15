@@ -14,6 +14,7 @@ from typing import Any, Final, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
@@ -25,6 +26,10 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.router_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -125,6 +130,29 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
         return False
     supported_endpoints: Final = model_info.get("supported_endpoints")
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
+
+
+def _with_deployment_output_effort(
+    params: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+    drop_params: bool,
+) -> Mapping[str, object]:
+    output_config: Final = as_str_mapping(params.get("output_config"))
+    if output_config is None:
+        return params
+    resolved: Final = resolve_deployment_reasoning_effort(
+        output_config,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=kwargs.get("model_info"),
+        model_group=model_group_from_metadata(kwargs.get("litellm_metadata"), kwargs.get("metadata")),
+        drop_params=drop_params,
+    ).value
+    rest: Final = {key: value for key, value in params.items() if key != "output_config"}
+    return rest if resolved is None else {**rest, "output_config": resolved}
 
 
 def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
@@ -698,7 +726,15 @@ def anthropic_messages_handler(
             ),
         ),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+        anthropic_messages_optional_request_params=dict(
+            _with_deployment_output_effort(
+                anthropic_messages_optional_request_params,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: router kwargs arrive untyped
+                drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+            )
+        ),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,

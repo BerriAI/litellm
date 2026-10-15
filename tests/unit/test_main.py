@@ -8572,3 +8572,13 @@ def test_default_on_a_declaring_deployment_keeps_a_tool_call_on_chat_completions
 
     assert not responses.called
     assert "reasoning_effort" not in json.loads(chat.calls.last.request.content)
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_drop_params_drops_a_level_the_deployment_does_not_declare(respx_mock: respx.MockRouter, model: str) -> None:
+    without_none: Final = {"reasoning_effort_levels": ["low", "high", "max"]}
+
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, model, "turbo", without_none, drop_params=True)
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, model, "none", without_none, drop_params=True)
+    assert _chat_body_sent(respx_mock, model, "none", _KIMI_DEPLOYMENT, drop_params=True)["reasoning_effort"] == "none"
+    assert _chat_body_sent(respx_mock, model, "turbo", without_none)["reasoning_effort"] == "turbo"

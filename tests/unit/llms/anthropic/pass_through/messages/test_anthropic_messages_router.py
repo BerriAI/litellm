@@ -617,3 +617,41 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": tool_input}
     ]
+
+
+async def _native_output_config_sent(
+    respx_mock, effort: str, model_info: Mapping[str, object] | None, **params: object
+) -> object:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-sonnet-4-6"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "fake-key"},
+        **({"model_info": model_info} if model_info is not None else {}),
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(
+        messages=[{"role": "user", "content": _PROMPT}],
+        model=_ALIAS,
+        max_tokens=100,
+        thinking={"type": "adaptive"},
+        output_config={"effort": effort},
+        **params,
+    )
+    return json.loads(route.calls.last.request.read()).get("output_config")
+
+
+@pytest.mark.asyncio
+async def test_native_messages_round_output_config_effort_onto_the_deployment_declaration(respx_mock):
+    declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+    assert await _native_output_config_sent(respx_mock, "medium", declared) == {"effort": "high"}
+    assert await _native_output_config_sent(respx_mock, "medium", None) == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx_mock):
+    declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+    assert await _native_output_config_sent(respx_mock, "turbo", declared, drop_params=True) is None
+    assert await _native_output_config_sent(respx_mock, "turbo", declared) == {"effort": "turbo"}

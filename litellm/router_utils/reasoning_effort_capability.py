@@ -144,6 +144,8 @@ def nearest_declared_reasoning_effort(
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
 _DEFAULT_EFFORT: Final = "default"
 _EFFORT_KEY: Final = "effort"
+_LOGGABLE_REQUESTED_LEVELS: Final = frozenset((*REASONING_EFFORT_ADVERTISEMENT_ORDER, _DEFAULT_EFFORT))
+_UNRECOGNIZED_LEVEL: Final = "unrecognized"
 
 
 def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
@@ -161,7 +163,7 @@ def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
 
 
 def _rounding(value: object) -> ReasoningEffortRounding | None:
-    match value:
+    match value.strip().lower() if isinstance(value, str) else value:
         case "up":
             return "up"
         case "down":
@@ -215,6 +217,7 @@ def resolve_deployment_reasoning_effort(
     custom_llm_provider: str | None,
     deployment_model_info: object,
     model_group: str | None,
+    drop_params: bool,
 ) -> DeploymentReasoningEffort:
     requested_level: Final = _requested_level(requested)
     unchanged: Final = DeploymentReasoningEffort(value=requested, deployment_accepts_effort=False)
@@ -224,11 +227,12 @@ def resolve_deployment_reasoning_effort(
     if declared is None:
         return unchanged
     rounding: Final = _deployment_rounding(deployment_model_info)
-    sent_level: Final = (
+    rounded_level: Final = (
         None
         if requested_level == _DEFAULT_EFFORT
         else nearest_declared_reasoning_effort(requested_level, declared, rounding)
     )
+    sent_level: Final = None if drop_params and rounded_level not in declared else rounded_level
     deployment_accepts_effort: Final = sent_level is not None and len(declared) > 0
     if sent_level == requested_level:
         return DeploymentReasoningEffort(value=requested, deployment_accepts_effort=deployment_accepts_effort)
@@ -262,9 +266,12 @@ def _log_remap(
 ) -> None:
     own_info: Final = as_str_mapping(deployment_model_info)
     deployment_id: Final = own_info.get("id") if own_info is not None else None
+    logged_requested_level: Final = (
+        requested_level if requested_level in _LOGGABLE_REQUESTED_LEVELS else _UNRECOGNIZED_LEVEL
+    )
     verbose_logger.info(
         "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
-        requested_level,
+        logged_requested_level,
         sent_level,
         rounding,
         deployment_id,
@@ -274,7 +281,7 @@ def _log_remap(
             "reasoning_effort_deployment_id": deployment_id,
             "reasoning_effort_model_group": model_group,
             "reasoning_effort_deployment_model": deployment_model,
-            "reasoning_effort_requested": requested_level,
+            "reasoning_effort_requested": logged_requested_level,
             "reasoning_effort_sent": sent_level,
             "reasoning_effort_rounding": rounding,
         },

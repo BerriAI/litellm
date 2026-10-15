@@ -5497,6 +5497,7 @@ def completion(
             model_group=model_group_from_metadata(
                 routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
             ),
+            drop_params=litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
         )
         resolved_reasoning_effort: Final = deployment_reasoning_effort.value
 
