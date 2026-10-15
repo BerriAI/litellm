@@ -3237,7 +3237,6 @@ async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_th
     assert not route.called
 
 
-
 @pytest.mark.asyncio
 async def test_a_typesafe_deployment_that_advertises_box_questions_still_needs_the_images_header(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

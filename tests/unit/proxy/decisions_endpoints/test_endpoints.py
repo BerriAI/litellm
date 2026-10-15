@@ -422,7 +422,6 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
 
 
-
 def test_a_request_body_cannot_turn_on_box_questions_for_a_proxy_without_a_router(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
