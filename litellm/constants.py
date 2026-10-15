@@ -60,6 +60,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
+        "fallback_on_unsupported_params",
     }
 )
 ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
@@ -75,6 +76,9 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
     }
 )
 DEFAULT_BATCH_SIZE: Final = get_env_int("DEFAULT_BATCH_SIZE", 512)
+SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE: Final = get_env_int_in_range(
+    "SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE", 1000, 1, 10_000
+)
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_FLUSH_INTERVAL_SECONDS", 5)
 CLICKHOUSE_BATCH_SIZE: Final = get_env_int("CLICKHOUSE_BATCH_SIZE", 10_000)
 CLICKHOUSE_FLUSH_INTERVAL_SECONDS: Final = get_env_float("CLICKHOUSE_FLUSH_INTERVAL_SECONDS", 1.0)
@@ -393,6 +397,7 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
 OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
@@ -474,6 +479,7 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT: Final = (
     else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 )
 PROMPT_CACHE_LOOKBACK_POSITIONS: Final = 20
+PROMPT_CACHE_PIN_CACHE_MAX_SIZE: Final = 10_000
 DEFAULT_TRIM_RATIO: Final = get_env_float(
     "DEFAULT_TRIM_RATIO", 0.75
 )  # default ratio of tokens to trim from the end of a prompt
@@ -547,7 +553,7 @@ DEFAULT_POLLING_INTERVAL: Final = get_env_float(
 AZURE_OPERATION_POLLING_TIMEOUT: Final = get_env_int("AZURE_OPERATION_POLLING_TIMEOUT", 120)
 AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: Final = str(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"))
 AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: Final = get_env_int("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
-REDIS_SOCKET_TIMEOUT: Final = get_env_float("REDIS_SOCKET_TIMEOUT", 0.1)
+REDIS_SOCKET_TIMEOUT: Final = get_env_float("REDIS_SOCKET_TIMEOUT", 5.0)
 CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS: Final[float] = 5.0
 REDIS_CONNECTION_POOL_TIMEOUT: Final = get_env_int("REDIS_CONNECTION_POOL_TIMEOUT", 5)
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = get_env_int("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5)
@@ -1651,6 +1657,7 @@ DEFAULT_SOFT_BUDGET: Final = get_env_float(
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
 # Prefix of the 401 raised when a submitted virtual key is not shaped like one.
 INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key provided."
 # Attribute stamped on that 401 at its raise site so log routing recognises it by
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
@@ -1683,6 +1690,7 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
+TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 

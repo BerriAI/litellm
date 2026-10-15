@@ -430,6 +430,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
     safeguards: ReadOnly[list[dict[str, object]] | None]
+    service_tier: ReadOnly[str | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -800,6 +801,8 @@ ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
     {"tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"}
 )
+ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
+ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"

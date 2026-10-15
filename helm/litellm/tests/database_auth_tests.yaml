@@ -191,3 +191,400 @@ tests:
           content:
             name: DATABASE_PASSWORD_READ_REPLICA
           any: true
+
+  - it: writer hostKey reads the host from the Secret and supports IAM auth
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+      database.writer.passwordSecret.hostKey: hostname
+      database.writer.useIAMAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: hostname
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+
+  - it: writer urlKey supplies only DATABASE_URL to each database client container and keeps pool env
+    set:
+      database.writer.host: ""
+      database.writer.dbname: ""
+      database.writer.schema: ""
+      database.writer.sslMode: ""
+      database.writer.sslRootCert: ""
+      database.writer.passwordSecret.urlKey: connection-url
+      database.connectionPool.enabled: true
+      gateway.collector.enabled: true
+      gateway.metricsServer.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: connection-url
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PORT
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SCHEMA
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+        template: gateway/deployment.yaml
+      - notExists:
+          path: >-
+            spec.template.spec.containers[0].env[?(@.name == "DATABASE_HOST" ||
+            @.name == "DATABASE_PORT" || @.name == "DATABASE_USER" ||
+            @.name == "DATABASE_NAME" || @.name == "DATABASE_SCHEMA" ||
+            @.name == "DATABASE_SSLMODE" || @.name == "DATABASE_SSLROOTCERT" ||
+            @.name == "DATABASE_PASSWORD")]
+        template: gateway/deployment.yaml
+      - notExists:
+          path: >-
+            spec.template.spec.containers[2].env[?(@.name == "DATABASE_HOST" ||
+            @.name == "DATABASE_PORT" || @.name == "DATABASE_USER" ||
+            @.name == "DATABASE_NAME" || @.name == "DATABASE_SCHEMA" ||
+            @.name == "DATABASE_SSLMODE" || @.name == "DATABASE_SSLROOTCERT" ||
+            @.name == "DATABASE_PASSWORD")]
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: connection-url
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: DATABASE_USER
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: connection-url
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: connection-url
+        template: backend/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER
+          any: true
+        template: backend/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+        template: backend/deployment.yaml
+      - notExists:
+          path: >-
+            spec.template.spec.containers[0].env[?(@.name == "DATABASE_HOST" ||
+            @.name == "DATABASE_PORT" || @.name == "DATABASE_USER" ||
+            @.name == "DATABASE_NAME" || @.name == "DATABASE_SCHEMA" ||
+            @.name == "DATABASE_SSLMODE" || @.name == "DATABASE_SSLROOTCERT" ||
+            @.name == "DATABASE_PASSWORD")]
+        template: backend/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: connection-url
+        template: migrations-job.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER
+          any: true
+        template: migrations-job.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+        template: migrations-job.yaml
+      - notExists:
+          path: >-
+            spec.template.spec.containers[0].env[?(@.name == "DATABASE_HOST" ||
+            @.name == "DATABASE_PORT" || @.name == "DATABASE_USER" ||
+            @.name == "DATABASE_NAME" || @.name == "DATABASE_SCHEMA" ||
+            @.name == "DATABASE_SSLMODE" || @.name == "DATABASE_SSLROOTCERT" ||
+            @.name == "DATABASE_PASSWORD")]
+        template: migrations-job.yaml
+
+  - it: writer rejects host together with hostKey
+    template: gateway/deployment.yaml
+    set:
+      database.writer.passwordSecret.hostKey: hostname
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.host and database.writer.passwordSecret.hostKey cannot both be set"
+
+  - it: writer rejects urlKey with discrete connection settings
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+      database.writer.passwordSecret.urlKey: connection-url
+      database.writer.schema: public
+      database.writer.sslMode: require
+      database.writer.sslRootCert: /etc/ssl/ca.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth"
+
+  - it: writer rejects urlKey with IAM auth
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+      database.writer.dbname: ""
+      database.writer.passwordSecret.urlKey: connection-url
+      database.writer.useIAMAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth"
+
+  - it: writer rejects urlKey with Entra auth
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+      database.writer.dbname: ""
+      database.writer.passwordSecret.urlKey: connection-url
+      database.writer.useAzureEntraAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth"
+
+  - it: writer requires an endpoint
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "one of database.writer.host, database.writer.passwordSecret.hostKey, or database.writer.passwordSecret.urlKey is required"
+
+  - it: writer hostKey requires a Secret name
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: ""
+      database.writer.passwordSecret.hostKey: hostname
+      database.writer.passwordSecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.passwordSecret.name is required when hostKey or urlKey is set"
+
+  - it: reader renders without replica env vars when passwordSecret is null
+    template: gateway/deployment.yaml
+    set:
+      database.reader.passwordSecret: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL_READ_REPLICA
+          any: true
+
+  - it: reader hostKey enables replica routing and reads its host from the Secret
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+      database.reader.passwordSecret.hostKey: hostname
+      database.reader.dbname: litellm
+      database.reader.useIAMAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST_READ_REPLICA
+            valueFrom:
+              secretKeyRef:
+                name: litellm-reader-secret
+                key: hostname
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME_READ_REPLICA
+            value: litellm
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+
+  - it: reader urlKey emits only the replica URL
+    template: gateway/deployment.yaml
+    set:
+      database.reader.passwordSecret.urlKey: connection-url
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL_READ_REPLICA
+            valueFrom:
+              secretKeyRef:
+                name: litellm-reader-secret
+                key: connection-url
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PORT_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME_READ_REPLICA
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SCHEMA_READ_REPLICA
+          any: true
+
+  - it: reader rejects host together with hostKey
+    template: gateway/deployment.yaml
+    set:
+      database.reader.host: reader.example.com
+      database.reader.passwordSecret.hostKey: hostname
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.reader.host and database.reader.passwordSecret.hostKey cannot both be set"
+
+  - it: reader rejects urlKey with discrete connection settings
+    template: gateway/deployment.yaml
+    set:
+      database.reader.passwordSecret.urlKey: connection-url
+      database.reader.dbname: litellm
+      database.reader.schema: public
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.reader.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, useIAMAuth, or useAzureEntraAuth"
+
+  - it: reader rejects urlKey with token auth
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+      database.reader.passwordSecret.urlKey: connection-url
+      database.reader.useIAMAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.reader.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, useIAMAuth, or useAzureEntraAuth"
+
+  - it: reader urlKey requires a Secret name
+    template: gateway/deployment.yaml
+    set:
+      database.reader.passwordSecret.urlKey: connection-url
+      database.reader.passwordSecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.reader.passwordSecret.name is required when hostKey or urlKey is set"

@@ -120,8 +120,7 @@ class TestGetCompleteUrl:
             api_base="https://custom.example.com/", api_key=None, model="GigaChat",
             optional_params={}, litellm_params={},
         )
-        # get_api_base doesn't strip slash, so we get double slash
-        assert url == "https://custom.example.com//embeddings"
+        assert url == "https://custom.example.com/embeddings"
 
 
 class TestTransformEmbeddingRequest:

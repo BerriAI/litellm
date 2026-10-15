@@ -397,3 +397,20 @@ def test_perplexity_embedding_usage_that_is_not_an_object_is_rejected(usage):
 def test_perplexity_embedding_token_count_that_is_not_an_integer_is_rejected(usage):
     with pytest.raises(ValidationError):
         _transform({"data": [FLOAT_ROW], "usage": usage})
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/perplexity",
+        "https://gateway.example.com/perplexity/",
+        "https://gateway.example.com/perplexity/v1/embeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        PerplexityEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="pplx-embed-v1-0.6b", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/perplexity/v1/embeddings"
+    )
