@@ -244,7 +244,7 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
     assert captured == [(args, kwargs)]
 
 
-def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_public_responses_routes_through_dispatch() -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = _response()
 
@@ -255,10 +255,10 @@ def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
         return expected
 
     NATIVE_RESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_responses: Final = cast(Callable[..., ResponsesAPIResponse], litellm.responses)
     try:
-        result: Final = public_responses(input=INPUT, model="gpt-4o")
+        with catalog.scoped_rules(RUST_RULES):
+            result: Final = public_responses(input=INPUT, model="gpt-4o")
     finally:
         NATIVE_RESPONSES.reset()
     assert result is expected
@@ -266,7 +266,7 @@ def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_public_aresponses_routes_through_dispatch() -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = _response()
 
@@ -277,10 +277,10 @@ async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.Mon
         return expected
 
     NATIVE_ARESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_aresponses: Final = cast(Callable[..., Awaitable[ResponsesAPIResponse]], litellm.aresponses)
     try:
-        result: Final = await public_aresponses(input=INPUT, model="gpt-4o")
+        with catalog.scoped_rules(RUST_RULES):
+            result: Final = await public_aresponses(input=INPUT, model="gpt-4o")
     finally:
         NATIVE_ARESPONSES.reset()
     assert result is expected
