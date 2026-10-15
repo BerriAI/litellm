@@ -2,6 +2,8 @@
 # 1. Generate a Key, and use it to make a call
 
 
+import asyncio
+import time
 from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1285,7 +1287,9 @@ _COUNT_REQUEST = TokenCountRequest(
 )
 
 
-async def _ladder(counter: _ScriptedCounter, settings: TokenCountSettings) -> TokenCountResponse | None:
+async def _ladder(
+    counter: _ScriptedCounter, settings: TokenCountSettings, local_estimate_allowed: bool = True
+) -> TokenCountResponse | None:
     return await _provider_or_fallback_token_count(
         count_with=partial(
             _try_provider_token_count,
@@ -1300,6 +1304,7 @@ async def _ladder(counter: _ScriptedCounter, settings: TokenCountSettings) -> To
         ),
         model_to_use="us.anthropic.claude-sonnet-5-5",
         settings=settings,
+        local_estimate_allowed=local_estimate_allowed,
     )
 
 
@@ -1349,11 +1354,11 @@ async def test_errors_other_than_cannot_count_raise_without_a_fallback(status_co
 
 
 @pytest.mark.asyncio
-async def test_failed_fallback_raises_the_requested_model_error():
+async def test_failed_fallback_raises_the_requested_model_error_naming_the_fallback_error():
     counter = _ScriptedCounter(
         {
             "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
-            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=400),
         }
     )
 
@@ -1361,7 +1366,8 @@ async def test_failed_fallback_raises_the_requested_model_error():
         await _ladder(counter, TokenCountSettings(framing=None, fallback_model="us.anthropic.claude-opus-5-5"))
 
     assert raised.value.code == "404"
-    assert "sonnet" in raised.value.message
+    assert "scripted 404 for sonnet" in raised.value.message
+    assert "scripted 400 for opus" in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -1405,3 +1411,84 @@ async def test_local_estimate_adds_the_configured_framing_once_per_request(monke
     assert framed.total_tokens == plain.total_tokens + 100
     assert (plain.count_source, framed.count_source) == ("local_estimate", "local_estimate")
     assert framed_prompt.total_tokens == litellm.token_counter(model="gpt-5.4-mini", text="hello there")
+
+
+@pytest.mark.asyncio
+async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(monkeypatch: pytest.MonkeyPatch):
+    real_get_model_info: Final = litellm.get_model_info
+
+    def slow_get_model_info(model: str, *args: object, **kwargs: object):
+        if model == "slow-lookup-model":
+            time.sleep(0.5)
+        return real_get_model_info(model, *args, **kwargs)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "get_model_info", slow_get_model_info)
+    counting: Final = asyncio.create_task(
+        token_counter(request=TokenCountRequest(model="slow-lookup-model", messages=[{"role": "user", "content": "hi"}]))
+    )
+    started: Final = time.monotonic()
+    await asyncio.sleep(0.05)
+    other_request_wait: Final = time.monotonic() - started
+    await counting
+
+    assert other_request_wait < 0.4
+
+
+@pytest.mark.asyncio
+async def test_uncountable_model_keeps_the_provider_error_when_local_counting_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    counter: Final = _ScriptedCounter(
+        {"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)}
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "kimi",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {"token_count_framing": 78},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(
+            request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
+        )
+
+    assert raised.value.code == "400"
+    assert "scripted 400 for kimi" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_framing_still_applies_while_the_deployment_is_cooling_down(monkeypatch: pytest.MonkeyPatch):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "framed",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-unused-framed"},
+                "model_info": {"id": "framed-deployment", "token_count_framing": 100},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    messages: Final = [{"role": "user", "content": "hello there"}]
+    warm: Final = await token_counter(request=TokenCountRequest(model="framed", messages=messages))
+
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="framed-deployment", original_exception=Exception("rate limited"), exception_status=429, cooldown_time=60
+    )
+    cooling: Final = await token_counter(request=TokenCountRequest(model="framed", messages=messages))
+
+    assert warm.total_tokens == litellm.token_counter(model="gpt-5.4-mini", messages=messages) + 100
+    assert cooling.total_tokens - 100 == litellm.token_counter(model="framed", messages=messages)
+    assert cooling.count_source == "local_estimate"

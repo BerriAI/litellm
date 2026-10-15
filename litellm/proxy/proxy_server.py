@@ -14432,6 +14432,7 @@ async def _provider_or_fallback_token_count(
     count_with: Callable[[str], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
     model_to_use: str,
     settings: TokenCountSettings,
+    local_estimate_allowed: bool,
 ) -> Optional["TokenCountResponse"]:
     """Count with the provider, then the configured fallback model when the provider cannot count this one.
 
@@ -14445,8 +14446,10 @@ async def _provider_or_fallback_token_count(
         fallback: Final = await count_with(settings.fallback_model)
         if isinstance(fallback, TokenCountResponse):
             return fallback.model_copy(update={"count_source": "fallback_model", "model_used": settings.fallback_model})
+        if isinstance(fallback, ProviderCountFailure):
+            raise primary.with_fallback_failure(settings.fallback_model, fallback).to_proxy_exception()
         raise primary.to_proxy_exception()
-    if settings.framing is not None:
+    if settings.framing is not None and local_estimate_allowed:
         return None
     raise primary.to_proxy_exception()
 
@@ -14457,6 +14460,11 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+
+
+def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
+    group: Final = () if router is None else router.get_all_deployments(model_name=model_group)
+    return group[0] if group else None
 
 
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> str:
@@ -14527,10 +14535,12 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     model_to_use: str = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
-    deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(deployment or {})
+    deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
+        deployment or _model_group_deployment(llm_router, request.model) or {}
+    )
     settings: Final = resolve_token_count_settings(
         configured=deployment_view.get("model_info", {}),
-        default=cost_map_entry(_token_count_settings_model(deployment_view, request.model)),
+        default=await asyncify(cost_map_entry)(_token_count_settings_model(deployment_view, request.model)),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
@@ -14557,6 +14567,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             ),
             model_to_use=model_to_use,
             settings=settings,
+            local_estimate_allowed=litellm.disable_token_counter is not True,
         )
         if result is not None:
             return result

@@ -26,6 +26,12 @@ class ProviderCountFailure:
     def cannot_count_model(self) -> bool:
         return self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
+    def with_fallback_failure(self, fallback_model: str, fallback: "ProviderCountFailure") -> "ProviderCountFailure":
+        return ProviderCountFailure(
+            status_code=self.status_code,
+            message=f"{self.message} The fallback model {fallback_model} could not count it either: {fallback.message}",
+        )
+
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(
             message=self.message,
