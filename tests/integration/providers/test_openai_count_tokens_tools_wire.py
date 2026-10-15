@@ -269,3 +269,27 @@ def test_messages_count_tokens_sends_the_input_v1_messages_inference_sends(
         count_body: Final = _body_for(requests, "/v1/responses/input_tokens")
         assert _counted_fields(count_body) == _counted_fields(inference_body)
         assert count_body["model"] == inference_body["model"]
+
+
+_UNCONVERTIBLE_BODY: Final[Mapping[str, JsonValue]] = {
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize the notes."},
+                {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}},
+                {"type": "search_result", "source": "https://example.com/notes", "title": "Notes", "content": []},
+            ],
+        }
+    ],
+}
+
+
+def test_messages_count_tokens_rejects_blocks_it_cannot_convert(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_responses_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, **_UNCONVERTIBLE_BODY})
+        assert response.status_code == 400, response.text
+        assert "document with a text source, search_result" in response.text
+        assert wire.drain() == ()

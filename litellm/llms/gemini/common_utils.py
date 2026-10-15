@@ -504,12 +504,16 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             VertexGeminiCountContextError,
             count_context_error_response,
             gemini_count_contents,
+            unconvertible_messages_error,
             vertex_gemini_count_context,
         )
 
         count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
         if isinstance(count_context, VertexGeminiCountContextError):
             return count_context_error_response(count_context, request_model, model_to_use)
+        blocks_error: Final = unconvertible_messages_error(messages, messages_format)
+        if blocks_error is not None:
+            return count_context_error_response(blocks_error, request_model, model_to_use)
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))

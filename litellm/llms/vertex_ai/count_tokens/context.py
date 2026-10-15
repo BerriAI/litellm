@@ -134,6 +134,15 @@ def vertex_gemini_count_context(
     )
 
 
+def unconvertible_messages_error(
+    messages: Sequence[Mapping[str, object]] | None, messages_format: TokenCountMessagesFormat
+) -> VertexGeminiCountContextError | None:
+    from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+
+    error_message: Final = unconvertible_blocks_error(messages, messages_format)
+    return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
+
+
 def count_context_error_response(
     error: VertexGeminiCountContextError, request_model: str, model_used: str
 ) -> TokenCountResponse:

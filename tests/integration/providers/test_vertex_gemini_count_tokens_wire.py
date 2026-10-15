@@ -254,6 +254,35 @@ def test_count_tokens_sends_the_contents_messages_inference_sends(gateway: Gatew
         assert _counted_contents(count_body) == generated_body["contents"]
 
 
+_UNCONVERTIBLE_MESSAGES: Final[JsonValue] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the notes."},
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}},
+            {"type": "search_result", "source": "https://example.com/notes", "title": "Notes", "content": []},
+        ],
+    }
+]
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_count_tokens_rejects_blocks_it_cannot_convert(gateway: Gateway, provider: str) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = (
+            _deployment(gateway, scenario, wire.url)
+            if provider == "vertex_ai"
+            else _ai_studio_deployment(scenario, wire.url)
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": _UNCONVERTIBLE_MESSAGES}
+        )
+        assert response.status_code == 400, response.text
+        assert "document with a text source, search_result" in response.text
+        assert peer.drain() == ()
+
+
 def test_count_tokens_keeps_each_text_block_in_system_instruction(gateway: Gateway) -> None:
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:

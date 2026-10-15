@@ -9,6 +9,7 @@ from typing import Any, Final
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.count_tokens.handler import (
@@ -75,6 +76,18 @@ class OpenAITokenCounter(BaseTokenCounter):
         """
         if not messages:
             return None
+
+        blocks_error: Final = unconvertible_blocks_error(messages, messages_format)
+        if blocks_error is not None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=blocks_error,
+                status_code=400,
+            )
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
