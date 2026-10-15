@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -35,6 +35,10 @@ else:
 
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class GoogleImageGenConfig(BaseImageGenerationConfig):
@@ -199,19 +203,22 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         # Handle different response formats based on model
         if is_gemini_image_model(model):
             # Gemini Flash Image Preview models return in candidates format
-            candidates: Final = response_data.get("candidates", [])
+            response_object: Final = _JSON_OBJECT.validate_python(response_data)
+            candidates: Final = _JSON_CONTAINER.validate_python(response_object.get("candidates", []))
             for candidate in candidates:
-                content = candidate.get("content", {})
-                parts = content.get("parts", [])
-                for part in parts:
+                content = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(candidate).get("content", {}))
+                parts = _JSON_CONTAINER.validate_python(content.get("parts", []))
+                for raw_part in parts:
+                    part = raw_part if isinstance(raw_part, str) else _JSON_CONTAINER.validate_python(raw_part)
                     # Look for inlineData with image
                     if "inlineData" in part:
-                        inline_data = part["inlineData"]
+                        part_object = _JSON_OBJECT.validate_python(part)
+                        inline_data = _JSON_CONTAINER.validate_python(part_object["inlineData"])
                         if "data" in inline_data:
-                            thought_sig = part.get("thoughtSignature")
+                            thought_sig = part_object.get("thoughtSignature")
                             model_response.data.append(
                                 ImageObject(
-                                    b64_json=inline_data["data"],
+                                    b64_json=_JSON_OBJECT.validate_python(inline_data)["data"],
                                     url=None,
                                     provider_specific_fields=(
                                         {"thought_signature": thought_sig} if thought_sig else None
@@ -224,12 +231,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 model_response.usage = transform_gemini_image_usage(
                     _JSON_DICT.validate_python(response_data["usageMetadata"])
                 )
-            web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
+            web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
         else:
             # Original Imagen format - predictions with generated images
-            predictions: Final = _JSON_OBJECTS.validate_python(response_data.get("predictions", []))
+            predictions: Final = _JSON_OBJECTS.validate_python(
+                _JSON_OBJECT.validate_python(response_data).get("predictions", [])
+            )
             for prediction in predictions:
                 # Google AI returns base64 encoded images in the prediction
                 model_response.data.append(

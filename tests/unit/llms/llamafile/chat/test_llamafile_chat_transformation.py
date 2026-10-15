@@ -135,9 +135,7 @@ def test_get_openai_compatible_provider_info(
         patch_base as mock_base,
         patch_key as mock_key,
     ):
-        result_base, result_key = config._get_openai_compatible_provider_info(
-            api_base, api_key
-        )
+        result_base, result_key = config.get_openai_compatible_provider_info(api_base, api_key)
 
         assert result_base == expected_base
         assert result_key == expected_key

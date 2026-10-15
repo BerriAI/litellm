@@ -230,7 +230,7 @@ def image_generation(
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
-        model_response._hidden_params["model"] = model
+        model_response.hidden_params["model"] = model
         openai_params: Final = [
             "user",
             "request_timeout",

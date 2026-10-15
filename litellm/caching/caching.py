@@ -16,7 +16,7 @@ import traceback
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel
 
@@ -71,6 +71,27 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
+def _is_conversation_item(item: object) -> bool:
+    if isinstance(item, BaseModel):
+        return True
+    if not isinstance(item, Mapping):
+        return False
+    block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
+    return block.get("type") != "file"
+
+
+def _request_message_count(kwargs: Mapping[str, object]) -> int:
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    messages: Final = kwargs.get("messages")
+    if isinstance(messages, list):
+        return len(messages)
+    input_items: Final = kwargs.get("input")
+    if not isinstance(input_items, list):
+        return 0
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
+
+
 class Cache:
     def __init__(
         self,
@@ -119,6 +140,7 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -148,6 +170,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
+            max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
@@ -298,6 +321,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -363,12 +387,12 @@ class Cache:
         cache_key = ""
         # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
-        preset_cache_key: Final = self._get_preset_cache_key_from_kwargs(**kwargs)
+        preset_cache_key: Final = self.get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
@@ -421,7 +445,7 @@ class Cache:
 
         1. If caching groups are set, then return the caching group as the model https://docs.litellm.ai/docs/routing#caching-across-model-groups
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
-        3. Else use the `model` passed in kwargs
+        3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
         metadata_sources: Final[tuple[dict, ...]] = (
@@ -436,7 +460,10 @@ class Cache:
         caching_group: Final = next(
             (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
         )
-        return caching_group or model_group or kwargs["model"]
+        model_id_suffix: Final = (
+            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+        )
+        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])
@@ -460,7 +487,7 @@ class Cache:
             or litellm_params.get("file_name")
         )
 
-    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> str | None:
+    def get_preset_cache_key_from_kwargs(self, **kwargs: object) -> str | None:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
@@ -469,10 +496,16 @@ class Cache:
         1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
         2. avoid doing duplicate / repeated work
         """
-        if kwargs:
-            if "litellm_params" in kwargs:
-                return kwargs["litellm_params"].get("preset_cache_key", None)
+        if "litellm_params" in kwargs:
+            litellm_params: Final = cast(  # cast-ok: cache kwargs retain dynamic caller values
+                Mapping[str, object], kwargs["litellm_params"]
+            )
+            return cast(  # cast-ok: preserve dynamically supplied cache keys
+                str | None, litellm_params.get("preset_cache_key", None)
+            )
         return None
+
+    _get_preset_cache_key_from_kwargs = get_preset_cache_key_from_kwargs
 
     def _set_preset_cache_key_in_kwargs(self, preset_cache_key: str, **kwargs) -> None:
         """
@@ -539,11 +572,11 @@ class Cache:
             }
             time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
-    def _get_cache_logic(
+    def get_cache_logic(
         self,
         cached_result: object | None,
         max_age: float | None,
-    ):
+    ) -> object | None:
         """
         Common get cache logic across sync + async implementations
         """
@@ -571,6 +604,8 @@ class Cache:
                 cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
+
+    _get_cache_logic = get_cache_logic
 
     @staticmethod
     def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -628,7 +663,7 @@ class Cache:
                         original_kwargs=kwargs,
                         cache_lookup_kwargs=cache_lookup_kwargs,
                     )
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -658,7 +693,7 @@ class Cache:
                         cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
                     else:
                         cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -674,7 +709,7 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:
@@ -925,7 +960,10 @@ class Cache:
 
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
+        Always False once the request carries more than `max_messages` messages
         """
+        if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
         if self.mode == CacheMode.default_on:
             return True
 
@@ -957,7 +995,7 @@ class Cache:
         if hasattr(self.cache, "disconnect"):
             await self.cache.disconnect()
 
-    def _supports_async(self) -> bool:
+    def supports_async(self) -> bool:
         """
         Internal method to check if the cache type supports async get/set operations
 
@@ -965,6 +1003,8 @@ class Cache:
 
         """
         return True
+
+    _supports_async = supports_async
 
 
 def enable_cache(

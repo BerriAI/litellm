@@ -27,6 +27,7 @@ Tests cover (consolidating PRs #23706 and #22727):
 
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,6 +41,7 @@ from litellm.llms.anthropic.pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -322,9 +324,7 @@ def test_response_cost_is_recorded_while_image_tokens_are_still_visible():
     calculator = _StubCostCalculator(cost=0.0672035)
     logging_obj = _real_logging_obj(calculator)
 
-    _store_response_cost_before_usage_flattening(
-        _image_usage_response(), {"litellm_logging_obj": logging_obj}
-    )
+    _store_response_cost_before_usage_flattening(_image_usage_response(), {"litellm_logging_obj": logging_obj})
 
     stored_usage = logging_obj.model_call_details.get("combined_usage_object")
     assert stored_usage is not None, "adapter skipped response-cost bookkeeping on the non-streaming path"
@@ -340,7 +340,10 @@ def test_response_cost_bookkeeping_is_a_noop_without_logging_obj():
         _store_response_cost_before_usage_flattening,
     )
 
-    _store_response_cost_before_usage_flattening(_image_usage_response(), {})
+    response: Final = _image_usage_response()
+    before: Final = response.model_dump()
+    _store_response_cost_before_usage_flattening(response, {})
+    assert response.model_dump() == before
 
 
 def test_response_cost_bookkeeping_swallows_calculator_failure():
@@ -350,9 +353,7 @@ def test_response_cost_bookkeeping_swallows_calculator_failure():
 
     logging_obj = _real_logging_obj(_StubCostCalculator(raises=True))
 
-    _store_response_cost_before_usage_flattening(
-        _image_usage_response(), {"litellm_logging_obj": logging_obj}
-    )
+    _store_response_cost_before_usage_flattening(_image_usage_response(), {"litellm_logging_obj": logging_obj})
 
     assert "combined_usage_object" not in logging_obj.model_call_details
 
@@ -406,3 +407,18 @@ def test_anthropic_messages_handler_records_cost_before_flattening():
     # The returned Anthropic response is what the proxy recomputes from, and it is
     # exactly the shape that no longer carries the image-token breakdown.
     assert "completion_tokens_details" not in result["usage"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("converted_stream_key", sorted(CONVERTED_STREAM_KEYS))
+async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(converted_stream_key: str):
+    response: Final = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+        max_tokens=16,
+        messages=MESSAGES,
+        model="openai/gpt-4o",
+        stream=False,
+        mock_response="hi",
+        **{converted_stream_key: True},
+    )
+
+    assert response["content"][0]["text"] == "hi"
