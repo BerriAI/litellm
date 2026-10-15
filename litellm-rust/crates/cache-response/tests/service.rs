@@ -40,7 +40,10 @@ async fn service_honors_per_call_expiry_and_freshness() {
         .unwrap();
     assert_eq!(
         cache.lookup(&request, Duration::ZERO).await.unwrap(),
-        Some(json!({"answer":7}))
+        Some(litellm_cache_response::CacheHit {
+            value: json!({"answer":7}),
+            key: litellm_cache_response::cache_key(&request.key),
+        })
     );
     let stale_request = ResponseCacheRequest {
         max_age: Some(Duration::from_secs(1)),
@@ -114,7 +117,11 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     }
     for key in ["batch-small", "service"] {
         assert_eq!(
-            service.lookup(&request(key), Duration::ZERO).await.unwrap(),
+            service
+                .lookup(&request(key), Duration::ZERO)
+                .await
+                .unwrap()
+                .map(|hit| hit.value),
             Some(small.clone())
         );
     }

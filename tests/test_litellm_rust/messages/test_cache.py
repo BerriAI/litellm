@@ -26,7 +26,7 @@ from tests.test_litellm_rust.support.caching import (
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.results import cache_key
+from tests.test_litellm_rust.support.results import cache_key, stored_cache_key
 from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -464,3 +464,17 @@ async def test_a_redis_hit_fills_the_worker_memory_tier(
 
     assert len(server.requests) == 1
     assert body(hit) == MESSAGES_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_a_hit_reports_the_key_the_entry_is_stored_under(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend: Final = InMemoryCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    await call(server)
+    hit: Final = await call(server)
+
+    (stored,) = backend.cache_dict
+    assert stored_cache_key(hit) == cache_key(hit) == stored

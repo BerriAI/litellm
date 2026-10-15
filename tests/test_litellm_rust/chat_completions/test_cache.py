@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
@@ -22,7 +23,7 @@ from tests.test_litellm_rust.support.caching import (
     use_cache,
 )
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.results import cache_key
+from tests.test_litellm_rust.support.results import cache_key, stored_cache_key
 from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -116,3 +117,18 @@ async def test_a_stored_response_lands_in_the_worker_memory_tier(
 
     assert len(server.requests) == 1
     assert content(hit) == content(first)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ("python", "native"))
+async def test_a_hit_reports_the_key_the_entry_is_stored_under(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, engine: Literal["python", "native"]
+) -> None:
+    backend: Final = InMemoryCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    await send(engine, server, monkeypatch)
+    hit: Final = await send(engine, server, monkeypatch)
+
+    (stored,) = backend.cache_dict
+    assert stored_cache_key(hit) == stored

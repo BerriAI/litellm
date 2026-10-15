@@ -2,8 +2,8 @@ use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Durati
 
 use litellm_cache::Error;
 use litellm_cache_response::{
-    CacheScope, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
-    ScopedCache,
+    CacheHit, CacheScope, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    ResponseEnvelope, ScopedCache,
 };
 use litellm_host::{machine::HostServices, protocol::Reply};
 use litellm_inference::caching::{Cachable, CachedOutput};
@@ -15,7 +15,7 @@ const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";
 
 pub(crate) enum CacheCall {
     Lookup {
-        reply: Reply<Result<Option<Value>, Error>>,
+        reply: Reply<Result<Option<CacheHit>, Error>>,
     },
     Store {
         value: Value,
@@ -72,13 +72,18 @@ impl<P: Cachable> ResponseCacheService for PythonCacheService<P> {
         &'a self,
         _: &'a ResponseCacheRequest,
         _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<CacheHit>, Error>> + Send + 'a>> {
         Box::pin(async move {
             self.services
                 .call(|reply| CacheCall::Lookup { reply })
                 .await
                 .map_err(|_| Error::Unavailable)??
-                .map(from_python::<P>)
+                .map(|hit| {
+                    Ok(CacheHit {
+                        value: from_python::<P>(hit.value)?,
+                        key: hit.key,
+                    })
+                })
                 .transpose()
         })
     }

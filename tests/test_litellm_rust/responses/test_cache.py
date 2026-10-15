@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
@@ -20,7 +21,7 @@ from tests.test_litellm_rust.support.caching import (
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.results import cache_key
+from tests.test_litellm_rust.support.results import cache_key, stored_cache_key
 from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -262,3 +263,18 @@ async def test_a_cache_hit_keeps_budget_spend_and_counts_usage(
 
     usage: Final = TypeAdapter(dict[str, int]).validate_python(RESPONSES_RESPONSE["usage"])
     await assert_cache_hit_keeps_budget_spend_and_counts_usage(send, server, usage["total_tokens"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ("python", "native"))
+async def test_a_hit_reports_the_key_the_entry_is_stored_under(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, engine: Literal["python", "native"]
+) -> None:
+    backend: Final = InMemoryCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    await (call_python(server, monkeypatch) if engine == "python" else call(server))
+    hit: Final = await (call_python(server, monkeypatch) if engine == "python" else call(server))
+
+    (stored,) = backend.cache_dict
+    assert stored_cache_key(hit) == stored

@@ -1,5 +1,6 @@
+use super::service::CacheCall;
 use litellm_cache::Error;
-use litellm_cache_response::CachePolicy;
+use litellm_cache_response::{CacheHit, CachePolicy};
 use litellm_host::protocol::Reply;
 use litellm_host_python::{from_py, to_py};
 use pyo3::{
@@ -8,20 +9,27 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
-use serde_json::Value;
-
-use super::service::CacheCall;
 
 const MODULE: &str = "litellm.rust_bridge.host.cache";
 
 enum Pending {
-    Lookup(Reply<Result<Option<Value>, Error>>),
+    Lookup(Reply<Result<Option<CacheHit>, Error>>),
     Store(Reply<Result<(), Error>>),
 }
 
 struct Granted {
     access: Py<PyAny>,
     arguments: Py<PyDict>,
+}
+
+fn cache_hit(hit: &Bound<'_, PyAny>) -> PyResult<Option<CacheHit>> {
+    if hit.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(CacheHit {
+        value: from_py(&hit.getattr("response")?)?,
+        key: hit.getattr("key")?.extract()?,
+    }))
 }
 
 pub(crate) struct PythonCache {
@@ -111,16 +119,10 @@ impl PythonCache {
         }
         match self.pending.take() {
             Some(Pending::Lookup(reply)) => {
-                let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
-                    if value.bind(py).is_none() {
-                        Ok(None)
-                    } else {
-                        from_py(value.bind(py))
-                            .map(Some)
-                            .map_err(|_| Error::InvalidEntry)
-                    }
-                });
-                reply.send(value);
+                let hit = result
+                    .map_err(|_| Error::Unavailable)
+                    .and_then(|hit| cache_hit(hit.bind(py)).map_err(|_| Error::InvalidEntry));
+                reply.send(hit);
             }
             Some(Pending::Store(reply)) => {
                 reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
@@ -153,6 +155,7 @@ mod tests {
     use futures_util::FutureExt;
     use litellm_host::protocol::reply;
     use rstest::rstest;
+    use serde_json::Value;
 
     use super::*;
 
