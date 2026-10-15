@@ -2306,14 +2306,6 @@ def _map_exception_by_status(
     message: Final = f"{exception_provider} - {error_str}"
     response: Final = original_exception.response if hasattr(original_exception, "response") else None
     match status_code:
-        case 400 if ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
-            raise ContextWindowExceededError(
-                message=message,
-                model=model,
-                llm_provider=custom_llm_provider,
-                response=response,
-                litellm_debug_info=extra_information,
-            )
         case 401:
             raise AuthenticationError(
                 message=message,

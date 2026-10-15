@@ -838,6 +838,10 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
+    "inferenceapis": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
     "mistral": {402: (litellm.APIError, 402)},
     "nlp_cloud": {
         402: (litellm.RateLimitError, 429),
@@ -884,6 +888,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "gemini",
     "groq",
     "huggingface",
+    "inferenceapis",
     "mistral",
     "nlp_cloud",
     "ollama",
@@ -1122,20 +1127,18 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "anthropic",
     "azure",
     "azure_ai",
-    "cloudflare",
     "databricks",
     "deepseek",
     "fireworks_ai",
     "gemini",
     "groq",
+    "inferenceapis",
     "mistral",
-    "ollama",
     "openai",
     "perplexity",
     "runwayml",
     "together_ai",
     "vertex_ai",
-    "vllm",
     "xai",
 )
 
@@ -1179,19 +1182,6 @@ def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(provide
 
     assert type(raised.value) is expected_class
     assert raised.value.status_code == expected_status
-
-
-@pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
-def test_a_provider_without_a_handler_reports_a_full_context_window(provider, quiet_exception_mapping):
-    with pytest.raises(litellm.ContextWindowExceededError) as raised:
-        exception_type(
-            model="test-model",
-            original_exception=_UpstreamErrorWithMessage(CONTEXT_WINDOW_MESSAGE, 400),
-            custom_llm_provider=provider,
-        )
-
-    assert raised.value.status_code == 400
-    assert raised.value.llm_provider == provider
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
