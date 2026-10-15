@@ -22,7 +22,7 @@ import yaml
 
 from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 
 METRIC: Final = "litellm_team_members_metric"
 METRICS_ROUTE: Final = "/metrics/"
@@ -120,3 +120,52 @@ def test_team_members_gauge_reads_roster_size_then_zero_after_delete(gateway: Ga
             seconds=30,
         )
         assert after == ({"team": team_id, "team_alias": alias}, 0.0), after
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_user_delete_moves_the_aliased_team_members_gauge(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        gateway.scenario() as scenario,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"]},
+            config=_prometheus_config(tmp_path),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+    ):
+        candidate: Final = owned.gateway
+        alias: Final = f"integration-h7-{uuid.uuid4().hex}"
+        team_id: Final = string_value(candidate.post("/team/new", {"team_alias": alias})["team_id"])
+        scenario.cleanups.callback(_delete_team_if_present, gateway, team_id)
+        leaving: Final = string_value(
+            candidate.post(
+                "/user/new",
+                {
+                    "user_id": f"integration-h7-{uuid.uuid4().hex}",
+                    "auto_create_key": False,
+                    "user_role": "internal_user",
+                },
+            )["user_id"]
+        )
+        staying: Final = tuple(_user(candidate, scenario) for _ in range(MEMBERS - 1))
+        candidate.post(
+            "/team/member_add",
+            {"team_id": team_id, "member": [{"role": "user", "user_id": user_id} for user_id in (leaving, *staying)]},
+        )
+        before: Final = eventually(
+            lambda: _team_members_series(_scrape(candidate), team_id),
+            lambda sample: sample is not None and sample[1] == float(MEMBERS),
+            seconds=30,
+        )
+        assert before == ({"team": team_id, "team_alias": alias}, float(MEMBERS)), before
+
+        deleted: Final = candidate.request("POST", "/user/delete", {"user_ids": [leaving]})
+        assert deleted.status_code == 200, deleted.text
+
+        after: Final = eventually(
+            lambda: _team_members_series(_scrape(candidate), team_id),
+            lambda sample: sample is not None and sample[1] == float(MEMBERS - 1),
+            seconds=30,
+        )
+        assert after == ({"team": team_id, "team_alias": alias}, float(MEMBERS - 1)), after

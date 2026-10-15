@@ -24,10 +24,18 @@ class _ConfigSyncPubSub(Protocol):
 ConfigSyncPubSub = _ConfigSyncPubSub
 
 
+class _PublishPipeline(Protocol):
+    def publish(self, channel: str, message: str) -> object: ...
+
+    def execute(self) -> Awaitable[object]: ...
+
+
 class _ConfigSyncPubSubClient(Protocol):
     def publish(self, channel: str, message: str) -> Awaitable[int]: ...
 
     def pubsub(self) -> ConfigSyncPubSub: ...
+
+    def pipeline(self, transaction: bool = True) -> _PublishPipeline: ...
 
 
 CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
