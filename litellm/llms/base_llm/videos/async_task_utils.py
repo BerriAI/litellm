@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Mapping
 from io import BufferedReader, BytesIO
+from itertools import accumulate, repeat
 from pathlib import Path, PurePath
 from typing import Final
 
@@ -67,11 +68,16 @@ def polled_video_models(logging_obj: object) -> tuple[str | None, str | None]:
     return decoded.get("model_id") or None, served if routed is None or served in routed else None
 
 
-def _file_content(file_obj: object) -> object:
+def _tuple_payload(file_obj: object) -> object:
     if not isinstance(file_obj, tuple):
         return file_obj
     file_tuple: Final = _FILE_TUPLE_ADAPTER.validate_python(file_obj)
-    return _file_content(file_tuple[1]) if len(file_tuple) >= 2 else None
+    return file_tuple[1] if len(file_tuple) >= 2 else None
+
+
+def _file_content(file_obj: object) -> object:
+    unwrapped: Final = accumulate(repeat(None), lambda current, _: _tuple_payload(current), initial=file_obj)
+    return next(item for item in unwrapped if not isinstance(item, tuple))
 
 
 def input_reference_bytes(file_obj: object) -> bytes:
