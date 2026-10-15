@@ -5507,7 +5507,16 @@ async def _routable_deployment_ids(
             ("model-a", "model-b", "model-c"),
             id="fine-tune-files-on-disjoint-deployments-keep-every-deployment",
         ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-z": "f-5"}},
+            ("model-a", "model-b", "model-c"),
+            id="fine-tune-file-of-another-model-group-keeps-every-deployment",
+        ),
         pytest.param("acreate_batch", {"input_file_id": {"model-c": "f-4"}}, ("model-c",), id="batch-input-file"),
+        pytest.param(
+            "acreate_batch", {"input_file_id": {"model-z": "f-6"}}, (), id="batch-input-file-of-another-model-group"
+        ),
     ],
 )
 async def test_create_from_managed_files_routes_only_to_deployments_holding_every_file(

@@ -1,7 +1,9 @@
 """Managed fine-tuning creates on a two-worker proxy whose model group has two deployments: a concurrent burst from
 sync and async clients, traffic pinned to each worker in turn, and a worker killed and replaced, all send every
 deployment its own provider file ids and hand the caller back its own managed ids. A deployment added to the group
-after the upload holds no copy of the files, so it never receives the create even when the router prefers it."""
+after the upload holds no copy of the files, so it never receives the create even when the router prefers it. A model
+group the files were never uploaded for still gets the create and the provider's own 400, as before routing checked
+which deployments hold the files."""
 
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import yaml
 from integration._support.client import eventually, gateway_from_environment
 from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, BadRequestError, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(480)
@@ -28,6 +30,8 @@ pytestmark: Final = pytest.mark.timeout(480)
 MODEL: Final = "gpt-4.1-chaos"
 DEPLOYMENT_KEYS: Final = ("sk-chaos-deployment-a", "sk-chaos-deployment-b")
 LATE_DEPLOYMENT_KEY: Final = "sk-chaos-deployment-late"
+OTHER_MODEL: Final = "gpt-4.1-chaos-other"
+OTHER_DEPLOYMENT_KEY: Final = "sk-chaos-deployment-other"
 RUN: Final = uuid.uuid4().hex[:12]
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -65,6 +69,16 @@ def _uploaded_purpose(request: Request) -> str:
     return "validate" if b'filename="validate.jsonl"' in request.body else "train"
 
 
+def _invalid_training_file(training_file: str) -> Reply:
+    error: Final = {
+        "message": f"invalid training_file: {training_file}",
+        "type": "invalid_request_error",
+        "param": "training_file",
+        "code": None,
+    }
+    return Reply(status=400, body=json.dumps({"error": error}).encode())
+
+
 def _respond(request: Request) -> Reply:
     path: Final = urlsplit(request.target).path
     if (request.method, path) == ("POST", "/v1/files"):
@@ -83,6 +97,8 @@ def _respond(request: Request) -> Reply:
         )
     if (request.method, path) == ("POST", "/v1/fine_tuning/jobs"):
         sent: Final = JSON_OBJECT.validate_json(request.body)
+        if not str(sent["training_file"]).startswith(f"file-{RUN}-"):
+            return _invalid_training_file(str(sent["training_file"]))
         return Reply(
             body=json.dumps(
                 {
@@ -107,9 +123,9 @@ def _respond(request: Request) -> Reply:
     return Reply(body=json.dumps({"object": "list", "data": []}).encode())
 
 
-def _deployment(wire: Wire, key: str, routing: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+def _deployment(wire: Wire, key: str, routing: Mapping[str, JsonValue], model: str = MODEL) -> dict[str, JsonValue]:
     return {
-        "model_name": MODEL,
+        "model_name": model,
         "litellm_params": {"model": "openai/gpt-4.1", "api_key": key, "api_base": f"{wire.url}/v1", **routing},
         "model_info": {"supported_endpoints": ["/chat/completions", "/fine_tuning"]},
     }
@@ -118,7 +134,11 @@ def _deployment(wire: Wire, key: str, routing: Mapping[str, JsonValue]) -> dict[
 def _config(wire: Wire, late_preferred_deployment: bool = False) -> dict[str, JsonValue]:
     late: Final = (_deployment(wire, LATE_DEPLOYMENT_KEY, {"order": 1}),) if late_preferred_deployment else ()
     return {
-        "model_list": [*(_deployment(wire, key, {}) for key in DEPLOYMENT_KEYS), *late],
+        "model_list": [
+            *(_deployment(wire, key, {}) for key in DEPLOYMENT_KEYS),
+            *late,
+            _deployment(wire, OTHER_DEPLOYMENT_KEY, {}, OTHER_MODEL),
+        ],
         "router_settings": {"num_retries": 0, "disable_cooldowns": True},
         "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY", "database_url": "os.environ/DATABASE_URL"},
     }
@@ -253,3 +273,11 @@ def test_a_deployment_added_after_the_upload_never_receives_the_create(tmp_path:
             creates: Final = _sent_creates(rig, 6)
     _assert_caller_gets_its_own_ids(rig, outcomes)
     _assert_each_deployment_got_its_own_ids(creates)
+
+
+def test_a_model_group_without_a_copy_of_the_files_still_gets_the_providers_400(rig: Rig) -> None:
+    with rig.sdk() as client, pytest.raises(BadRequestError) as rejected:
+        client.fine_tuning.jobs.create(model=OTHER_MODEL, training_file=rig.training_file)
+    creates: Final = _sent_creates(rig, 1)
+    assert rejected.value.status_code == 400, rejected.value.response.text
+    assert [_bearer(request) for request in creates] == [OTHER_DEPLOYMENT_KEY], creates

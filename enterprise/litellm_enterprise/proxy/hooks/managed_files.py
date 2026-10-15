@@ -1363,11 +1363,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if len(allowed_model_ids) == 0:
             return healthy_deployments
 
-        return [
+        holders: Final[list[dict[str, object]]] = [
             deployment
             for deployment in healthy_deployments
             if deployment.get("model_info", {}).get("id") in allowed_model_ids
         ]
+        return holders if holders or "input_file_id" in request else healthy_deployments
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
