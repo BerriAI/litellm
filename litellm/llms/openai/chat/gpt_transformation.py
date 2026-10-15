@@ -307,7 +307,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     llm_provider="openai",
                 )
             new_file_obj: Final = ChatCompletionFileObjectFile(
-                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
+                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}  # pyright: ignore[reportArgumentType]  # items() widens each value to object, but every key and value comes from the same ChatCompletionFileObjectFile
             )
             content_item["file"] = new_file_obj
 
