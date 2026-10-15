@@ -167,6 +167,8 @@ LLM_CONFIG_NAMES: Final = (
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
+    "LayaDecisionsConfig",
+    "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
     "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
@@ -738,6 +740,8 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.hosted_vllm.decisions.transformation",
         "HostedVLLMDecisionsConfig",
     ),
+    "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
+    "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (

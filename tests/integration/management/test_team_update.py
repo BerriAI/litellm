@@ -4,6 +4,7 @@ from litellm.proxy._types import LitellmUserRoles
 
 from tests.integration._support.actors import Actor, SeededKey
 from tests.integration._support.actors import create_scratch_actor, create_scratch_team
+from tests.integration._support.client import team_admin_permissions
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -159,6 +160,124 @@ async def test_team_update_org_admin_resolved_from_team_without_org_context(
     assert denied_team_admin.status_code == 403, denied_team_admin.text
     assert "cannot edit team settings" in denied_team_admin.text, denied_team_admin.text
     assert "Team admin editable fields" in denied_team_admin.text, denied_team_admin.text
+
+
+_MEMBER_DEFAULTS = [
+    pytest.param("team_member_budget", 25.0, "max_budget", id="team_member_budget"),
+    pytest.param("team_member_budget_duration", "7d", "budget_duration", id="team_member_budget_duration"),
+    pytest.param("team_member_tpm_limit", 200, "tpm_limit", id="team_member_tpm_limit"),
+    pytest.param("team_member_rpm_limit", 9, "rpm_limit", id="team_member_rpm_limit"),
+]
+
+
+@pytest.mark.parametrize("field,value,budget_column", _MEMBER_DEFAULTS)
+async def test_team_update_team_admin_member_default_follows_the_proxy_admin_grant(
+    field: str, value: str | float, budget_column: str, gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    headers = {"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"}
+    body = {"team_id": resources.prefix, field: value}
+
+    with team_admin_permissions(gateway_client.gateway, ["tpm_limit"]):
+        denied = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert denied.status_code == 403, denied.text
+    assert f"'{field}'" in denied.text and "Team admin editable fields" in denied.text, denied.text
+
+    with team_admin_permissions(gateway_client.gateway, [field]):
+        allowed = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert allowed.status_code == 200, allowed.text
+
+    info = await gateway_client.get("/team/info", params={"team_id": resources.prefix})
+    assert info.status_code == 200, info.text
+    assert info.json()["team_info"]["team_member_budget_table"][budget_column] == value
+
+
+async def test_team_update_team_admin_resending_member_defaults_leaves_the_budget_row_alone(
+    gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    stored = {
+        "team_member_budget": 10.0,
+        "team_member_budget_duration": "30d",
+        "team_member_tpm_limit": 100,
+        "team_member_rpm_limit": 5,
+    }
+    seeded = await gateway_client.post("/team/update", json={"team_id": resources.prefix, **stored})
+    assert seeded.status_code == 200, seeded.text
+    team = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert team is not None
+    budget_id = team.metadata["team_member_budget_id"]
+    before = await db.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
+    assert before is not None
+
+    with team_admin_permissions(gateway_client.gateway, ["tpm_limit"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "tpm_limit": 1000, **stored},
+        )
+    assert resp.status_code == 200, resp.text
+
+    after = await db.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
+    assert after is not None and after.updated_at == before.updated_at
+    team = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert team is not None and team.tpm_limit == 1000
+
+
+async def test_team_update_team_admin_cannot_change_member_defaults_of_another_team(
+    gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "beta", resources.prefix)
+
+    with team_admin_permissions(gateway_client.gateway, ["team_member_budget"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "team_member_budget": 25.0},
+        )
+    assert resp.status_code == 403, resp.text
+    team = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert team is not None and "team_member_budget_id" not in (team.metadata or {}), "denied but team mutated"
+
+
+async def test_team_update_team_admin_soft_budget_follows_the_proxy_admin_grant(gateway_client, db, resources, actors):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    headers = {"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"}
+    body = {"team_id": resources.prefix, "soft_budget": 7.5}
+
+    with team_admin_permissions(gateway_client.gateway, ["max_budget"]):
+        denied = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert denied.status_code == 403, denied.text
+    assert "'soft_budget'" in denied.text and "Team admin editable fields" in denied.text, denied.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget != 7.5, "denied but team mutated"
+
+    with team_admin_permissions(gateway_client.gateway, ["soft_budget"]):
+        allowed = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert allowed.status_code == 200, allowed.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget == 7.5
+
+
+async def test_team_update_team_admin_cannot_set_soft_budget_on_a_team_they_do_not_administer(
+    gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "beta", resources.prefix)
+
+    with team_admin_permissions(gateway_client.gateway, ["soft_budget"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "soft_budget": 7.5},
+        )
+    assert resp.status_code == 403, resp.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget != 7.5, "denied but team mutated"
 
 
 # Relocation gate — moving a team to a different org. The resources team starts

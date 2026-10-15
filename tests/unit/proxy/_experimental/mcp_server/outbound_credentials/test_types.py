@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     CredError,
     Error,
     IdJagConfig,
+    IdJagResourceClient,
     NoneConfig,
     Ok,
     PrivateKeyJwtAuth,
@@ -42,6 +43,10 @@ _ID_JAG_MINIMAL = {
     "resource_token_endpoint": "https://mcp-as.example.com/token",
     "client_id": "litellm",
     "client_auth": {"source": "client_secret", "client_secret": "s"},
+    "resource_client": {
+        "client_id": "litellm",
+        "client_auth": {"source": "client_secret", "client_secret": "s"},
+    },
 }
 
 
@@ -230,6 +235,10 @@ def test_id_jag_secrets_do_not_leak_in_repr():
         resource_token_endpoint="https://mcp-as.example.com/token",
         client_id="litellm",
         client_auth=PrivateKeyJwtAuth(private_key=SecretStr("super-secret-pem")),
+        resource_client=IdJagResourceClient(
+            client_id="resource-client",
+            client_auth=PrivateKeyJwtAuth(private_key=SecretStr("super-secret-pem")),
+        ),
     )
     assert "super-secret-pem" not in repr(config)
 
@@ -255,6 +264,10 @@ _CARRIER_CONFIGS = (
             resource_token_endpoint="https://mcp-as.example.com/token",
             client_id="litellm",
             client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+            resource_client=IdJagResourceClient(
+                client_id="litellm",
+                client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+            ),
             **kw,
         ),
     ),
