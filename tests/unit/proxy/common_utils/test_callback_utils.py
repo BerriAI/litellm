@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.callback_utils import (
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -154,9 +155,7 @@ def test_add_policy_to_applied_policies_header_uses_litellm_metadata_bucket():
         "litellm_metadata": {},
     }
 
-    add_policy_to_applied_policies_header(
-        request_data=request_data, policy_name="global-baseline"
-    )
+    add_policy_to_applied_policies_header(request_data=request_data, policy_name="global-baseline")
 
     assert request_data["litellm_metadata"]["applied_policies"] == ["global-baseline"]
     assert "applied_policies" not in request_data.get("metadata", {})
@@ -311,9 +310,7 @@ def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
         lambda litellm_settings, callback_specific_params: dummy_callback,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -366,20 +363,11 @@ def test_encrypt_callback_vars_round_trip(monkeypatch):
     enc_vars = encrypted["logging"][0]["callback_vars"]
     assert enc_vars["langfuse_secret_key"] != "sk-lf-secret"
     assert enc_vars["langfuse_public_key"] != "pk-lf-public"
-    assert (
-        encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"]
-        != "ls-api-key"
-    )
+    assert encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"] != "ls-api-key"
 
     decrypted = decrypt_callback_vars(encrypted)
-    assert (
-        decrypted["logging"][0]["callback_vars"]
-        == original["logging"][0]["callback_vars"]
-    )
-    assert (
-        decrypted["callback_settings"]["callback_vars"]
-        == original["callback_settings"]["callback_vars"]
-    )
+    assert decrypted["logging"][0]["callback_vars"] == original["logging"][0]["callback_vars"]
+    assert decrypted["callback_settings"]["callback_vars"] == original["callback_settings"]["callback_vars"]
 
 
 def test_encrypt_callback_vars_is_idempotent(monkeypatch):
@@ -402,10 +390,7 @@ def test_decrypt_callback_vars_passes_through_legacy_plaintext(monkeypatch):
     plaintext = _sample_metadata()
     decrypted = decrypt_callback_vars(plaintext)
     # legacy rows decrypt-fail and fall through unchanged
-    assert (
-        decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"]
-        == "sk-lf-secret"
-    )
+    assert decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-lf-secret"
 
 
 def test_callback_vars_helpers_handle_edge_shapes(monkeypatch):
@@ -506,9 +491,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
         SimpleNamespace(prisma_client=None),
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         # A non-dict value must be ignored (init_params stays {}), not **-unpacked.
@@ -526,9 +509,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
 
 
 @pytest.mark.parametrize("bad_root", [None, True])
-def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
-    monkeypatch, bad_root
-):
+def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(monkeypatch, bad_root):
     """Regression: a blank `callback_settings:` key in YAML loads as None (and
     `callback_settings: true` as a bool); load_config forwards that value
     verbatim as callback_specific_params. Membership tests like
@@ -545,9 +526,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
         CompressionInterceptionLogger,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -557,9 +536,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
             litellm_settings={},
             callback_specific_params=bad_root,
         )
-        assert any(
-            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
-        )
+        assert any(isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks)
     finally:
         litellm.callbacks = original_callbacks
 
@@ -611,7 +588,7 @@ def test_strip_callback_config_passes_through_non_dicts(value):
 
 _PROBE_MODULE_NAME = "custom_callback_probe"
 
-_PROBE_MODULE_SOURCE = '''
+_PROBE_MODULE_SOURCE = """
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -632,7 +609,7 @@ def log_event_fn(kwargs, response_obj, start_time, end_time):
 NOT_A_CALLBACK = "some-plain-string"
 
 proxy_handler_instance = FloorMaxTokens()
-'''
+"""
 
 
 @pytest.fixture
@@ -646,9 +623,7 @@ def probe_config_path(tmp_path):
     """
     (tmp_path / f"{_PROBE_MODULE_NAME}.py").write_text(_PROBE_MODULE_SOURCE)
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else litellm.callbacks
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else litellm.callbacks
     litellm.callbacks = []
     ProxyLogging._callback_capabilities_cache.clear()
     try:
@@ -674,7 +649,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     silently never run the hook. Config load must fail instead."""
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -692,12 +667,10 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
         ("NOT_A_CALLBACK", "str 'some-plain-string'"),
     ],
 )
-def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
-    probe_config_path, attribute, expected_fragment
-):
+def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(probe_config_path, attribute, expected_fragment):
     entry = f"{_PROBE_MODULE_NAME}.{attribute}"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -709,7 +682,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks(entry, probe_config_path)
 
     assert entry in str(exc_info.value)
@@ -762,3 +735,28 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
 
     assert len(litellm.callbacks) == 1
     assert isinstance(litellm.callbacks[0], CustomLogger)
+
+
+def test_decrypt_callback_vars_drops_a_marked_value_it_cannot_read(monkeypatch):
+    """A value carrying the encrypted-value marker that does not decrypt (wrong key, or
+    legacy ciphertext without PyNaCl) must read as unset — never be handed to the
+    logging provider as if the ciphertext blob were the credential."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-callback-decrypt-salt")
+    marked = "litellm_enc::" + str(encrypt_value_helper("secret", new_encryption_key="sk-another-salt"))
+
+    decrypted = decrypt_callback_vars({"callback_settings": {"callback_vars": {"langfuse_secret_key": marked}}})
+
+    assert decrypted["callback_settings"]["callback_vars"]["langfuse_secret_key"] is None
+
+
+def test_decrypt_callback_vars_round_trips_a_marked_value_under_the_current_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-callback-decrypt-salt")
+    marked = "litellm_enc::" + str(encrypt_value_helper("the-secret"))
+
+    decrypted = decrypt_callback_vars({"callback_settings": {"callback_vars": {"langfuse_secret_key": marked}}})
+
+    assert decrypted["callback_settings"]["callback_vars"]["langfuse_secret_key"] == "the-secret"

@@ -732,3 +732,43 @@ async def test_guardrail_mode_and_unprefixed_params_do_not_block_a_pynacl_free_m
     database = _FakeDatabase(tables)
 
     assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # the marked api_key only
+
+
+@pytest.mark.asyncio
+async def test_integration_settings_config_rows_count_their_encrypted_fields(monkeypatch):
+    """vantage_settings / cloudzero_settings config rows hold writer-encrypted fields
+    next to plaintext metadata; the count must see the encrypted fields (so the boot
+    re-encrypts them before the variable can be deleted) and ignore the metadata."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {
+                "param_name": "vantage_settings",
+                "param_value": {
+                    "api_key": _encrypted("vantage-key"),
+                    "integration_token": _encrypted("vantage-token"),
+                    "base_url": "https://api.vantage.sh",
+                },
+            },
+            {"param_name": "cloudzero_settings", "param_value": {"api_key": _encrypted("cz-key"), "timezone": "utc"}},
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 3
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=3, remaining=0, unreadable=0)
+    assert decrypt_if_encrypted_with(tables["LiteLLM_Config"][0]["param_value"]["api_key"], NEW_KEY) == "vantage-key"
+    assert tables["LiteLLM_Config"][0]["param_value"]["base_url"] == "https://api.vantage.sh"
+    assert tables["LiteLLM_Config"][1]["param_value"]["timezone"] == "utc"

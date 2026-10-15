@@ -134,6 +134,12 @@ _LITELLM_PARAMS_SECRET_COLUMNS: Final = frozenset(
     )
 )
 _ENV_VARS_CONFIG_ROW: Final = "environment_variables"
+# Config rows whose writers encrypt selected top-level fields (the same fields the
+# credential-migration walkers re-encrypt); the rows' other fields are plaintext metadata.
+_CONFIG_ROW_SENSITIVE_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
+    "vantage_settings": ("api_key", "integration_token"),
+    "cloudzero_settings": ("api_key",),
+}
 
 
 def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, stored: JsonValue) -> Iterator[str]:
@@ -147,9 +153,22 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
     selection the credential-migration scanner applies. Columns without a known writer
     shape keep the conservative every-string-leaf walk. The callback-encryption marker is
     stripped exactly as ``replace_ciphertexts`` strips it before the decrypt attempt."""
-    if secret_column.table == "LiteLLM_Config" and _PRIMARY_KEY.validate_python(primary_key) != _ENV_VARS_CONFIG_ROW:
-        # Only the environment_variables row's values are ever encrypted; every other
-        # config row (general_settings, …) stores plaintext by construction.
+    if secret_column.table == "LiteLLM_Config":
+        param_name: Final[str] = _PRIMARY_KEY.validate_python(primary_key)
+        if param_name == _ENV_VARS_CONFIG_ROW:
+            yield from _string_leaves(stored)
+            return
+        sensitive_fields: Final[tuple[str, ...] | None] = _CONFIG_ROW_SENSITIVE_FIELDS.get(param_name)
+        if sensitive_fields is None:
+            # Every other config row (general_settings, …) stores plaintext by
+            # construction — counting its strings would read them as ciphertext.
+            return
+        settings: Final[JsonValue] = stored
+        if isinstance(settings, dict):
+            for field in sensitive_fields:
+                value = settings.get(field)
+                if isinstance(value, str):
+                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
         return
     if (secret_column.table, secret_column.column) in _LITELLM_PARAMS_SECRET_COLUMNS:
         params: Final[JsonValue] = stored

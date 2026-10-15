@@ -728,7 +728,8 @@ def encrypt_callback_vars(metadata: object) -> Any:
 def decrypt_callback_vars(metadata: object) -> Any:
     """Return a deep copy of metadata with callback_vars values decrypted.
 
-    Legacy plaintext rows pass through unchanged (decrypt failure → original).
+    Legacy plaintext rows pass through unchanged; a marked value that cannot be
+    decrypted reads as unset instead of being served as the credential.
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
@@ -796,4 +797,8 @@ def _decrypt_or_passthrough(key: str, value: object) -> object:
         return value
     inner: Final = value[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     decrypted: Final = decrypt_value_helper(value=inner, key=key, exception_type="debug", return_original_value=False)
-    return decrypted if decrypted is not None else value
+    if decrypted is not None:
+        return decrypted
+    # Marked-but-undecryptable (wrong key, or legacy ciphertext PyNaCl is missing for):
+    # hand the provider None — never the ciphertext blob itself as if it were the key.
+    return None
