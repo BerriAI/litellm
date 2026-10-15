@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.process import graceful_stop_seconds, refused_boot_log
+from integration._support.process import graceful_stop_seconds
 from integration.providers._idle_upstream_support import (
     QUIET_STREAM_SECONDS,
     REUSE_IDLE_SECONDS,
@@ -24,6 +24,7 @@ from integration.providers._idle_upstream_support import (
     quiet_stream_answer,
     served_by_rust,
     spend_statuses,
+    stale_pools,
     stay_idle,
     upstream_proxy,
 )
@@ -44,6 +45,7 @@ QUIET_ROWS: Final = (
         respond=quiet_stream_answer,
     ),
 )
+MALFORMED_ROW: Final = Row("malformed-chat-openai-sdk-sync", openai_deployment, chat_sdk)
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +86,10 @@ def test_stream_quiet_for_longer_than_the_keepalive_completes_on_each_worker(edg
 
 
 @pytest.mark.parametrize("value", ["fifteen", ""], ids=["word", "empty"])
-def test_malformed_keepalive_timeout_refuses_to_boot(gateway: Gateway, tmp_path: Path, value: str) -> None:
-    log: Final = refused_boot_log(gateway, tmp_path, {"AIOHTTP_KEEPALIVE_TIMEOUT": value})
-    assert f"invalid literal for int() with base 10: {value!r}" in log, log
+def test_malformed_keepalive_timeout_boots_with_the_default_keepalive(
+    gateway: Gateway, tmp_path: Path, value: str
+) -> None:
+    with stale_pools(gateway, tmp_path, (MALFORMED_ROW,), {"AIOHTTP_KEEPALIVE_TIMEOUT": value}) as pools:
+        sents, arrivals = pools.probe(MALFORMED_ROW.name)
+    assert answered(sents) == expected_answers(MALFORMED_ROW, sents), sents
+    assert landed(arrivals) == landed_once_undropped(sents), arrivals
