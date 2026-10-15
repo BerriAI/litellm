@@ -858,6 +858,29 @@ class TestMinimaxVideoList:
         assert last_decoded["video_id"] == "424635601932588"
         assert first_decoded["custom_llm_provider"] == "minimax"
 
+    def test_a_listed_task_without_a_model_carries_the_routed_group(self):
+        """The caller polls the ids a list hands back, and the proxy resolves a poll by the model in the id, so a
+        task MiniMax leaves `model` off would come back as an id that no longer resolves."""
+        response = MinimaxVideoConfig().transform_video_list_response(
+            raw_response=_mock_response(
+                {
+                    "items": [
+                        {"id": "424635601932571", "model": "MiniMax-H3", "status": "succeeded"},
+                        {"id": "424635601932588", "status": "running"},
+                    ],
+                    "total": 2,
+                }
+            ),
+            logging_obj=Mock(litellm_params={"litellm_metadata": {"model_group": "minimax-video"}}),
+            custom_llm_provider="minimax",
+        )
+
+        with_model = decode_video_id_with_provider(response["data"][0]["id"])
+        without_model = decode_video_id_with_provider(response["data"][1]["id"])
+        assert with_model["model_id"] == "MiniMax-H3"
+        assert without_model["model_id"] == "minimax-video"
+        assert without_model["video_id"] == "424635601932588"
+
 
 class TestMinimaxVideoRemix:
     @pytest.mark.asyncio

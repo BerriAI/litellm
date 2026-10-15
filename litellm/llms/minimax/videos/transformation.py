@@ -136,6 +136,7 @@ _CONTENT_ITEMS_ADAPTER: Final = TypeAdapter(list[_ContentItem])
 _CALLER_MEDIA_ADAPTER: Final = TypeAdapter(list[_CallerMediaItem])
 _FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _DROP_KEYS_ADAPTER: Final = TypeAdapter(frozenset[str])
+_PARAMETERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 _STATUS_MAP: Final = MappingProxyType(
     {
@@ -356,6 +357,30 @@ def _polled_model_id(logging_obj: object) -> str | None:
             return decode_video_id_with_provider(video_id).get("model_id") or None
         case _:
             return None
+
+
+def _routed_model_id(logging_obj: object) -> str | None:
+    """
+    A list has no id to read a model back from, so a task MiniMax leaves `model` off falls back to the group the
+    router was asked for. The router stamps the group into litellm_metadata, and metadata carries a copy only when
+    the caller sent none.
+    """
+    litellm_params: Final[object] = getattr(logging_obj, "litellm_params", None)
+    try:
+        params: Final = _PARAMETERS_ADAPTER.validate_python(litellm_params)
+    except ValidationError:
+        return None
+    stamped: Final = (_model_group_from_metadata(params.get(key)) for key in ("litellm_metadata", "metadata"))
+    return next((group for group in stamped if group is not None), None)
+
+
+def _model_group_from_metadata(metadata: object) -> str | None:
+    try:
+        fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
+    except ValidationError:
+        return None
+    group: Final = fields.get("model_group")
+    return group if isinstance(group, str) and group else None
 
 
 def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
@@ -736,7 +761,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         for task in list_payload.items or ():
             video_obj = _video_object_from_task(task)
             if custom_llm_provider and video_obj.id:
-                video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, video_obj.model)
+                model_id = video_obj.model or _routed_model_id(logging_obj)
+                video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model_id)
             data.append(video_obj.model_dump())
 
         list_response: Final[dict[str, object]] = {  # mutable-ok: OpenAI list body served as JSON by the proxy
