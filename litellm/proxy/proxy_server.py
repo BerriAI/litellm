@@ -9749,7 +9749,9 @@ def _restamp_streaming_chunk_model(
     restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
 
     downstream_model: Final = (
-        restamped_chunk.get("model") if isinstance(restamped_chunk, dict) else getattr(restamped_chunk, "model", None)
+        restamped_chunk.get("model")
+        if isinstance(restamped_chunk, Mapping)
+        else getattr(restamped_chunk, "model", None)
     )
     if downstream_model == target_model:
         return restamped_chunk, model_mismatch_logged
@@ -9770,7 +9772,7 @@ def _restamp_streaming_chunk_model(
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.client_facing_stream_model = target_model
-    if isinstance(restamped_chunk, dict):
+    if isinstance(restamped_chunk, Mapping):
         return {**restamped_chunk, "model": target_model}, model_mismatch_logged
 
     try:
@@ -9798,13 +9800,8 @@ def _restamp_nested_response_model(
     events carry the whole Response object, whose model a top-level restamp never reaches.
 
     Returns a copy, so the provider's model stays on the chunk the streaming wrapper prices.
+    Any chunk that is not a Responses lifecycle event is returned unchanged.
     """
-    if isinstance(chunk, Mapping):
-        nested_value: Final = chunk.get("response")
-        if isinstance(nested_value, Mapping) and nested_value.get("model") not in (None, target_model):
-            return {**chunk, "response": {**nested_value, "model": target_model}}
-        return chunk
-
     if isinstance(
         chunk,
         (

@@ -68,7 +68,7 @@ def _decode_sse_chunk(chunk) -> str:
     return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
 
 
-def _make_response_created_event(model: str):
+def _make_response_created_event(model: str | None):
     from litellm.types.llms.openai import (
         ResponseCreatedEvent,
         ResponsesAPIResponse,
@@ -530,25 +530,10 @@ def test_restamp_streaming_chunk_rewrites_nested_model_on_completed_event():
     assert chunk.response.model == "hosted_vllm/some-model", "the priced original must not change"
 
 
-def test_restamp_streaming_chunk_rewrites_nested_model_in_dict_event():
-    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
-
-    chunk = {"type": "response.created", "response": {"id": "resp_test", "model": "hosted_vllm/some-model"}}
-    result, _ = _restamp_streaming_chunk_model(
-        chunk=chunk,
-        requested_model_from_client="client-model",
-        request_data={"litellm_call_id": "test-call-id"},
-        model_mismatch_logged=False,
-    )
-
-    assert result["response"]["model"] == "client-model"
-    assert chunk["response"]["model"] == "hosted_vllm/some-model", "the priced original must not change"
-
-
 def test_restamp_streaming_chunk_leaves_nested_none_model_untouched():
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
-    chunk = {"type": "response.created", "response": {"id": "resp_test", "model": None}}
+    chunk = _make_response_created_event(None)
     result, _ = _restamp_streaming_chunk_model(
         chunk=chunk,
         requested_model_from_client="client-model",
@@ -556,7 +541,7 @@ def test_restamp_streaming_chunk_leaves_nested_none_model_untouched():
         model_mismatch_logged=False,
     )
 
-    assert result["response"]["model"] is None
+    assert result.response.model is None
 
 
 def test_restamp_streaming_chunk_does_not_add_nested_response_to_other_events():
