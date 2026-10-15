@@ -239,6 +239,8 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
                     for item in answer.probabilities
                 ),
             )
+        case DecisionsIRBoxQuestion(), OpenAIBoxAnswer():
+            return DecisionsIRBoxAnswer(box=answer.box, confidence=answer.confidence)
         case _:
             return DecisionsIRRefusal()
 
