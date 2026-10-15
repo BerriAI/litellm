@@ -1,9 +1,17 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
+from integration.translation.chat_completions.templates import (
+    CHAT_COMPLETIONS_REQUEST,
+    CHAT_COMPLETIONS_RESPONSE,
+    CODING_AGENT_REQUEST,
+    CODING_AGENT_RESPONSE,
+)
 from integration.translation.templates.bedrock_converse import (
+    BEDROCK_CONVERSE_AGENT_REQUEST,
+    BEDROCK_CONVERSE_AGENT_RESPONSE,
     BEDROCK_CONVERSE_REQUEST,
     BEDROCK_CONVERSE_RESPONSE,
     CLAUDE_HAIKU_5_5_THINKING_SIGNATURE_0,
@@ -57,6 +65,1267 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens_details": {
                 "cached_tokens": 0,
                 "text_tokens": 17,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_FABLE_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.anthropic.claude-fable-5"},
+    expected_provider_endpoint="/model/global.anthropic.claude-fable-5/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "tool_choice": {"disable_parallel_tool_use": False},
+            "output_config": {"effort": "low"},
+        },
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"],
+                                "additionalProperties": False,
+                            }
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                                "additionalProperties": False,
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"],
+                                "additionalProperties": False,
+                            }
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                                "additionalProperties": False,
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 0}}},
+        "metrics": {"latencyMs": 2256},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "tooluse_8F5NPCLa3Auzb12CgAn28Q",
+                            "type": "tool_use",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "tooluse_0GdPjDJbx5w7EzbCQi49uO",
+                            "type": "tool_use",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 1184,
+            "outputTokens": 105,
+            "totalTokens": 1289,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.anthropic.claude-fable-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "tooluse_8F5NPCLa3Auzb12CgAn28Q",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "tooluse_0GdPjDJbx5w7EzbCQi49uO",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_OPUS_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.anthropic.claude-opus-5"},
+    expected_provider_endpoint="/model/global.anthropic.claude-opus-5/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "tool_choice": {"disable_parallel_tool_use": False},
+            "output_config": {"effort": "low"},
+        },
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 0}}},
+        "metrics": {"latencyMs": 1929},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "tooluse_J2NI1YJRdC0KDZibAcgZhF",
+                            "type": "tool_use",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "tooluse_64n9QInquvlU5vhkAleMpJ",
+                            "type": "tool_use",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 1140,
+            "outputTokens": 105,
+            "totalTokens": 1245,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.anthropic.claude-opus-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "tooluse_J2NI1YJRdC0KDZibAcgZhF",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "tooluse_64n9QInquvlU5vhkAleMpJ",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1140,
+            "total_tokens": 1245,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1140,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-5.6-luna"},
+    expected_provider_endpoint="/model/global.openai.gpt-5.6-luna/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 911},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_ddecd7a963c55f68a8f60049c783bd95",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_63fb22f6ea7459e1988a9e41a01c01c4",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-5.6-luna",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_ddecd7a963c55f68a8f60049c783bd95",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_63fb22f6ea7459e1988a9e41a01c01c4",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-5.6-sol"},
+    expected_provider_endpoint="/model/global.openai.gpt-5.6-sol/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 1065},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_c1270df77e20598fb15ecb00e80d568f",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_809ae84cbd005e8284ec3168c6e1e29f",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-5.6-sol",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_c1270df77e20598fb15ecb00e80d568f",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_809ae84cbd005e8284ec3168c6e1e29f",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-5.6-terra"},
+    expected_provider_endpoint="/model/global.openai.gpt-5.6-terra/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 2192},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_4de9aceae32a5b3788b78f6cba38a447",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_423b772b9bd65ff7ac64ee75cb54f8a8",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-5.6-terra",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_4de9aceae32a5b3788b78f6cba38a447",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_423b772b9bd65ff7ac64ee75cb54f8a8",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-6-astra"},
+    expected_provider_endpoint="/model/global.openai.gpt-6-astra/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 1399},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_008a8775094550c79dbbc084eb264469",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_da04451fac2455238ac6a0baeb96040b",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-6-astra",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_008a8775094550c79dbbc084eb264469",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_da04451fac2455238ac6a0baeb96040b",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-6-luna"},
+    expected_provider_endpoint="/model/global.openai.gpt-6-luna/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 789},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_0abaf8f8430151c49b5347a36cea178c",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_928195190d5b5d5b80a1448958d7f6b0",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-6-luna",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_0abaf8f8430151c49b5347a36cea178c",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_928195190d5b5d5b80a1448958d7f6b0",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-6-sol"},
+    expected_provider_endpoint="/model/global.openai.gpt-6-sol/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 841},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_432bebf6455e56e9aca3ca7d332b3b72",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_dff8cbdda3cf5ab6b65587a730cb39a1",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-6-sol",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_432bebf6455e56e9aca3ca7d332b3b72",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_dff8cbdda3cf5ab6b65587a730cb39a1",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "bedrock/converse/global.openai.gpt-6.1-sol"},
+    expected_provider_endpoint="/model/global.openai.gpt-6.1-sol/converse",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={
+        **BEDROCK_CONVERSE_AGENT_REQUEST,
+        "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "read_file",
+                        "description": "Read a UTF-8 file in the repository.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            }
+                        },
+                        "name": "search_code",
+                        "description": "Search repository source for a literal query.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                        },
+                        "name": "run_tests",
+                        "description": "Run a specific pytest test path and return the exit code and output.",
+                    }
+                },
+                {
+                    "toolSpec": {
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {"patch": {"type": "string"}},
+                                "required": ["patch"],
+                            }
+                        },
+                        "name": "apply_patch",
+                        "description": "Apply a unified diff to repository files.",
+                    }
+                },
+            ],
+            "toolChoice": {"auto": {}},
+        },
+    },
+    mock_provider_response={
+        **BEDROCK_CONVERSE_AGENT_RESPONSE,
+        "metrics": {"latencyMs": 1981},
+        "output": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"]),
+            "message": {
+                **object_value(object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["output"])["message"]),
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"query": "retries_remaining"},
+                            "name": "search_code",
+                            "toolUseId": "call_e119dbd374765056bb1886401168fcdd",
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {"path": "tests/test_retry.py"},
+                            "name": "run_tests",
+                            "toolUseId": "call_26ef40995a505036ac6917a11eb0eff4",
+                        }
+                    },
+                ],
+            },
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            **object_value(BEDROCK_CONVERSE_AGENT_RESPONSE["usage"]),
+            "inputTokens": 448,
+            "outputTokens": 53,
+            "totalTokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "bedrock/converse/global.openai.gpt-6.1-sol",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "call_e119dbd374765056bb1886401168fcdd",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_26ef40995a505036ac6917a11eb0eff4",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 448,
                 "cache_write_tokens": 0,
                 "cache_creation_tokens": 0,
             },
