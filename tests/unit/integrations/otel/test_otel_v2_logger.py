@@ -10,8 +10,10 @@ import ast
 import asyncio
 import contextlib
 import contextvars
+import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -735,6 +737,118 @@ def test_only_a_request_destination_can_turn_on_llm_payload_content(
     (span,) = exporter.get_finished_spans()
     assert ("gen_ai.input.messages" in span.attributes) is captures_content
     assert ("gen_ai.output.messages" in span.attributes) is captures_content
+
+
+_SYSTEM_PROMPT_CASES: Final = (
+    pytest.param(
+        "anthropic_messages",
+        {"system": "You are terse."},
+        [{"type": "text", "content": "You are terse."}],
+        id="anthropic-string-system",
+    ),
+    pytest.param(
+        "anthropic_messages",
+        {
+            "system": [
+                {"type": "text", "text": "You are terse."},
+                {"type": "text", "text": "Cite sources.", "cache_control": {"type": "ephemeral"}},
+            ]
+        },
+        [{"type": "text", "content": "You are terse."}, {"type": "text", "content": "Cite sources."}],
+        id="anthropic-cached-system-blocks",
+    ),
+    pytest.param(
+        "aresponses",
+        {"instructions": "Answer in French."},
+        [{"type": "text", "content": "Answer in French."}],
+        id="responses-instructions",
+    ),
+    pytest.param(
+        "aresponses",
+        {
+            "instructions": [
+                {"role": "developer", "content": [{"type": "input_text", "text": "Answer in French."}]},
+            ]
+        },
+        [{"type": "text", "content": "Answer in French."}],
+        id="responses-instruction-items",
+    ),
+)
+
+
+def _system_prompt_kwargs(call_type: str, request_fields: Mapping[str, object]) -> Mapping[str, object]:
+    payload: Final[object] = _payload(call_type=call_type, messages=[{"role": "user", "content": "hi"}])
+    return {
+        "standard_logging_object": payload,
+        "litellm_params": {"metadata": {}},
+        **request_fields,
+        "call_type": call_type,
+        "api_call_start_time": datetime.now(timezone.utc),
+    }
+
+
+@pytest.mark.parametrize(("call_type", "request_fields", "expected"), _SYSTEM_PROMPT_CASES)
+@pytest.mark.parametrize("opened_at_pre_call", [True, False], ids=["boundary", "deferred"])
+def test_llm_call_span_carries_the_separately_supplied_system_prompt(
+    call_type: str,
+    request_fields: Mapping[str, object],
+    expected: Sequence[Mapping[str, str]],
+    opened_at_pre_call: bool,
+) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs(call_type, request_fields)
+    if opened_at_pre_call:
+        _emit_llm(logger, kwargs)
+    else:
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert json.loads(str((span.attributes or {})[GenAI.SYSTEM_INSTRUCTIONS])) == expected
+
+
+@pytest.mark.parametrize(
+    ("call_type", "request_fields"),
+    [
+        pytest.param("aspeech", {"instructions": "Speak slowly."}, id="speech-voice-instructions"),
+        pytest.param("acompletion", {"instructions": "Answer in French."}, id="chat-instructions"),
+        pytest.param("acompletion", {"system": "You are terse."}, id="chat-system"),
+        pytest.param("aresponses", {"system": "You are terse."}, id="responses-system"),
+        pytest.param("anthropic_messages", {"instructions": "Answer in French."}, id="messages-instructions"),
+    ],
+)
+def test_system_instructions_come_only_from_the_field_the_call_type_defines(
+    call_type: str, request_fields: Mapping[str, object]
+) -> None:
+    logger, exporter = _logger_capturing()
+    _emit_llm(logger, _system_prompt_kwargs(call_type, request_fields))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def test_chat_system_message_stays_in_the_input_messages_only() -> None:
+    logger, exporter = _logger_capturing()
+    messages: Final = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
+    _emit_llm(logger, {**_kwargs(_payload(messages=messages)), "call_type": "acompletion"})
+    (span,) = exporter.get_finished_spans()
+    attributes: Final = span.attributes or {}
+    assert json.loads(str(attributes[GenAI.INPUT_MESSAGES])) == messages
+    assert GenAI.SYSTEM_INSTRUCTIONS not in attributes
+
+
+@pytest.mark.parametrize("request_fields", [{}, {"system": ""}, {"system": []}, {"system": None}])
+def test_llm_call_span_without_a_system_prompt_has_no_system_instructions(
+    request_fields: Mapping[str, object],
+) -> None:
+    logger, exporter = _logger_capturing()
+    _emit_llm(logger, _system_prompt_kwargs("anthropic_messages", request_fields))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def test_system_instructions_are_withheld_while_content_capture_is_off() -> None:
+    logger, exporter = _logger()
+    _emit_llm(logger, _system_prompt_kwargs("anthropic_messages", {"system": "You are terse."}))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
 
 
 def test_mcp_tool_call_failure_marks_error():
