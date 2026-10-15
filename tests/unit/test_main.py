@@ -415,6 +415,233 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_CLAUDE_TOOL_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+}
+_LOADED_FUNCTION_CALL: Final = {
+    "id": "toolu_01weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
+_WEATHER_RESULT: Final = {"role": "tool", "tool_call_id": "toolu_01weather", "content": "18C"}
+_SEARCH_RESULT: Final = {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"}
+
+
+@pytest.mark.parametrize(
+    ("claude_turn", "sent_after_user"),
+    [
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="search-beside-a-function-call",
+        ),
+        pytest.param(
+            [
+                litellm.Message(content="Looking", tool_calls=[_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]),
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "content": "Looking", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="sdk-message-object",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL]}],
+            [],
+            id="unanswered-search-alone",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            [
+                {"role": "assistant", "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            id="answered-search-kept",
+        ),
+    ],
+)
+def test_completion_drops_unanswered_claude_tool_search_calls_from_history_sent_to_openai(
+    respx_mock: respx.MockRouter, openai_api_response, claude_turn, sent_after_user
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[_USER_TURN, *claude_turn, {"role": "user", "content": "And tomorrow?"}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [
+        {key: message[key] for key in ("role", "content", "tool_calls", "tool_call_id") if key in message}
+        for message in sent
+    ] == [_USER_TURN, *sent_after_user, {"role": "user", "content": "And tomorrow?"}]
+
+
+def test_completion_drops_unanswered_claude_tool_search_calls_before_the_responses_bridge_sends_history_to_openai(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_turn2",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_turn2",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "18C and clear", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},
+        }
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+    )
+
+    sent_input: Final = json.loads(route.calls.last.request.content)["input"]
+    assert [(item.get("type"), item.get("call_id")) for item in sent_input if "call_id" in item] == [
+        ("function_call", "toolu_01weather"),
+        ("function_call_output", "toolu_01weather"),
+    ]
+
+
+def _openai_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    return tuple(call["function"]["name"] for message in messages for call in message.get("tool_calls") or ())
+
+
+def _converse_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    blocks: Final = tuple(block for message in messages for block in message["content"])
+    return tuple(block["toolUse"]["name"] for block in blocks if "toolUse" in block)
+
+
+def _gemini_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    contents: Final = body["contents"]
+    assert isinstance(contents, list)
+    parts: Final = tuple(part for content in contents for part in content["parts"])
+    return tuple(part["function_call"]["name"] for part in parts if "function_call" in part)
+
+
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-turn2",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "18C"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "route_kwargs", "url_pattern", "reply", "called_names", "sent_names"),
+    [
+        pytest.param(
+            "azure/gpt-4o",
+            {"api_base": "https://turn2.openai.azure.com", "api_key": "fake", "api_version": "2024-10-21"},
+            r"https://turn2\.openai\.azure\.com/openai/deployments/gpt-4o/chat/completions.*",
+            _OPENAI_CHAT_REPLY,
+            _openai_called_names,
+            ("get_weather",),
+            id="azure-openai-strips",
+        ),
+        pytest.param(
+            "bedrock/us.anthropic.claude-opus-5-5",
+            {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"},
+            r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "18C"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            _converse_called_names,
+            ("get_weather",),
+            id="bedrock-converse-strips",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            {"api_key": "fake"},
+            r"https://generativelanguage\.googleapis\.com/.*:generateContent.*",
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "18C"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            _gemini_called_names,
+            ("tool_search_tool_regex", "get_weather"),
+            id="gemini-keeps",
+        ),
+    ],
+)
+def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes_that_reject_it(
+    respx_mock: respx.MockRouter, model, route_kwargs, url_pattern, reply, called_names, sent_names
+):
+    route: Final = respx_mock.post(url__regex=url_pattern).respond(json=reply)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        **route_kwargs,
+    )
+
+    assert called_names(json.loads(route.calls.last.request.content)) == sent_names
+
+
+def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
+    respx_mock: respx.MockRouter, openai_api_response
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    lookalike_call: Final = {**_LOADED_FUNCTION_CALL, "id": "srvtoolu_01weather"}
+    history: Final = [
+        _USER_TURN,
+        {"role": "assistant", "content": None, "tool_calls": [lookalike_call]},
+        {"role": "tool", "tool_call_id": "srvtoolu_01weather", "content": "18C"},
+    ]
+
+    litellm.completion(model="openai/gpt-5.6", messages=history, api_base=api_base, api_key="fake_openai_api_key")
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant", "tool"]
+    assert sent[1]["tool_calls"][0]["id"] == "srvtoolu_01weather"
+
+
 def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(

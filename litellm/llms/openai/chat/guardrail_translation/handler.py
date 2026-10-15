@@ -25,6 +25,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    replayed_tool_search_tool_names,
+)
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -257,7 +260,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return None if images else "no scannable content"
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
-        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
+        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name,
+        and the tools a replayed tool_search_output loads)."""
         names: Final[list[str]] = []
         for tool in list_field(data, "tools"):
             if isinstance(tool, dict) and tool.get("type") == "function":
@@ -267,7 +271,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
-        return names
+        return [*names, *replayed_tool_search_tool_names(data)]
 
     def _extract_inputs(
         self,

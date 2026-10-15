@@ -38,6 +38,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -2732,11 +2733,7 @@ def _per_user_oauth_configured() -> bool:
     )
 
     return any(
-        isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         for credential in (litellm.credential_list or ())
     )
 
@@ -2753,12 +2750,8 @@ def _all_per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
         for credential in (litellm.credential_list or ())
-        if getattr(credential, "credential_name", None)
-        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        if credential.credential_name
+        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
@@ -4033,7 +4026,7 @@ _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_F
 
 def add_provider_specific_headers_to_request(
     data: dict,
-    headers: dict,
+    headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4043,12 +4036,18 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    typesafe_danger_zone_headers: Final = {
+        header: value
+        for header, value in headers.items()
+        if header.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
+    }
 
     scoped_headers: Final = [
         ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
         for providers, extra_headers in (
             (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
             (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
+            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
         )
         if extra_headers
     ]
