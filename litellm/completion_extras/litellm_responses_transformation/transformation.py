@@ -672,18 +672,13 @@ def _defer_loading_field(
     tool: Mapping[str, object],
     function_tool: Mapping[str, object],
     *,
-    tool_search: Literal["hosted", "client", "absent"],
+    carries_tool_search: bool,
     drop_params: bool,
 ) -> Mapping[str, bool]:
     defer_loading: Final = _requested_defer_loading(tool, function_tool)
-    if defer_loading is None or (defer_loading is False and tool_search == "absent"):
+    if defer_loading is None or (defer_loading is False and not carries_tool_search):
         return {}
-    if tool_search == "client":
-        verbose_logger.debug(
-            "Chat provider: dropping defer_loading=%r beside a client-executed tool_search", defer_loading
-        )
-        return {}
-    if isinstance(defer_loading, bool) and tool_search == "hosted":
+    if isinstance(defer_loading, bool) and carries_tool_search:
         return {"defer_loading": defer_loading}
     if drop_params:
         verbose_logger.debug("Chat provider: dropping defer_loading=%r under drop_params", defer_loading)
@@ -699,11 +694,11 @@ def _defer_loading_field(
 
 
 def _without_dropped_defer_loading(
-    tool: Mapping[str, object], *, tool_search: Literal["hosted", "client", "absent"], drop_params: bool
+    tool: Mapping[str, object], *, carries_tool_search: bool, drop_params: bool
 ) -> Mapping[str, object]:
     if tool.get("type") != "function" or "defer_loading" not in tool:
         return tool
-    kept: Final = _defer_loading_field(tool, {}, tool_search=tool_search, drop_params=drop_params)
+    kept: Final = _defer_loading_field(tool, {}, carries_tool_search=carries_tool_search, drop_params=drop_params)
     return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
 
 
@@ -1642,13 +1637,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self, tools: list[dict[str, object]], drop_params: bool = False
     ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
-        tool_search: Final[Literal["hosted", "client", "absent"]] = (
-            "client"
-            if any(tool.get("type") == "tool_search" and tool.get("execution") == "client" for tool in tools)
-            else "hosted"
-            if any(tool.get("type") == "tool_search" for tool in tools)
-            else "absent"
-        )
+        carries_tool_search: Final = any(tool.get("type") == "tool_search" for tool in tools)
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
@@ -1661,7 +1650,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         strict=function_tool.get("strict"),
                         type="function",
                         description=function_tool.get("description"),
-                        **_defer_loading_field(tool, function_tool, tool_search=tool_search, drop_params=drop_params),
+                        **_defer_loading_field(
+                            tool, function_tool, carries_tool_search=carries_tool_search, drop_params=drop_params
+                        ),
                     )
                 )
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
@@ -1677,7 +1668,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_tools.append(flat_custom)
             else:
                 responses_tools.append(
-                    _without_dropped_defer_loading(tool, tool_search=tool_search, drop_params=drop_params)
+                    _without_dropped_defer_loading(
+                        tool, carries_tool_search=carries_tool_search, drop_params=drop_params
+                    )
                 )
 
         return cast(list["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
