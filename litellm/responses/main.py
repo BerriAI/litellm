@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeA
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import assert_never
+from typing_extensions import (
+    TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
+    assert_never,
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -109,8 +112,8 @@ def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
-    return ResponsesAPIResponse(
-        **{
+    return ResponsesAPIResponse.model_validate(
+        {
             "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
             "object": "response",
             "created_at": 1741476542,
@@ -568,12 +571,54 @@ def _will_bridge_to_chat_completions(
     )
 
 
-def _stamp_injection_points_with_dialect(
+def _is_a_client_input_item(
+    item: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: bounds a client input item before its mark is read
+    return isinstance(item, Mapping)
+
+
+_ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM: Final = frozenset(("function_call", "function_call_output"))
+
+
+def _item_carries_a_mark_outside_the_provisional_messages(item: object) -> bool:
+    return (
+        _is_a_client_input_item(item)
+        and item.get("type") in _ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM
+        and bool(item.get("cache_control"))
+    )
+
+
+def _function_tool_carries_a_mark(tool: Mapping[str, object]) -> bool:
+    return isinstance(tool, dict) and tool.get("type") == "function" and bool(tool.get("cache_control"))
+
+
+def _cache_control_marks_outside_the_provisional_messages(
+    input: str | ResponseInputParam | None, tools: Iterable[Mapping[str, object]] | None
+) -> int:
+    """Client marks on the request parts the provisional message list leaves out.
+
+    A ``function_call`` or ``function_call_output`` item has no role, so the hook's pass here
+    never sees its mark, while the bridge forwards it onto the tool call or tool message it
+    builds, where the provider counts it against the cap. A ``function`` tool's mark reaches
+    the provider the same way, on the chat tool the bridge builds from it.
+    """
+    item_marks: Final = (
+        0
+        if input is None or isinstance(input, str)
+        else sum(1 for item in input if _item_carries_a_mark_outside_the_provisional_messages(item))
+    )
+    tool_marks: Final = sum(1 for tool in tools or () if _function_tool_carries_a_mark(tool))
+    return item_marks + tool_marks
+
+
+def _stamp_injection_points_for_the_hook(
     kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
     model: str,
     custom_llm_provider: str | None,
+    input: str | ResponseInputParam | None,
+    tools: Iterable[Mapping[str, object]] | None,
 ) -> None:
-    """Carry the provider this layer resolved onto the points.
+    """Carry onto the points the provider this layer resolved and the marks its pass cannot see.
 
     The hook reads ``custom_llm_provider`` from the request kwargs, which never hold the one
     resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
@@ -582,8 +627,9 @@ def _stamp_injection_points_with_dialect(
     points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
     if not points:
         return
-    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
+    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_for_prompt_hook(
         points,
+        _cache_control_marks_outside_the_provisional_messages(input, tools),
         model,
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
@@ -668,7 +714,11 @@ async def aresponses(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -700,7 +750,7 @@ async def aresponses(
                     _api_base_kwarg(kwargs),
                 ),
             ):
-                _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+                _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
                 (
                     model,
                     merged_input,
@@ -792,7 +842,7 @@ async def aresponses(
             # (mirrors litellm/main.py:1371 for chat completions)
             response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
-        if response is None:
+        if response is None:  # pyright: ignore[reportUnnecessaryComparison]  # provider handlers can return None at runtime
             raise ValueError(f"Got an unexpected None response from the Responses API: {response}")
 
         return response
@@ -837,6 +887,7 @@ def _resolve_prompt_swapped_provider(
 
 def _apply_prompt_management_to_responses_call(
     input: str | ResponseInputParam,
+    tools: Iterable[ToolParam] | None,
     model: str,
     custom_llm_provider: str | None,
     litellm_logging_obj: LiteLLMLoggingObj | None,
@@ -871,7 +922,7 @@ def _apply_prompt_management_to_responses_call(
                 _api_base_kwarg(kwargs),
             ),
         ):
-            _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+            _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
             (
                 model,
                 merged_input,
@@ -1054,7 +1105,6 @@ def _responses_try_dispatch_mcp_gateway(
     if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
         return None
     mcp_call_kwargs: Final = {
-        "input": input,
         "model": model,
         "include": include,
         "instructions": instructions,
@@ -1063,13 +1113,11 @@ def _responses_try_dispatch_mcp_gateway(
         "metadata": metadata,
         "parallel_tool_calls": parallel_tool_calls,
         "previous_response_id": previous_response_id,
-        "reasoning": reasoning,
         "store": store,
         "background": background,
         "stream": stream,
         "temperature": temperature,
         "text": text,
-        "tool_choice": tool_choice,
         "tools": tools,
         "top_p": top_p,
         "truncation": truncation,
@@ -1077,13 +1125,25 @@ def _responses_try_dispatch_mcp_gateway(
         "extra_headers": extra_headers,
         "extra_query": extra_query,
         "extra_body": extra_body,
-        "timeout": timeout,
         "custom_llm_provider": custom_llm_provider,
         **kwargs,
     }
     if _is_async:
-        return aresponses_api_with_mcp(**mcp_call_kwargs)
-    return run_async_function(aresponses_api_with_mcp, **mcp_call_kwargs)
+        return aresponses_api_with_mcp(
+            input=input,
+            reasoning=reasoning,
+            timeout=timeout,
+            tool_choice=tool_choice,
+            **mcp_call_kwargs,
+        )
+    return run_async_function(
+        aresponses_api_with_mcp,
+        input=input,
+        reasoning=reasoning,
+        timeout=timeout,
+        tool_choice=tool_choice,
+        **mcp_call_kwargs,
+    )
 
 
 def _responses_try_dispatch_emulated_file_search(
@@ -1251,12 +1311,17 @@ def responses(
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
         input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
+            tools=tools,
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_logging_obj=litellm_logging_obj,
@@ -1719,13 +1784,15 @@ async def aget_responses(
             response = init_response
 
         # Update the responses_api_response_id with the model_id
-        if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-        return response
+        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers can return non-ResponsesAPIResponse objects at runtime
+            return response
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            litellm_metadata=cast(  # cast-ok: litellm_metadata is a plain dict when present
+                "dict[str, object]", kwargs.get("litellm_metadata", {})
+            ),
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -2159,7 +2226,11 @@ async def acompact_responses(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -2188,14 +2259,15 @@ async def acompact_responses(
             response = init_response
 
         # Update the responses_api_response_id with the model_id
-        if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-
-        return response
+        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers can return non-ResponsesAPIResponse objects at runtime
+            return response
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            litellm_metadata=cast(  # cast-ok: litellm_metadata is a plain dict when present
+                "dict[str, object]", kwargs.get("litellm_metadata", {})
+            ),
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -2423,6 +2495,7 @@ async def _aresponses_websocket(
         model=model,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=litellm_params,
     )
     resolved_model: Final = _strip_responses_routing_prefix(provider_model)
 

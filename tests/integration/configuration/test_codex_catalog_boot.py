@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import stat
 import subprocess
 import sys
@@ -11,12 +10,11 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from pydantic import JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
-from tests.integration._support.process import group_members, owned_proxy, owned_proxy_process
+from tests.integration._support.process import owned_proxy, owned_proxy_process
 
 CLIENT_VERSION: Final = "0.159.3"
 FRESH_CONNECTION: Final = {"Connection": "close"}
@@ -224,16 +222,6 @@ def test_team_owned_deployments_of_one_name_serve_each_team_its_own_upstream(gat
             assert outsider[mixed]["service_tiers"] == [_generic_tier("flex")], outsider[mixed]
 
 
-def _worker_pids(root_pid: int) -> frozenset[int]:
-    def is_worker(process: psutil.Process) -> bool:
-        try:
-            return "spawn_main" in " ".join(process.cmdline())
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return False
-
-    return frozenset(process.pid for process in group_members(root_pid) if is_worker(process))
-
-
 def _catalog_outcome(proxy: Gateway, slugs: Sequence[JsonValue]) -> str:
     try:
         response: Final = _catalog_response(proxy)
@@ -252,22 +240,24 @@ def test_catalog_survives_a_worker_kill(gateway: Gateway, tmp_path: Path) -> Non
     config: Final = _write_config(tmp_path, gateway.upstream_url, tiered, plain, alias)
     with owned_proxy_process(gateway, tmp_path, {"STORE_MODEL_IN_DB": "False"}, config=config, workers=2) as owned:
         candidate: Final = owned.gateway
-        workers: Final = eventually(lambda: _worker_pids(owned.process.pid), lambda pids: len(pids) == 2, seconds=30)
+        workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)
         victim: Final = min(workers)
         slugs: Final = sorted(entry["slug"] for entry in _entries(_catalog_response(candidate)))
         assert slugs == sorted((tiered, plain, alias)), slugs
 
-        def attempt(index: int) -> str:
-            if index == 2:
-                os.kill(victim, signal.SIGKILL)
-            return _catalog_outcome(candidate, slugs)
+        with owned.replacing_worker(victim) as kill:
 
-        with ThreadPoolExecutor(max_workers=BURST) as pool:
-            outcomes: Final = tuple(pool.map(attempt, range(BURST)))
+            def attempt(index: int) -> str:
+                if index == 2:
+                    kill()
+                return _catalog_outcome(candidate, slugs)
+
+            with ThreadPoolExecutor(max_workers=BURST) as pool:
+                outcomes: Final = tuple(pool.map(attempt, range(BURST)))
         assert outcomes.count("ok") >= 1, outcomes
         assert all(outcome == "ok" or outcome.startswith("transport:") for outcome in outcomes), outcomes
         respawned: Final = eventually(
-            lambda: _worker_pids(owned.process.pid),
+            owned.worker_pids,
             lambda pids: len(pids) == 2 and victim not in pids,
             seconds=60,
         )

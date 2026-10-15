@@ -648,6 +648,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -686,6 +700,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -812,6 +843,14 @@
               "title": "Access Model Names",
               "type": "array"
             },
+            "access_skill_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Skill Names",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -866,6 +905,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             },
             "updated_at": {
               "format": "date-time",
@@ -957,6 +1013,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -995,6 +1065,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",
@@ -7134,6 +7221,22 @@
               "title": "Id",
               "type": "string"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Installation Preference"
+            },
             "keywords": {
               "anyOf": [
                 {
@@ -7231,6 +7334,23 @@
               "title": "Id",
               "type": "string"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin installation preference",
+              "title": "Installation Preference"
+            },
             "name": {
               "description": "Plugin name",
               "title": "Name",
@@ -7327,6 +7447,23 @@
               ],
               "description": "Plugin homepage URL",
               "title": "Homepage"
+            },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
             },
             "keywords": {
               "anyOf": [
@@ -7478,6 +7615,23 @@
               "description": "Plugin homepage URL",
               "title": "Homepage"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
+            },
             "keywords": {
               "anyOf": [
                 {
@@ -7577,7 +7731,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -7672,7 +7826,7 @@
           ]
         },
         "post": {
-          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).\nClaude Code clones the git source or downloads the archive when users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).\nClaude Code clones the git source or downloads the archive when users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -7807,7 +7961,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -9494,17 +9648,1097 @@
   },
   "decisions": {
     "components": {
-      "schemas": {}
+      "schemas": {
+        "BoxAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "box": {
+              "$ref": "#/components/schemas/DecisionsBox"
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "type": {
+              "const": "box",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "box",
+            "confidence"
+          ],
+          "title": "BoxAnswer",
+          "type": "object"
+        },
+        "ChoiceAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "choice": {
+              "title": "Choice",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "confidence",
+            "probabilities"
+          ],
+          "title": "ChoiceAnswer",
+          "type": "object"
+        },
+        "DecisionsBox": {
+          "additionalProperties": true,
+          "properties": {
+            "bottom": {
+              "title": "Bottom",
+              "type": "number"
+            },
+            "left": {
+              "title": "Left",
+              "type": "number"
+            },
+            "right": {
+              "title": "Right",
+              "type": "number"
+            },
+            "top": {
+              "title": "Top",
+              "type": "number"
+            }
+          },
+          "required": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ],
+          "title": "DecisionsBox",
+          "type": "object"
+        },
+        "DecisionsResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "discriminator": {
+                  "mapping": {
+                    "box": "#/components/schemas/BoxAnswer",
+                    "choice": "#/components/schemas/ChoiceAnswer",
+                    "noul": "#/components/schemas/NoulAnswer",
+                    "score": "#/components/schemas/ScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/NoulAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BoxAnswer"
+                  }
+                ]
+              },
+              "title": "Answers",
+              "type": "object"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DecisionsUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "answers"
+          ],
+          "title": "DecisionsResponse",
+          "type": "object"
+        },
+        "DecisionsUsage": {
+          "additionalProperties": true,
+          "properties": {
+            "input_tokens": {
+              "default": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "DecisionsUsage",
+          "type": "object"
+        },
+        "NoulAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "noul": {
+              "title": "Noul",
+              "type": "number"
+            },
+            "type": {
+              "const": "noul",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "noul"
+          ],
+          "title": "NoulAnswer",
+          "type": "object"
+        },
+        "OpenAIBoxAnswer": {
+          "properties": {
+            "box": {
+              "$ref": "#/components/schemas/DecisionsBox"
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "const": "box",
+              "default": "box",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "box",
+            "confidence"
+          ],
+          "title": "OpenAIBoxAnswer",
+          "type": "object"
+        },
+        "OpenAIChoiceAnswer": {
+          "properties": {
+            "choice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Choice"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probabilities": {
+              "items": {
+                "$ref": "#/components/schemas/OpenAIChoiceProbability"
+              },
+              "title": "Probabilities",
+              "type": "array"
+            },
+            "type": {
+              "const": "choice",
+              "default": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "choice",
+            "probabilities",
+            "confidence"
+          ],
+          "title": "OpenAIChoiceAnswer",
+          "type": "object"
+        },
+        "OpenAIChoiceProbability": {
+          "properties": {
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value",
+            "probability"
+          ],
+          "title": "OpenAIChoiceProbability",
+          "type": "object"
+        },
+        "OpenAIDecisionInputTokensDetails": {
+          "properties": {
+            "cache_write_tokens": {
+              "default": 0,
+              "title": "Cache Write Tokens",
+              "type": "integer"
+            },
+            "cached_tokens": {
+              "default": 0,
+              "title": "Cached Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionInputTokensDetails",
+          "type": "object"
+        },
+        "OpenAIDecisionOutputTokensDetails": {
+          "properties": {
+            "reasoning_tokens": {
+              "default": 0,
+              "title": "Reasoning Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionOutputTokensDetails",
+          "type": "object"
+        },
+        "OpenAIDecisionResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "box": "#/components/schemas/OpenAIBoxAnswer",
+                    "choice": "#/components/schemas/OpenAIChoiceAnswer",
+                    "predicate": "#/components/schemas/OpenAIPredicateAnswer",
+                    "refusal": "#/components/schemas/OpenAIRefusalAnswer",
+                    "score": "#/components/schemas/OpenAIScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/OpenAIPredicateAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIBoxAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIRefusalAnswer"
+                  }
+                ]
+              },
+              "title": "Answers",
+              "type": "array"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/OpenAIDecisionUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "usage"
+          ],
+          "title": "OpenAIDecisionResponse",
+          "type": "object"
+        },
+        "OpenAIDecisionUsage": {
+          "properties": {
+            "input_tokens": {
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "input_tokens_details": {
+              "$ref": "#/components/schemas/OpenAIDecisionInputTokensDetails",
+              "default": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              }
+            },
+            "output_tokens": {
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "output_tokens_details": {
+              "$ref": "#/components/schemas/OpenAIDecisionOutputTokensDetails",
+              "default": {
+                "reasoning_tokens": 0
+              }
+            },
+            "total_tokens": {
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "total_tokens"
+          ],
+          "title": "OpenAIDecisionUsage",
+          "type": "object"
+        },
+        "OpenAIPredicateAnswer": {
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "type": {
+              "const": "predicate",
+              "default": "predicate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "probability"
+          ],
+          "title": "OpenAIPredicateAnswer",
+          "type": "object"
+        },
+        "OpenAIRefusalAnswer": {
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "const": "refusal",
+              "default": "refusal",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "OpenAIRefusalAnswer",
+          "type": "object"
+        },
+        "OpenAIScoreAnswer": {
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probabilities": {
+              "items": {
+                "$ref": "#/components/schemas/OpenAIScoreProbability"
+              },
+              "title": "Probabilities",
+              "type": "array"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "default": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "score",
+            "probabilities",
+            "confidence"
+          ],
+          "title": "OpenAIScoreAnswer",
+          "type": "object"
+        },
+        "OpenAIScoreProbability": {
+          "properties": {
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "value",
+            "label",
+            "probability"
+          ],
+          "title": "OpenAIScoreProbability",
+          "type": "object"
+        },
+        "ScoreAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "legend": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Legend",
+              "type": "object"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "confidence",
+            "legend",
+            "probabilities"
+          ],
+          "title": "ScoreAnswer",
+          "type": "object"
+        }
+      }
     },
     "paths": {
       "/decisions": {
         "post": {
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_decisions_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                  "model": "luna",
+                  "questions": [
+                    {
+                      "instructions": "Is the customer asking for a refund?",
+                      "name": "is_refund_request",
+                      "type": "predicate"
+                    },
+                    {
+                      "choices": [
+                        {
+                          "description": "can wait a week",
+                          "value": "low"
+                        },
+                        {
+                          "description": "needs action today",
+                          "value": "high"
+                        }
+                      ],
+                      "instructions": "How urgent is this?",
+                      "name": "urgency",
+                      "type": "choice"
+                    },
+                    {
+                      "instructions": "How frustrated is the customer?",
+                      "levels": [
+                        {
+                          "label": "calm"
+                        },
+                        {
+                          "label": "mildly annoyed"
+                        },
+                        {
+                          "label": "angry"
+                        }
+                      ],
+                      "name": "frustration",
+                      "type": "score"
+                    }
+                  ]
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "input": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "items": {
+                                      "discriminator": {
+                                        "propertyName": "type"
+                                      },
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "text": {
+                                              "title": "Text",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_text",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "text"
+                                          ],
+                                          "title": "OpenAIDecisionInputText",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "detail": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Detail"
+                                            },
+                                            "image_url": {
+                                              "title": "Image Url",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_image",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "image_url"
+                                          ],
+                                          "title": "OpenAIDecisionInputImage",
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array"
+                                  }
+                                ],
+                                "title": "Content"
+                              },
+                              "role": {
+                                "const": "user",
+                                "default": "user",
+                                "title": "Role",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "message",
+                                "default": "message",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content"
+                            ],
+                            "title": "OpenAIDecisionInputMessage",
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "title": "Input"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "description": "Predicate, choice and score questions. Answers come back in the same order",
+                      "items": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The yes/no question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "predicate",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIPredicateQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "choices": {
+                                "description": "The options the model picks from. Values must be unique",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ],
+                                      "title": "Value"
+                                    }
+                                  },
+                                  "required": [
+                                    "value"
+                                  ],
+                                  "title": "OpenAIChoiceOption",
+                                  "type": "object"
+                                },
+                                "maxItems": 255,
+                                "minItems": 2,
+                                "title": "Choices",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "choices"
+                            ],
+                            "title": "OpenAIChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "levels": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "label": {
+                                      "title": "Label",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "title": "OpenAIScoreLevel",
+                                  "type": "object"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Levels",
+                                "type": "array"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "levels"
+                            ],
+                            "title": "OpenAIScoreQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "What to find in the input's image",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIBoxQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 128,
+                      "minItems": 1,
+                      "title": "Questions",
+                      "type": "array"
+                    },
+                    "safety_identifier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
+                      "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "OpenAIDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/OpenAIDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9515,7 +10749,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Decisions",
+          "summary": "Ask questions about an input (OpenAI Decisions format)",
           "tags": [
             "decisions"
           ]
@@ -9523,12 +10757,495 @@
       },
       "/systemone": {
         "post": {
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "jev",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "urgency": {
+                      "criteria": {
+                        "high": "needs action today",
+                        "low": "can wait a week"
+                      },
+                      "instructions": "How urgent is this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs",
+                      "title": "Assets"
+                    },
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what makes the answer true and what makes it false",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The yes/no question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "NoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "description": "Candidate labels mapped to an optional description of each",
+                                "maxProperties": 255,
+                                "minProperties": 1,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 10,
+                                "minItems": 1,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ScoreQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  }
+                                ],
+                                "description": "What to find, and in which image, such as 'the coffee mug in `photo`'",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "maxProperties": 128,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
+                      "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "DecisionsRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/DecisionsResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9539,7 +11256,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Systemone",
+          "summary": "Ask named questions about a state (System One format)",
           "tags": [
             "decisions"
           ]
@@ -9547,12 +11264,491 @@
       },
       "/v1/decisions": {
         "post": {
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_v1_decisions_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                  "model": "luna",
+                  "questions": [
+                    {
+                      "instructions": "Is the customer asking for a refund?",
+                      "name": "is_refund_request",
+                      "type": "predicate"
+                    },
+                    {
+                      "choices": [
+                        {
+                          "description": "can wait a week",
+                          "value": "low"
+                        },
+                        {
+                          "description": "needs action today",
+                          "value": "high"
+                        }
+                      ],
+                      "instructions": "How urgent is this?",
+                      "name": "urgency",
+                      "type": "choice"
+                    },
+                    {
+                      "instructions": "How frustrated is the customer?",
+                      "levels": [
+                        {
+                          "label": "calm"
+                        },
+                        {
+                          "label": "mildly annoyed"
+                        },
+                        {
+                          "label": "angry"
+                        }
+                      ],
+                      "name": "frustration",
+                      "type": "score"
+                    }
+                  ]
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "input": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "items": {
+                                      "discriminator": {
+                                        "propertyName": "type"
+                                      },
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "text": {
+                                              "title": "Text",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_text",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "text"
+                                          ],
+                                          "title": "OpenAIDecisionInputText",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "detail": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Detail"
+                                            },
+                                            "image_url": {
+                                              "title": "Image Url",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_image",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "image_url"
+                                          ],
+                                          "title": "OpenAIDecisionInputImage",
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array"
+                                  }
+                                ],
+                                "title": "Content"
+                              },
+                              "role": {
+                                "const": "user",
+                                "default": "user",
+                                "title": "Role",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "message",
+                                "default": "message",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content"
+                            ],
+                            "title": "OpenAIDecisionInputMessage",
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "title": "Input"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "description": "Predicate, choice and score questions. Answers come back in the same order",
+                      "items": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The yes/no question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "predicate",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIPredicateQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "choices": {
+                                "description": "The options the model picks from. Values must be unique",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ],
+                                      "title": "Value"
+                                    }
+                                  },
+                                  "required": [
+                                    "value"
+                                  ],
+                                  "title": "OpenAIChoiceOption",
+                                  "type": "object"
+                                },
+                                "maxItems": 255,
+                                "minItems": 2,
+                                "title": "Choices",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "choices"
+                            ],
+                            "title": "OpenAIChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "levels": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "label": {
+                                      "title": "Label",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "title": "OpenAIScoreLevel",
+                                  "type": "object"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Levels",
+                                "type": "array"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "levels"
+                            ],
+                            "title": "OpenAIScoreQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "What to find in the input's image",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIBoxQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 128,
+                      "minItems": 1,
+                      "title": "Questions",
+                      "type": "array"
+                    },
+                    "safety_identifier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
+                      "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "OpenAIDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/OpenAIDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9563,7 +11759,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Decisions",
+          "summary": "Ask questions about an input (OpenAI Decisions format)",
           "tags": [
             "decisions"
           ]
@@ -9571,12 +11767,495 @@
       },
       "/v1/systemone": {
         "post": {
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "jev",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "urgency": {
+                      "criteria": {
+                        "high": "needs action today",
+                        "low": "can wait a week"
+                      },
+                      "instructions": "How urgent is this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs",
+                      "title": "Assets"
+                    },
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what makes the answer true and what makes it false",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The yes/no question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "NoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "description": "Candidate labels mapped to an optional description of each",
+                                "maxProperties": 255,
+                                "minProperties": 1,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 10,
+                                "minItems": 1,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ScoreQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  }
+                                ],
+                                "description": "What to find, and in which image, such as 'the coffee mug in `photo`'",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "maxProperties": 128,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
+                      "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "DecisionsRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/DecisionsResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9587,7 +12266,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Systemone",
+          "summary": "Ask named questions about a state (System One format)",
           "tags": [
             "decisions"
           ]
@@ -11620,13 +14299,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -11634,7 +14324,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask_request_content": {
@@ -11660,6 +14350,32 @@
               ],
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
+            },
+            "max_concurrent_decision_calls": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+              "title": "Max Concurrent Decision Calls"
+            },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
             },
             "model": {
               "anyOf": [
@@ -11890,7 +14606,7 @@
                 }
               ],
               "default": false,
-              "description": "Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.",
+              "description": "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.",
               "title": "Skip Unscannable Attachments"
             },
             "sticky_session_routing": {
@@ -11960,7 +14676,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -12502,6 +15218,43 @@
           "title": "CreateGuardrailRequest",
           "type": "object"
         },
+        "DecisionModelCheck": {
+          "description": "One predicate the decision model scores the request or response against.",
+          "properties": {
+            "action": {
+              "default": "block",
+              "enum": [
+                "block",
+                "log"
+              ],
+              "title": "Action",
+              "type": "string"
+            },
+            "instructions": {
+              "minLength": 1,
+              "title": "Instructions",
+              "type": "string"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "threshold": {
+              "default": 0.7,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Threshold",
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "instructions"
+          ],
+          "title": "DecisionModelCheck",
+          "type": "object"
+        },
         "GUARDRAIL_DEFINITION_LOCATION": {
           "enum": [
             "db",
@@ -12833,6 +15586,13 @@
                 }
               ],
               "title": "Content Filter Settings"
+            },
+            "decision_model_providers": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Decision Model Providers",
+              "type": "array"
             },
             "pii_entity_categories": {
               "items": {
@@ -13495,10 +16255,17 @@
                   "$ref": "#/components/schemas/BedrockChecksConfigModel"
                 },
                 {
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionModelCheck"
+                  },
+                  "type": "array"
+                },
+                {
                   "type": "null"
                 }
               ],
-              "description": "Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier."
+              "description": "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'",
+              "title": "Checks"
             },
             "chunk_budget_chars": {
               "default": 25000,
@@ -13629,6 +16396,18 @@
               ],
               "description": "Python-like code containing the apply_guardrail function for custom guardrail logic",
               "title": "Custom Code"
+            },
+            "decision_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For guardrail='decision_model': the Decisions-API model that scores each check",
+              "title": "Decision Model"
             },
             "deepkeep_firewall_id": {
               "anyOf": [
@@ -14027,13 +16806,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -14041,7 +16831,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask": {
@@ -14080,6 +16870,32 @@
               ],
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
+            },
+            "max_concurrent_decision_calls": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+              "title": "Max Concurrent Decision Calls"
+            },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
             },
             "metadata": {
               "anyOf": [
@@ -14843,7 +17659,7 @@
                 }
               ],
               "default": false,
-              "description": "Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.",
+              "description": "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.",
               "title": "Skip Unscannable Attachments"
             },
             "sticky_session_routing": {
@@ -15019,6 +17835,18 @@
               ],
               "description": "Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
               "title": "Violation Message Template"
+            },
+            "wingback_app_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).",
+              "title": "Wingback App Id"
             },
             "xecguard_model": {
               "anyOf": [
@@ -21888,6 +24716,60 @@
           "title": "OutputTokensDetails",
           "type": "object"
         },
+        "OutputToolSearchCall": {
+          "additionalProperties": true,
+          "properties": {
+            "arguments": {
+              "title": "Arguments"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_search_call",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "arguments",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchCall",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -24254,6 +27136,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OutputToolSearchCall"
                       }
                     ]
                   },
@@ -31613,6 +34498,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -34374,6 +37281,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -35126,28 +38055,6 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
-        "Scope": {
-          "additionalProperties": false,
-          "properties": {
-            "all_teams": {
-              "default": false,
-              "title": "All Teams",
-              "type": "boolean"
-            },
-            "api_key_hash": {
-              "default": "",
-              "title": "Api Key Hash",
-              "type": "string"
-            },
-            "team_id": {
-              "default": "",
-              "title": "Team Id",
-              "type": "string"
-            }
-          },
-          "title": "Scope",
-          "type": "object"
-        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -35186,105 +38093,6 @@
             "type"
           ],
           "title": "ValidationError",
-          "type": "object"
-        },
-        "Worker": {
-          "additionalProperties": false,
-          "properties": {
-            "analysis_key_id": {
-              "anyOf": [
-                {
-                  "pattern": "^[a-f0-9]{64}$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Analysis Key Id"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "last_seen": {
-              "format": "date-time",
-              "title": "Last Seen",
-              "type": "string"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "revoked": {
-              "default": false,
-              "title": "Revoked",
-              "type": "boolean"
-            },
-            "scope": {
-              "$ref": "#/components/schemas/Scope"
-            }
-          },
-          "required": [
-            "id",
-            "name",
-            "scope",
-            "last_seen"
-          ],
-          "title": "Worker",
-          "type": "object"
-        },
-        "WorkerCreated": {
-          "additionalProperties": false,
-          "properties": {
-            "image": {
-              "title": "Image",
-              "type": "string"
-            },
-            "managed": {
-              "default": false,
-              "title": "Managed",
-              "type": "boolean"
-            },
-            "token": {
-              "title": "Token",
-              "type": "string"
-            },
-            "worker": {
-              "$ref": "#/components/schemas/Worker"
-            }
-          },
-          "required": [
-            "image",
-            "worker",
-            "token"
-          ],
-          "title": "WorkerCreated",
-          "type": "object"
-        },
-        "WorkerName": {
-          "properties": {
-            "analysis_key_id": {
-              "pattern": "^[a-f0-9]{64}$",
-              "title": "Analysis Key Id",
-              "type": "string"
-            },
-            "managed": {
-              "default": false,
-              "title": "Managed",
-              "type": "boolean"
-            },
-            "name": {
-              "default": "Lens worker",
-              "minLength": 1,
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          "required": [
-            "analysis_key_id"
-          ],
-          "title": "WorkerName",
           "type": "object"
         }
       }
@@ -36028,6 +38836,22 @@
                 ],
                 "title": "Resource"
               }
+            },
+            {
+              "in": "query",
+              "name": "scope",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Scope"
+              }
             }
           ],
           "responses": {
@@ -36323,52 +39147,6 @@
             }
           ],
           "summary": "Introspect Endpoint",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
-      "/lens/workers/register": {
-        "post": {
-          "operationId": "register_worker_lens_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]
@@ -37907,6 +40685,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -41948,6 +44748,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -43870,6 +46692,10 @@
               "title": "Data",
               "type": "string"
             },
+            "index": {
+              "title": "Index",
+              "type": "integer"
+            },
             "type": {
               "const": "redacted_thinking",
               "title": "Type",
@@ -43954,6 +46780,10 @@
                 }
               ],
               "title": "Cache Control"
+            },
+            "index": {
+              "title": "Index",
+              "type": "integer"
             },
             "signature": {
               "anyOf": [
@@ -44105,6 +46935,10 @@
             },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "defer_loading": {
+              "title": "Defer Loading",
+              "type": "boolean"
             },
             "eager_input_streaming": {
               "title": "Eager Input Streaming",
@@ -51907,6 +54741,17 @@
                 }
               ],
               "title": "Api Key"
+            },
+            "input_cost_per_query": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Cost Per Query"
             },
             "max_retries": {
               "anyOf": [

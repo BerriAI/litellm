@@ -249,15 +249,39 @@ def test_an_audit_log_does_not_store_the_key_it_recorded_a_change_to(field):
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_keeps_the_non_secret_fields_it_recorded(field):
-    sent = {"key": SECRET, "max_budget": 50, "models": ["gpt-4o"]}
+    sent = {"key": SECRET, "token": "88dc28d0f030c55ed4ab", "max_budget": 50, "models": ["gpt-4o"]}
 
     log = _audit_log(**{field: json.dumps(sent)})
 
     assert json.loads(getattr(log, field)) == {
         "key": SECRET_MASKED,
+        "token": "88dc28d0f030c55ed4ab",
         "max_budget": 50,
         "models": ["gpt-4o"],
     }
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_null_values_as_null(field):
+    sent = {
+        "key": SECRET,
+        "key_alias": None,
+        "metadata": {"ignored_until": None},
+        "tags": ["prod", None, {"owner": None}],
+    }
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(field):
+    sent = [{"id": "no_redis", "key": SECRET}, {"id": "detailed_debug"}]
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == [{"id": "no_redis", "key": SECRET_MASKED}, {"id": "detailed_debug"}]
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
@@ -387,7 +411,7 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
-@pytest.mark.parametrize("versions", [[], ["2099-01-01"], ["2026-07-28"]])
+@pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
 

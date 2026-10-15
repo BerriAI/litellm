@@ -1,8 +1,10 @@
 import asyncio
 import importlib
 import json
+from typing import Final
 
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -198,3 +200,60 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_endpoint_forwards_key_and_body(
+    respx_mock: "respx.MockRouter", httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from fastapi import Request, Response
+
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        gemini_proxy_route,
+    )
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
+    upstream: Final = respx_mock.post(
+        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"totalTokens": 9},
+        )
+    )
+    body: Final = json.dumps(
+        {"contents": [{"parts": [{"text": "The quick brown fox jumps over the lazy dog."}]}]}
+    ).encode()
+    scope: Final = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": f"/gemini/{endpoint}",
+        "raw_path": f"/gemini/{endpoint}".encode(),
+        "root_path": "",
+        "query_string": b"key=sk-9876",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 51234),
+        "server": ("proxy.local", 4000),
+        "state": {},
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    response: Final = await gemini_proxy_route(
+        endpoint=f"{endpoint}?key=sk-9876",
+        request=Request(scope, receive),
+        fastapi_response=Response(),
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"totalTokens": 9}
+    assert upstream.call_count == 1
+    outbound: Final = upstream.calls[0].request
+    assert outbound.url.path == f"/{endpoint}"
+    assert outbound.url.params["key"] == "gemini-test-key"
+    assert json.loads(outbound.content) == json.loads(body)

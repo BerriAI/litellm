@@ -10,7 +10,11 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
-from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
@@ -114,6 +118,12 @@ class RealtimeEventNormalizer(Protocol):
     def patch_outgoing_session(self, session: dict) -> dict: ...
 
 
+class RealtimeUsageMeter(Protocol):
+    def observe_client_event(self, event: Mapping[str, object]) -> None: ...
+    def observe_backend_event(self, event: Mapping[str, object]) -> None: ...
+    def snapshot(self) -> object: ...
+
+
 DefaultLoggedRealTimeEventTypes: Final = [
     "session.created",
     "response.create",
@@ -136,6 +146,7 @@ class RealTimeStreaming:
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
+        usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
@@ -198,6 +209,7 @@ class RealTimeStreaming:
         self._is_transcription_session: bool = force_transcription_model is not None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
+        self._usage_meter = usage_meter
 
     @property
     def _session_created_sent_to_client(self) -> bool:
@@ -416,6 +428,8 @@ class RealTimeStreaming:
     async def log_messages(self):
         """Log messages in list"""
         if self.logging_obj:
+            if self._usage_meter is not None:
+                self.logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY] = self._usage_meter.snapshot()
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
             if self.session_tools or self.tool_calls:
@@ -481,6 +495,10 @@ class RealTimeStreaming:
                     sent = True
             return sent
         await self.backend_ws.send(message)
+        if self._usage_meter is not None:
+            sent_event: Final = self._parse_backend_event(message)
+            if sent_event is not None:
+                self._usage_meter.observe_client_event(sent_event)
         return True
 
     def _enforce_transcription_session_model(self, message: str) -> str:
@@ -1031,7 +1049,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1078,7 +1096,7 @@ class RealTimeStreaming:
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked and not self._is_transcription_session:
+            if not blocked and self._should_disable_vad_auto_response():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False
@@ -1112,6 +1130,9 @@ class RealTimeStreaming:
 
                 if self._should_drop_event_from_client(event):
                     continue
+
+                if self._usage_meter is not None:
+                    self._usage_meter.observe_backend_event(event)
 
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue

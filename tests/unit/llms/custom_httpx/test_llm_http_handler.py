@@ -5,6 +5,8 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -18,6 +20,9 @@ from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -45,6 +50,7 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
@@ -350,6 +356,89 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     hook_litellm_params = transform_kwargs["litellm_params"]
     assert hook_litellm_params.get(_ACTIVE_KEY) is True
     assert hook_litellm_params.get(_SANDBOX_KEY)
+
+
+class _AgenticLoopKwargsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_kwargs: Mapping[str, object] = MappingProxyType({})
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen_kwargs = MappingProxyType(dict(kwargs))
+        return False, {}
+
+
+class _SentRequestRecorder:
+    def __init__(self) -> None:
+        self.body: Mapping[str, object] = MappingProxyType({})
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.body = MappingProxyType(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-4o",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+
+def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: Final = _SentRequestRecorder()
+    recorder: Final = _AgenticLoopKwargsRecorder()
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what is new in litellm?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "stream": True,
+            "stream_options": {"include_obfuscation": True},
+            "tools": [{"type": "web_search"}],
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test",
+            api_base="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+            stream_options={"include_obfuscation": True},
+        ),
+        logging_obj=logging_obj,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(sent.respond))),
+    )
+
+    assert sent.body["stream"] is False
+    assert "stream_options" not in sent.body
+    assert "stream_options" not in recorder.seen_kwargs
 
 
 @pytest.mark.asyncio
@@ -4139,6 +4228,54 @@ async def test_completion_streams_after_the_async_transform_request():
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "async"
 
 
+class _IteratorRecordingConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+        self.iterator_requests = []
+
+    def get_model_response_iterator(self, streaming_response, sync_stream, json_mode=False):
+        self.iterator_requests.append({"sync_stream": sync_stream, "json_mode": json_mode})
+        return super().get_model_response_iterator(streaming_response, sync_stream, json_mode)
+
+
+def _json_mode_stream(config, **transport):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"json_mode": True},
+        timeout=10.0,
+        litellm_params={},
+        stream=True,
+        provider_config=config,
+        **transport,
+    )
+
+
+def _streamed_text(chunks):
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook_only_when_sync():
+    config = _IteratorRecordingConfig()
+    sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_sse_echoing_transformed_by)))
+    async_client = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_sse_echoing_transformed_by))
+
+    sync_chunks = list(_json_mode_stream(config, acompletion=False, client=sync_client))
+    async_chunks = [chunk async for chunk in await _json_mode_stream(config, acompletion=True, client=async_client)]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+    assert config.iterator_requests == [
+        {"sync_stream": True, "json_mode": True},
+        {"sync_stream": False, "json_mode": False},
+    ]
+
+
 class _ImageEditRecordingConfig(BaseImageEditConfig):
     def __init__(self):
         self.transform_calls = []
@@ -4925,3 +5062,133 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize(
+    ("status_code", "content", "headers", "expected_bytes"),
+    (
+        (
+            416,
+            b"<Error><Code>InvalidRange</Code><ActualObjectSize>0</ActualObjectSize></Error>",
+            {},
+            0,
+        ),
+        (206, b"", {"Content-Range": "bytes 0-0/4321"}, 4321),
+    ),
+)
+async def test_retrieve_file_accepts_bedrock_successful_range_responses(
+    is_async: bool,
+    status_code: int,
+    content: bytes,
+    headers: dict[str, str],
+    expected_bytes: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+    file_id = "s3://my-bucket/litellm-batch-outputs/job-123/output.jsonl"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            status_code,
+            content=content,
+            headers=headers,
+            request=request,
+        )
+    )
+    params = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+    handler = BaseLLMHTTPHandler()
+
+    if is_async:
+        client = AsyncHTTPHandler()
+        await client.close()
+        async_client = httpx.AsyncClient(transport=transport)
+        client.client = async_client
+        try:
+            result = await handler.async_retrieve_file(
+                file_id=file_id,
+                provider_config=BedrockFilesConfig(),
+                litellm_params=params,
+                headers={},
+                logging_obj=Mock(),
+                client=client,
+            )
+        finally:
+            await async_client.aclose()
+    else:
+        sync_client = httpx.Client(transport=transport)
+        client = HTTPHandler(client=sync_client)
+        try:
+            result = handler.retrieve_file(
+                file_id=file_id,
+                provider_config=BedrockFilesConfig(),
+                litellm_params=params,
+                headers={},
+                logging_obj=Mock(),
+                client=client,
+            )
+        finally:
+            sync_client.close()
+
+    assert result.bytes == expected_bytes
+    assert result.filename == "output.jsonl"
+    assert result.purpose == "batch_output"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_retrieve_file_rejects_unverified_bedrock_range_error(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+    file_id = "s3://my-bucket/litellm-batch-outputs/job-123/output.jsonl"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            416,
+            content=b"<Error><Code>InvalidRange</Code></Error>",
+            request=request,
+        )
+    )
+    params = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+    handler = BaseLLMHTTPHandler()
+
+    if is_async:
+        client = AsyncHTTPHandler()
+        await client.close()
+        async_client = httpx.AsyncClient(transport=transport)
+        client.client = async_client
+        try:
+            with pytest.raises(BaseLLMException, match="InvalidRange"):
+                await handler.async_retrieve_file(
+                    file_id=file_id,
+                    provider_config=BedrockFilesConfig(),
+                    litellm_params=params,
+                    headers={},
+                    logging_obj=Mock(),
+                    client=client,
+                )
+        finally:
+            await async_client.aclose()
+    else:
+        sync_client = httpx.Client(transport=transport)
+        client = HTTPHandler(client=sync_client)
+        try:
+            with pytest.raises(BaseLLMException, match="InvalidRange"):
+                handler.retrieve_file(
+                    file_id=file_id,
+                    provider_config=BedrockFilesConfig(),
+                    litellm_params=params,
+                    headers={},
+                    logging_obj=Mock(),
+                    client=client,
+                )
+        finally:
+            sync_client.close()

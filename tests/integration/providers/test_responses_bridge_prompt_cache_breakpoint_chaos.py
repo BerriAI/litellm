@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import signal
 import threading
 import uuid
 from contextlib import ExitStack
@@ -126,11 +125,11 @@ async def test_worker_and_peer_outages_preserve_markers_and_recover(
                     survivor_pids: Final = tuple(pid for pid in workers if pid != victim_pid)
                     assert active_by_worker[victim_pid] > 0 and len(survivor_pids) == 1, active_by_worker
                     (survivor_pid,) = survivor_pids
-                    victim: Final = psutil.Process(victim_pid)
-                    victim.suspend()
-                    victim.send_signal(signal.SIGKILL)
-                    release.set()
-                    remaining_served: Final = await asyncio.gather(*burst_tasks[len(early_calls) :])
+                    with owned.replacing_worker(victim_pid) as kill:
+                        kill.freeze()
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        remaining_served: Final = await asyncio.gather(*burst_tasks[len(early_calls) :])
                     served: Final = (*early_served, *remaining_served)
                 successful: Final = tuple(item for item in served if item.status == 200)
                 connection_errors: Final = tuple(item for item in served if item.status == 0)

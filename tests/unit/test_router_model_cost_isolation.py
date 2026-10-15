@@ -26,7 +26,13 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import (
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    LiteLLMParamsTypedDict,
+    ModelInfo,
+)
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
@@ -3227,3 +3233,89 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+_COLLIDING_BUILTIN_KEY: Final = "baseten/zai-org/GLM-5.2"
+_COLLIDING_SHARED_OPENAI_KEY: Final = "openai/zai-org/GLM-5.2"
+_COLLIDING_MODEL_INFO: Final = {
+    "input_cost_per_token": 0.00000096,
+    "output_cost_per_token": 0.00000302,
+    "cache_read_input_token_cost": 0.00000010,
+    "mode": "chat",
+}
+
+
+def _colliding_id_deployment(model_id: str, custom_llm_provider: str) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider=custom_llm_provider,
+    )
+    model_info: Final[dict] = {"id": model_id, **_COLLIDING_MODEL_INFO}
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info=model_info,
+    )
+
+
+@pytest.mark.parametrize("model_id", ("baseten/zai-org/glm-5.2",))
+def test_deployment_id_colliding_with_another_providers_catalog_key_keeps_its_own_pricing(model_id: str) -> None:
+    """A deployment id equal to another provider's catalog key must not merge
+    into that row: the merge leaves litellm_provider=baseten on the entry, which
+    _check_provider_match then rejects for the openai request, billing $0."""
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[_COLLIDING_BUILTIN_KEY])
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "openai")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "colliding id pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+        assert litellm.model_cost[_COLLIDING_BUILTIN_KEY] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> None:
+    """Same-provider collision keeps today's merge behavior: the deployment's
+    custom prices land on the baseten row the openai-compatible baseten request
+    matches against."""
+    model_id: Final = "baseten/zai-org/glm-5.2"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "baseten")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "same provider pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
