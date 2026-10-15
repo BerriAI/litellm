@@ -16639,6 +16639,19 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "north-large-01-2026": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.cohere.com/v1/models/north-large-01-2026",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "coralbricks/glm-5.3-fast": {
         "cache_creation_input_token_cost": 1.68e-06,
         "cache_read_input_token_cost": 0.0,
