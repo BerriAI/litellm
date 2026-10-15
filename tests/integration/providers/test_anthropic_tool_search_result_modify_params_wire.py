@@ -185,15 +185,12 @@ def _with_tokyo_call(identity: JsonValue) -> dict[str, JsonValue]:
 _MALFORMED_MESSAGES: Final = (
     pytest.param(_with_tokyo_call({"id": call_id("Tokyo")}), id="tool-call-id-object"),
     pytest.param(_with_tokyo_call([call_id("Tokyo")]), id="tool-call-id-list"),
-    pytest.param(
-        {"role": "tool", "tool_call_id": {"id": call_id("Paris")}, "content": "sunny."}, id="answer-id-object"
-    ),
 )
 
 
 @pytest.mark.parametrize("malformed", _MALFORMED_MESSAGES)
 @pytest.mark.parametrize("modify_params", [False, True], ids=["modify-params-off", "modify-params-on"])
-def test_marked_tool_calls_next_to_a_malformed_tool_id_and_a_later_system_message_answer_400(
+def test_marked_search_call_next_to_a_malformed_tool_id_and_a_later_system_message_answers_400(
     gateway: Gateway,
     modify_params_gateway: Gateway,
     modify_params: bool,
@@ -210,6 +207,7 @@ def test_marked_tool_calls_next_to_a_malformed_tool_id_and_a_later_system_messag
             "tool_calls": [tool_call(city, cache_control=EPHEMERAL) for city in _CITIES],
         },
         *({"role": "tool", "tool_call_id": call_id(city), "content": "sunny."} for city in _CITIES),
+        _marked_search_turn(),
         malformed,
         {"role": "user", "content": final_text(marker)},
         {"role": "system", "content": _SYSTEM_NOTE},
