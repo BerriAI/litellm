@@ -22,6 +22,8 @@ pub enum LlmProviders {
     BedrockMantle,
     #[strum(serialize = "cohere")]
     Cohere,
+    #[strum(serialize = "databricks")]
+    Databricks,
     #[strum(serialize = "deepseek")]
     Deepseek,
     #[strum(serialize = "edenai")]

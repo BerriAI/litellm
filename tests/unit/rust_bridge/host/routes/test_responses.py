@@ -260,3 +260,59 @@ def test_openai_file_search_stays_native() -> None:
         "tools": [{"type": "file_search", "vector_store_ids": ["vs_1"]}],
     }
     assert decline_reason(request) is None
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "environment", "expected"),
+    [
+        pytest.param({}, {}, None, id="personal_access_token"),
+        pytest.param(
+            {"model": "databricks/databricks-claude-sonnet"},
+            {},
+            "Databricks serves Responses only on GPT endpoints",
+            id="non_gpt_endpoint",
+        ),
+        pytest.param(
+            {"api_key": None},
+            {},
+            "native Databricks Responses does not implement Databricks SDK auth",
+            id="no_token",
+        ),
+        pytest.param(
+            {"api_key": None, "api_base": None},
+            {"DATABRICKS_API_KEY": "dapi-env"},
+            "native Databricks Responses does not implement Databricks SDK auth",
+            id="no_api_base",
+        ),
+        pytest.param(
+            {},
+            {"DATABRICKS_CLIENT_ID": "id", "DATABRICKS_CLIENT_SECRET": "secret"},
+            "native Databricks Responses does not implement OAuth M2M",
+            id="oauth_m2m",
+        ),
+    ],
+)
+def test_databricks_requests_outside_the_native_config_stay_on_python(
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    environment: dict[str, str],
+    expected: str | None,
+) -> None:
+    for name in ("DATABRICKS_API_KEY", "DATABRICKS_API_BASE", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    request: Final = {
+        "model": "databricks/databricks-gpt-5-nano",
+        "input": "hi",
+        "api_key": "dapi-explicit",
+        "api_base": "https://w.cloud.databricks.com/serving-endpoints",
+        **request_fields,
+    }
+    assert decline_reason(request) == expected
+
+
+def test_databricks_connection_defaults_ignore_the_global_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_key", "global")
+    monkeypatch.setattr(litellm, "api_base", "https://global.invalid")
+    assert connection_defaults("databricks") == (None, None)
