@@ -9867,6 +9867,7 @@ def _fast_serialize_simple_model_response_stream(
         getattr(chunk, "provider_specific_fields", None) is not None
         or getattr(chunk, "system_fingerprint", None) is not None
         or getattr(chunk, "usage", None) is not None
+        or _has_provider_extras(chunk)
     ):
         return None
 
@@ -9940,6 +9941,20 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
             return serialized_chunk
 
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+
+
+_FAST_SERIALIZED_EXTRAS: Final = frozenset({"service_tier", "usage"})
+
+
+def _has_provider_extras(chunk: ModelResponseStream) -> bool:
+    extras: Final = chunk.model_extra or {}
+    return any(value is not None for key, value in extras.items() if key not in _FAST_SERIALIZED_EXTRAS)
+
+
+def _without_injected_usage(chunk: object) -> ModelResponseStream | None:
+    if not isinstance(chunk, ModelResponseStream) or not _has_provider_extras(chunk):
+        return None
+    return chunk.model_copy(update={"usage": None})
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:
@@ -10338,7 +10353,9 @@ async def async_data_generator(
                         fallback_errors=fallback_errors,
                     )
                     fallback_metadata_event_sent = True
-                continue
+                if (kept_chunk := _without_injected_usage(chunk)) is None:
+                    continue
+                chunk = kept_chunk
 
             if error_state is not None:
                 error_state.observe_chunk(chunk)

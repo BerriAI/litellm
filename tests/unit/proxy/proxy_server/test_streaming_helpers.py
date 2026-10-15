@@ -550,6 +550,23 @@ def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_inv
     assert _fast_serialize_simple_model_response_stream(chunk) is None
 
 
+def test_serialize_streaming_chunk_keeps_provider_fields():
+    chunk = _simple_chunk()
+    setattr(chunk, "provider_metrics", {"energy_wh": 0.5})
+
+    payload = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["provider_metrics"] == {"energy_wh": 0.5}
+    assert payload["choices"][0]["delta"] == {"role": "assistant", "content": "hi"}
+
+
+def test_serialize_streaming_chunk_ignores_unset_provider_fields_for_fast_path():
+    chunk = _simple_chunk()
+    setattr(chunk, "citations", None)
+
+    assert isinstance(_serialize_streaming_chunk(chunk), bytes)
+
+
 # ---------------------------------------------------------------------------
 # _serialize_streaming_chunk
 # ---------------------------------------------------------------------------
@@ -681,6 +698,58 @@ def _patch_logging_flags(monkeypatch, needs_wrap=False, needs_per_chunk=False):
         "fire_deferred_stream_logging",
         staticmethod(lambda request_data: None),
     )
+
+
+def _injected_usage_chunk(**provider_fields: object) -> ModelResponseStream:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-test",
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    for key, value in provider_fields.items():
+        setattr(chunk, key, value)
+    return chunk
+
+
+def _sse_payload(line: str | bytes) -> dict[str, object]:
+    text: Final = line.decode() if isinstance(line, bytes) else line
+    return json.loads(text.removeprefix("data: ").removesuffix("\n\n"))
+
+
+async def _stream_with_injected_usage(usage_chunk: ModelResponseStream) -> list[dict[str, object]]:
+    out: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter([_simple_chunk(content="hello"), usage_chunk]),
+            user_api_key_dict=_user_auth(),
+            request_data={"model": "gpt-4", "_litellm_strip_stream_usage": True},
+        )
+    ]
+    assert out[-1] == "data: [DONE]\n\n"
+    return [_sse_payload(line) for line in out[:-1]]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_keeps_provider_fields_from_stripped_usage_chunk(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    payloads: Final = await _stream_with_injected_usage(_injected_usage_chunk(provider_metrics={"energy_wh": 0.5}))
+
+    assert len(payloads) == 2
+    assert payloads[-1]["provider_metrics"] == {"energy_wh": 0.5}
+    assert "usage" not in payloads[-1]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_drops_stripped_usage_chunk_without_provider_fields(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    payloads: Final = await _stream_with_injected_usage(_injected_usage_chunk(citations=None))
+
+    assert len(payloads) == 1
+    assert "usage" not in payloads[0]
 
 
 @pytest.mark.asyncio
