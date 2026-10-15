@@ -299,11 +299,15 @@ def _model_info(model: str) -> ModelInfo | None:
 
 def _priced_tiers(model: str) -> tuple[str, ...] | None:
     """A tier the model has no price for is one Ark does not offer it at, and litellm would bill it at the base rate.
-    A model missing from the cost map has nothing to check against."""
+    A model with no tier price listed, missing from the cost map or registered unpriced by the router, has nothing
+    to check against."""
     info: Final = _model_info(model)
     if info is None:
         return None
-    return tuple(tier for tier in _RESOLUTION_SHORTEST_SIDE if info.get(f"output_cost_per_second_{tier}") is not None)
+    return (
+        tuple(tier for tier in _RESOLUTION_SHORTEST_SIDE if info.get(f"output_cost_per_second_{tier}") is not None)
+        or None
+    )
 
 
 def _delivered_frames(model: str | None) -> Mapping[str, Mapping[str, str]]:

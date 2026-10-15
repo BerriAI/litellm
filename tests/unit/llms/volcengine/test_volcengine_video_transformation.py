@@ -229,6 +229,20 @@ def test_an_unpriced_resolution_is_dropped_under_drop_params():
     }
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_model_the_router_registered_without_prices_keeps_its_resolution():
+    endpoint_id: Final = "ep-20261015-unpriced"
+    _ = Router(
+        model_list=[
+            {"model_name": "ark", "litellm_params": {"model": f"volcengine/{endpoint_id}", "api_key": "sk-test"}}
+        ]
+    )
+
+    body = _create_body({"duration": 4, "resolution": "480p"}, model=endpoint_id)
+
+    assert body["resolution"] == "480p"
+
+
 def test_a_mistyped_ark_field_is_rejected():
     with pytest.raises(UnsupportedParamsError, match="invalid seed"):
         _ = _create_body({"duration": 4, "seed": "abc", "watermark": False})
