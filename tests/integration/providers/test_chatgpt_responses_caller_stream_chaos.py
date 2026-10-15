@@ -20,6 +20,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(240)
@@ -62,17 +63,10 @@ class _Rig:
         return f"http://127.0.0.1:{self.port}"
 
 
-def _free_port() -> int:
-    with wire_server(cv.CodexVendor().respond) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("chatgpt-caller-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     overrides: Final = {"CHATGPT_TOKEN_DIR": str(cv.login(directory)), "CHATGPT_API_BASE": f"http://127.0.0.1:{port}"}
     config: Final = cv.proxy_config(directory, probe=False)
     with gateway_from_environment() as gateway:

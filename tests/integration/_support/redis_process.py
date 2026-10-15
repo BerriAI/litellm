@@ -1,7 +1,6 @@
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import time
 import uuid
@@ -14,18 +13,7 @@ from typing import Final, TextIO
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-PORT_ATTEMPTS: Final = 5
-
-
-@dataclass(frozen=True, slots=True)
-class PortUnavailable:
-    reason: str
-
-
-def free_loopback_port() -> int:
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        return reservation.getsockname()[1]
+from tests.integration._support.ports import allocate_port
 
 
 @dataclass
@@ -60,13 +48,8 @@ class OwnedRedis:
         return int(result.stdout)
 
     def start(self) -> None:
-        unavailable: Final = self.try_start()
-        assert unavailable is None, unavailable.reason
-
-    def try_start(self) -> PortUnavailable | None:
         assert self.process is None
-        if self.serves():
-            return PortUnavailable(f"Another Redis already serves {self.host}:{self.port} before the owned one starts")
+        assert not self.serves(), f"Another Redis already serves {self.host}:{self.port} before the owned one starts"
         process: Final = subprocess.Popen(
             self.command, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True
         )
@@ -77,7 +60,7 @@ class OwnedRedis:
                 code: Final = process.poll()
                 if code is not None:
                     self.process = None
-                    return PortUnavailable(
+                    raise AssertionError(
                         f"Owned Redis exited with code {code} before readiness on {self.host}:{self.port}"
                     )
                 try:
@@ -86,13 +69,13 @@ class OwnedRedis:
                         expected: Final = self.owned_pid()
                         if actual == expected:
                             self.server_pid = actual
-                            return None
+                            return
                         try:
                             process.wait(timeout=max(deadline - time.monotonic(), 0))
                         except subprocess.TimeoutExpired as error:
                             raise AssertionError("Redis readiness reached a different process") from error
                         self.process = None
-                        return PortUnavailable(f"A different Redis answered on {self.host}:{self.port} during startup")
+                        raise AssertionError(f"A different Redis answered on {self.host}:{self.port} during startup")
                 except RedisConnectionError:
                     pass
                 assert time.monotonic() < deadline, "Owned Redis readiness deadline exceeded"
@@ -149,32 +132,9 @@ class OwnedRedis:
 
 
 @contextmanager
-def _started(
-    build: Callable[[int], OwnedRedis],
-    choose_port: Callable[[], int],
-    attempts: int,
-    log_name: str,
-) -> Iterator[OwnedRedis]:
-    server: Final = build(choose_port())
-    try:
-        unavailable: Final = server.try_start()
-        if unavailable is None:
-            yield server
-            return
-        assert attempts > 1, (
-            f"Owned Redis found no usable port after {PORT_ATTEMPTS} attempts: {unavailable.reason} (log {log_name})"
-        )
-        with _started(build, choose_port, attempts - 1, log_name) as started:
-            yield started
-    finally:
-        if server.process is not None:
-            server.stop()
-
-
-@contextmanager
 def owned_redis(
     directory: Path,
-    choose_port: Callable[[], int] = free_loopback_port,
+    choose_port: Callable[[], int] = allocate_port,
     inherited: Mapping[str, str] = os.environ,
 ) -> Iterator[OwnedRedis]:
     binary: Final = shutil.which("redis-server")
@@ -198,31 +158,31 @@ def owned_redis(
     output.mkdir(parents=True, exist_ok=True)
     directory.mkdir(parents=True, exist_ok=True)
     with (output / f"owned-redis-{uuid.uuid4().hex}.log").open("w") as log:
-
-        def build(port: int) -> OwnedRedis:
-            pid_file: Final = (
-                str(directory / f"owned-redis-{port}.pid")
-                if binary
-                else f"/tmp/integration-redis-{uuid.uuid4().hex}.pid"
-            )
-            command: Final = (
-                *prefix,
-                "--port",
-                str(port),
-                "--set-proc-title",
-                "no",
-                "--pidfile",
-                pid_file,
-                "--bind",
-                "0.0.0.0" if not binary else "127.0.0.1",
-                "--protected-mode",
-                "no",
-                "--save",
-                "",
-                "--appendonly",
-                "no",
-            )
-            return OwnedRedis(host, port, command, log, pid_file)
-
-        with _started(build, choose_port, PORT_ATTEMPTS, log.name) as server:
+        port: Final = choose_port()
+        pid_file: Final = (
+            str(directory / f"owned-redis-{port}.pid") if binary else f"/tmp/integration-redis-{uuid.uuid4().hex}.pid"
+        )
+        command: Final = (
+            *prefix,
+            "--port",
+            str(port),
+            "--set-proc-title",
+            "no",
+            "--pidfile",
+            pid_file,
+            "--bind",
+            "0.0.0.0" if not binary else "127.0.0.1",
+            "--protected-mode",
+            "no",
+            "--save",
+            "",
+            "--appendonly",
+            "no",
+        )
+        server: Final = OwnedRedis(host, port, command, log, pid_file)
+        try:
+            server.start()
             yield server
+        finally:
+            if server.process is not None:
+                server.stop()
