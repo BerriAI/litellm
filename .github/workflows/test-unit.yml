@@ -589,7 +589,7 @@ jobs:
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: load
+            dist: loadscope
 
           - shard: proxy-infra
             test-path: |-
