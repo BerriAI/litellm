@@ -3324,15 +3324,15 @@ def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> 
 _CAPACITY_TEST_DEPLOYMENTS: Final = (
     (
         "bedrock",
-        "bedrock/converse/global.anthropic.claude-router-capacity-test",
-        "bedrock/anthropic.claude-router-capacity-test@global:us-east-1",
+        "bedrock/converse/anthropic.claude-router-capacity-test",
+        "bedrock/us-east-1/anthropic.claude-router-capacity-test",
     ),
     (
         "bedrock_mantle",
-        "bedrock_mantle/openai.router-capacity-test-route",
-        "bedrock_mantle/openai.router-capacity-test-base",
+        "bedrock_mantle/openai.router-capacity-test",
+        "bedrock_mantle/us-east-1/openai.router-capacity-test",
     ),
-    ("openai", "openai/router-capacity-test-route", "openai/router-capacity-test-base"),
+    ("openai", "openai/router-capacity-test", "openai/us/router-capacity-test"),
 )
 
 
@@ -3410,7 +3410,7 @@ def test_router_capacity_widens_to_a_larger_base_model_window(
     )
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
-    expected: Final = explicit_limit if explicit_limit is not None else (8192 if base_location else 1024)
+    expected: Final = explicit_limit if explicit_limit is not None else (8192 if base_location == "model_info" else 1024)
     assert _effective_max_input_tokens(router) == expected
     assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
     _invalidate_model_cost_lowercase_map()
@@ -3472,25 +3472,26 @@ def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_dec
 @pytest.mark.parametrize(
     ("base_model", "expected"),
     (
-        ("bedrock/anthropic.router-capacity-test-base", 8192),
-        ("anthropic.router-capacity-test-base", 8192),
-        ("bedrock/anthropic.router-capacity-test-*", 1024),
-        ("bedrock/anthropic.claude-routercapacitytest-9-9", 1024),
-        ("bedrock/anthropic.router-capacity-test-unmapped", 1024),
+        ("bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
+        ("us-east-1/anthropic.claude-routercapacitytest-9-9", 8192),
+        ("bedrock/us-east-1/anthropic.claude-routercapacitytest-*", 1024),
+        ("bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9", 1024),
+        ("bedrock/eu-west-1/anthropic.claude-routercapacitytest-9-9", 1024),
     ),
 )
-def test_router_capacity_widens_only_for_an_exact_base_model_entry(
+def test_router_capacity_widens_only_for_an_exact_base_model_entry_of_the_same_model(
     monkeypatch: pytest.MonkeyPatch, base_model: str, expected: int
 ) -> None:
-    route: Final = "bedrock/converse/anthropic.router-capacity-test-route"
+    route: Final = "bedrock/converse/anthropic.claude-routercapacitytest-9-9"
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
             **litellm.model_cost,
             route: _capacity_test_metadata("bedrock", 1024),
-            "bedrock/anthropic.router-capacity-test-base": _capacity_test_metadata("bedrock", 8192),
-            "bedrock/anthropic.router-capacity-test-*": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-9-9": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/us-east-1/anthropic.claude-routercapacitytest-*": _capacity_test_metadata("bedrock", 8192),
+            "bedrock/us-east-1/anthropic.claude-routercapacitystandin-9-9": _capacity_test_metadata("bedrock", 8192),
         },
     )
     _invalidate_model_cost_lowercase_map()

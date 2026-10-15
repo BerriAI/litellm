@@ -991,8 +991,6 @@ def as_output_cap(value: object) -> int | None:
 
 
 def _exact_base_model_max_input_tokens(base_model: str, custom_llm_provider: str) -> int | None:
-    if "*" in base_model:
-        return None
     lookup_name: Final = (
         base_model if base_model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{base_model}"
     )
@@ -1005,10 +1003,25 @@ def _exact_base_model_max_input_tokens(base_model: str, custom_llm_provider: str
     return model_info.get("max_input_tokens")
 
 
+def _provider_model_id(model_name: str) -> str:
+    return model_name.rsplit("/", 1)[-1]
+
+
+def _declared_base_model(user_model_info: Mapping[str, object]) -> str | None:
+    match user_model_info:
+        case {"base_model": str() as base_model}:
+            return base_model
+        case _:
+            return None
+
+
 def _base_model_widened_window(
-    route_max_input_tokens: int | None, base_model: str, custom_llm_provider: str
+    route_model_info: ModelMapInfo, base_model: str | None, custom_llm_provider: str
 ) -> Mapping[str, int]:
-    if route_max_input_tokens is None:
+    route_max_input_tokens: Final = route_model_info.get("max_input_tokens")
+    if base_model is None or route_max_input_tokens is None:
+        return MappingProxyType({})
+    if _provider_model_id(base_model) != _provider_model_id(route_model_info["key"]):
         return MappingProxyType({})
     base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model, custom_llm_provider)
     if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
@@ -11364,7 +11377,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
-        For every other provider, a base_model with its own cost-map entry can only widen `model:`'s context window.
+        For every other provider, a model_info base_model naming the same model as `model:` can only widen its context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11461,25 +11474,19 @@ class Router:
 
         ## CHECK USER SET MODEL INFO
         raw_user_model_info: Final = deployment.get("model_info")
-        user_model_info: Final = (
+        user_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
             raw_user_model_info.model_dump(exclude_none=True)
             if isinstance(raw_user_model_info, BaseModel)
-            else raw_user_model_info
+            else raw_user_model_info or {}
         )
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **(
-                _base_model_widened_window(model_info.get("max_input_tokens"), base_model, custom_llm_provider)
-                if isinstance(base_model, str)
-                else MappingProxyType({})
-            ),
+            **_base_model_widened_window(model_info, _declared_base_model(user_model_info), custom_llm_provider),
             **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
-            **MappingProxyType(
-                {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
-            ),
+            **MappingProxyType({key: value for key, value in user_model_info.items() if value is not None}),
         }
 
         return merged_model_info

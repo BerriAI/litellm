@@ -116,6 +116,8 @@ ignored_function_names = [
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
 ]
 
 
