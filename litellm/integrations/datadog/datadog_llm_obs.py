@@ -660,11 +660,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Datadog prices llm/embedding spans from top-level meta.model_name /
         # model_provider. Those values already live in metadata; lift them so
         # embedding spans are not flagged "Partial cost — Unsupported model provider".
-        # Use TypedDict required-key access (not str(.get(...))) so basedpyright
-        # reportUnknownArgumentType / reportUnknownMemberType ceilings stay flat.
-        model_name: Final[str] = standard_logging_payload["model"] or "unknown"
-        provider_raw: Final[str | None] = standard_logging_payload["custom_llm_provider"]
-        model_provider: Final[str] = provider_raw if provider_raw is not None else "unknown"
+        # Narrow via isinstance so reportUnknownVariableType stays flat vs
+        # indexing a payload that basedpyright still treats as partially unknown.
+        _meta_model: Final[object] = payload_metadata.get("model_name", "unknown")
+        _meta_provider: Final[object] = payload_metadata.get("model_provider", "unknown")
+        model_name: Final[str] = _meta_model if isinstance(_meta_model, str) else "unknown"
+        model_provider: Final[str] = (
+            _meta_provider if isinstance(_meta_provider, str) else "unknown"
+        )
         meta: Final[Meta] = {
             "kind": span_kind,
             "input": input_meta,
