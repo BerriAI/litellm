@@ -16,6 +16,7 @@ from ....litellm_core_utils.realtime_errors import close_after_upstream_handshak
 from ....litellm_core_utils.realtime_streaming import (
     RealtimeEventNormalizer,
     RealTimeStreaming,
+    RealtimeUsageMeter,
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
@@ -123,6 +124,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         return None
 
+    def _make_usage_meter(self) -> RealtimeUsageMeter | None:
+        """Return a per-session usage meter, or None when billing needs no metering."""
+        return None
+
     async def async_realtime(
         self,
         model: str,
@@ -190,6 +195,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    usage_meter=self._make_usage_meter(),
                 )
                 await realtime_streaming.bidirectional_forward()
 
