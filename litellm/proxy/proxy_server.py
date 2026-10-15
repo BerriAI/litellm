@@ -2185,6 +2185,29 @@ def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigPara
     )
 
 
+def _stored_environment_variables(row: "_ConfigParamRow | None") -> Mapping[str, object]:
+    """The stored ``environment_variables`` config row as a mapping for the legacy-reader guard.
+
+    A JSON-string ``param_value`` (the row's serialized form) is decoded; anything that is not
+    a mapping reads as empty so the guard only ever compares against real stored counterparts.
+    """
+    param_value: Final[object] = None if row is None else row.param_value
+    if isinstance(param_value, str):
+        try:
+            decoded: Final[object] = cast("object", json.loads(param_value))  # cast-ok: json.loads returns Any
+        except (ValueError, TypeError):
+            return MappingProxyType({})
+        if isinstance(decoded, dict):
+            return cast("Mapping[str, object]", decoded)  # cast-ok: narrowed above
+        return MappingProxyType({})
+    if isinstance(param_value, Mapping):
+        narrowed: Final[Mapping[str, object]] = cast(  # cast-ok: narrowed to Mapping above
+            "Mapping[str, object]", param_value
+        )
+        return dict(narrowed)
+    return MappingProxyType({})
+
+
 class _TTFTRow(TypedDict):
     api_base: str
     model: str
@@ -5792,8 +5815,20 @@ class ProxyConfig:
 
             environment_variables: Final = new_config.get("environment_variables")
             if include_env_vars and environment_variables is not None:
+                # Route the save through the same guarded door as save_environment_variables:
+                # the stored env-vars row is loaded and passed to the legacy-reader guard so a
+                # legacy unprefixed ciphertext echoed back from a config read refuses loudly
+                # (instead of being double-wrapped into the config row on a no-PyNaCl install),
+                # while fresh plaintext values with no stored counterpart still save fine.
                 encrypted_environment_variables: Final = (
-                    self.encrypt_env_variables_for_db(environment_variables=environment_variables)
+                    self.encrypt_env_variables_for_db(
+                        environment_variables=environment_variables,
+                        stored_environment_variables=_stored_environment_variables(
+                            await _config_param_table(prisma_client).find_first(
+                                where={"param_name": "environment_variables"}
+                            )
+                        ),
+                    )
                     if isinstance(environment_variables, dict) and environment_variables
                     else environment_variables
                 )

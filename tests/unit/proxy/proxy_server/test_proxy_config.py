@@ -5802,3 +5802,71 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+# ---------------------------------------------------------------------------
+# ProxyConfig.save_config environment_variables door (gauntlet B3): the door
+# must refuse a legacy round-trip echo on a no-PyNaCl install instead of
+# double-wrapping it into the config row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_without_pynacl_refuses_legacy_env_var_echo(monkeypatch):
+    """Regression: save_config(include_env_vars=True) used to encrypt the
+    submitted environment_variables without the legacy-reader guard its sibling
+    doors have. On a no-PyNaCl install a legacy unprefixed ciphertext echoed
+    back from a config read was silently double-wrapped into the config row —
+    at boot the ciphertext blob would load into os.environ as the credential,
+    and the migration would later classify it migrated. The save must refuse
+    loudly and leave the stored row untouched."""
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-save-config-salt")
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch, {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"re-encrypt environment variables.*legacy-encryption"):
+        await proxy_config.save_config(
+            {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}, include_env_vars=True
+        )
+
+    assert table.rows == {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    assert table.upserted_param_names == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_without_pynacl_saves_fresh_plaintext_env_vars(monkeypatch):
+    """Fresh plaintext values with no stored counterpart still save on a
+    no-PyNaCl install, encrypted straight to v3:gcm:."""
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    await proxy_config.save_config(
+        {"environment_variables": {"UI_LOGO_PATH": "first-write-plaintext"}}, include_env_vars=True
+    )
+
+    written: Final = table.rows["environment_variables"]["UI_LOGO_PATH"]
+    assert isinstance(written, str) and written.startswith("v3:gcm:")
+    assert decrypt_value_helper(written, key="UI_LOGO_PATH") == "first-write-plaintext"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_with_pynacl_reencrypts_a_legacy_env_var_echo(monkeypatch):
+    """Control: with PyNaCl present, echoing a legacy value through save_config
+    re-encrypts it to v3:gcm: and it round-trips to the secret."""
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-save-config-salt")
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch, {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+
+    await proxy_config.save_config({"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}, include_env_vars=True)
+
+    written: Final = table.rows["environment_variables"]["LANGFUSE_PUBLIC_KEY"]
+    assert isinstance(written, str) and written.startswith("v3:gcm:")
+    assert decrypt_value_helper(written, key="LANGFUSE_PUBLIC_KEY") == "legacy-secret"

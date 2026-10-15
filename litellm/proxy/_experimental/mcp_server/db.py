@@ -1495,14 +1495,38 @@ def _reencrypt_mcp_credentials_blob(
     """Decrypt an at-rest MCP credentials blob with the current key and re-encrypt it under
     new_master_key, returning the serialized blob or None when there is nothing to rotate. Shared by
     every table that stores an encrypted MCP credentials blob so a master-key rotation covers them
-    uniformly and cannot silently skip one."""
+    uniformly and cannot silently skip one.
+
+    A secret field that does not decrypt under the current key (wrong-key / corrupt versioned
+    value) survives the decrypt pass as its original ciphertext; re-encrypting that would store a
+    double wrap no single key can undo, so such fields are kept byte-identical in the returned
+    blob for manual rotation by an admin — the same preserve rule the environment_variables
+    rotation branch applies."""
     if not credentials:
         return None
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415  # avoids import cycle through proxy_server
+        is_undecryptable_versioned,
+    )
 
     creds_dict: Final = _credentials_blob_to_mutable_dict(credentials)
     decrypted: Final = decrypt_credentials(credentials=cast(MCPCredentials, creds_dict))
+    preserved_fields: Final[dict[str, str]] = {}  # mutable-ok: filled one secret field at a time
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
+        value: object = decrypted.get(field)
+        if value is not None and is_undecryptable_versioned(value, key=field):
+            preserved_fields[field] = value
+    if preserved_fields:
+        verbose_proxy_logger.warning(
+            "Master-key rotation preserved %d MCP credentials field(s) byte-identical "
+            "because they do not decrypt under the current key "
+            "(they need manual rotation by an admin): %s",
+            len(preserved_fields),
+            sorted(preserved_fields),
+        )
     encrypted: Final = encrypt_credentials(credentials=decrypted, encryption_key=new_master_key)
+    for field, value in preserved_fields.items():
+        encrypted[field] = value
     return safe_dumps(encrypted)
 
 

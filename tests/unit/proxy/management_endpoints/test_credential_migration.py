@@ -749,7 +749,9 @@ async def test_check_classifies_mcp_secret_maps(
         "already_v2": expected_v2,
         "plaintext": 0,
         "undecryptable": expected_invalid,
-        "preserved": 0,
+        # A secret map that does not decode is skipped-and-preserved by the rotation
+        # rewrite, so preserved tracks undecryptable here.
+        "preserved": expected_invalid,
         "legacy": expected_legacy,
     }
     assert report.residual_legacy == expected_legacy
@@ -979,4 +981,270 @@ async def test_sso_walker_write_emits_a_postgres_update_event_for_litellm_ssocon
         ServiceTypes.DB,
         "migrate_sso_credentials",
         {"table_name": "LiteLLM_SSOConfig"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Covered-table preserve (gauntlet B3): a stored value that does NOT decrypt
+# under the current key must survive migrate_encryption / master-key rotation
+# byte-identical on the model table, the credentials table, the MCP
+# credentials blob and the guardrails table — never double-wrapped.
+# ---------------------------------------------------------------------------
+
+
+def _covered_table_rig(
+    salt: str,
+    monkeypatch,
+    *,
+    wrong_key_model: bool = True,
+    control_model: bool = True,
+    wrong_key_credential: bool = True,
+    control_credential: bool = True,
+    wrong_key_mcp: bool = True,
+    control_mcp: bool = True,
+    guardrail: bool = True,
+) -> tuple:
+    """Write-through prisma fake: every seeded table mutates its in-memory row on
+    update, so post-run scans observe exactly what the rewrite persisted.
+
+    Returns (client, snapshot) where snapshot maps location -> the original
+    stored secret values the run must preserve byte-identical.
+    """
+    _enable_aes(monkeypatch)
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_many = AsyncMock(return_value=[])
+
+    model_rows: list = []
+    if wrong_key_model:
+        model_rows.append(
+            SimpleNamespace(
+                model_id="model-wrong-key",
+                model_name="wrong-key-model",
+                litellm_params={"model": "openai/gpt-4", "api_key": _wrong_key_v3("model-secret")},
+                model_info={"id": "model-wrong-key"},
+                blocked=False,
+            )
+        )
+    if control_model:
+        model_rows.append(
+            SimpleNamespace(
+                model_id="model-good",
+                model_name="good-model",
+                litellm_params={"model": "openai/gpt-4", "api_key": encrypt_value_helper("good-model-secret")},
+                model_info={"id": "model-good"},
+                blocked=False,
+            )
+        )
+
+    async def _model_update_many(where, data):
+        target = next(r for r in model_rows if r.model_id == where["model_id"])
+        payload = data["litellm_params"]
+        target.litellm_params = dict(payload.data if hasattr(payload, "data") else payload)
+
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=list(model_rows))
+    mock_tx = MagicMock()
+    mock_tx.litellm_proxymodeltable = MagicMock()
+    mock_tx.litellm_proxymodeltable.update_many = AsyncMock(side_effect=_model_update_many)
+    client.db.tx = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_tx),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    from litellm.types.utils import CredentialItem
+
+    credential_rows: list[CredentialItem] = []
+    if wrong_key_credential:
+        credential_rows.append(
+            CredentialItem(
+                credential_name="cred-wrong-key",
+                credential_values={"ANTHROPIC_API_KEY": _wrong_key_v3("credential-secret")},
+                credential_info={},
+            )
+        )
+    if control_credential:
+        credential_rows.append(
+            CredentialItem(
+                credential_name="cred-good",
+                credential_values={"OPENAI_API_KEY": encrypt_value_helper("good-credential-secret")},
+                credential_info={},
+            )
+        )
+
+    async def _credential_update(where, data):
+        target = next(r for r in credential_rows if r.credential_name == where["credential_name"])
+        payload = data["credential_values"]
+        target.credential_values = dict(payload.data if hasattr(payload, "data") else payload)
+
+    client.db.litellm_credentialstable.find_many = AsyncMock(return_value=list(credential_rows))
+    client.db.litellm_credentialstable.update = AsyncMock(side_effect=_credential_update)
+
+    mcp_rows: list = []
+    if wrong_key_mcp:
+        mcp_rows.append(
+            SimpleNamespace(
+                server_id="mcp-wrong-key",
+                credentials=json.dumps({"auth_value": _wrong_key_v3("mcp-secret")}),
+                env_vars=None,
+                static_headers=None,
+                env=None,
+            )
+        )
+    if control_mcp:
+        mcp_rows.append(
+            SimpleNamespace(
+                server_id="mcp-good",
+                credentials=json.dumps({"auth_value": encrypt_value_helper("good-mcp-secret")}),
+                env_vars=None,
+                static_headers=None,
+                env=None,
+            )
+        )
+
+    async def _mcp_update(where, data):
+        target = next(r for r in mcp_rows if r.server_id == where["server_id"])
+        if "credentials" in data:
+            target.credentials = data["credentials"]
+
+    client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_rows))
+    client.db.litellm_mcpservertable.update = AsyncMock(side_effect=_mcp_update)
+
+    guardrail_rows: list = []
+    if guardrail:
+        from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+
+        guardrail_rows.append(
+            SimpleNamespace(
+                guardrail_id="gr-wrong-key",
+                updated_at="2026-01-01T00:00:00Z",
+                litellm_params={
+                    "mode": "pre_call",
+                    "api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("guardrail-secret"),
+                },
+            )
+        )
+
+    async def _guardrail_update_many(where, data):
+        target = next(r for r in guardrail_rows if r.guardrail_id == where["guardrail_id"])
+        target.litellm_params = json.loads(data["litellm_params"])
+        return 1
+
+    client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=list(guardrail_rows))
+    client.db.litellm_guardrailstable.update_many = AsyncMock(side_effect=_guardrail_update_many)
+
+    snapshot: Final = {
+        "model_table": model_rows,
+        "credentials": credential_rows,
+        "mcp_server": mcp_rows,
+        "guardrails": guardrail_rows,
+    }
+    return client, snapshot
+
+
+def _wrong_key_v3(secret: str) -> str:
+    """A v3:gcm value minted under a rotated-away salt: it never decrypts under the current key."""
+    return encrypt_value_helper(secret, new_encryption_key="sk-rotated-away-salt")
+
+
+@pytest.mark.asyncio
+async def test_migrate_preserves_undecryptable_values_on_every_covered_table(salt_key, monkeypatch):
+    """The covered-table legs of migrate_encryption(dry_run=False) — model table,
+    credentials table, MCP credentials blob, guardrails — must leave a stored
+    value that does not decrypt under the current key byte-identical (single
+    wrap, needs manual rotation) instead of double-wrapping it, and the report
+    must count it as preserved + undecryptable rather than laundering it to
+    already_v2."""
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    client, rig = _covered_table_rig(salt_key, monkeypatch)
+
+    wrong_model = next(r for r in rig["model_table"] if r.model_id == "model-wrong-key")
+    good_model = next(r for r in rig["model_table"] if r.model_id == "model-good")
+    wrong_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-wrong-key")
+    good_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-good")
+    wrong_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-wrong-key")
+    good_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-good")
+    guardrail_row = rig["guardrails"][0]
+
+    original_wrong_model_key: Final = wrong_model.litellm_params["api_key"]
+    original_wrong_cred_values: Final = dict(wrong_cred.credential_values)
+    original_wrong_mcp_blob: Final = json.loads(wrong_mcp.credentials)
+    original_guardrail_params: Final = dict(guardrail_row.litellm_params)
+
+    report = await cm.migrate_encryption(
+        prisma_client=client, user_api_key_dict=MagicMock(user_id="admin"), dry_run=False
+    )
+
+    # --- model table: wrong-key value preserved byte-identical, control re-encrypted ---
+    assert wrong_model.litellm_params["api_key"] == original_wrong_model_key
+    assert cm.classify_value(wrong_model.litellm_params["api_key"]) == "undecryptable"
+    assert good_model.litellm_params["api_key"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(good_model.litellm_params["api_key"], salt_key) == "good-model-secret"
+
+    # --- credentials table ---
+    assert wrong_cred.credential_values["ANTHROPIC_API_KEY"] == original_wrong_cred_values["ANTHROPIC_API_KEY"]
+    assert good_cred.credential_values["OPENAI_API_KEY"] != "good-credential-secret"
+    assert (
+        decrypt_if_encrypted_with(good_cred.credential_values["OPENAI_API_KEY"], salt_key) == "good-credential-secret"
+    )
+
+    # --- MCP credentials blob ---
+    assert json.loads(wrong_mcp.credentials)["auth_value"] == original_wrong_mcp_blob["auth_value"]
+    assert decrypt_if_encrypted_with(json.loads(good_mcp.credentials)["auth_value"], salt_key) == "good-mcp-secret"
+
+    # --- guardrails: wrong-key credential row preserved ---
+    assert guardrail_row.litellm_params == original_guardrail_params
+
+    locations: Final = report.as_dict()["locations"]
+    for location in ("model_table", "credentials", "mcp_server", "guardrails"):
+        assert locations[location]["preserved"] >= 1, f"{location} must count the preserved value"
+        assert locations[location]["undecryptable"] >= 1, f"{location} must stay undecryptable-visible (no laundering)"
+    assert report.total_preserved >= 4
+
+    # No laundering: a fresh read-only check still surfaces every preserved value.
+    check: Final = await cm.check_encryption(prisma_client=client)
+    check_locations: Final = check.as_dict()["locations"]
+    for location in ("model_table", "credentials", "mcp_server", "guardrails"):
+        assert check_locations[location]["undecryptable"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_new_key_preserves_undecryptable_rows(salt_key, monkeypatch):
+    """Key-rotation mode (POST /key/regenerate with a new master key) gets the same
+    semantics: rows that do not decrypt under the current key are preserved
+    byte-identical, decryptable rows re-encrypt under the new key."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+
+    client, rig = _covered_table_rig(salt_key, monkeypatch)
+
+    wrong_model = next(r for r in rig["model_table"] if r.model_id == "model-wrong-key")
+    good_model = next(r for r in rig["model_table"] if r.model_id == "model-good")
+    wrong_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-wrong-key")
+    wrong_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-wrong-key")
+    guardrail_row = rig["guardrails"][0]
+
+    original_wrong_model_key: Final = wrong_model.litellm_params["api_key"]
+    original_wrong_cred_values: Final = dict(wrong_cred.credential_values)
+    original_wrong_mcp_auth: Final = json.loads(wrong_mcp.credentials)["auth_value"]
+    original_guardrail_params: Final = dict(guardrail_row.litellm_params)
+
+    await rotate_master_key(
+        prisma_client=client,
+        user_api_key_dict=MagicMock(user_id="admin"),
+        current_master_key=salt_key,
+        new_master_key="sk-brand-new-master-key",
+    )
+
+    assert wrong_model.litellm_params["api_key"] == original_wrong_model_key
+    assert wrong_cred.credential_values["ANTHROPIC_API_KEY"] == original_wrong_cred_values["ANTHROPIC_API_KEY"]
+    assert json.loads(wrong_mcp.credentials)["auth_value"] == original_wrong_mcp_auth
+    assert guardrail_row.litellm_params == original_guardrail_params
+    # Control: the decryptable value re-encrypts under the NEW key.
+    assert decrypt_if_encrypted_with(good_model.litellm_params["api_key"], "sk-brand-new-master-key") == (
+        "good-model-secret"
     )

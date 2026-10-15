@@ -2,7 +2,7 @@ import base64
 import hashlib
 import os
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -47,6 +47,23 @@ class LegacyEncryptionUnavailableError(RuntimeError):
 
 def is_versioned_gcm(value: str) -> bool:
     return value.startswith(_GCM_PREFIXES)
+
+
+def is_undecryptable_versioned(
+    value: object, key: str = "preserve"
+) -> TypeGuard[str]:  # guard-ok: the body does narrow to str — every return path requires isinstance(value, str)
+    """True when ``value`` is a versioned ``gcm`` ciphertext that does NOT decrypt under the
+    current key (wrong key / corrupt): a decrypt-then-rewrite pass must preserve it
+    byte-identical for manual rotation by an admin, never re-encrypt it — re-encrypting the
+    ciphertext would store a double wrap no single key can undo. A prefix alone proves
+    nothing about the key, so this attempts a real decryption; non-strings, empty strings
+    and unversioned values never need the check (the legacy reader gate owns those).
+    """
+    return (
+        isinstance(value, str)
+        and is_versioned_gcm(value)
+        and decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False) is None
+    )
 
 
 def get_salt_key() -> str | None:

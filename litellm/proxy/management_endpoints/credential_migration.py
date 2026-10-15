@@ -532,8 +532,10 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
     ("search_tools", "litellm_searchtoolstable", ("litellm_params",), ()),
     ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
+    ("guardrails", "litellm_guardrailstable", ("litellm_params",), ()),
 ]
 _MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
+_GUARDRAILS_DB_ATTR: Final = "litellm_guardrailstable"
 _PLAINTEXT_LITELLM_PARAMS: Final = frozenset({"complexity_router_config"})
 _OBJECT_MAP: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
@@ -614,24 +616,70 @@ def _top_level_param_leaves(params: Mapping[str, object]) -> Iterator[tuple[str,
                 yield nested, True
 
 
+def _iter_keyed_strings(obj: object):
+    """Yield every (dict key, string leaf) pair in a nested structure, keyless for list items.
+
+    Iterative like ``_iter_encrypted_strings``: the code-quality recursive-function
+    detector bans recursion here, and an explicit stack walks arbitrary depth safely.
+    """
+    stack: Final[list[tuple[str | None, object]]] = [(None, obj)]  # mutable-ok: walker stack
+    while stack:
+        key, cur = stack.pop()
+        if isinstance(cur, str):
+            yield key, cur
+        elif isinstance(cur, dict):
+            entries = cast("dict[str, object]", cur)  # cast-ok: any dict is a str-keyed object map for this walk
+            stack.extend(entries.items())
+        elif isinstance(cur, list):
+            items = cast("list[object]", cur)  # cast-ok: list items are walked as opaque objects
+            stack.extend((None, item) for item in items)
+
+
+def _guardrail_encrypted_leaves(raw: object) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs for one guardrails ``litellm_params`` column.
+
+    The guardrails writer encrypts every sensitive-keyed string at any depth and stores it
+    with the callback encrypted-value prefix, everything else (mode, guardrail type, …) as
+    plaintext by construction. Only the prefixed sensitive leaves are yielded with the
+    prefix stripped so ``classify_value`` sees the stored ciphertext itself; a plaintext
+    leaf would otherwise be mistaken for legacy ciphertext and refuse the scan.
+    """
+    from litellm.proxy.common_utils.callback_utils import (
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
+        is_sensitive_callback_key,
+    )
+
+    return (
+        (value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX), False)
+        for key, value in _iter_keyed_strings(raw)
+        if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX) and key is not None and is_sensitive_callback_key(key)
+    )
+
+
 def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[tuple[str, bool]]:
     """(leaf, plaintext_metadata) pairs of one JSON column; plaintext_metadata is True for leaves
     the write path stores as plaintext by construction (never gated on the legacy reader)."""
     if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
         return ((leaf, False) for leaf in _mcp_encrypted_leaves(col, raw))
+    if db_attr == _GUARDRAILS_DB_ATTR and col == "litellm_params":
+        return _guardrail_encrypted_leaves(raw)
     if db_attr in _LITELLM_PARAMS_TABLES and (params := _object_map(raw)) is not None:
         return _top_level_param_leaves(params)
     return ((leaf, False) for leaf in _iter_encrypted_strings(raw))
 
 
-def _classify_into_report(report: LocationReport, value: str, *, plaintext_metadata: bool = False) -> None:
-    """Classify one stored string and bump the matching read-only counter.
+def _classify_into_report(report: LocationReport, value: str, *, plaintext_metadata: bool = False) -> ValueClass | None:
+    """Classify one stored string into ``report``'s read-only counters, returning the
+    classification so the caller can bump ``preserved`` for the values its rewrite
+    leaves byte-identical.
 
     Only genuine nacl ciphertext lands in ``legacy``; non-secret strings (model
     names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
     over-scanning a column is harmless to the residual count.
     """
-    report.count(classify_value(value, key="scan", plaintext_metadata=plaintext_metadata))
+    classification: Final = classify_value(value, key="scan", plaintext_metadata=plaintext_metadata)
+    report.count(classification)
+    return classification
 
 
 def _secret_map_ciphertext(value: object) -> object:
@@ -680,7 +728,12 @@ async def _scan_one_table(
             if raw is None:
                 continue
             if db_attr == "litellm_mcpservertable" and col in ("static_headers", "env"):
-                report.count(_classify_secret_map(raw, col))
+                # A secret map that fails to decode is skipped-and-preserved by the rotation
+                # rewrite, so it counts as preserved exactly like an undecryptable leaf.
+                secret_map_class = _classify_secret_map(raw, col)
+                report.count(secret_map_class)
+                if secret_map_class == "undecryptable":
+                    report.preserved += 1
                 continue
             if isinstance(raw, str):
                 try:
@@ -688,11 +741,16 @@ async def _scan_one_table(
                 except (ValueError, TypeError):
                     pass
             for leaf, plaintext_metadata in _encrypted_leaves(db_attr, col, raw):
-                _classify_into_report(report, leaf, plaintext_metadata=plaintext_metadata)
+                if _classify_into_report(report, leaf, plaintext_metadata=plaintext_metadata) == "undecryptable":
+                    # The covered-table rewrite leaves exactly these byte-identical; count
+                    # them as preserved so the report never launders a wrong-key value into
+                    # an already-v2 success.
+                    report.preserved += 1
         for col in scalar_columns:
             v = getattr(row, col, None)
             if isinstance(v, str):
-                _classify_into_report(report, v)
+                if _classify_into_report(report, v) == "undecryptable":
+                    report.preserved += 1
     return report
 
 

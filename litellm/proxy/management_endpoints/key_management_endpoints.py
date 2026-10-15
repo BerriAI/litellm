@@ -53,7 +53,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     rotate_sso_identity_assertions_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_ProxyModelTable, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     LegacyEncryptionUnavailableError,
     encrypt_value_helper,
+    is_undecryptable_versioned,
     legacy_encryption_available,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
@@ -229,6 +230,37 @@ class _ModelParamsUpdate(TypedDict):
 
 class _ModelRowWhere(TypedDict):
     model_id: ReadOnly[str]
+
+
+def _parsed_model_params(stored: object) -> object:
+    """The row's params mapping, JSON-decoded when the row stored it serialized."""
+    if not isinstance(stored, str):
+        return stored
+    return cast("object", json.loads(stored))  # cast-ok: json.loads returns Any
+
+
+def _restore_preserved_model_params(
+    row: LiteLLM_ProxyModelTable,
+    preserved_params: Mapping[str, str],
+) -> None:
+    """Put undecryptable params back into a re-encrypted model row's update payload.
+
+    ``add_model_to_db`` re-encrypts every top-level string param, so a param the decrypt
+    pass could not read (its ciphertext survived unchanged) would otherwise be stored as a
+    fresh ciphertext whose plaintext IS the old ciphertext — a double wrap no single key
+    can undo. Restoring the original values keeps the persisted row byte-identical for
+    those fields while the row's other fields re-encrypt normally.
+    """
+    stored: Final[object] = cast(  # cast-ok: getattr on the row yields Any
+        "object", getattr(row, "litellm_params", None)
+    )
+    parsed: Final[object] = _parsed_model_params(stored)
+    if isinstance(parsed, dict):
+        merged: Final[dict[str, object]] = {  # mutable-ok: Json column write
+            **cast("dict[str, object]", parsed),  # cast-ok: narrowed to dict above
+            **preserved_params,
+        }
+        setattr(row, "litellm_params", merged)
 
 
 class _KeyUpdateResult(TypedDict):
@@ -5508,21 +5540,41 @@ async def rotate_master_key(
     if models:
         decrypted_models: Final = proxy_config.decrypt_model_list_from_db(new_models=models)
         verbose_proxy_logger.debug("ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models))
-        reencrypted_models: Final = tuple(
-            [
-                reencrypted
-                for model in decrypted_models
-                if (
-                    reencrypted := await add_model_to_db(
+        reencrypted_models: Final[list[LiteLLM_ProxyModelTable]] = []  # mutable-ok: row accumulator
+        for model in decrypted_models:
+            # Undecryptable stored params (wrong-key / corrupt versioned values survive the
+            # decrypt pass as their original ciphertext) are excluded from the re-encryption
+            # payload per field — the persisted row keeps them byte-identical, exactly like
+            # the environment_variables preserve branch below.
+            model_params: Mapping[str, object] = cast(  # cast-ok: row params mapping
+                "Mapping[str, object]", model["litellm_params"]
+            )
+            preserved_params: dict[str, str] = {  # mutable-ok: per-field restore payload built once per model
+                field: value for field, value in model_params.items() if is_undecryptable_versioned(value, key=field)
+            }
+            reencrypted: LiteLLM_ProxyModelTable = (
+                cast(  # cast-ok: should_create_model_in_db=False always returns the built row
+                    "LiteLLM_ProxyModelTable",
+                    await add_model_to_db(
                         model_params=Deployment(**model),
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                         new_encryption_key=new_master_key,
                         should_create_model_in_db=False,
-                    )
+                    ),
                 )
-            ]
-        )
+            )
+            if preserved_params:
+                _restore_preserved_model_params(reencrypted, preserved_params)
+                verbose_proxy_logger.warning(
+                    "Master-key rotation preserved %d litellm_params field(s) on model %s "
+                    "byte-identical because they do not decrypt under the current key "
+                    "(they need manual rotation by an admin): %s",
+                    len(preserved_params),
+                    reencrypted.model_id,
+                    sorted(preserved_params),
+                )
+            reencrypted_models.append(reencrypted)
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
         async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
             tx: Final[_TxTables] = tx_ctx
@@ -5642,6 +5694,27 @@ async def rotate_master_key(
         for cred in credentials:
             try:
                 decrypted_cred = proxy_config.decrypt_credentials(cred)
+                # Undecryptable stored values (wrong-key / corrupt versioned values pass the
+                # decrypt through as their original ciphertext) are dropped from the patch so
+                # update_db_credential keeps the stored value for those keys: the persisted row
+                # stays byte-identical per field, mirroring the environment_variables preserve
+                # branch, instead of double-wrapping the ciphertext under the new key.
+                preserved_credential_values: dict[str, str] = {  # mutable-ok: patch exclusion
+                    field: value
+                    for field, value in decrypted_cred.credential_values.items()
+                    if is_undecryptable_versioned(value, key=field)
+                }
+                for field in preserved_credential_values:
+                    decrypted_cred.credential_values.pop(field, None)
+                if preserved_credential_values:
+                    verbose_proxy_logger.warning(
+                        "Master-key rotation preserved %d credential value(s) on credential %s "
+                        "byte-identical because they do not decrypt under the current key "
+                        "(they need manual rotation by an admin): %s",
+                        len(preserved_credential_values),
+                        cred.credential_name,
+                        sorted(preserved_credential_values),
+                    )
                 encrypted_cred = update_db_credential(
                     db_credential=cred,
                     updated_patch=decrypted_cred,
