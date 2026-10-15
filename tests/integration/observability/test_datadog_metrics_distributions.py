@@ -383,6 +383,23 @@ def test_a_set_hostname_tags_every_series_and_distribution(rig_factory: RigFacto
             }
 
 
+def test_an_empty_hostname_adds_no_hostname_tag(rig_factory: RigFactory) -> None:
+    """`HOSTNAME=""` is treated like an unset HOSTNAME: no series or distribution carries a `HOSTNAME` tag."""
+    intake: Final = DatadogIntake()
+    with rig_factory(intake, hostname="") as rig:
+        with rig.proxy.scenario() as scenario:
+            model: Final = scenario.model(api_base=rig.provider_url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            assert _chat(str(rig.proxy.client.base_url), key, model, (f"dd-{uuid.uuid4().hex[:8]}",)) == (200,)
+            _wait_for_samples(intake, model, 1)
+
+            uploaded: Final = tuple(
+                series for series in every_series(intake) if f"model_group:{model}" in _tags(series)
+            )
+            assert len(uploaded) == 2 * len(LATENCIES) + 1, uploaded
+            assert not any(tag.startswith("HOSTNAME") for series in uploaded for tag in _tags(series)), uploaded
+
+
 @pytest.mark.parametrize(("callback_setting", "reports_failures"), (("callbacks", True), ("success_callback", False)))
 def test_failed_requests_report_latency_under_their_status_code(
     rig_factory: RigFactory, callback_setting: str, reports_failures: bool
