@@ -96,11 +96,11 @@ describe("docs_search tool", () => {
       },
       "team budget",
     );
-    expect(result.source).toBe("docs");
+    expect(result.success).toBe(true);
     expect(result.results[0]?.title).toBe("Setting Team Budgets");
   });
 
-  it("falls back to bundled topics when the index fetch fails, then retries on the next call", async () => {
+  it("returns success false and no results when the index fetch fails, then retries on the next call", async () => {
     const fetchIndex = vi.fn(async (_signal: AbortSignal) => {
       throw new Error("offline");
     });
@@ -108,13 +108,13 @@ describe("docs_search tool", () => {
     const { runDocsSearch: run } = await import("./docsSearch");
     const search = (query: string) => run({ signal, beforeTool: () => {}, fetchIndex }, query);
     const offline = await search("budgets");
-    expect(offline.source).toBe("bundled");
-    expect(offline.results.length).toBeGreaterThan(0);
+    expect(offline).toMatchObject({ success: false, results: [] });
 
     fetchIndex.mockImplementation(async () => INDEX_FIXTURE);
     const retried = await search("team budget");
     expect(fetchIndex).toHaveBeenCalledTimes(2);
-    expect(retried.source).toBe("docs");
+    expect(retried.success).toBe(true);
+    expect(retried.results.length).toBeGreaterThan(0);
   });
 
   it("calls beforeTool so the search counts toward the action limit", async () => {

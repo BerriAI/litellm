@@ -1,7 +1,6 @@
 import { zodFunction } from "openai/helpers/zod";
 import { z } from "zod";
 import { fetchDocsIndex } from "@/lib/http/docsIndex";
-import { PAGE_DOCS } from "@/lib/pageDocs";
 
 export { DOCS_INDEX_URL } from "@/lib/http/docsIndex";
 
@@ -93,14 +92,6 @@ export function searchDocs(entries: readonly DocEntry[], query: string, limit = 
     .map(({ entry }) => entry);
 }
 
-const bundledEntries: readonly DocEntry[] = [
-  ...new Map(
-    [...PAGE_DOCS.values()]
-      .flat()
-      .map((topic) => [topic.href, { title: topic.title, url: topic.href, description: "" }]),
-  ).values(),
-];
-
 let docsIndexPromise: Promise<readonly DocEntry[]> | null = null;
 
 function loadDocsIndex(fetchIndex: () => Promise<string>): Promise<readonly DocEntry[]> {
@@ -121,28 +112,19 @@ export interface DocsSearchToolOptions {
 
 const truncate = (text: string): string => (text.length > 200 ? `${text.slice(0, 200)}…` : text);
 
-const loadCorpus = async (
-  options: DocsSearchToolOptions,
-  fetchIndex: (signal: AbortSignal) => Promise<string>,
-): Promise<{ entries: readonly DocEntry[]; source: "docs" | "bundled" }> => {
-  try {
-    const fetched = await loadDocsIndex(() => fetchIndex(options.signal));
-    return {
-      entries: [...fetched, ...bundledEntries.filter((b) => !fetched.some((f) => f.url === b.url))],
-      source: "docs",
-    };
-  } catch {
-    return { entries: bundledEntries, source: "bundled" };
-  }
-};
-
 export async function runDocsSearch(options: DocsSearchToolOptions, query: string) {
   options.beforeTool();
-  const { entries, source } = await loadCorpus(options, options.fetchIndex ?? fetchDocsIndex);
+  const fetchIndex = options.fetchIndex ?? fetchDocsIndex;
+  const entries = await loadDocsIndex(() => fetchIndex(options.signal)).then(
+    (fetched) => fetched,
+    () => null,
+  );
+  if (entries === null) {
+    return { operation: "docs_search", success: false, results: [], error: "Docs index unavailable" };
+  }
   return {
     operation: "docs_search",
     success: true,
-    source,
     results: searchDocs(entries, query).map((entry) => ({
       title: entry.title,
       url: entry.url,

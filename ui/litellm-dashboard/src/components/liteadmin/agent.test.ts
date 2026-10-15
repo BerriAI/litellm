@@ -88,6 +88,10 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
   };
 }
 
+const DOCS_INDEX_FIXTURE = `# LiteLLM
+- [Setting Team Budgets](https://docs.litellm.ai/docs/proxy/team_budgets.md): Give each team a spend budget
+`;
+
 const options = () =>
   ({
     model: "selected-model",
@@ -460,9 +464,7 @@ describe("SDK conversation and action lifecycle", () => {
   it("returns docs_search results to the model", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        throw new Error("offline");
-      }),
+      vi.fn(async () => new Response(DOCS_INDEX_FIXTURE)),
     );
     const model = transport([completion([call("docs_search", { query: "team budget" })]), completion()]);
     await runLiteAdmin(options(), model.client);
@@ -472,9 +474,8 @@ describe("SDK conversation and action lifecycle", () => {
     const result = JSON.parse(String((toolMessage as { content: string }).content));
     expect(result.operation).toBe("docs_search");
     expect(result.success).toBe(true);
-    expect(result.results.length).toBeGreaterThan(0);
-    expect(result.results.every((entry: { url: string }) => entry.url.startsWith("https://docs.litellm.ai/"))).toBe(
-      true,
+    expect(result.results.map((entry: { url: string }) => entry.url)).toContain(
+      "https://docs.litellm.ai/docs/proxy/team_budgets",
     );
   });
 
