@@ -11100,16 +11100,15 @@ class TestPreCallHooksForUnroutableModel:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("callbacks", "skip_guardrails", "expected"),
+        ("callbacks", "expected"),
         [
-            pytest.param(lambda: [_CountingGuardrail()], False, True, id="guardrail-applies"),
-            pytest.param(lambda: [_CountingContentEnforcer()], False, True, id="content-enforcer"),
-            pytest.param(lambda: [_ModelRewritingHook()], False, None, id="no-guardrail"),
-            pytest.param(lambda: [_CountingGuardrail()], True, None, id="guardrails-skipped-by-caller"),
+            pytest.param(lambda: [_CountingGuardrail()], True, id="guardrail-applies"),
+            pytest.param(lambda: [_CountingContentEnforcer()], True, id="content-enforcer"),
+            pytest.param(lambda: [_ModelRewritingHook()], None, id="no-guardrail"),
         ],
     )
     async def test_rejected_request_is_redacted_only_when_guardrails_were_bypassed(
-        self, monkeypatch, callbacks, skip_guardrails, expected
+        self, monkeypatch, callbacks, expected
     ):
         from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
@@ -11122,7 +11121,6 @@ class TestPreCallHooksForUnroutableModel:
                 model="does-not-exist",
                 llm_router=self._router(),
                 processor=processor,
-                skip_guardrails=skip_guardrails,
             )
 
         logging_obj: Final = processor.data["litellm_logging_obj"]
@@ -11309,9 +11307,12 @@ class TestPreCallHooksForUnroutableModel:
         assert processor.data["proxy_server_request"]["body"]["messages"] == processor.data["messages"]
 
     @pytest.mark.asyncio
-    async def test_caller_that_skips_guardrails_still_runs_content_enforcers_for_a_renamed_model(self, monkeypatch):
+    async def test_caller_that_skips_guardrails_runs_content_enforcers_and_no_guardrail_for_a_renamed_model(
+        self, monkeypatch
+    ):
         enforcer: Final = _CountingContentEnforcer()
-        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook(), enforcer])
+        guardrail: Final = _CountingGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook(), enforcer, guardrail])
 
         data: Final = await self._run(
             monkeypatch, model="virtual-model", llm_router=self._router(), skip_guardrails=True
@@ -11319,6 +11320,7 @@ class TestPreCallHooksForUnroutableModel:
 
         assert data["model"] == "gpt-4o-mini"
         assert enforcer.calls == 1
+        assert guardrail.models_seen == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

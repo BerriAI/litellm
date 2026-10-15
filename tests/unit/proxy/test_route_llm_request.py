@@ -13,6 +13,7 @@ from litellm.proxy.route_llm_request import (
     ProxyModelNotFoundError,
     route_request,
 )
+from litellm.types.router import RouterGeneralSettings
 
 
 @pytest.mark.parametrize(
@@ -1713,7 +1714,7 @@ def test_proxy_model_not_found_error_keeps_the_raw_model_only_in_the_client_resp
     assert error.spend_log_error_message.startswith("/chat/completions: Invalid model name passed in")
 
 
-def _router_with_gpt4o_mini():
+def _router_with_gpt4o_mini(router_general_settings: RouterGeneralSettings | None = None):
     import litellm
 
     return litellm.Router(
@@ -1722,7 +1723,8 @@ def _router_with_gpt4o_mini():
                 "model_name": "gpt-4o-mini",
                 "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
             }
-        ]
+        ],
+        router_general_settings=router_general_settings,
     )
 
 
@@ -1812,7 +1814,7 @@ async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(
     ],
 )
 @pytest.mark.asyncio
-async def test_raise_if_model_not_routable_allows_routable_requests(monkeypatch, data, route_type, router_mutator):
+async def test_raise_if_model_not_routable_allows_routable_requests(data, route_type, router_mutator):
     from litellm.proxy.route_llm_request import raise_if_model_not_routable
 
     if router_mutator == "wildcard":
@@ -1826,11 +1828,10 @@ async def test_raise_if_model_not_routable_allows_routable_requests(monkeypatch,
                 }
             ]
         )
+    elif router_mutator == "pass_through_all_models":
+        router = _router_with_gpt4o_mini(router_general_settings=RouterGeneralSettings(pass_through_all_models=True))
     else:
         router = _router_with_gpt4o_mini()
-    if router_mutator == "pass_through_all_models":
-        # router_general_settings is shared across Router instances; monkeypatch restores it
-        monkeypatch.setattr(router.router_general_settings, "pass_through_all_models", True)
 
     assert (
         await raise_if_model_not_routable(

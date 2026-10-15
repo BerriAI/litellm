@@ -2336,11 +2336,15 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
-        model_routable: Final = llm_router is None or can_route_with_loaded_models(
-            data=self.data,
-            llm_router=llm_router,
-            user_model=user_model,
-            route_type=route_type,
+        model_routable: Final = (
+            skip_guardrails
+            or llm_router is None
+            or can_route_with_loaded_models(
+                data=self.data,
+                llm_router=llm_router,
+                user_model=user_model,
+                route_type=route_type,
+            )
         )
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
@@ -2419,7 +2423,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 call_type=call_type,
                 skip_guardrails=True,
-                skip_content_enforcers=not skip_guardrails,
+                skip_content_enforcers=True,
             )
             refresh_proxy_server_request_body_snapshot(self.data)
             await raise_if_model_not_routable(
@@ -2429,16 +2433,14 @@ class ProxyBaseLLMRequestProcessing:
                 route_type=call_type,
             )
         except Exception:
-            if not skip_guardrails:
-                self._redact_request_rejected_before_guardrails(proxy_logging_obj=proxy_logging_obj)
+            self._redact_request_rejected_before_guardrails(proxy_logging_obj=proxy_logging_obj)
             raise
-        if not skip_guardrails:
-            self.data = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=self.data,
-                call_type=call_type,
-                guardrails_only=True,
-            )
+        self.data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=call_type,
+            guardrails_only=True,
+        )
 
     def _redact_request_rejected_before_guardrails(self, proxy_logging_obj: ProxyLogging) -> None:
         """Redact the content of a request rejected before the pre-call guardrails that apply to it ran.
