@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -1516,6 +1516,9 @@ def completion_cost(
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         custom_priced_request_model: Final = model if custom_pricing is True else None
+        configured_cost_per_query: Final = (
+            _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
+        )
         base_model_provider: Final = (
             _base_model_pricing_provider(
                 base_model,
@@ -1759,9 +1762,6 @@ def completion_cost(
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    configured_cost_per_query: Final = (
-                        _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
-                    )
                     (
                         prompt_cost,
                         completion_cost_result,
@@ -2159,9 +2159,14 @@ def response_cost_calculator(
         raise e
 
 
+_LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
 def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
-    litellm_params: Final = litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
-    cost_per_query: Final = litellm_params.get("input_cost_per_query") if litellm_params else None
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if logged_params is None:
+        return None
+    cost_per_query: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("input_cost_per_query")
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
