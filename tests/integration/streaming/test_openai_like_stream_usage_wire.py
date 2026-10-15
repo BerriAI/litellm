@@ -65,6 +65,11 @@ _MEMBERS: Final = {
     "vertex_mistral_partner": _vertex("mistral-small-2503", "us-central1"),
     "watsonx": _keyed("watsonx/ibm/granite-3-8b-instruct", zen_api_key="synthetic-zen-key", project_id=_PROJECT),
 }
+_NON_STREAM_MEMBERS: Final = {
+    **_MEMBERS,
+    "maritalk": _keyed("maritalk/sabia-3"),
+    "amazon_nova": _keyed("amazon_nova/nova-pro-v1"),
+}
 
 
 def _chunk(choices: list[JsonValue], **extra: JsonValue) -> bytes:
@@ -211,10 +216,10 @@ def test_chat_stream_cache_hit_replays_the_usage_chunk(gateway: Gateway, member:
         _assert_each_send_billed(key, 2)
 
 
-@pytest.mark.parametrize("member", tuple(_MEMBERS))
+@pytest.mark.parametrize("member", tuple(_NON_STREAM_MEMBERS))
 def test_chat_non_stream_usage_is_unchanged(gateway: Gateway, member: str) -> None:
     with wire_server(_peer(_FINISH_THEN_USAGE)) as wire, gateway.scenario() as scenario:
-        model: Final = _MEMBERS[member](gateway, scenario, wire)
+        model: Final = _NON_STREAM_MEMBERS[member](gateway, scenario, wire)
         key: Final = scenario.key(models=[model])
         response: Final = gateway.request(
             "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "hi"}]}, key=key

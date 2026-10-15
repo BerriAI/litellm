@@ -43,6 +43,9 @@ _BURST_SELECT: Final = (
     'SELECT api_key, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs"'
     " WHERE api_key = ANY(string_to_array(%s, ','))"
 )
+_CACHE_SELECT: Final = (
+    'SELECT cache_hit, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"'
+)
 _CALLER_OPTIONS: Final = {
     "caller_sends_none": None,
     "caller_opts_in": {"include_usage": True},
@@ -212,6 +215,46 @@ def test_always_include_stream_usage_decides_what_the_adapter_asks_upstream(
         native_bodies: Final = _model_bodies(wire)
         assert len(native_bodies) == 1, native_bodies
         assert "stream_options" not in native_bodies[0] and "streamOptions" not in native_bodies[0], native_bodies[0]
+
+
+def _cache_rows(key: str) -> list[dict[str, JsonValue]]:
+    digest: Final = sha256(key.encode()).hexdigest()
+    eventually(lambda: read_rows(_CACHE_SELECT, (digest,)), lambda rows: len(rows) >= 2, seconds=70)
+    return held(lambda: read_rows(_CACHE_SELECT, (digest,)), lambda rows: len(rows) == 2, holding=3)
+
+
+def _assert_cache_hit_replays_the_stop_usage(
+    client: httpx.Client, key: str, wire: Wire, setting: str, caller: str
+) -> None:
+    body: Final = _stream_body(uuid.uuid4().hex, _CALLER_OPTIONS[caller])
+    usage: Final = _GEMINI_USAGE if _UPSTREAM_ASKS_FOR_USAGE[setting][caller] else _ZERO_USAGE
+    _assert_one_stop_with(_stream(client, _ADAPTER_MODEL, key, body), usage)
+    _assert_one_stop_with(_stream(client, _ADAPTER_MODEL, key, body), usage)
+    assert len(_model_bodies(wire)) == 1, caller
+    rows: Final = _cache_rows(key)
+    assert [row["cache_hit"] == "True" for row in rows] == [False, True], (caller, rows)
+    assert (rows[1]["prompt_tokens"], rows[1]["completion_tokens"]) == (
+        rows[0]["prompt_tokens"],
+        rows[0]["completion_tokens"],
+    ), (caller, rows)
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+@pytest.mark.parametrize("setting", tuple(_SETTING_VALUES))
+def test_always_include_stream_usage_cache_hit_replays_the_stop_usage_the_miss_sent(
+    gateway: Gateway, tmp_path: Path, setting: str
+) -> None:
+    with ExitStack() as stack:
+        wire: Final = stack.enter_context(wire_server(_peer()))
+        config: Final = _owned_config(
+            tmp_path / f"{setting}-cache.yaml", gateway, wire, {"always_include_stream_usage": _SETTING_VALUES[setting]}
+        )
+        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2))
+        scenario: Final = stack.enter_context(owned.gateway.scenario())
+        for caller in _CALLER_OPTIONS:
+            _assert_cache_hit_replays_the_stop_usage(
+                owned.gateway.client, scenario.key(models=[_ADAPTER_MODEL]), wire, setting, caller
+            )
 
 
 def _burst_rows(digests: Sequence[str]) -> list[dict[str, JsonValue]]:
