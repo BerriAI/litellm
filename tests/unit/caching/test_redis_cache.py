@@ -1031,6 +1031,7 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     assert early.is_open() is False
 
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    gc.collect()
     ServiceLogging()
     assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
         redis_breaker_state_counts()["closed"]
