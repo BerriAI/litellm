@@ -174,7 +174,6 @@ def test_retried_failure_uploads_one_s3_object(
                 tmp_path,
                 {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"},
                 config=config,
-                workers=2,
             ) as candidate,
             candidate.scenario() as scenario,
         ):
@@ -216,7 +215,6 @@ def test_fallback_chain_failure_uploads_one_s3_object(
                 tmp_path,
                 {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"},
                 config=config,
-                workers=2,
             ) as candidate,
             candidate.scenario() as scenario,
         ):
@@ -268,7 +266,6 @@ def test_streaming_success_uploads_one_s3_object(
                 tmp_path,
                 {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"},
                 config=config,
-                workers=2,
             ) as candidate,
             candidate.scenario() as scenario,
         ):

@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -40,6 +41,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -115,7 +117,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -159,14 +164,20 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_MEMBER_DEFAULT_FIELDS,
+    TeamMemberDefaults,
     resolve_team_admin_editable_fields,
+    stored_team_member_budget_id,
     team_admin_edit_verdict,
     team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
+    team_member_defaults,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
     AccessGroupSyncTx,
     invalidate_access_group_caches,
     reconcile_team_access_group_membership,
@@ -193,6 +204,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -403,8 +415,16 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
-_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
+_STRIP_DELETED_TEAMS_FROM_USERS_SQL: Final = """
+UPDATE "LiteLLM_UserTable"
+SET teams = ARRAY(
+    SELECT kept.team_id FROM unnest(teams) WITH ORDINALITY AS kept(team_id, position)
+    WHERE kept.team_id <> ALL($1::text[])
+    ORDER BY kept.position
+)
+WHERE user_id IN (
+    SELECT user_id FROM "LiteLLM_UserTable" WHERE teams && $1::text[] ORDER BY user_id COLLATE "C" FOR UPDATE
+)
 """
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
@@ -473,7 +493,7 @@ async def refresh_cached_team(
     proxy_logging_obj: ProxyLogging,
 ) -> None:
     """
-    Refresh the in-memory cached team object after a DB write.
+    Refresh the cached team object after a DB write and broadcast invalidations to other instances.
 
     Every endpoint that mutates `litellm_teamtable` must call this so the
     cached `LiteLLM_TeamTableCachedObj` used by `common_checks` stays in
@@ -486,12 +506,19 @@ async def refresh_cached_team(
     via `model_dump()` to match the cache shape `_cache_team_object`
     expects.
     """
+    team_table: Final = LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump())
     await cache_team_object(
         team_id=team_row.team_id,
-        team_table=LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump()),
+        team_table=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    batches: Final = active_request_redis_batches()
+    if batches is not None:
+        await batches.flush_all()
+    await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
+    if team_table.team_alias is not None:
+        await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -520,6 +547,9 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             return TeamEditAsTeamAdmin(
                 editable_fields=tuple(sorted(permitted)),
                 may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+                proxy_controlled_metadata_keys=(
+                    tuple(sorted(PROXY_CONTROLLED_TEAM_METADATA_KEYS)) if "metadata" in permitted else ()
+                ),
             )
         case None:
             return TeamEditNone()
@@ -2354,13 +2384,22 @@ async def update_team(
         if access_role is None:
             team_access_denied()
         if access_role == "team_admin":
+            permitted: Final = resolve_team_admin_editable_fields(
+                _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+            )
+            reads_member_defaults: Final = bool(permitted) and bool(data.model_fields_set & TEAM_MEMBER_DEFAULT_FIELDS)
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
                     data=data,
                     existing=existing_team,
-                    permitted=resolve_team_admin_editable_fields(
-                        _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                    permitted=permitted,
+                    member_defaults=(
+                        await _stored_team_member_defaults(prisma_client, existing_team)
+                        if reads_member_defaults
+                        else None
                     ),
+                    proxy_controlled_metadata_keys=PROXY_CONTROLLED_TEAM_METADATA_KEYS,
+                    declared_metadata_keys=frozenset(field.key for field in TEAM_METADATA_SCHEMA_REGISTRY.get()),
                 )
             )
 
@@ -3102,6 +3141,17 @@ async def _update_team_members_list(
     )
 
 
+def _user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    return tx.litellm_usertable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+async def _lock_requested_member_rows(tx: "Prisma", members: Sequence[Member]) -> None:
+    emails_only: Final = tuple(m.user_email for m in members if m.user_id is None and m.user_email is not None)
+    matched: Final = await find_many_in(_user_tx_db(tx), "user_email", emails_only)
+    named: Final = (m.user_id for m in members if m.user_id is not None)
+    await tx.query_raw(USER_ROWS_LOCK_SQL, sorted({*named, *(row.user_id for row in matched)}))
+
+
 async def _add_team_members_to_team(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
@@ -3118,6 +3168,9 @@ async def _add_team_members_to_team(
     lock around its own sweep-and-delete, so the two can never interleave; whichever
     acquires the lock first runs to completion before the other's re-read can proceed.
 
+    Every existing user row the request names is locked through ``USER_ROWS_LOCK_SQL`` before
+    the first member write, so a list of members never waits on a SCIM group push in a cycle.
+
     The user and membership writes run on this transaction too, not on a second
     connection from the pool: a lock waiter that needs a connection it hasn't got yet is
     a waiter that can deadlock the pool, since enough concurrent adds for one team would
@@ -3131,6 +3184,7 @@ async def _add_team_members_to_team(
         if locked_members is None:
             raise HTTPException(status_code=404, detail=gone_detail)
         complete_team_data.members_with_roles = locked_members
+        await _lock_requested_member_rows(tx, (data.member,) if isinstance(data.member, Member) else data.member)
 
         updated_users, updated_team_memberships = await _process_team_members(
             data=data,
@@ -4658,11 +4712,12 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
     rows that already drifted, which is the state this was reported against, so the sweep still has
     to run on delete.
 
-    `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
-    outside a transaction drops any team a concurrent `/team/member_add` appended in between.
+    One statement filters the array in place rather than read-filter-write: rewriting the whole
+    array from a snapshot read outside a transaction drops any team a concurrent `/team/member_add`
+    appended in between. It locks the user rows in the order `USER_ROWS_LOCK_SQL` takes them, so it
+    never waits on a SCIM group push in a cycle.
     """
-    for team_id in team_ids:
-        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
 
@@ -4670,8 +4725,7 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
 async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> None:
     """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
     every id's advisory lock and deletes the team rows, so it commits or rolls back with them."""
-    for team_id in team_ids:
-        _ = await tx.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await tx.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
     _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
@@ -4888,6 +4942,15 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
     )
 
 
+async def _stored_team_member_defaults(
+    prisma_client: PrismaClient, team: LiteLLM_TeamTable
+) -> TeamMemberDefaults | None:
+    budget_id: Final = stored_team_member_budget_id(team)
+    if budget_id is None:
+        return None
+    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id))
+
+
 async def _add_team_member_budget_table(
     team_member_budget_id: str,
     prisma_client: PrismaClient,
@@ -4941,6 +5004,16 @@ def _parent_organization_models(team_row: BaseModel) -> list[str] | None:
     return organization.models if organization is not None else None
 
 
+def _effective_access_group_skill_names(
+    resolved_groups: "Sequence[prisma_models.LiteLLM_AccessGroupTable]", unresolved_ids: Sequence[str]
+) -> tuple[str, ...]:
+    """Skill names the team's keys can actually use: none while a listed group has no row,
+    because the skill check then clamps the team to public plugins (see skill_visibility)."""
+    if unresolved_ids:
+        return ()
+    return tuple(frozenset(chain.from_iterable(group.access_skill_names or () for group in resolved_groups)))
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4952,6 +5025,9 @@ async def _resolve_team_access_group_resources(
     resolved_groups: Final = tuple(
         ag_lookup[ag_id] for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id in ag_lookup
     )
+    unresolved_ids: Final = tuple(
+        ag_id for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id not in ag_lookup
+    )
     return _team_info.model_copy(
         update={
             "access_group_models": list({m for group in resolved_groups for m in (group.access_model_names or [])}),
@@ -4959,6 +5035,8 @@ async def _resolve_team_access_group_resources(
                 {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
+            "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
                     access_group_id=group.access_group_id,
@@ -4966,6 +5044,7 @@ async def _resolve_team_access_group_resources(
                     models=tuple(group.access_model_names or ()),
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
+                    skill_names=tuple(group.access_skill_names or ()),
                 )
                 for group in resolved_groups
             ),
@@ -5618,6 +5697,7 @@ def _convert_teams_to_response_models(
                     **team_dict,
                     members_count=members_count,
                     keys_count=keys_count,
+                    access_group_skill_names=None,
                 )
             )
     return team_list
@@ -5904,6 +5984,9 @@ async def list_team_v2(
                 )
                 team_item.access_group_agent_ids = list(
                     {a for group in team_groups for a in (group.access_agent_ids or [])}
+                )
+                team_item.access_group_skill_names = _effective_access_group_skill_names(
+                    team_groups, tuple(ag_id for ag_id in (team_item.access_group_ids or []) if ag_id not in ag_lookup)
                 )
 
     return {
@@ -6833,8 +6916,6 @@ def aggregated_date_range_error(start_date: str | None, end_date: str | None) ->
     date_range: Final = parse_canonical_date_range(start_date, end_date)
     if isinstance(date_range, InvalidDateRange):
         return date_range.reason
-    if date_range.end < date_range.start:
-        return "end_date must be on or after start_date"
     if (date_range.end - date_range.start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None
