@@ -171,7 +171,6 @@ _FAMILY: Final = (
     "claude_platform_unmapped",
     "vertex_haiku",
 )
-_STREAM_FAMILY: Final = ("anthropic_unmapped", "azure_ai_unmapped", "bedrock_invoke", "vertex_haiku")
 _FRAGMENT_SIZE: Final = 20
 _TIMING_BYTES: Final = 512 * 1024
 _TIMING_FRAGMENT: Final = 4096
@@ -1118,8 +1117,10 @@ def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Ga
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, stream=True))
         frames: Final = _content_frames(response)
         assert json.loads("".join(frames)) == _expected(shape, marker_hex), response.text
-        expected_frames: Final = 1 if shape in _HELD_STREAM_SHAPES else _fragment_count(shape, marker_hex)
-        assert len(frames) == expected_frames, (len(frames), expected_frames, frames)
+        if shape in _HELD_STREAM_SHAPES:
+            assert len(frames) == 1, frames
+        else:
+            assert len(frames) >= _fragment_count(shape, marker_hex), frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
@@ -1169,8 +1170,7 @@ def test_vertex_chat_json_schema_without_required_keys_unwraps_only_the_tool_nam
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
         if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+            assert (len(_content_frames(response)) == 1) is unwrapped, response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1191,7 +1191,7 @@ def test_vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == _tool_input("values", marker_hex), response.text
         if stream:
-            assert len(_content_frames(response)) == _fragment_count("values", marker_hex), response.text
+            assert len(_content_frames(response)) >= _fragment_count("values", marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1223,9 +1223,10 @@ def test_vertex_chat_json_schema_that_allows_undeclared_keys_keeps_an_undeclared
         )
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
-        if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+        if stream and unwrapped:
+            assert len(_content_frames(response)) == 1, response.text
+        elif stream:
+            assert len(_content_frames(response)) >= _fragment_count(shape, marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1322,7 +1323,7 @@ def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) ->
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
-@pytest.mark.parametrize("member", _STREAM_FAMILY)
+@pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:

@@ -96,7 +96,7 @@ def _iter_lines(file_source: bytes | BinaryIO) -> Iterator[bytes]:
 def _check_line(line_number: int, raw_line: bytes, line_shape: BatchLineShape) -> BatchFileValidationFailure | None:
     try:
         parsed: Final = json.loads(raw_line)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return BatchFileInvalidJsonLine(line_number=line_number)
     if not isinstance(parsed, dict):
         return BatchFileLineNotObject(line_number=line_number)

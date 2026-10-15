@@ -198,7 +198,7 @@ class AnthropicResponsesStreamWrapper:
                 item_id,
                 {"type": "redacted_thinking", "data": signature},
             )
-            stop: Final = {"type": "content_block_stop", "index": redacted_idx}
+            stop: Final[dict[str, object]] = {"type": "content_block_stop", "index": redacted_idx}
             self._chunk_queue.append(stop)
             return
         if signature is not None:
