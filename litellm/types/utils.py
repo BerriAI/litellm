@@ -9,6 +9,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
 
@@ -4465,6 +4466,9 @@ class LiteLLMLoggingBaseClass:
 
     def post_call(self, original_response, input=None, api_key=None, additional_args=None) -> None:
         pass
+
+
+TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
 
 
 class TokenCountResponse(LiteLLMPydanticObjectBase):

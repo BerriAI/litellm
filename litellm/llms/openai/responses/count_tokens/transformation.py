@@ -5,9 +5,15 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -30,6 +36,16 @@ class ResponsesInputFilePart(TypedDict):
 ResponsesInputPart = ResponsesInputTextPart | ResponsesInputImagePart | ResponsesInputFilePart
 
 ResponsesContentRole = Literal["user", "assistant"]
+
+ResponsesCountRequestParts: TypeAlias = tuple[
+    tuple[Mapping[str, object], ...], str | None, tuple[Mapping[str, object], ...] | None
+]
+_RESPONSES_COUNT_REQUEST_PARTS: Final = TypeAdapter(ResponsesCountRequestParts)
+_TRANSLATED_REQUEST: Final = TypeAdapter(Mapping[str, object])
+
+
+def _is_anthropic_system(system: object) -> bool:
+    return isinstance(system, (str, list)) and system not in ("", [])
 
 
 def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
@@ -118,7 +134,7 @@ class OpenAICountTokensConfig:
         self,
         model: str,
         input: str | Sequence[object],
-        tools: list[dict[str, object]] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
     ) -> dict[str, object]:
         """
@@ -135,7 +151,7 @@ class OpenAICountTokensConfig:
             request["instructions"] = instructions
 
         if tools is not None:
-            request["tools"] = self._transform_tools_for_responses_api(tools)
+            request["tools"] = self._transform_tools_for_responses_api([dict(tool) for tool in tools])
 
         return request
 
@@ -257,3 +273,29 @@ class OpenAICountTokensConfig:
 
         instructions: Final = "\n".join(instructions_parts) if instructions_parts else None
         return input_items, instructions
+
+    @staticmethod
+    def anthropic_messages_to_responses_input(
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        system: object,
+        tools: Sequence[Mapping[str, object]] | None,
+    ) -> ResponsesCountRequestParts:
+        """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
+        system_field: Final[Mapping[str, object]] = {"system": system} if _is_anthropic_system(system) else {}
+        tools_field: Final[Mapping[str, object]] = {"tools": list(tools)} if tools else {}
+        anthropic_request: Final = cast(  # cast-ok: raw Anthropic body, the adapter reads it as inference does
+            AnthropicMessagesRequest, {"model": model, "messages": list(messages), **system_field, **tools_field}
+        )
+        translated: Final = _TRANSLATED_REQUEST.validate_python(
+            LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
+                anthropic_request, include_encrypted_reasoning=False
+            )
+        )
+        return OpenAICountTokensConfig.count_request_parts(
+            translated.get("input"), translated.get("instructions"), translated.get("tools")
+        )
+
+    @staticmethod
+    def count_request_parts(input_items: object, instructions: object, tools: object) -> ResponsesCountRequestParts:
+        return _RESPONSES_COUNT_REQUEST_PARTS.validate_python((input_items, instructions, tools))

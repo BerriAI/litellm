@@ -343,6 +343,7 @@ async def count_tokens(
             messages=messages,
             tools=data.get("tools"),
             system=data.get("system"),
+            messages_format="anthropic",
         )
 
         # Call the internal token counter function with direct request flag set to False

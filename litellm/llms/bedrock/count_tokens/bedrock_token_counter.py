@@ -16,7 +16,7 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountResponse
+from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
@@ -107,6 +107,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
     ) -> TokenCountResponse | None:
         if not messages:
             return None

@@ -3,7 +3,10 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 """
 
 import os
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -13,8 +16,9 @@ from litellm.llms.openai.responses.count_tokens.handler import (
 )
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
+    ResponsesCountRequestParts,
 )
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
@@ -29,6 +33,32 @@ class OpenAITokenCounter(BaseTokenCounter):
     ) -> bool:
         return custom_llm_provider == LlmProviders.OPENAI.value
 
+    @staticmethod
+    def _responses_request_parts(
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        system: object,
+        messages_format: TokenCountMessagesFormat,
+    ) -> ResponsesCountRequestParts:
+        match messages_format:
+            case "anthropic":
+                return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+                    model=model_to_use, messages=messages, system=system, tools=tools
+                )
+            case "openai":
+                input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+                    [dict(message) for message in messages]
+                )
+                fallback_instructions: Final = (
+                    None if system is None else system if isinstance(system, str) else str(system)
+                )
+                return OpenAICountTokensConfig.count_request_parts(
+                    input_items, instructions if instructions is not None else fallback_instructions, tools
+                )
+            case _:
+                assert_never(messages_format)
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -38,6 +68,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object = None,
+        messages_format: TokenCountMessagesFormat = "openai",
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
@@ -59,12 +90,9 @@ class OpenAITokenCounter(BaseTokenCounter):
 
         api_base: Final = litellm_params.get("api_base")
 
-        # Convert chat messages to Responses API input format
-        input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
-
-        # Use system param if instructions not extracted from messages
-        if instructions is None and system is not None:
-            instructions = system if isinstance(system, str) else str(system)
+        input_items, instructions, counted_tools = self._responses_request_parts(
+            model_to_use=model_to_use, messages=messages, tools=tools, system=system, messages_format=messages_format
+        )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
         if not input_items:
@@ -73,10 +101,10 @@ class OpenAITokenCounter(BaseTokenCounter):
         try:
             result: Final = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                input=input_items if input_items is not None else [],
+                input=input_items,
                 api_key=api_key,
                 api_base=api_base,
-                tools=tools,
+                tools=counted_tools,
                 instructions=instructions,
             )
 

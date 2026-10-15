@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
 
@@ -161,6 +161,87 @@ async def test_upstream_error_status_becomes_an_error_response_with_that_status_
             "status_code": upstream_status,
         }
     )
+
+
+async def _sent_count_body(
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[dict[str, object]],
+    system: object,
+    messages_format: TokenCountMessagesFormat,
+) -> object:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            system=system,
+            messages_format=messages_format,
+        )
+        return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_count_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize."},
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBE"}},
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/page.png"}},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "found"}]},
+    ]
+
+    sent: Final = await _sent_count_body(
+        monkeypatch, messages, [{"type": "text", "text": "Be brief."}], messages_format="anthropic"
+    )
+
+    assert sent == {
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Summarize."},
+                    {"type": "input_file", "filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBE"},
+                    {"type": "input_image", "image_url": "https://example.com/page.png"},
+                ],
+            },
+            {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "found"},
+        ],
+        "instructions": "Be brief.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_format_keeps_the_chat_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": [{"type": "text", "text": "Summarize."}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+    ]
+
+    sent: Final = await _sent_count_body(monkeypatch, messages, system=None, messages_format="openai")
+
+    assert sent == {
+        "model": "gpt-4o",
+        "input": [
+            {"role": "user", "content": "Summarize."},
+            {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+        ],
+        "instructions": "Be brief.",
+    }
 
 
 @pytest.mark.asyncio

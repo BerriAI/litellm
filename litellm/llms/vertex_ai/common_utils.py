@@ -23,7 +23,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
@@ -1278,6 +1278,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
     ) -> TokenCountResponse | None:
         import copy
 

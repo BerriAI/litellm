@@ -15,7 +15,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountMessagesFormat, TokenCountResponse
 
 
 class BaseTokenCounter(ABC):
@@ -29,6 +29,7 @@ class BaseTokenCounter(ABC):
         request_model: str = "",
         tools: list[dict[str, Any]] | None = None,
         system: Any | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
     ) -> TokenCountResponse | None:
         pass
 

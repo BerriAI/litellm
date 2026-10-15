@@ -170,6 +170,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
+    TokenCountMessagesFormat,
     TokenCountResponse,
     echoed_cost_map_pricing_fields,
     is_server_derived_pricing_key,
@@ -14361,6 +14362,7 @@ async def _try_provider_token_count(
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
+    messages_format: TokenCountMessagesFormat = "openai",
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14374,6 +14376,7 @@ async def _try_provider_token_count(
             request_model=request_model,
             tools=tools,
             system=system,
+            messages_format=messages_format,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14476,6 +14479,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            messages_format=request.messages_format,
         )
         if result is not None:
             return result

@@ -112,6 +112,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
+    TokenCountMessagesFormat,
     TranscriptionResponse,
 )
 from litellm.types.videos.main import VideoObject
@@ -3390,6 +3391,7 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
 
     tools: list[dict] | None = None
     system: Any | None = None
+    messages_format: TokenCountMessagesFormat = "openai"
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
