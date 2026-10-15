@@ -694,7 +694,7 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
-_RestT = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
+_RestT: Final = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
 
 
 @dataclass(frozen=True, slots=True)
