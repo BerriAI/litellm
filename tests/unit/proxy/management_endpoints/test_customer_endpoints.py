@@ -2104,6 +2104,32 @@ def test_customer_budget_update_allows_own_budget_with_unrelated_shared_referenc
 @pytest.mark.parametrize(
     "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
 )
+def test_customer_budget_update_rejects_missing_linked_budget_without_writing(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    original: Final = LiteLLM_EndUserTable(user_id="customer", alias="Original", blocked=False, budget_id="gone")
+    database: Final = _CustomerBatchDatabase((original,))
+    database.attach(mock_prisma_client)
+    update: Final = {"user_id": original.user_id, "max_budget": 100, "alias": "Changed"}
+    bulk: Final = route.endswith("bulk_update")
+    payload: Final = {"customers": [update]} if bulk else update
+    response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == (200 if bulk else 404), response.text
+    if bulk:
+        assert response.json()["results"] == [
+            {"user_id": original.user_id, "success": False, "updated_customer": None, "error": "Budget does not exist"}
+        ]
+    else:
+        assert response.json()["error"]["message"] == "Budget does not exist"
+    assert database.customers == {original.user_id: original}
+    assert database.budgets == {}
+    assert database.locked_budget_ids == {"gone"}
+
+
+@pytest.mark.parametrize(
+    "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
+)
 @pytest.mark.parametrize("max_budget", (None, 100))
 @pytest.mark.parametrize("budget_id", (None, "other-budget"))
 def test_customer_update_rejects_both_budget_fields_before_writing(
