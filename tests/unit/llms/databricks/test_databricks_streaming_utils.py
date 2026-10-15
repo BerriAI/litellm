@@ -62,3 +62,26 @@ def test_chunk_parser_normal_content_chunk_still_works():
     result = iterator.chunk_parser(chunk=chunk)
 
     assert result["text"] == "hi"
+
+
+def test_chunk_parser_keeps_cached_tokens_on_usage_only_chunk():
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+    usage_only_chunk = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "m",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 340,
+            "completion_tokens": 1,
+            "total_tokens": 341,
+            "prompt_tokens_details": {"cached_tokens": 320},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk=usage_only_chunk)
+
+    assert result["usage"] is not None
+    assert result["usage"]["prompt_tokens_details"] is not None
+    assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 320

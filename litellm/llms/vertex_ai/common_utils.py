@@ -298,6 +298,13 @@ def get_vertex_ai_model_route(model: str, litellm_params: Mapping[str, object] |
     return VertexAIModelRoute.NON_GEMINI
 
 
+GEMINI_API_ROUTES: Final = frozenset({VertexAIModelRoute.GEMINI, VertexAIModelRoute.NON_GEMINI})
+
+
+def uses_vertex_gemini_api(model: str) -> bool:
+    return get_vertex_ai_model_route(model) in GEMINI_API_ROUTES
+
+
 def get_supports_system_message(
     model: str, custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"]
 ) -> bool:
@@ -1280,6 +1287,9 @@ class VertexAITokenCounter(BaseTokenCounter):
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIPartnerModels,
         )
+
+        if not VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and not uses_vertex_gemini_api(model_to_use):
+            return None
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))

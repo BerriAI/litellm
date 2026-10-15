@@ -1913,3 +1913,22 @@ def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host
     vertex_datetime: str, utc_epoch: int
 ) -> None:
     assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_leaves_model_garden_models_to_local_counting():
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        result = await VertexAITokenCounter().count_tokens(
+            model_to_use="xai/grok-4.20-non-reasoning",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+            request_model="vertex_ai/xai/grok-4.20-non-reasoning",
+        )
+
+    assert result is None
+    assert not mock_gemini_count_tokens.called

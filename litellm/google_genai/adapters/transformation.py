@@ -136,13 +136,15 @@ def _translate_response_format(config: object) -> Mapping[str, object] | None:
     return {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}}
 
 
-def _deployment_supports_response_format(model: str, custom_llm_provider: str | None) -> bool:
+def deployment_supports_openai_param(
+    model: str, custom_llm_provider: str | None, param: str, *, when_unknown: bool
+) -> bool:
     try:
         provider_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
     except BadRequestError:
-        return True
+        return when_unknown
     supported_params: Final = get_supported_openai_params(model=provider_model, custom_llm_provider=provider)
-    return supported_params is None or "response_format" in supported_params
+    return when_unknown if supported_params is None else param in supported_params
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
@@ -363,8 +365,8 @@ class GoogleGenAIAdapter:
             if "stopSequences" in config:
                 completion_request["stop"] = config["stopSequences"]
         response_format: Final = _translate_response_format(config)
-        if response_format is not None and _deployment_supports_response_format(
-            model, litellm_params.custom_llm_provider if litellm_params else None
+        if response_format is not None and deployment_supports_openai_param(
+            model, litellm_params.custom_llm_provider if litellm_params else None, "response_format", when_unknown=True
         ):
             completion_request["response_format"] = response_format
 

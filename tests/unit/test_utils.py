@@ -7013,6 +7013,8 @@ def test_get_model_info_gemini(monkeypatch):
         ("xai/grok-4.6", False),
         ("claude-haiku-4-5@20251001", False),
         ("openai/gpt-oss-120b-maas", False),
+        ("gemma/gemma-3-12b-it", False),
+        ("agent_engine/1234567890", False),
     ],
 )
 def test_vertex_generate_content_config_follows_model_route(model: str, expects_native_config: bool):

@@ -10209,24 +10209,13 @@ class ProviderConfigManager:
 
             return GoogleGenAIConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.common_utils import (
-                VertexAIModelRoute,
-                get_vertex_ai_model_route,
-            )
+            from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
             from litellm.llms.vertex_ai.google_genai.transformation import (
                 VertexAIGoogleGenAIConfig,
             )
 
-            if get_vertex_ai_model_route(model) in (
-                VertexAIModelRoute.PARTNER_MODELS,
-                VertexAIModelRoute.MODEL_GARDEN,
-            ):
+            if not uses_vertex_gemini_api(model):
                 return None
-
-            #########################################################
-            # If the model is not a Vertex Partner model, return the Vertex AI Google Gen AI Config
-            # This is for Vertex `gemini` models
-            #########################################################
             return VertexAIGoogleGenAIConfig()
         return None
 
