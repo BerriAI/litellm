@@ -1270,9 +1270,7 @@ HOSTILE_SCOPE_VALUES: Final[tuple[JsonValue, ...]] = (
 
 
 @pytest.mark.parametrize("operation", ("POST", "PUT", "PATCH"))
-@pytest.mark.parametrize(
-    "scope", HOSTILE_SCOPE_VALUES, ids=("integer", "list", "long", "unknown-key", "wrong-value")
-)
+@pytest.mark.parametrize("scope", HOSTILE_SCOPE_VALUES, ids=("integer", "list", "long", "unknown-key", "wrong-value"))
 @pytest.mark.parametrize("repeat", (1, 2), ids=("first", "second"))
 def test_d3_management_rejects_invalid_scope_values(
     rig: MatrixRig,
@@ -1328,60 +1326,33 @@ def test_d3_management_rejects_invalid_scope_values(
             assert deleted.status_code == 200, deleted.text
 
 
-def _assert_blank_scope_management_response(rig: MatrixRig, identity: str, response: httpx.Response) -> None:
-    assert response.status_code == 200, response.text
-    info: Final = rig.candidate.request("GET", f"/guardrails/{identity}/info")
-    payload: Final = JSON_OBJECT.validate_json(info.content)
-    params: Final = payload.get("litellm_params")
-    assert (
-        info.status_code == 200 and isinstance(params, dict) and params.get("stream_scope") is None
-    ), (info.status_code, info.text)
-
-
 @pytest.mark.parametrize("operation", ("POST", "PUT", "PATCH"))
-def test_d3_management_blank_scope_means_unset(rig: MatrixRig, operation: str) -> None:
-    name: Final = f"d3-management-blank-{operation.lower()}-{uuid.uuid4().hex}"
-    if operation == "POST":
+def test_d3_management_treats_an_empty_scope_as_unset(rig: MatrixRig, operation: str) -> None:
+    name: Final = f"d3-empty-{operation.lower()}-{uuid.uuid4().hex}"
+    existing: Final = _create_management_rail(rig, name, _management_params(name, rig)) if operation != "POST" else None
+    payload: Final = (
+        {"litellm_params": {"stream_scope": ""}}
+        if operation == "PATCH"
+        else {"guardrail": {"guardrail_name": name, "litellm_params": _management_params(name, rig, scope="")}}
+    )
+    try:
         response: Final = rig.candidate.request(
-            "POST",
-            "/guardrails",
-            {
-                "guardrail": {
-                    "guardrail_name": name,
-                    "litellm_params": _management_params(name, rig, scope=""),
-                }
-            },
+            operation, "/guardrails" if existing is None else f"/guardrails/{existing}", payload
         )
-        assert response.status_code == 200, response.text
-        payload: Final = JSON_OBJECT.validate_json(response.content)
-        identity_value: Final = payload.get("guardrail_id")
-        assert isinstance(identity_value, str), payload
-        identity: Final = identity_value
-        try:
-            _assert_blank_scope_management_response(rig, identity, response)
-        finally:
-            deleted: Final = rig.candidate.request("DELETE", f"/guardrails/{identity}")
-            assert deleted.status_code == 200, deleted.text
-    else:
-        identity: Final = _create_management_rail(rig, name, _management_params(name, rig))
-        payload: Final = (
-            {"litellm_params": {"stream_scope": ""}}
-            if operation == "PATCH"
-            else {
-                "guardrail": {
-                    "guardrail_name": name,
-                    "litellm_params": _management_params(name, rig, scope=""),
-                }
-            }
+        assert response.status_code == 200, (operation, response.text)
+        identity: Final = existing or JSON_OBJECT.validate_json(response.content).get("guardrail_id")
+        info: Final = rig.candidate.request("GET", f"/guardrails/{identity}/info")
+        parameters: Final = JSON_OBJECT.validate_json(info.content).get("litellm_params")
+        assert info.status_code == 200 and isinstance(parameters, dict) and parameters.get("stream_scope") is None, (
+            operation,
+            info.status_code,
+            info.text,
         )
-        try:
-            response: Final = rig.candidate.request(operation, f"/guardrails/{identity}", payload)
-            _assert_blank_scope_management_response(rig, identity, response)
-        finally:
-            deleted: Final = rig.candidate.request("DELETE", f"/guardrails/{identity}")
-            assert deleted.status_code == 200, deleted.text
-
-
+        observed: Final = _eventually_management_scope(rig, name, (1, 1))
+        assert observed[0][2] == 1 and observed[1][2] == 1, observed
+    finally:
+        for row in read_rows('SELECT guardrail_id FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (name,)):
+            assert rig.candidate.request("DELETE", f"/guardrails/{row['guardrail_id']}").status_code == 200, row
 def test_d3_management_normalizes_uppercase_scope(rig: MatrixRig) -> None:
     name: Final = f"d3-uppercase-{uuid.uuid4().hex}"
     identity: Final = _create_management_rail(rig, name, _management_params(name, rig, scope="STREAMING"))

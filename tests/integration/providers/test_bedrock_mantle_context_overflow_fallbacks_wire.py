@@ -402,7 +402,7 @@ def test_context_window_fallback_fires_for_the_overflow_on_responses(cwf_rig: Ri
     _assert_fell_back(cwf_rig, "overflow", prompt, response.text)
 
 
-def test_context_window_fallback_fires_on_streamed_chat_completions(cwf_rig: Rig) -> None:
+def test_context_window_fallback_fires_for_the_overflow_on_streamed_chat_completions(cwf_rig: Rig) -> None:
     prompt: Final = _prompt("cwf chat stream")
     response, text = _consumed(cwf_rig.gateway, "/v1/chat/completions", _chat(cwf_rig.models["cwf"], prompt, True))
     assert response.status_code == 200, text
@@ -448,7 +448,7 @@ def test_plain_fallback_fires_for_the_overflow_on_responses(fb_rig: Rig) -> None
     _assert_fell_back(fb_rig, "overflow", prompt, response.text)
 
 
-def test_plain_fallback_fires_on_streamed_chat_completions(fb_rig: Rig) -> None:
+def test_plain_fallback_fires_for_the_overflow_on_streamed_chat_completions(fb_rig: Rig) -> None:
     prompt: Final = _prompt("fb chat stream")
     response, text = _consumed(fb_rig.gateway, "/v1/chat/completions", _chat(fb_rig.models["fb"], prompt, True))
     assert response.status_code == 200, text

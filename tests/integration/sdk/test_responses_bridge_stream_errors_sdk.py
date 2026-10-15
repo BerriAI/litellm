@@ -115,9 +115,7 @@ async def test_router_async_stream_in_stream_rate_limit_without_fallbacks_surfac
     marker: Final = uuid.uuid4().hex
     with wire_server(serve(rate_limited_stream(f"resp_{marker}"), AZURE_TARGET)) as wire:
         with pytest.raises(RateLimitError) as raised:
-            await _router(wire).acompletion(
-                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
-            )
+            await _router(wire).acompletion(model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True)
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
@@ -163,9 +161,7 @@ async def test_router_async_stream_openai_error_event_rate_limit_surfaces_the_pr
     stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
     with wire_server(serve(stream, AZURE_TARGET)) as wire:
         with pytest.raises(RateLimitError) as raised:
-            await _router(wire).acompletion(
-                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
-            )
+            await _router(wire).acompletion(model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True)
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 

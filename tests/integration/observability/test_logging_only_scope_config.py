@@ -829,14 +829,14 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             id="H2-post-rejects-invalid-number",
         ),
         pytest.param(
-            "H2",
+            "H3",
             "generic_guardrail_api",
             "logging_only",
             "",
             200,
             None,
             "",
-            id="H2-post-blank-string-means-unset",
+            id="H3-post-stores-empty-scope-as-unset",
         ),
         pytest.param(
             "H2",
