@@ -236,8 +236,13 @@ class Rig:
     gateway: Gateway
     wire: Wire
 
-    def send(self, body: Mapping[str, JsonValue], *, streaming: bool = False) -> tuple[int, bytes]:
-        headers: Final = {"Authorization": f"Bearer {self.gateway.key}"}
+    def send(
+        self, body: Mapping[str, JsonValue], *, streaming: bool = False, close_connection: bool = False
+    ) -> tuple[int, bytes]:
+        headers: Final = {
+            "Authorization": f"Bearer {self.gateway.key}",
+            **({"Connection": "close"} if close_connection else {}),
+        }
         with self.gateway.client.stream(
             "POST", "/v1/messages", json={**body, "stream": streaming}, headers=headers, timeout=120
         ) as response:
@@ -364,7 +369,7 @@ def test_a_malformed_tools_field_is_answered_with_an_error_and_the_proxy_keeps_s
     rig: Rig, tools: JsonValue
 ) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(messages_body(CLAUDE_MODEL, request_nonce, tools=tools))
+    status, raw = rig.send(messages_body(CLAUDE_MODEL, request_nonce, tools=tools), close_connection=True)
 
     assert status >= 400, raw[:500]
     assert object_value(_JSON_OBJECT.validate_json(raw)["error"])["message"], raw[:500]
