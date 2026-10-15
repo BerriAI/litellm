@@ -2491,7 +2491,7 @@ def _without_stream_index(
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
     if "index" not in block:
         return block
-    return cast(
+    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
         ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
         {key: value for key, value in block.items() if key != "index"},
     )

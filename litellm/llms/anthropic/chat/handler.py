@@ -74,6 +74,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
@@ -977,7 +979,7 @@ class ModelResponseIterator:
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
-                if self.current_content_block_type in ("thinking", "redacted_thinking"):
+                if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + content_block_start["content_block"]["text"]
