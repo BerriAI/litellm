@@ -1131,6 +1131,7 @@ _openai_like_providers: Final[list[str]] = [
     "databricks",
     "lemonade",
     "watsonx",
+    "inferenceapis",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: Final[set] = set(
