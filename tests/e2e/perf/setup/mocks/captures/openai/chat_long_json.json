@@ -1,27 +1,27 @@
 {
  "provider": "openai",
  "route": "chat",
- "shape": "long_context",
- "marker": "perfreq-326716-c",
- "captured_at": "2026-10-14T19:33:35Z",
+ "shape": "long",
+ "marker": "perfreq-974091-c",
+ "captured_at": "2026-10-15T00:14:46Z",
  "stream": false,
  "model": "gpt-6-luna",
- "request_bytes": 1427924,
- "request_tokens_estimate": 356981,
+ "request_bytes": 2146872,
+ "request_tokens_estimate": 536718,
  "status": 200,
- "ttfb_s": 3.817,
- "total_s": 3.8171,
+ "ttfb_s": 9.4849,
+ "total_s": 9.485,
  "body": {
-  "id": "chatcmpl-EYz19Tw34G18x7FNQMzpftzBfKqcy",
+  "id": "chatcmpl-EZ3PCotkXHFUEHIA9ah3FT9C3pt3b",
   "object": "chat.completion",
-  "created": 1792006411,
+  "created": 1792023278,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": "litellm/llms/anthropic/pass_through/adapters/streaming_iterator.py\nlitellm/proxy/hooks/batch_redis_get.py",
+     "content": "I can\u2019t determine that from the current context: I don\u2019t have the \u201cfiles above\u201d or their contents. Please provide the file list or relevant code.",
      "refusal": null,
      "annotations": []
     },
@@ -29,12 +29,12 @@
    }
   ],
   "usage": {
-   "prompt_tokens": 338262,
+   "prompt_tokens": 536578,
    "completion_tokens": 35,
-   "total_tokens": 338297,
+   "total_tokens": 536613,
    "prompt_tokens_details": {
     "cached_tokens": 0,
-    "cache_write_tokens": 338259,
+    "cache_write_tokens": 536575,
     "audio_tokens": 0
    },
    "completion_tokens_details": {

@@ -1,0 +1,52 @@
+{
+ "provider": "openai",
+ "route": "chat",
+ "shape": "short",
+ "marker": "perfreq-903855-c",
+ "captured_at": "2026-10-15T00:14:35Z",
+ "stream": false,
+ "model": "gpt-6-luna",
+ "request_bytes": 430071,
+ "request_tokens_estimate": 107517,
+ "status": 200,
+ "ttfb_s": 4.3062,
+ "total_s": 4.3064,
+ "body": {
+  "id": "chatcmpl-EZ3P6S1pwuKXAY37EG67CucLHVr5U",
+  "object": "chat.completion",
+  "created": 1792023272,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "tests/e2e/claude_code/tool_search/test_azure.py\ntests/e2e/claude_code/thinking_with_tool_use/test_vertex_ai.py\ntests/e2e/claude_code/thinking_with_tool_use/test_bedrock_invoke.py\ntests/e2e/claude_code/thinking_with_tool_use/test_bedrock_converse.py\ntests/e2e/claude_code/thinking_with_tool_use/test_azure.py\ntests/e2e/claude_code/thinking_with_tool_use/test_anthropic.py\ntests/e2e/claude_code/thinking/test_vertex_ai.py\ntests/e2e/claude_code/thinking/test_bedrock_invoke.py\ntests/e2e/claude_code/thinking/test_bedrock_converse.py\ntests/e2e/claude_code/thinking/test_azure.py\ntests/e2e/claude_code/thinking/test_anthropic.py\ntests/e2e/claude_code/structured_outputs/test_vertex_ai.py\ntests/e2e/claude_code/structured_outputs/test_bedrock_invoke.py\ntests/e2e/claude_code/structured_outputs/test_bedrock_converse.py\ntests/e2e/claude_code/structured_outputs/test_azure.py\ntests/e2e/claude_code/structured_outputs/test_anthropic.py\ntests/e2e/claude_code/prompt_caching_5m/test_vertex_ai.py\ntests/e2e/claude_code/prompt_caching_5m/test_bedrock_invoke.py\ntests/e2e/management/test_model_test_connection_e2e.py",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 106142,
+   "completion_tokens": 341,
+   "total_tokens": 106483,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 106139,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ },
+ "chunks": [],
+ "events": []
+}
