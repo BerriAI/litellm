@@ -271,26 +271,30 @@ def test_bucket_failures_keep_their_status_and_never_blame_a_row(
         assert "Batch input file line" not in response.text, response.text
 
 
-def test_router_rewrite_keeps_every_openai_row_on_its_file_line(gateway: Gateway) -> None:
+def _bom_then_blank_lines(first: bytes, fourth: bytes) -> bytes:
+    return b"".join((BOM + first + b"\n", b"\n", b"  \n", fourth + b"\n"))
+
+
+def _leading_blank_line(first: bytes, fourth: bytes) -> bytes:
+    return b"".join((b"\n", first + b"\n", fourth + b"\n"))
+
+
+@pytest.mark.parametrize("layout", (_bom_then_blank_lines, _leading_blank_line), ids=("bom_then_blank", "leading_blank"))
+def test_router_rewrite_sends_openai_only_the_rows(gateway: Gateway, layout: Callable[[bytes, bytes], bytes]) -> None:
     with wire_server(openai_files_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/gpt-4o-mini", api_key="integration-provider-key", api_base=f"{wire.url}/v1"
         )
-        content: Final = b"".join(
-            (
-                BOM + encoded(chat_row("first", model, "one")) + b"\n",
-                b"\n",
-                b"  \n",
-                encoded(chat_row("fourth", model, "four")) + b"\n",
-            )
-        )
+        content: Final = layout(encoded(chat_row("first", model, "one")), encoded(chat_row("fourth", model, "four")))
         response: Final = upload(gateway, "target_model_names", model, content)
         assert response.status_code == 200, response.text
         uploads: Final = tuple(request for request in wire.drain() if is_openai_upload(request))
         assert len(uploads) == 1, [request.target for request in uploads]
-        lines: Final = openai_uploaded_lines(uploads[0])
-        assert [json.loads(line)["custom_id"] if line else None for line in lines] == ["first", None, None, "fourth"]
-        assert {json.loads(line)["body"]["model"] for line in lines if line} == {"gpt-4o-mini"}
+        rows: Final = tuple(json.loads(line) for line in openai_uploaded_lines(uploads[0]))
+        assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [
+            ("first", "gpt-4o-mini"),
+            ("fourth", "gpt-4o-mini"),
+        ]
 
 
 def _unreachable_anthropic_model(scenario: Scenario) -> str:

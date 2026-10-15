@@ -74,7 +74,7 @@ def should_replace_model_in_jsonl(
     return purpose == "batch" and not passthrough
 
 
-def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> FileTypes:
+def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_line_numbers: bool = False) -> FileTypes:
     try:
         ## if pathlike, return the original file content
         if isinstance(file_content, PathLike):
@@ -106,9 +106,11 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # multiple physical lines still parse. Streaming the handle also means
         # the model rewrite is actually applied to tuple-wrapped upload handles;
         # otherwise a restricted body.model would survive and bypass the batch
-        # model allowlist (which validates the upload target alias). Each row is
-        # written on the line it ends on, blank lines included, so a provider
-        # error naming a line still points into the caller's file.
+        # model allowlist (which validates the upload target alias). With
+        # keep_line_numbers each row is written on the line it ends on, blank
+        # lines included, so a row error naming a line still points into the
+        # caller's file; otherwise rows go back to back, since OpenAI rejects a
+        # batch file whose first line is empty.
         output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
         last_written_line = 0
         buffer = ""
@@ -128,7 +130,12 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
                 continue  # object not complete yet; keep accumulating
             if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
                 json_object["body"]["model"] = new_model_name
-            output.write(("\n" * (line_number - max(last_written_line, 1)) + json.dumps(json_object)).encode("utf-8"))
+            output.write(
+                (
+                    "\n" * (line_number - max(last_written_line, 1) if keep_line_numbers else min(last_written_line, 1))
+                    + json.dumps(json_object)
+                ).encode("utf-8")
+            )
             last_written_line = line_number
             buffer = ""
 

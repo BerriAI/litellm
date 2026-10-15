@@ -1,7 +1,7 @@
 import json
 import threading
 from itertools import chain
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -113,7 +113,7 @@ def _tripwire_row(custom_id: str, model: str) -> bytes:
     return encoded(chat_row(custom_id, model, "this row trips the tripwire filter"))
 
 
-LAYOUTS: Final[tuple[tuple[str, int], ...]] = (("dropped_row_first", 3), ("dropped_row_second", 4))
+LAYOUTS: Final[tuple[tuple[str, int], ...]] = (("dropped_row_first", 1), ("dropped_row_second", 2))
 
 
 def _layout(name: str, model: str) -> bytes:
@@ -146,7 +146,7 @@ def test_unconvertible_row_after_a_blank_line_names_its_file_line(rig: _Rig, rou
 
 @pytest.mark.parametrize(("layout", "bad_line"), LAYOUTS, ids=tuple(name for name, _ in LAYOUTS))
 @pytest.mark.parametrize("route", UPLOAD_ROUTES)
-def test_row_after_a_guardrail_dropped_row_keeps_its_file_line(
+def test_row_after_a_guardrail_dropped_row_names_its_line_in_the_uploaded_file(
     rig: _Rig, route: UploadRoute, layout: str, bad_line: int
 ) -> None:
     with wire_server(gcs_peer, port=rig.vertex_port) as wire:
@@ -166,16 +166,26 @@ def _kept_and_dropped(model: str) -> bytes:
     )
 
 
-@pytest.mark.parametrize("route", ("load_balanced", "target_model_names"))
-def test_guardrail_dropped_and_blank_rows_reach_openai_as_blank_lines(rig: _Rig, route: UploadRoute) -> None:
+def _dropped_first(model: str) -> bytes:
+    return jsonl(
+        _tripwire_row("dropped", model),
+        b"",
+        encoded(chat_row("first", model, "one")),
+        encoded(chat_row("fourth", model, "four")),
+    )
+
+
+@pytest.mark.parametrize("content", (_kept_and_dropped, _dropped_first), ids=("dropped_row_second", "dropped_row_first"))
+@pytest.mark.parametrize("route", UPLOAD_ROUTES)
+def test_guardrail_dropped_and_blank_rows_never_reach_openai(
+    rig: _Rig, route: UploadRoute, content: Callable[[str], bytes]
+) -> None:
     with wire_server(openai_files_peer, port=rig.openai_port) as wire:
-        response: Final = _upload(rig.gateway, route, OPENAI, _kept_and_dropped(OPENAI))
+        response: Final = _upload(rig.gateway, route, OPENAI, content(OPENAI))
         assert response.status_code == 200, response.text
         uploads: Final = tuple(request for request in wire.drain() if is_openai_upload(request))
         assert len(uploads) == 1, uploads
-        lines: Final = openai_uploaded_lines(uploads[0])
-        assert [json.loads(line)["custom_id"] if line else None for line in lines] == ["first", None, None, "fourth"]
-        assert {json.loads(line)["body"]["model"] for line in lines if line} == {"gpt-4o-mini"}
+        assert [json.loads(line)["custom_id"] for line in openai_uploaded_lines(uploads[0])] == ["first", "fourth"]
 
 
 @pytest.mark.parametrize("route", UPLOAD_ROUTES)

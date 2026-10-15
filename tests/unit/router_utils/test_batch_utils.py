@@ -286,7 +286,7 @@ def test_replace_model_in_jsonl_keeps_every_row_on_its_original_line():
         b'{"custom_id":"f","body":{"model":"old"}}\n'
     )
 
-    result = replace_model_in_jsonl(content, "new-model")
+    result = replace_model_in_jsonl(content, "new-model", keep_line_numbers=True)
 
     assert isinstance(result, InMemoryFile)
     lines = result.getvalue().decode("utf-8").split("\n")
