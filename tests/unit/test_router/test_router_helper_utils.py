@@ -1071,6 +1071,7 @@ def _shared_redis_stub(store: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")
