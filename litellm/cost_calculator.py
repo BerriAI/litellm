@@ -1759,14 +1759,21 @@ def completion_cost(
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
+                    configured_cost_per_query: Final = (
+                        _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
+                    )
                     (
                         prompt_cost,
                         completion_cost_result,
-                    ) = search_provider_cost_per_query(
-                        model=search_model,
-                        custom_llm_provider=custom_llm_provider,
-                        number_of_queries=number_of_queries,
-                        optional_params=optional_params,
+                    ) = (
+                        (number_of_queries * configured_cost_per_query, 0.0)
+                        if configured_cost_per_query is not None
+                        else search_provider_cost_per_query(
+                            model=search_model,
+                            custom_llm_provider=custom_llm_provider,
+                            number_of_queries=number_of_queries,
+                            optional_params=optional_params,
+                        )
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
@@ -2150,6 +2157,12 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+    litellm_params: Final = litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
+    cost_per_query: Final = litellm_params.get("input_cost_per_query") if litellm_params else None
+    return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
 def _deployment_model_info(
