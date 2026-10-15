@@ -947,6 +947,11 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponseInProgressEvent,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -9740,11 +9745,14 @@ def _restamp_streaming_chunk_model(
         return chunk, model_mismatch_logged
 
     # Responses lifecycle events carry the model one level down, in response.model
-    chunk = _restamp_nested_response_model(chunk, target_model)
+    typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
+    restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
 
-    downstream_model: Final = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    downstream_model: Final = (
+        restamped_chunk.get("model") if isinstance(restamped_chunk, dict) else getattr(restamped_chunk, "model", None)
+    )
     if downstream_model == target_model:
-        return chunk, model_mismatch_logged
+        return restamped_chunk, model_mismatch_logged
 
     if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
@@ -9762,25 +9770,27 @@ def _restamp_streaming_chunk_model(
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.client_facing_stream_model = target_model
-    if isinstance(chunk, dict):
-        return {**chunk, "model": target_model}, model_mismatch_logged
+    if isinstance(restamped_chunk, dict):
+        return {**restamped_chunk, "model": target_model}, model_mismatch_logged
 
     try:
-        return chunk.model_copy(update={"model": target_model}), model_mismatch_logged
+        return restamped_chunk.model_copy(update={"model": target_model}), model_mismatch_logged
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
             target_model,
-            type(chunk),
+            type(restamped_chunk),
             str(e),
             exc_info=True,
         )
 
-    return chunk, model_mismatch_logged
+    return restamped_chunk, model_mismatch_logged
 
 
-def _restamp_nested_response_model(chunk: object, target_model: str) -> object:
+def _restamp_nested_response_model(
+    chunk: BaseModel | Mapping[str, object], target_model: str
+) -> BaseModel | Mapping[str, object]:
     """
     Return chunk with a Responses lifecycle event's response.model set to target model.
 
@@ -9789,15 +9799,25 @@ def _restamp_nested_response_model(chunk: object, target_model: str) -> object:
 
     Returns a copy, so the provider's model stays on the chunk the streaming wrapper prices.
     """
-    if isinstance(chunk, dict):
-        nested = chunk.get("response")
-        if isinstance(nested, dict) and nested.get("model") not in (None, target_model):
-            return {**chunk, "response": {**nested, "model": target_model}}
+    if isinstance(chunk, Mapping):
+        nested_value: Final = chunk.get("response")
+        if isinstance(nested_value, Mapping) and nested_value.get("model") not in (None, target_model):
+            return {**chunk, "response": {**nested_value, "model": target_model}}
         return chunk
 
-    nested = getattr(chunk, "response", None)
-    if isinstance(nested, BaseModel) and getattr(nested, "model", None) not in (None, target_model):
-        return chunk.model_copy(update={"response": nested.model_copy(update={"model": target_model})})
+    if isinstance(
+        chunk,
+        (
+            ResponseCreatedEvent,
+            ResponseInProgressEvent,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        ),
+    ):
+        nested_response: Final = chunk.response
+        if nested_response.model not in (None, target_model):
+            return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
 
     return chunk
 
