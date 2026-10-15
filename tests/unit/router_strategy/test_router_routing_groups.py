@@ -234,17 +234,11 @@ async def test_async_dispatch_uses_group_strategy_for_grouped_model():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="filtered-model", request_kwargs={})
 
-        assert (
-            latency_spy.called
-        ), "group's latency selector should run for grouped model"
+        assert latency_spy.called, "group's latency selector should run for grouped model"
         assert not shuffle_spy.called
 
 
@@ -269,13 +263,9 @@ async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="other-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="other-model", request_kwargs={})
 
         assert shuffle_spy.called, "default group's simple-shuffle should run"
         assert not latency_spy.called
@@ -329,17 +319,11 @@ async def test_async_dispatch_uses_default_selector_when_constructed_with_enum()
             "async_get_available_deployments",
             wraps=default_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="filtered-model", request_kwargs={})
 
-        assert (
-            latency_spy.called
-        ), "default group's latency selector must run when constructed with the enum"
+        assert latency_spy.called, "default group's latency selector must run when constructed with the enum"
         assert not shuffle_spy.called
 
 
@@ -356,9 +340,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
     router = _build_router(routing_strategy="latency-based-routing")
     initial_default_selector = router.lowestlatency_logger
     assert initial_default_selector is not None
-    assert any(
-        c is initial_default_selector for c in litellm.callbacks
-    ), "fresh router should register its default selector"
+    assert any(c is initial_default_selector for c in litellm.callbacks), (
+        "fresh router should register its default selector"
+    )
 
     # Flip strategies back and forth — each transition triggers
     # routing_strategy_init and must replace, not accumulate.
@@ -366,9 +350,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
         router.update_settings(routing_strategy="usage-based-routing")
         router.update_settings(routing_strategy="latency-based-routing")
 
-    assert all(
-        c is not initial_default_selector for c in litellm.callbacks
-    ), "old default selector instance leaked into litellm.callbacks"
+    assert all(c is not initial_default_selector for c in litellm.callbacks), (
+        "old default selector instance leaked into litellm.callbacks"
+    )
 
     # The set of router-owned selectors should be bounded — at most one per
     # strategy class. Without the cleanup fix this grows by one per toggle.
@@ -379,12 +363,10 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
         "LowestLatencyLoggingHandler",
         "LowestCostLoggingHandler",
     )
-    router_owned = [
-        c for c in litellm.callbacks if type(c).__name__ in router_owned_classes
-    ]
-    assert len(router_owned) <= len(
-        router_owned_classes
-    ), f"router selectors leaked: {[type(c).__name__ for c in router_owned]}"
+    router_owned = [c for c in litellm.callbacks if type(c).__name__ in router_owned_classes]
+    assert len(router_owned) <= len(router_owned_classes), (
+        f"router selectors leaked: {[type(c).__name__ for c in router_owned]}"
+    )
 
     # Group selectors: capture the v1 instance, swap, confirm v1 is gone by id.
     router.update_settings(
@@ -409,9 +391,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
             }
         ]
     )
-    assert all(
-        c is not group_selector_v1 for c in litellm.callbacks
-    ), "old group selector instance leaked into litellm.callbacks"
+    assert all(c is not group_selector_v1 for c in litellm.callbacks), (
+        "old group selector instance leaked into litellm.callbacks"
+    )
     group_selector_v2 = router._group_selectors["fast"]["latency-based-routing"]
     assert group_selector_v2 is not group_selector_v1
 
@@ -506,10 +488,7 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
             callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
 
     assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 1
-    assert (
-        second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"]
-        == "deploy-2"
-    )
+    assert second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"] == "deploy-2"
 
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
@@ -527,10 +506,7 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
 def test_normalize_strategy_handles_string_enum_and_none():
     assert Router._normalize_strategy(None) is None
     assert Router._normalize_strategy("simple-shuffle") == "simple-shuffle"
-    assert (
-        Router._normalize_strategy(RoutingStrategy.LATENCY_BASED)
-        == RoutingStrategy.LATENCY_BASED.value
-    )
+    assert Router._normalize_strategy(RoutingStrategy.LATENCY_BASED) == RoutingStrategy.LATENCY_BASED.value
 
 
 def test_validate_routing_strategy_accepts_valid_and_rejects_invalid():
@@ -631,11 +607,13 @@ def test_select_deployment_sync_returns_none_without_selector():
     assert result is None
 
 
-def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
+def test_select_deployment_sync_falls_back_for_cost_based_routing():
     """
     `LowestCostLoggingHandler` only implements `async_get_available_deployments`,
-    so the sync dispatch must fall through to None for `cost-based-routing`
-    instead of raising AttributeError.
+    so the sync dispatch for `cost-based-routing` has no cost-aware selector.
+    Since #45718 it falls back to a weighted healthy pick instead of returning
+    None (which the callers turn into a `RouterRateLimitError` with nothing in
+    cooldown), and returns None for an empty candidate list.
     """
     router = _build_router(
         routing_strategy="simple-shuffle",
@@ -649,20 +627,33 @@ def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
     )
     cost_selector = router._group_selectors["cheap"]["cost-based-routing"]
     assert not hasattr(cost_selector, "get_available_deployments"), (
-        "test premise broken: LowestCostLoggingHandler unexpectedly grew a "
-        "sync method — revisit the sync dispatch arm."
+        "test premise broken: LowestCostLoggingHandler unexpectedly grew a sync method — revisit the sync dispatch arm."
     )
 
+    deployment = {"model_info": {"id": "d1"}, "litellm_params": {"model": "filtered-model"}}
     result = router._select_deployment_sync(
         strategy="cost-based-routing",
         selector=cost_selector,
         model="filtered-model",
-        healthy_deployments=[],
+        healthy_deployments=[deployment],
         messages=None,
         input=None,
         request_kwargs=None,
     )
-    assert result is None
+    assert result is deployment
+
+    assert (
+        router._select_deployment_sync(
+            strategy="cost-based-routing",
+            selector=cost_selector,
+            model="filtered-model",
+            healthy_deployments=[],
+            messages=None,
+            input=None,
+            request_kwargs=None,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -714,9 +705,7 @@ async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
 
 def test_request_routing_strategy_override_beats_top_level():
     router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "simple-shuffle"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "simple-shuffle"})
     assert strategy == "simple-shuffle"
     assert selector is None
 
@@ -732,39 +721,29 @@ def test_request_routing_strategy_override_beats_explicit_group():
             }
         ],
     )
-    strategy, _ = router._get_routing_context(
-        "filtered-model", {"routing_strategy": "least-busy"}
-    )
+    strategy, _ = router._get_routing_context("filtered-model", {"routing_strategy": "least-busy"})
     assert strategy == "least-busy"
 
 
 def test_request_routing_strategy_override_builds_and_caches_selector():
     router = _build_router(routing_strategy="simple-shuffle")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "latency-based-routing"})
     assert strategy == "latency-based-routing"
     assert selector is not None
-    _, selector_again = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
+    _, selector_again = router._get_routing_context("other-model", {"routing_strategy": "latency-based-routing"})
     assert selector_again is selector
 
 
 def test_request_routing_strategy_override_matching_global_reuses_default_selector():
     router = _build_router(routing_strategy="least-busy")
-    _, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "least-busy"}
-    )
+    _, selector = router._get_routing_context("other-model", {"routing_strategy": "least-busy"})
     assert selector is router.leastbusy_logger
     assert router._override_selectors == {}
 
 
 def test_invalid_request_routing_strategy_override_falls_back():
     router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "not-a-real-strategy"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "not-a-real-strategy"})
     assert strategy == "least-busy"
     assert selector is router.leastbusy_logger
 
@@ -780,7 +759,9 @@ def test_no_override_key_keeps_existing_behavior():
 def test_request_routing_strategy_override_helper_validates_directly():
     router = _build_router(routing_strategy="least-busy")
     assert router._get_request_routing_strategy_override({"routing_strategy": "simple-shuffle"}) == "simple-shuffle"
-    assert router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
+    assert (
+        router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
+    )
     assert router._get_request_routing_strategy_override({"routing_strategy": "lar1"}) is None
     assert router._get_request_routing_strategy_override({"routing_strategy": {"bad": "type"}}) is None
     assert router._get_request_routing_strategy_override({}) is None
@@ -1622,7 +1603,9 @@ def test_group_rows_do_not_inherit_member_access_groups():
     )
     access_groups = router.get_model_access_groups()
     assert "gated-group" not in access_groups.get("restricted-team", [])
-    assert all("access_groups" not in (row.get("model_info") or {}) for row in router.get_model_list(model_name="gated-group"))
+    assert all(
+        "access_groups" not in (row.get("model_info") or {}) for row in router.get_model_list(model_name="gated-group")
+    )
     assert "access_groups" in router.get_model_list(model_name="gated-member")[0]["model_info"]
 
 
@@ -1680,15 +1663,15 @@ async def test_group_call_429_cools_down_member_across_retries():
     assert "deploy-3" in cooldown_ids
 
 
-def _priority_group(
-    name: str = "priority-group", primary: int = 1, backup: int = 2
-) -> RoutingGroup:
-    return RoutingGroup.model_validate({
-        "group_name": name,
-        "models": ["filtered-model", "other-model"],
-        "routing_strategy": "priority",
-        "model_priorities": {"filtered-model": primary, "other-model": backup},
-    })
+def _priority_group(name: str = "priority-group", primary: int = 1, backup: int = 2) -> RoutingGroup:
+    return RoutingGroup.model_validate(
+        {
+            "group_name": name,
+            "models": ["filtered-model", "other-model"],
+            "routing_strategy": "priority",
+            "model_priorities": {"filtered-model": primary, "other-model": backup},
+        }
+    )
 
 
 def _priority_deployments(
@@ -1722,27 +1705,32 @@ def test_priority_group_affinity_scope_follows_group_aliases_and_settings_reload
         ],
         model_group_alias={"priority-alias": "priority-group"},
     )
-    requested_models: Final = (
-        "priority-group", "priority-alias", "filtered-model", "other-model", "legacy", "missing"
-    )
+    requested_models: Final = ("priority-group", "priority-alias", "filtered-model", "other-model", "legacy", "missing")
     assert tuple(router._is_priority_routing_group(model) for model in requested_models) == (
-        True, True, False, False, False, False
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
     )
 
-    router.update_settings(routing_groups=[{
-        "group_name": "priority-group",
-        "models": ["filtered-model", "other-model"],
-        "routing_strategy": "simple-shuffle",
-    }])
+    router.update_settings(
+        routing_groups=[
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model", "other-model"],
+                "routing_strategy": "simple-shuffle",
+            }
+        ]
+    )
     assert tuple(router._is_priority_routing_group(model) for model in requested_models) == (False,) * 6
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("requested_model", ["priority-group", "priority-alias"])
 @pytest.mark.asyncio
-async def test_priority_group_always_uses_primary_when_healthy(
-    asynchronous: bool, requested_model: str
-) -> None:
+async def test_priority_group_always_uses_primary_when_healthy(asynchronous: bool, requested_model: str) -> None:
     router: Final = Router(
         model_list=_priority_deployments(),
         routing_groups=[_priority_group()],
@@ -1750,9 +1738,7 @@ async def test_priority_group_always_uses_primary_when_healthy(
         num_retries=0,
     )
     request: Final = {"model": requested_model, "messages": [{"role": "user", "content": "hi"}]}
-    response: Final = (
-        await router.acompletion(**request) if asynchronous else router.completion(**request)
-    )
+    response: Final = await router.acompletion(**request) if asynchronous else router.completion(**request)
     assert response.choices[0].message.content == "primary"
 
 
@@ -1768,9 +1754,7 @@ async def test_priority_group_fails_over_without_retries_and_leaves_direct_calls
         num_retries=0,
         disable_cooldowns=True,
     )
-    response: Final = await router.acompletion(
-        model=requested_model, messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model=requested_model, messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(model="filtered-model", messages=[{"role": "user", "content": "hi"}])
@@ -1788,12 +1772,8 @@ async def test_opposite_priority_groups_preserve_deployments_and_legacy_member_p
         ],
     )
     before: Final = router.get_model_list(model_name="filtered-model")
-    forward: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
-    reverse: Final = await router.acompletion(
-        model="reverse-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    forward: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
+    reverse: Final = await router.acompletion(model="reverse-group", messages=[{"role": "user", "content": "hi"}])
     assert (forward.choices[0].message.content, reverse.choices[0].message.content) == ("primary", "backup")
     assert router._get_routing_context("filtered-model")[0] == "least-busy"
     assert router._get_routing_context("other-model")[0] == "latency-based-routing"
@@ -1806,9 +1786,7 @@ async def test_opposite_priority_groups_preserve_deployments_and_legacy_member_p
 async def test_priority_group_weights_select_only_within_the_first_eligible_level(
     backup_priority: int, expected: str
 ) -> None:
-    router: Final = Router(
-        model_list=_priority_deployments(), routing_groups=[_priority_group(backup=backup_priority)]
-    )
+    router: Final = Router(model_list=_priority_deployments(), routing_groups=[_priority_group(backup=backup_priority)])
     response: Final = await router.acompletion(
         model="priority-group",
         messages=[{"role": "user", "content": "hi"}],
@@ -1819,16 +1797,10 @@ async def test_priority_group_weights_select_only_within_the_first_eligible_leve
 
 @pytest.mark.asyncio
 async def test_priority_group_skips_paused_primary_and_returns_to_it_after_recovery() -> None:
-    router: Final = Router(
-        model_list=_priority_deployments(primary_blocked=True), routing_groups=[_priority_group()]
-    )
-    paused: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    router: Final = Router(model_list=_priority_deployments(primary_blocked=True), routing_groups=[_priority_group()])
+    paused: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     router.set_model_list(_priority_deployments())
-    recovered: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    recovered: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     assert (paused.choices[0].message.content, recovered.choices[0].message.content) == ("backup", "primary")
 
 
@@ -1842,9 +1814,7 @@ async def test_priority_group_respects_request_fallback_controls(controls: dict[
         disable_cooldowns=True,
     )
     with pytest.raises(litellm.RateLimitError):
-        await router.acompletion(
-            model="priority-group", messages=[{"role": "user", "content": "hi"}], **controls
-        )
+        await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}], **controls)
 
 
 @pytest.mark.parametrize(
@@ -1853,48 +1823,54 @@ async def test_priority_group_respects_request_fallback_controls(controls: dict[
 )
 def test_priority_group_requires_exact_member_priorities(priorities: object) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model", "other-model"],
-            "routing_strategy": "priority",
-            "model_priorities": priorities,
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model", "other-model"],
+                "routing_strategy": "priority",
+                "model_priorities": priorities,
+            }
+        )
 
 
 @pytest.mark.parametrize("priority", [True, 0, -1, 1.5, "1", 9007199254740992])
 def test_priority_group_rejects_invalid_priority_values(priority: object) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model"],
-            "routing_strategy": "priority",
-            "model_priorities": {"filtered-model": priority},
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model"],
+                "routing_strategy": "priority",
+                "model_priorities": {"filtered-model": priority},
+            }
+        )
 
 
 @pytest.mark.parametrize("models", [[], ["filtered-model", "filtered-model"]])
 def test_priority_group_requires_nonempty_unique_members(models: list[str]) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": models,
-            "routing_strategy": "priority",
-            "model_priorities": {model: 1 for model in models},
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": models,
+                "routing_strategy": "priority",
+                "model_priorities": {model: 1 for model in models},
+            }
+        )
 
 
-@pytest.mark.parametrize(
-    "changes", [{"routing_strategy": "simple-shuffle"}, {"routing_strategy_args": {"ttl": 60}}]
-)
+@pytest.mark.parametrize("changes", [{"routing_strategy": "simple-shuffle"}, {"routing_strategy_args": {"ttl": 60}}])
 def test_priority_group_rejects_conflicting_strategy_settings(changes: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model"],
-            "routing_strategy": "priority",
-            "model_priorities": {"filtered-model": 1},
-            **changes,
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model"],
+                "routing_strategy": "priority",
+                "model_priorities": {"filtered-model": 1},
+                **changes,
+            }
+        )
 
 
 @pytest.mark.parametrize("group_name", ["filtered-model", "priority-alias"])
@@ -1919,9 +1895,7 @@ async def test_priority_group_settings_roundtrip_replaces_the_order() -> None:
     router.update_settings(routing_groups=[replacement.model_dump()])
     stored: Final = router.get_settings()["routing_groups"]
     assert stored == [replacement.model_dump()]
-    response: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
 
 
@@ -1933,10 +1907,7 @@ def _priority_auto_router_deployment() -> DeploymentTypedDict:
             "complexity_router_config": {
                 "classifier_type": "heuristic",
                 "adaptive": False,
-                "tiers": {
-                    tier: "priority-group"
-                    for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
-                },
+                "tiers": {tier: "priority-group" for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
             },
             "complexity_router_default_model": "filtered-model",
         },
@@ -1954,9 +1925,7 @@ async def test_auto_router_selected_priority_group_fails_over_inside_the_group()
         num_retries=0,
         disable_cooldowns=True,
     )
-    response: Final = await router.acompletion(
-        model="smart-router", messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
 
 
@@ -2030,10 +1999,12 @@ async def test_priority_group_ignores_cached_backup_affinity() -> None:
         routing_groups=[_priority_group()],
         optional_pre_call_checks=["prompt_caching"],
     )
-    messages: Final = [{
-        "role": "user",
-        "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
-    }]
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
     cache: Final = PromptCachingCache(cache=router.cache)
     await cache.async_add_model_id(model_id="deploy-3", messages=messages, tools=None)
     assert await cache.async_get_model_id(messages=messages, tools=None) == {"model_id": "deploy-3"}
@@ -2088,9 +2059,7 @@ async def test_auto_priority_advance_preserves_access_scope_and_checks_paid_grou
         ),
     )
     if budget_admits_group:
-        response: Final = await router.acompletion(
-            model="smart-router", messages=[{"role": "user", "content": "hi"}]
-        )
+        response: Final = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
         assert response.choices[0].message.content == "backup"
     else:
         with pytest.raises(litellm.RateLimitError):
@@ -2104,9 +2073,7 @@ async def test_auto_priority_group_exhaustion_still_checks_external_fallback_acc
     access_checks: Final[list[str]] = []
     router: Final = Router(
         model_list=[
-            *_priority_deployments(
-                primary_response="litellm.RateLimitError", backup_response="litellm.RateLimitError"
-            ),
+            *_priority_deployments(primary_response="litellm.RateLimitError", backup_response="litellm.RateLimitError"),
             _priority_auto_router_deployment(),
             {
                 **_model_list()[2],
@@ -2130,7 +2097,8 @@ async def test_auto_priority_group_exhaustion_still_checks_external_fallback_acc
 @pytest.mark.parametrize("metadata_bucket", ["metadata", "litellm_metadata"])
 @pytest.mark.asyncio
 async def test_caller_cannot_spoof_a_priority_group_to_bypass_fallback_gates(
-    check_kind: Literal["access", "budget"], metadata_bucket: str,
+    check_kind: Literal["access", "budget"],
+    metadata_bucket: str,
 ) -> None:
     checked: Final[list[str]] = []
     check: Final = _recording_fallback_gate(frozenset({"filtered-model"}), checked)

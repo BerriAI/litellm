@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 
 import litellm
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -112,6 +113,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -164,6 +166,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -183,6 +186,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -205,6 +209,7 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -234,6 +239,7 @@ async def test_get_available_deployments():
     print("selected model: ", selected_model)
 
     assert selected_model["model_info"]["id"] == "groq-llama"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -286,6 +292,7 @@ async def test_get_available_deployments_custom_price():
 
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
 
+
 async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     kwargs = {
         "litellm_params": {
@@ -306,6 +313,7 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
         start_time=start_time,
         end_time=end_time,
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
@@ -357,3 +365,39 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
     print("selected deployment:", d_ans)
+
+
+def _cost_based_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"},
+            }
+        ],
+        routing_strategy="cost-based-routing",
+    )
+
+
+def test_cost_based_routing_resolves_on_the_sync_path(monkeypatch, caplog):
+    """Regression for #45718: sync Router methods raised RouterRateLimitError
+    (with cooldown_list=[]) under cost-based-routing because the sync selector
+    match had no case for it and returned None."""
+    monkeypatch.setattr(Router, "_cost_based_sync_fallback_warned", False, raising=False)
+
+    deployment = _cost_based_router().get_available_deployment(model="m")
+
+    assert deployment["litellm_params"]["model"] == "openai/gpt-5.5"
+    assert any("cost-based-routing" in record.message for record in caplog.records)
+
+
+def test_cost_based_routing_sync_fallback_warns_only_once(monkeypatch, caplog):
+    monkeypatch.setattr(Router, "_cost_based_sync_fallback_warned", False, raising=False)
+    router = _cost_based_router()
+
+    with caplog.at_level("WARNING", logger="LiteLLM Router"):
+        router.get_available_deployment(model="m")
+        router.get_available_deployment(model="m")
+
+    warnings = [r for r in caplog.records if "cost-based-routing" in r.message]
+    assert len(warnings) == 1
