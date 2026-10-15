@@ -494,3 +494,55 @@ def test_interceptor_feature_follows_the_resolved_provider() -> None:
         rules=rules,
     )
     assert result is native_result
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"api_base": "https://api.groq.com/openai/v1"},
+        {"api_base": "https://api.deepseek.com/v1"},
+        {"use_litellm_proxy": True},
+    ),
+)
+def test_provider_rule_uses_legacy_handler_provider_inputs(kwargs: Mapping[str, object]) -> None:
+    python_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return python_result
+
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
+        pytest.fail("An anthropic provider rule must not route providers resolved from other handler inputs")
+
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, "claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=messages_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),),
+    )
+    assert result is python_result
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {},
+        {"custom_llm_provider": "anthropic"},
+    ),
+)
+def test_provider_rule_keeps_anthropic_requests_native(kwargs: Mapping[str, object]) -> None:
+    native_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return response()
+
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, "claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),),
+    )
+    assert result is native_result
