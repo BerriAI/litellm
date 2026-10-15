@@ -16,6 +16,7 @@ import respx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from respx.models import Call
 
 import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
@@ -2522,7 +2523,6 @@ async def test_clef_omni_media_reaches_upstream_in_both_formats(
         "cloudflare/clef-flash",
         "typesafe/jev-latest",
         "openai/decision",
-        "fireworks_ai/accounts/fireworks/routers/rune",
     ),
 )
 @pytest.mark.parametrize(
@@ -2777,65 +2777,131 @@ def test_positional_arguments_keep_the_order_the_sdk_had_before_media(respx_mock
         assert "audio" not in json.loads(sent)
 
 
-_FIREWORKS_URL: Final = "https://api.fireworks.ai/inference/v1/systemone"
-_FIREWORKS_MODEL: Final = "fireworks_ai/accounts/fireworks/routers/rune"
-_FIREWORKS_RESPONSE: Final[Mapping[str, object]] = {
-    "model": "accounts/fireworks/routers/rune",
-    "answers": {"is_defect": {"type": "noul", "noul": 0.9902915235185259}},
-    "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 0},
-}
+_BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+    (
+        "decisions",
+        MappingProxyType(
+            {
+                "input": "review",
+                "questions": (
+                    *_PREDICATE_QUESTIONS,
+                    {"type": "box", "name": "crack", "instructions": "the crack on the screen"},
+                ),
+            }
+        ),
+    ),
+    (
+        "systemone",
+        MappingProxyType(
+            {
+                "state": "review",
+                "questions": {
+                    "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+                    "crack": {"type": "box", "instructions": "the crack on the screen"},
+                },
+            }
+        ),
+    ),
+)
+_UNSUPPORTED_JEV_PARAMS: Final[tuple[tuple[str, Mapping[str, object], str], ...]] = (
+    *((api, request_kwargs, "box questions") for api, request_kwargs in _BOX_QUESTION_REQUESTS),
+    (
+        "systemone",
+        MappingProxyType(
+            {
+                "state": "review photo-1",
+                "questions": _SYSTEMONE_PREDICATE,
+                "assets": {"photo-1": {"format": "png", "data_base64": "AA=="}},
+            }
+        ),
+        "assets",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "param"),
+    _UNSUPPORTED_JEV_PARAMS,
+    ids=("decisions_box", "systemone_box", "systemone_assets"),
+)
+def test_assets_and_box_questions_are_refused_before_http_when_the_provider_cannot_take_them(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    param: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
+        getattr(litellm, api)(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+
+    assert caught.value.status_code == 400
+    assert not route.called
 
 
 @pytest.mark.asyncio
-async def test_fireworks_ai_posts_the_jev_body_to_systemone_with_the_account_model_name(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
-) -> None:
-    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
-    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
-    monkeypatch.setenv("FIREWORKS_AI_API_KEY", "fireworks-key")
-    route: Final = respx_mock.post(_FIREWORKS_URL).respond(json=_FIREWORKS_RESPONSE)
+async def test_assets_are_dropped_from_the_wire_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
-    response: Final = await litellm.asystemone(
-        model=_FIREWORKS_MODEL,
-        state="The package arrived broken.",
+    await litellm.asystemone(
+        model="perplexity/pplx-decider-v1-27b",
+        state="review photo-1",
         questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        api_key="caller-key",
+        drop_params=True,
     )
 
-    assert route.called
-    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer fireworks-key"
-    assert json.loads(respx_mock.calls[0].request.content) == {
-        "model": "accounts/fireworks/routers/rune",
-        "state": "The package arrived broken.",
+    sent: Final[Call] = route.calls.last
+    assert json.loads(sent.request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": "review photo-1",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
-    assert response.model == _FIREWORKS_RESPONSE["model"]
-    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9902915235185259)
+
+
+_DROPPED_BOX_ANSWERS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "decisions": [
+            {"type": "predicate", "name": "is_defect", "probability": 0.9},
+            {"type": "refusal", "name": "crack"},
+        ],
+        "systemone": {"is_defect": {"type": "noul", "noul": 0.9}},
+    }
+)
 
 
 @pytest.mark.asyncio
-async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
+@pytest.mark.parametrize(("api", "request_kwargs"), _BOX_QUESTION_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_box_questions_are_dropped_under_drop_params_and_answered_as_refusals(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter
 ) -> None:
-    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
-    respx_mock.post(_FIREWORKS_URL).respond(json=_FIREWORKS_RESPONSE)
-    prices: Final = litellm.model_cost[_FIREWORKS_MODEL]
-    uncached: Final = 100 * float(prices["input_cost_per_token"])
-    cached: Final = 200 * float(prices["cache_read_input_token_cost"])
-    recording_logger: Final = _RecordingLogger()
-    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
-    response: Final = await litellm.adecisions(
-        model=_FIREWORKS_MODEL,
-        input="The package arrived broken.",
-        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
-        api_key="caller-key",
+    response: Final = await getattr(litellm, f"a{api}")(
+        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
     )
-    await _drain_logging_worker()
 
-    assert cached > 0
-    assert response.usage.input_tokens_details.cached_tokens == 200
-    assert recording_logger.standard_logging_object is not None
-    assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(uncached + cached)
-    assert recording_logger.standard_logging_object["response_cost"] < 300 * float(prices["input_cost_per_token"])
+    sent: Final[Call] = route.calls.last
+    assert json.loads(sent.request.content)["questions"] == {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"}
+    }
+    assert response.model_dump(mode="json")["answers"] == _DROPPED_BOX_ANSWERS[api]
+
+
+def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="leaves no questions to answer") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            input="review",
+            questions=[{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
+            api_key="caller-key",
+            drop_params=True,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called

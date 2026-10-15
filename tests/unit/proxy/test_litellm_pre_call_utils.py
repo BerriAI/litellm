@@ -7813,6 +7813,23 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     assert forwarded == {}
 
 
+TYPESAFE_DANGER_ZONE_HEADERS = {
+    "TypeSafe-Danger-Zone-Images": "true",
+    "typesafe-danger-zone-long-context": "true",
+}
+
+
+def test_client_typesafe_danger_zone_headers_reach_typesafe():
+    client_headers = {**TYPESAFE_DANGER_ZONE_HEADERS, "x-request-id": "abc"}
+
+    assert _headers_forwarded_to(client_headers, "typesafe") == TYPESAFE_DANGER_ZONE_HEADERS
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["perplexity", "openai", "anthropic"])
+def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm_provider: str):
+    assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
+
+
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
 def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
     assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
