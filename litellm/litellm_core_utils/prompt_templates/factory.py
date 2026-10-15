@@ -5431,40 +5431,63 @@ def _bedrock_tools_pt(
     return tool_block_list
 
 
+def _is_system_message(message: Mapping[str, object]) -> bool:
+    role: Final = message.get("role")
+    return isinstance(role, str) and "system" in role
+
+
+_CONTENT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _content_with_function_prompt(
+    content: object, function_prompt: str, *, model: str, llm_provider: str, drop_params: bool
+) -> str | Sequence[object]:
+    if isinstance(content, str):
+        return f"{content} {function_prompt}"
+    if isinstance(content, list):
+        return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
+    if drop_params:
+        return function_prompt
+    raise litellm.BadRequestError(
+        message=(
+            f"system message content must be a string or a list of content parts, got {type(content).__name__}. "
+            "Pass drop_params=True to send the function prompt in its place"
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
 # Function call template
 def function_call_prompt(
     messages: list[dict[str, object]],
     functions: list[object],
+    *,
+    model: str,
+    llm_provider: str,
+    drop_params: bool,
 ) -> list[dict[str, object]]:
-    function_prompt = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
-    for function in functions:
-        function_prompt += f"""\n{function}\n"""
-
-    def _append_function_prompt(message: dict[str, object]) -> bool:
-        role: Final = cast(  # cast-ok: preserve dynamic role membership behavior
-            Container[object], message["role"]
+    header: Final = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
+    if not any(_is_system_message(message) for message in messages):
+        return [*messages, {"role": "system", "content": function_prompt}]
+    return [
+        (
+            {
+                **message,
+                "content": _content_with_function_prompt(
+                    message.get("content"),
+                    function_prompt,
+                    model=model,
+                    llm_provider=llm_provider,
+                    drop_params=drop_params,
+                ),
+            }
+            if _is_system_message(message)
+            else message
         )
-        if "system" not in role:
-            return False
-
-        content: Final = message["content"]
-        if isinstance(content, str):
-            message["content"] = f"{content} {function_prompt}"
-        else:
-            cast(  # cast-ok: preserve dynamic content append behavior
-                list[object], content
-            ).append({"type": "text", "text": f""" {function_prompt}"""})
-        return True
-
-    function_added_to_prompt = False
-    for message in messages:
-        if _append_function_prompt(message):
-            function_added_to_prompt = True
-
-    if function_added_to_prompt is False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
-
-    return messages
+        for message in messages
+    ]
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:
