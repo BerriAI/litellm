@@ -7,7 +7,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MINIMUM_SIZE_BYTES: Final = 500
-OFF_LOOP_SIZE_BYTES: Final = 1024 * 1024
+OFF_LOOP_SIZE_BYTES: Final = 16 * 1024
 COMPRESS_LEVEL: Final = 6
 
 
