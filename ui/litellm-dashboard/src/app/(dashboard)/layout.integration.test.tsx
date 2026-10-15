@@ -15,6 +15,9 @@ import Layout from "./layout";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 vi.unmock("@/lib/toast");
+let deploymentWarnings: { warnings: { id: string; severity: string; ignore: null }[]; ignore_available: boolean };
+let plugins: { name: string; display_name: string; url: string }[];
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
@@ -24,6 +27,8 @@ vi.mock("next/navigation", () => ({
 beforeEach(() => {
   testQueryClient.clear();
   localStorage.clear();
+  deploymentWarnings = { warnings: [], ignore_available: true };
+  plugins = [];
   const claims = {
     key: "sk-layout-test",
     user_id: "layout-admin",
@@ -45,11 +50,16 @@ beforeEach(() => {
         case "/get/ui_theme_settings":
           return Response.json({ values: {} });
         case "/api/plugins":
+          return Response.json(plugins);
+        case "/api/plugins/auth-token":
+          return Response.json({});
         case "/team/list":
         case "/organization/list":
           return Response.json([]);
         case "/health/readiness/details":
           return Response.json({ status: "healthy" });
+        case "/health/deployment_warnings":
+          return Response.json(deploymentWarnings);
         case "/health/license": {
           const license = {
             has_license: false,
@@ -185,5 +195,37 @@ describe("dashboard overlay boundaries", () => {
     expect(within(navigation).getByRole("link", { name: "Virtual Keys" })).toBeVisible();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
+
+describe("deployment health in the dashboard shells", () => {
+  it.each([
+    { shell: "gateway header", pluginMode: null },
+    { shell: "plugin navbar", pluginMode: "agent-plane" },
+  ])("should show the icon, the critical row and the panel in the $shell", async ({ pluginMode }) => {
+    const user = userEvent.setup();
+    deploymentWarnings = {
+      warnings: [{ id: "env_credential_login", severity: "critical", ignore: null }],
+      ignore_available: true,
+    };
+    if (pluginMode) {
+      plugins = [{ name: pluginMode, display_name: "Agent plane", url: "" }];
+      localStorage.setItem("litellm_plugin_mode", pluginMode);
+    }
+    renderWithProviders(
+      <AuthProvider>
+        <Layout>
+          <h1>Gateway page</h1>
+        </Layout>
+      </AuthProvider>,
+    );
+
+    expect(
+      (await screen.findAllByRole("button", { name: "Deployment health, 1 active warning" })).length,
+    ).toBeGreaterThan(0);
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+
+    const panel = await screen.findByRole("dialog", { name: "Deployment health" });
+    expect(within(panel).getByRole("article", { name: "Environment-credential login is enabled" })).toBeVisible();
   });
 });
