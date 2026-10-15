@@ -16,6 +16,8 @@ from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
+from tests.integration.caching.response_cache_case import await_entry, redis_store
+
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _POLICY: Final = "integration-tool-policy"
@@ -63,6 +65,10 @@ def _config(directory: Path, model: str, upstream: str, shell: str) -> Path:
                     "store_model_in_db": True,
                 },
                 "router_settings": {"disable_cooldowns": True},
+                "litellm_settings": {
+                    "cache": True,
+                    "cache_params": {"type": "redis", "host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                },
                 "guardrails": [
                     {
                         "guardrail_name": _POLICY,
@@ -144,17 +150,34 @@ def _assert_refused(response: httpx.Response, wire: Wire, marker: str, message: 
     assert _posts(wire, marker) == (), "a refused replay reached the upstream"
 
 
+def _one_search_body(
+    guarded: _Guarded, marker: str, loads: list[JsonValue], **fields: JsonValue
+) -> dict[str, JsonValue]:
+    return {
+        "model": guarded.model,
+        "messages": [{"role": "user", "content": pcb.prompt(marker)}, *_searched_turn(marker, ts.WEATHER, "a", loads)],
+        "tools": ts.chat_tools(ts.WEATHER),
+        **fields,
+    }
+
+
+def _blocked_load_body(guarded: _Guarded, marker: str) -> dict[str, JsonValue]:
+    return _one_search_body(guarded, marker, [ts.loaded(ts.WEATHER), ts.loaded(guarded.blocked)])
+
+
+def _cache(guarded: _Guarded, marker: str, body: dict[str, JsonValue], key: str | None = None) -> None:
+    populated: Final = guarded.proxy.request("POST", "/v1/chat/completions", body, key=key)
+    assert populated.status_code == 200, populated.text
+    await_entry(redis_store(), str(rv.JSON_OBJECT.validate_json(populated.text)["id"]))
+    hit: Final = guarded.proxy.request("POST", "/v1/chat/completions", body, key=key)
+    assert hit.status_code == 200 and hit.headers.get("x-litellm-cache-key"), (hit.text, dict(hit.headers))
+    assert ts.first_message(hit.text)["content"] == rv.answer(marker), hit.text
+    assert len(_posts(guarded.wire, marker)) == 1
+
+
 def _assert_policy_refuses_the_replay(guarded: _Guarded) -> None:
     marker: Final = uuid.uuid4().hex
-    body: Final = {
-        "model": guarded.model,
-        "messages": [
-            {"role": "user", "content": pcb.prompt(marker)},
-            *_searched_turn(marker, ts.WEATHER, "a", [ts.loaded(ts.WEATHER), ts.loaded(guarded.blocked)]),
-        ],
-        "tools": ts.chat_tools(ts.WEATHER),
-    }
-    refused: Final = guarded.proxy.request("POST", "/v1/chat/completions", body)
+    refused: Final = guarded.proxy.request("POST", "/v1/chat/completions", _blocked_load_body(guarded, marker))
     _assert_refused(refused, guarded.wire, marker, "Violated tool policy", guarded.blocked)
     detail: Final = rv.JSON_OBJECT.validate_python(rv.JSON_OBJECT.validate_json(refused.text)["error"])
     assert rv.JSON_OBJECT.validate_python(detail["provider_specific_fields"])["blocked_tools"] == [guarded.blocked]
@@ -203,15 +226,7 @@ def test_tool_permission_rewrite_mode_drops_only_the_search_that_loaded_the_deni
 
 def test_guardrails_leave_an_allowed_replay_untouched(guarded: _Guarded) -> None:
     marker: Final = uuid.uuid4().hex
-    body: Final = {
-        "model": guarded.model,
-        "messages": [
-            {"role": "user", "content": pcb.prompt(marker)},
-            *_searched_turn(marker, ts.WEATHER, "a", [ts.loaded(ts.WEATHER)]),
-        ],
-        "tools": ts.chat_tools(ts.WEATHER),
-        "guardrails": [_BLOCK],
-    }
+    body: Final = _one_search_body(guarded, marker, [ts.loaded(ts.WEATHER)], guardrails=[_BLOCK])
     response: Final = guarded.proxy.request("POST", "/v1/chat/completions", body)
     assert response.status_code == 200, response.text
     (posted,) = pcb.with_marker(pcb.drained_posts(guarded.wire), marker)
@@ -220,3 +235,42 @@ def test_guardrails_leave_an_allowed_replay_untouched(guarded: _Guarded) -> None
         ts.search_output(marker, [ts.loaded(ts.WEATHER)], "a"),
         ts.replayed_call(marker, ts.WEATHER),
     ]
+
+
+def test_guardrails_serve_an_allowed_replay_from_the_cache(guarded: _Guarded) -> None:
+    marker: Final = uuid.uuid4().hex
+    _cache(guarded, marker, _one_search_body(guarded, marker, [ts.loaded(ts.WEATHER)], guardrails=[_BLOCK]))
+
+
+def test_tool_policy_refuses_a_replay_whose_answer_an_exempt_key_cached(guarded: _Guarded) -> None:
+    marker: Final = uuid.uuid4().hex
+    body: Final = _blocked_load_body(guarded, marker)
+    with guarded.proxy.scenario() as scenario:
+        exempt: Final = scenario.key(models=[guarded.model], metadata={"disable_global_guardrails": True})
+        _cache(guarded, marker, body, key=exempt)
+        refused: Final = guarded.proxy.request("POST", "/v1/chat/completions", body)
+        _assert_refused(refused, guarded.wire, marker, "Violated tool policy", guarded.blocked)
+
+
+def test_tool_permission_block_mode_refuses_a_replay_whose_answer_is_cached(guarded: _Guarded) -> None:
+    marker: Final = uuid.uuid4().hex
+    _cache(guarded, marker, _two_turn_body(guarded, marker))
+    response: Final = guarded.proxy.request(
+        "POST", "/v1/chat/completions", _two_turn_body(guarded, marker, guardrails=[_BLOCK])
+    )
+    _assert_refused(response, guarded.wire, marker, "Violated guardrail policy", guarded.shell)
+
+
+def test_tool_permission_rewrite_mode_is_not_served_the_cached_unrewritten_answer(guarded: _Guarded) -> None:
+    marker: Final = uuid.uuid4().hex
+    _cache(guarded, marker, _two_turn_body(guarded, marker))
+    rewritten: Final = _two_turn_body(guarded, marker, guardrails=[_REWRITE])
+    first: Final = guarded.proxy.request("POST", "/v1/chat/completions", rewritten)
+    assert first.status_code == 200, first.text
+    (posted,) = pcb.with_marker(pcb.drained_posts(guarded.wire), marker)
+    assert guarded.shell not in posted.body.decode()
+    await_entry(redis_store(), str(rv.JSON_OBJECT.validate_json(first.text)["id"]))
+    hit: Final = guarded.proxy.request("POST", "/v1/chat/completions", rewritten)
+    assert hit.status_code == 200 and hit.headers.get("x-litellm-cache-key"), (hit.text, dict(hit.headers))
+    assert ts.first_message(hit.text)["content"] == rv.answer(marker), hit.text
+    assert _posts(guarded.wire, marker) == ()
