@@ -246,6 +246,7 @@ class TestMapFinishReasonGemini:
             ("ESCALATION", "content_filter"),
             ("UNEXPECTED_TOOL_CALL", "stop"),
             ("MISSING_THOUGHT_SIGNATURE", "stop"),
+            ("CONTINUATION", "length"),
         ],
     )
     def test_gemini_finish_reasons(self, gemini_reason, expected):
