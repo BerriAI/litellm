@@ -22,15 +22,13 @@ from litellm.types.utils import (
 
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(
+        litellm, "model_cost", litellm.get_model_cost_map(url="")
+    )
     litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def _usage() -> ImageUsage:
