@@ -1820,7 +1820,12 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
 
 
-def test_get_logging_payload_populates_litellm_call_id_and_preserves_provider_id():
+def test_get_logging_payload_populates_litellm_call_id_alongside_provider_request_id():
+    """
+    LIT-6302: request_id stays the provider response id, so clients holding the
+    x-litellm-call-id header value could never find their row. The payload now
+    also carries litellm_call_id as its own column for lookups by either id.
+    """
     call_id = "b980eea9-5cd9-4099-93cd-8291e46c76fd"
 
     payload = get_logging_payload(
@@ -1838,8 +1843,7 @@ def test_get_logging_payload_populates_litellm_call_id_and_preserves_provider_id
         end_time=datetime.datetime.now(timezone.utc),
     )
 
-    assert payload["request_id"] == "b980eea9-5cd9-4099-93cd-8291e46c76fd"
-    assert json.loads(payload["metadata"])["response_id"] == "chatcmpl-provider-id"
+    assert payload["request_id"] == "chatcmpl-provider-id"
     assert payload["litellm_call_id"] == call_id
 
 
@@ -3929,9 +3933,9 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
 
 def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
-    trace id). request_id now keys off that same per-call id so duplicate
-    provider response ids cannot collapse rows, and the provider response id
-    moves to metadata.response_id so lookups by it still work.
+    trace id) in its metadata, distinct from request_id, which stays the
+    provider response id. Without this there is no way to correlate a DB row
+    with its trace for a successful call.
     """
     provider_response_id = "chatcmpl-e6e6f3e9-c392-404e-9a71-5361c79d8470"
     trace_call_id = "c6a77556-19ce-4406-b287-53f5fb4b2b55"
@@ -3951,9 +3955,9 @@ def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     payload = get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now)
     metadata = json.loads(payload["metadata"])
 
-    assert payload["request_id"] == trace_call_id
+    assert payload["request_id"] == provider_response_id
     assert metadata["litellm_call_id"] == trace_call_id
-    assert metadata["response_id"] == provider_response_id
+    assert metadata["litellm_call_id"] != payload["request_id"]
 
 
 def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
@@ -4612,52 +4616,16 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
-def test_get_spend_logs_id_prefers_the_per_call_id_for_completion_calls():
-    """request_id is the primary key and the flush inserts with skip_duplicates, so a
-    completion row must key off the proxy-generated per-call id: a provider that reuses
-    completion ids (common on self-hosted OpenAI-compatible servers) would otherwise
-    silently drop every row after the first while budgets still get charged."""
+def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
+    """An unredacted response keeps deciding its own row key, so cache-hit ids and every
+    other call type behave exactly as they did before."""
     assert (
         get_spend_logs_id(
             "acompletion",
             {"id": "chatcmpl-from-response"},
             {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "id-from-standard-payload"}},
         )
-        == "call-id-1"
-    )
-
-
-def test_get_spend_logs_id_stays_unique_when_a_provider_reuses_completion_ids():
-    """Two requests answered with the same provider response id must produce two
-    insertable rows. Observed against a live proxy with a self-hosted server returning a
-    fixed completion id: the second row was silently skipped by the duplicate-tolerant
-    flush while key and daily spend still incremented."""
-    ids = [
-        get_spend_logs_id("acompletion", {"id": "chatcmpl-reused"}, {"litellm_call_id": f"call-id-{index}"})
-        for index in range(2)
-    ]
-
-    assert ids == ["call-id-0", "call-id-1"]
-
-
-@pytest.mark.parametrize(
-    "response_obj",
-    ({"id": "chatcmpl-from-response"}, litellm.ModelResponse(id="chatcmpl-from-response", created=0, choices=[])),
-)
-def test_get_spend_logs_id_falls_back_to_the_response_id_without_a_per_call_id(response_obj: object) -> None:
-    assert get_spend_logs_id("acompletion", response_obj, {}) == "chatcmpl-from-response"
-
-
-@pytest.mark.parametrize("call_type", ("anthropic_messages", "aanthropic_messages"))
-@pytest.mark.parametrize("response_obj", ({"id": "msg_lookup"}, litellm.ModelResponse(id="msg_lookup", created=0), {}))
-def test_messages_spend_logs_keep_response_id_lookup(call_type: str, response_obj: object) -> None:
-    assert (
-        get_spend_logs_id(
-            call_type,
-            response_obj,
-            {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "msg_lookup"}},
-        )
-        == "msg_lookup"
+        == "chatcmpl-from-response"
     )
 
 
@@ -5669,7 +5637,10 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
     assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
-def test_spend_log_request_id_for_chat_completions_uses_per_call_id():
+def test_spend_log_request_id_for_chat_completions_is_untouched():
+    """
+    /v1/chat/completions callers look their rows up by the chatcmpl- id in the response body.
+    """
     assert (
         _spend_log_request_id(
             response_obj=litellm.ModelResponse(id="chatcmpl-EJvWIw3DAhuKYuwp3jJI4Pnhp2vjv", choices=[]),
@@ -5680,7 +5651,7 @@ def test_spend_log_request_id_for_chat_completions_uses_per_call_id():
                 "litellm_params": {"metadata": {"user_api_key": "test-key"}},
             },
         )
-        == "6806cafe-0000-4000-8000-000000000002"
+        == "chatcmpl-EJvWIw3DAhuKYuwp3jJI4Pnhp2vjv"
     )
 
 

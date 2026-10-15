@@ -171,7 +171,6 @@ def _without_volatile_gcs_payload_fields(value: object, path: str = "") -> objec
             "request_id",
             "litellm_call_id",
             "metadata.litellm_call_id",
-            "metadata.response_id",
             "session_id",
             "startTime",
             "endTime",
@@ -226,7 +225,7 @@ async def test_v1_success_event_publishes_the_spend_log_fixture(
         credentials_path=_authorized_user_credentials(monkeypatch, tmp_path, project_id),
     )
     monkeypatch.setattr(litellm, "callbacks", [logger])
-    response: Final = await litellm.acompletion(
+    await litellm.acompletion(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="hi",
@@ -244,8 +243,6 @@ async def test_v1_success_event_publishes_the_spend_log_fixture(
     )
     assert route.call_count == 1
     assert route.calls.last.request.url == url
-    metadata: Final = TypeAdapter(dict[str, object]).validate_python(_with_decoded_metadata(decoded_payload)["metadata"])
-    assert metadata["response_id"] == response.id
     assert _without_volatile_gcs_payload_fields(_with_decoded_metadata(decoded_payload)) == (
         _without_volatile_gcs_payload_fields(_with_decoded_metadata(expected_payload))
     )

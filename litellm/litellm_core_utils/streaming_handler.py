@@ -14,6 +14,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
+from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
@@ -280,6 +282,7 @@ class CustomStreamWrapper:
 
         self._response_headers = _response_headers
         self.response_id: str | None = None
+        self._ollama_response_ids = OllamaResponseIdNormalizer()
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
@@ -819,7 +822,7 @@ class CustomStreamWrapper:
             pass
         else:
             model_response.choices = [StreamingChoices(finish_reason=None)]
-        return model_response
+        return self._ollama_response_ids.apply(model_response)
 
     def is_delta_empty(self, delta: Delta) -> bool:
         is_empty = True
@@ -1446,8 +1449,14 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        if self.custom_llm_provider != "cached_response" and isinstance(
+            chunk, (ChatCompletionChunk, ModelResponseStream)
+        ):
+            self._ollama_response_ids.observe(chunk)
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
+        if self._ollama_response_ids.response_id is not None:
+            self.response_id = self._ollama_response_ids.response_id
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model

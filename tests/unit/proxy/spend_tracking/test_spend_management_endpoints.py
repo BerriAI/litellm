@@ -652,7 +652,6 @@ ignored_keys = [
     "request_id",
     "litellm_call_id",
     "metadata.litellm_call_id",
-    "metadata.response_id",
     "session_id",
     "startTime",
     "endTime",

@@ -3680,7 +3680,6 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
-    response_id: ReadOnly[str | None]  # provider response id; request_id holds the proxy's per-call id
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
 
