@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "bettertoken": {
+    "base_url": "https://bettertoken.ai/v1",
+    "api_key_env": "BETTERTOKEN_API_KEY",
+    "api_base_env": "BETTERTOKEN_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
