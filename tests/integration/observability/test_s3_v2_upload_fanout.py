@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import threading
 import time
@@ -518,16 +519,20 @@ def test_s3_v2_failing_sink_trims_the_oldest_failed_events_past_the_queue_cap(ga
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
-            sink.fail_until = time.time() + 15
+            sink.fail_until = math.inf
             _send(owned.gateway, model, key, f"{marker}-probe")
             eventually(lambda: owned.log.read_text(), lambda text: "S3BatchUploadError" in text, seconds=30)
             for index in range(24):
                 _send(owned.gateway, model, key, f"{marker}-{index}")
+            sent: Final = len(owned.log.read_text())
             eventually(
                 lambda: owned.log.read_text(),
-                lambda text: "after a failed flush, dropped" in text,
+                lambda text: (
+                    "after a failed flush, dropped" in text and text[sent:].count("async_send_batch raised") >= 2
+                ),
                 seconds=30,
             )
+            sink.fail_until = time.time()
             payloads: Final = collect_payloads(sink, 4, seconds=90)
             landed: Final = frozenset(payload["id"] for payload in payloads)
     assert sum(1 for r in provider.drain() if r.method == "POST") == 25
