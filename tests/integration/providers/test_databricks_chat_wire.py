@@ -13,6 +13,8 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration.translation.chat_completions.cross_model.contracts import assert_completion
+from integration.translation.response_contracts import responses_structure
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _BACKEND: Final = "databricks-glm-5-2"
@@ -79,6 +81,43 @@ _JSON_TOOL_CALL_MESSAGE: Final[dict[str, JsonValue]] = {
         }
     ],
 }
+
+
+def test_databricks_responses_reasoning_summary_keeps_reasoning_effort_a_string(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/chat/completions"
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": _BACKEND,
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "max_tokens": 64,
+            "reasoning_effort": "low",
+        }
+        return Reply(body=_chat_completion_response(_BACKEND, {"role": "assistant", "content": "Hello."}, "stop"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(model=f"databricks/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": alias,
+                "input": "Say hello.",
+                "max_output_tokens": 64,
+                "reasoning": {"effort": "low", "summary": "auto"},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = _JSON_OBJECT.validate_json(response.content)
+        responses_structure(body)
+        assert body["usage"] == {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+            "input_tokens_details": None,
+            "output_tokens_details": None,
+            "cost": None,
+        }
+        assert len(wire.drain()) == 1
 
 
 def _chat_completion_response(model: str, message: dict[str, JsonValue], finish_reason: str) -> bytes:
@@ -455,6 +494,7 @@ def test_databricks_json_schema_refs_are_preserved_in_chat_completions(gateway: 
         )
         assert response.status_code == 200, response.text
         body: Final = _JSON_OBJECT.validate_json(response.content)
+        assert_completion(body)
         assert body["choices"] == [
             {
                 "index": 0,

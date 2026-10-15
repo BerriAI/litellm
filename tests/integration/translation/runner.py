@@ -34,9 +34,15 @@ def expected_response_for_deployment(
     }
 
 
-def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> dict[str, JsonValue]:
+def assert_translation(
+    case: TranslationTestCase,
+    gateway: Gateway,
+    provider: SharedProvider,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
     provider.expect(Reply(status=case.mock_provider_status_code, body=json.dumps(case.mock_provider_response).encode()))
-    response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
+    response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request, headers=headers)
     received: Final = provider.received()
     assert_provider_request(
         received,
