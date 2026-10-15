@@ -519,7 +519,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
     ) -> str:
-        return _normalized_api_base(get_volcengine_base_url(api_base))
+        return _normalized_api_base(get_volcengine_base_url(api_base or get_secret_str("VOLCENGINE_API_BASE")))
 
     def transform_video_create_request(
         self,

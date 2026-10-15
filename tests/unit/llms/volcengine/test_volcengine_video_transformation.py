@@ -635,8 +635,19 @@ async def test_edit_and_extension_are_a_bad_request_because_a_video_input_cannot
         f"{API_BASE}/v1",
     ],
 )
-def test_any_ark_surface_on_the_shared_credential_normalizes_to_the_host_root(api_base: str | None):
+def test_any_ark_surface_on_the_shared_credential_normalizes_to_the_host_root(
+    api_base: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
+
     assert VolcEngineVideoConfig().get_complete_url("m", api_base, {}) == API_BASE
+
+
+def test_the_volcengine_api_base_env_var_routes_a_deployment_without_api_base(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VOLCENGINE_API_BASE", "https://ark.ap-southeast.bytepluses.com/api/v3")
+
+    assert VolcEngineVideoConfig().get_complete_url("m", None, {}) == "https://ark.ap-southeast.bytepluses.com"
+    assert VolcEngineVideoConfig().get_complete_url("m", f"{API_BASE}/api/v3", {}) == API_BASE
 
 
 def test_a_path_prefix_before_the_api_marker_survives():
