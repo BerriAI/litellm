@@ -190,7 +190,7 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
         "description": "Smallest prefix the provider will actually cache; absent means the provider default applies.",
     },
     "token_count_framing": {
-        "type": "integer",
+        **NONNEG_INTEGER,
         "description": "Tokens added once per request to a local count estimate, for the provider's chat framing.",
     },
     "tpm": {**NONNEG_INTEGER, "description": "Provider default tokens-per-minute limit."},
@@ -289,6 +289,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
         "comment": STRING,
         "token_count_fallback_model": {
             "type": "string",
+            "minLength": 1,
             "description": "Model that counts tokens for this one when the provider cannot count it.",
         },
         "audio_transcription_config": STRING,
