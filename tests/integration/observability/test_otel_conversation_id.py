@@ -303,12 +303,12 @@ class RigFactory:
             yield Rig(owned.gateway, owned, model, self.provider, self.sink)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     yield from RigFactory(provider, collector, tmp_path_factory.mktemp("otel"), {}, 2).start()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def generating_rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     factory: Final = RigFactory(
         provider, collector, tmp_path_factory.mktemp("otel-generate"), {"missing_session_id": "generate"}, 2
@@ -316,7 +316,7 @@ def generating_rig(provider: Wire, collector: Collector, tmp_path_factory: pytes
     yield from factory.start()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def two_worker_rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     yield from RigFactory(provider, collector, tmp_path_factory.mktemp("otel-workers"), {}, 2).start()
 
