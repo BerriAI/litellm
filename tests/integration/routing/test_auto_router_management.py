@@ -8,7 +8,7 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value, until_asserted
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -117,7 +117,6 @@ def _session_response(
     stored_session_id: str | None = None,
     seconds: float = 70,
     return_last_on_timeout: bool = False,
-    turns: int = 1,
 ) -> httpx.Response:
     if database_url is None or stored_session_id is None:
         return eventually(
@@ -127,9 +126,7 @@ def _session_response(
                 params={"session_id": session_id},
                 key=key,
             ),
-            lambda response: (
-                response.status_code == 200 and JSON_OBJECT.validate_json(response.content).get("turns") == turns
-            ),
+            lambda response: response.status_code == 200,
             seconds=seconds,
             return_last_on_timeout=return_last_on_timeout,
         )
@@ -396,37 +393,42 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     {"type": "text", "text": "synthetic tier response"}
                 ], messages_second_response.text
 
-                messages_session: Final = _session_response(candidate, key, messages_session_id, turns=2)
-                assert JSON_OBJECT.validate_json(messages_session.content) == {
-                    "session_id": messages_session_id,
-                    "router_name": router_name,
-                    "router_type": "complexity",
-                    "turns": 2,
-                    "last_model": "openai/integration-medium",
-                    "spend": pytest.approx(0.000045),
-                    "savings_estimated_turns": 2,
-                    "savings_estimated_actual_spend": pytest.approx(0.000045),
-                    "saved_spend": pytest.approx(0.000255),
-                    "baseline_spend": pytest.approx(0.0003),
-                    "savings_estimated_baseline_spend": pytest.approx(0.0003),
-                    "baseline_model": "openai/integration-baseline",
-                    "baseline_models": {"openai/integration-baseline": 2},
-                }, messages_session.text
-                assert _rollup_row(key, database_url, router_name, messages_session_id) == {
-                    "session_id": messages_session_id,
-                    "router_name": router_name,
-                    "router_type": "complexity",
-                    "last_model": "openai/integration-medium",
-                    "turns": 2,
-                    "spend": pytest.approx(0.000045),
-                    "saved_spend": pytest.approx(0.000255),
-                    "savings_estimated_turns": 2,
-                    "savings_estimated_actual_spend": pytest.approx(0.000045),
-                    "savings_estimated_saved_spend": pytest.approx(0.000255),
-                    "savings_estimated_baseline_models": {"openai/integration-baseline": 2},
-                    "baseline_models": {"openai/integration-baseline": 2},
-                    "tier_turns": {"SIMPLE": 1, "MEDIUM": 1},
-                }
+                def messages_session_settled() -> None:
+                    session: Final = candidate.request(
+                        "GET", "/auto_router/session", params={"session_id": messages_session_id}, key=key
+                    )
+                    assert JSON_OBJECT.validate_json(session.content) == {
+                        "session_id": messages_session_id,
+                        "router_name": router_name,
+                        "router_type": "complexity",
+                        "turns": 2,
+                        "last_model": "openai/integration-medium",
+                        "spend": pytest.approx(0.000045),
+                        "savings_estimated_turns": 2,
+                        "savings_estimated_actual_spend": pytest.approx(0.000045),
+                        "saved_spend": pytest.approx(0.000255),
+                        "baseline_spend": pytest.approx(0.0003),
+                        "savings_estimated_baseline_spend": pytest.approx(0.0003),
+                        "baseline_model": "openai/integration-baseline",
+                        "baseline_models": {"openai/integration-baseline": 2},
+                    }, session.text
+                    assert _rollup_row(key, database_url, router_name, messages_session_id) == {
+                        "session_id": messages_session_id,
+                        "router_name": router_name,
+                        "router_type": "complexity",
+                        "last_model": "openai/integration-medium",
+                        "turns": 2,
+                        "spend": pytest.approx(0.000045),
+                        "saved_spend": pytest.approx(0.000255),
+                        "savings_estimated_turns": 2,
+                        "savings_estimated_actual_spend": pytest.approx(0.000045),
+                        "savings_estimated_saved_spend": pytest.approx(0.000255),
+                        "savings_estimated_baseline_models": {"openai/integration-baseline": 2},
+                        "baseline_models": {"openai/integration-baseline": 2},
+                        "tier_turns": {"SIMPLE": 1, "MEDIUM": 1},
+                    }
+
+                until_asserted(messages_session_settled, seconds=70)
 
                 responses_response: Final = candidate.client.post(
                     "/v1/responses",
