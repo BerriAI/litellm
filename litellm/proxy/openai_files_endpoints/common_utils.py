@@ -43,7 +43,6 @@ FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
 LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 EXPLICIT_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base", "litellm_credential_name"})
-_REQUEST_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base"})
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -649,8 +648,18 @@ def get_team_provider_credentials(
     return None
 
 
-def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key in _REQUEST_CREDENTIAL_KEYS and value})
+def _non_empty_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
+    api_key: Final = _non_empty_string(data.get("api_key"))
+    if api_key is None:
+        return MappingProxyType({})
+    api_base: Final = _non_empty_string(data.get("api_base"))
+    if api_base is None:
+        return MappingProxyType({"api_key": api_key})
+    return MappingProxyType({"api_key": api_key, "api_base": api_base})
 
 
 def apply_team_provider_credentials(
@@ -664,9 +673,10 @@ def apply_team_provider_credentials(
     ``get_team_provider_credentials`` and merge them into ``data`` in-place.
     Leaves ``data`` untouched when no authorized deployment matches, so the
     caller falls back to environment-variable credentials exactly as before.
-    An ``api_key`` or ``api_base`` the request carries itself (a provider key
-    forwarded with ``forward_llm_provider_auth_headers``) replaces the
-    deployment's, as on chat completions.
+    An ``api_key`` the request carries itself (a provider key forwarded with
+    ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
+    request's ``api_base`` replaces the deployment's only alongside that key,
+    so the deployment's key never goes to a host the caller picked.
     """
     credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,

@@ -722,12 +722,23 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
         ({}, "team-openai-key", "https://team.example/v1"),
         ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
         ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
-        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://caller.example/v1"),
+        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": "https://caller.example/v1"},
+            "sk-forwarded",
+            "https://caller.example/v1",
+        ),
+        ({"api_key": 123}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": ["https://caller.example/v1"]},
+            "sk-forwarded",
+            "https://team.example/v1",
+        ),
         ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
     ],
 )
-def test_a_key_or_base_the_request_carries_replaces_only_that_part_of_the_team_credentials(
-    request_credentials: dict[str, str], sent_api_key: str, sent_api_base: str
+def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
+    request_credentials: dict[str, object], sent_api_key: str, sent_api_base: str
 ):
     data: Final[dict[str, object]] = dict(request_credentials)
 
