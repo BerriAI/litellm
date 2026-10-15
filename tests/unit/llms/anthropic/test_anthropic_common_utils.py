@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
@@ -1385,6 +1386,12 @@ class TestPassthroughAuthToken:
         assert url == "https://custom.example.com/v1/messages"
 
 
+_BOUND_THINKING_ERROR: Final = (
+    "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."
+)
+_NULL_SIGNATURE_ERROR: Final = "messages.1.content.0.thinking.signature.str: Input should be a valid string"
+
+
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid thinking blocks in replayed history:
     invalid encrypted signatures, and blocks with empty thinking text."""
@@ -2081,6 +2088,49 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
+    @pytest.mark.parametrize(
+        ("thinking", "error_message", "expected"),
+        (
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _BOUND_THINKING_ERROR,
+                False,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _NULL_SIGNATURE_ERROR,
+                True,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+                _BOUND_THINKING_ERROR,
+                True,
+            ),
+            ({"type": "adaptive"}, _BOUND_THINKING_ERROR, True),
+        ),
+        ids=("error", "error_on_unrelated_bad_block", "drop_block", "unbound"),
+    )
+    def test_anthropic_messages_retry_honors_thinking_block_binding(
+        self, thinking: Mapping[str, object], error_message: str, expected: bool
+    ) -> None:
+        from litellm.llms.anthropic.pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        req: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp: Final = httpx.Response(
+            400,
+            request=req,
+            text=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": error_message}}),
+        )
+        err: Final = httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        should_retry = AnthropicMessagesConfig().should_retry_anthropic_messages_on_http_error(
+            err, {}, request_body={"model": "claude-opus-5-5", "thinking": thinking}
+        )
+
+        assert should_retry is expected
+
 
 class TestClaudeOpus48AdaptiveThinking:
     """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
@@ -2650,7 +2700,9 @@ class TestWifZeroBehaviorChange:
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
         assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
 
-    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env: None, tmp_path: Path):
+    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(
+        self, clean_anthropic_env: None, tmp_path: Path
+    ):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -4204,9 +4256,120 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
         model="claude-opus-5",
         optional_params=optional_params,
         custom_llm_provider="azure_ai",
+        drop_params=False,
     )
 
     assert optional_params["thinking"] == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(("drop_params", "expected_unknown_keys"), ((True, {}), (False, {"not_a_thinking_key": True})))
+def test_shared_legacy_thinking_translation_carries_block_binding(
+    drop_params: bool, expected_unknown_keys: dict[str, object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final = {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "block_binding": {"prefix_mismatch_behavior": "error"},
+            "not_a_thinking_key": True,
+        },
+    }
+
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model="claude-opus-5",
+        optional_params=optional_params,
+        custom_llm_provider="azure_ai",
+        drop_params=drop_params,
+    )
+
+    assert optional_params["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        **expected_unknown_keys,
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "requested_thinking", "rejected_keys", "expected_thinking"),
+    (
+        (
+            "anthropic",
+            "claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+        (
+            "bedrock",
+            "converse/us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+        (
+            "bedrock",
+            "invoke/us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+        (
+            "bedrock",
+            "invoke/us.anthropic.claude-opus-5-5",
+            {"type": "adaptive", "display": "updates"},
+            {"not_a_thinking_key": True, "budget_tokens": 2048},
+            {"type": "adaptive", "display": "updates"},
+        ),
+        (
+            "vertex_ai",
+            "claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+        (
+            "databricks",
+            "databricks-claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"not_a_thinking_key": True},
+            {"type": "adaptive"},
+        ),
+    ),
+    ids=(
+        "anthropic",
+        "bedrock_converse",
+        "bedrock_invoke",
+        "bedrock_invoke_display_updates",
+        "vertex_ai",
+        "databricks",
+    ),
+)
+@pytest.mark.parametrize("drop_params_source", ("request", "global", None))
+def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
+    custom_llm_provider: str,
+    model: str,
+    requested_thinking: dict[str, object],
+    rejected_keys: dict[str, object],
+    expected_thinking: dict[str, object],
+    drop_params_source: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        thinking={**requested_thinking, "block_binding": block_binding, **rejected_keys},
+        drop_params=drop_params_source == "request",
+    )
+
+    kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
+    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

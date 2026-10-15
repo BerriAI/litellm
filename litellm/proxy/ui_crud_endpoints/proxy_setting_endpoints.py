@@ -62,6 +62,8 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 
 router: Final = APIRouter()
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 JsonSchemaItems: Final = TypedDict(
     "JsonSchemaItems",
@@ -1267,7 +1269,7 @@ async def update_sso_settings(
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
-            stored = json.loads(stored)
+            stored = _DECODED_JSON.validate_python(json.loads(stored))
         if isinstance(stored, dict):
             before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
                 proxy_config.decrypt_db_variables(stored)
@@ -1720,7 +1722,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 1. Try cache
-    cached: Final = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
+    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1746,6 +1748,10 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
 
 
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _json_settings(settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return settings
 
 
 def model_creation_disabled_for_internal_users(settings: Mapping[str, object]) -> bool:
@@ -1954,7 +1960,7 @@ async def update_ui_settings(
         )
 
     # Only include fields the caller actually sent (not Pydantic defaults).
-    settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
+    settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.

@@ -141,7 +141,7 @@ class _ProxyDBLogger(CustomLogger):
             return
         _claim_budget_reservation(
             budget_reservation=_get_budget_reservation_from_metadata(
-                metadata=get_litellm_metadata_from_kwargs(kwargs=kwargs)
+                metadata=get_litellm_metadata_from_kwargs(kwargs=dict(kwargs))
             ),
             litellm_call_id=_string_call_id(_CALLBACK_DATA.validate_python(kwargs)),
         )
@@ -310,7 +310,7 @@ class _ProxyDBLogger(CustomLogger):
             token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
-            end_user_id=user_api_key_dict.end_user_id,
+            end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
             kwargs=(
                 request_data

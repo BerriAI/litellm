@@ -156,6 +156,9 @@ def _body(model: str, call: _Call) -> dict[str, JsonValue]:
             }
 
 
+_Builder = Callable[[str, _Call], dict[str, JsonValue]]
+
+
 def _generate_reply(marker: str, stream: bool, drop_connection: bool = False) -> Reply:
     done: Final = {
         "model": _BACKEND,
@@ -249,11 +252,11 @@ def _successes(statuses: MappingProxyType[str, str]) -> frozenset[str]:
     return frozenset(identity for identity, status in statuses.items() if status == "success")
 
 
-async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) -> _Served:
+async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call, build: _Builder) -> _Served:
     async with client.stream(
         "POST",
         _path(call.endpoint),
-        json=_body(model, call),
+        json=build(model, call),
         headers={"Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01"},
     ) as response:
         raw: Final = await response.aread()
@@ -261,11 +264,17 @@ async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) ->
 
 
 async def _burst(
-    base_url: str, key: str, model: str, calls: tuple[_Call, ...], *, tolerate_transport_errors: bool = False
+    base_url: str,
+    key: str,
+    model: str,
+    calls: tuple[_Call, ...],
+    *,
+    tolerate_transport_errors: bool = False,
+    build: _Builder = _body,
 ) -> tuple[_Served, ...]:
     async with httpx.AsyncClient(base_url=base_url, timeout=60, trust_env=False) as client:
         results: Final = await asyncio.gather(
-            *(_send(client, key, model, call) for call in calls), return_exceptions=tolerate_transport_errors
+            *(_send(client, key, model, call, build) for call in calls), return_exceptions=tolerate_transport_errors
         )
     for result in results:
         assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
@@ -298,6 +307,61 @@ async def test_concurrent_tool_result_turns_across_endpoints_each_get_their_own_
         known: Final = frozenset(identity for identity in map(_response_id, served) if identity is not None)
         assert len(known) == 16, known
         statuses: Final = _spend_statuses(model, 24)
+        assert _successes(statuses) == frozenset(statuses), statuses
+        assert known <= _successes(statuses)
+
+
+def _down(request: Request) -> Reply:
+    if not _is_generate(request):
+        return Reply(body=b"{}")
+    return Reply(status=500, body=json.dumps({"error": "primary ollama is down"}).encode())
+
+
+def _items(body: dict[str, JsonValue], key: str) -> list[JsonValue]:
+    value: Final = body[key]
+    assert isinstance(value, list), body
+    return value
+
+
+def _with_list_system(body: dict[str, JsonValue], endpoint: Endpoint, system: str) -> dict[str, JsonValue]:
+    match endpoint:
+        case "chat":
+            return {
+                **body,
+                "messages": [{"role": "system", "content": [{"type": "text", "text": system}]}, *_items(body, "messages")],
+            }
+        case "messages":
+            return {**body, "system": [{"type": "text", "text": system}]}
+        case "responses":
+            return {
+                **body,
+                "input": [{"role": "system", "content": [{"type": "input_text", "text": system}]}, *_items(body, "input")],
+            }
+
+
+async def test_concurrent_fallbacks_from_failed_list_system_turns_each_send_the_instruction_once(
+    gateway: Gateway,
+) -> None:
+    calls: Final = _calls(24, ("chat", "messages", "responses"), lambda index: index % 2 == 0)
+    markers: Final = frozenset(call.marker for call in calls)
+    with wire_server(_down) as primary_wire, wire_server(_echo) as fallback_wire, gateway.scenario() as scenario:
+        primary: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=primary_wire.url, api_key=_API_KEY)
+        fallback: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=fallback_wire.url, api_key=_API_KEY)
+
+        def build(model: str, call: _Call) -> dict[str, JsonValue]:
+            return _with_list_system(
+                {**_body(model, call), "fallbacks": [fallback]}, call.endpoint, f"Terse bot marker-{call.marker}."
+            )
+
+        served: Final = await _burst(str(gateway.client.base_url), gateway.key, primary, calls, build=build)
+        assert len(served) == 24
+        for item in served:
+            _assert_answered_with_its_own_marker(item)
+        _assert_each_prompt_is_instructed_once(primary_wire.drain(), markers)
+        _assert_each_prompt_is_instructed_once(fallback_wire.drain(), markers)
+        known: Final = frozenset(identity for identity in map(_response_id, served) if identity is not None)
+        assert len(known) == 16, known
+        statuses: Final = _spend_statuses(fallback, 24)
         assert _successes(statuses) == frozenset(statuses), statuses
         assert known <= _successes(statuses)
 

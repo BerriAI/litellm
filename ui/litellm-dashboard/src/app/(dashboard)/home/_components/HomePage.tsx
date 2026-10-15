@@ -29,14 +29,11 @@ export default function HomePage() {
 
   return (
     <Page>
-      <PageHeader className="flex flex-wrap items-center justify-between gap-3">
+      <PageHeader>
         <PageHeaderTitle>Home</PageHeaderTitle>
         {!isViewOnly && (
-          <PageHeaderControls className="mt-0">
-            <Button
-              render={<a href={uiHref("api-keys?create=true")} />}
-              className="bg-info text-info-foreground shadow-xs hover:bg-info/90"
-            >
+          <PageHeaderControls>
+            <Button render={<a href={uiHref("api-keys?create=true")} />}>
               <Plus />
               Create New Virtual Key
             </Button>

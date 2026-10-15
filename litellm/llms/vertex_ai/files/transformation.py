@@ -424,6 +424,15 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[st
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
+def vertex_batch_row_custom_id(vertex_row: Mapping[str, object]) -> str | None:
+    """The OpenAI `custom_id` a Vertex batch input or output row was written for, or None when it carries none."""
+    request_data: Final = vertex_row.get("request")
+    has_labels: Final = isinstance(request_data, Mapping) and "labels" in request_data
+    if vertex_row.get(_VERTEX_BATCH_KEY_FIELD) is None and not has_labels:
+        return None
+    return _split_vertex_batch_key(vertex_row)[0]
+
+
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
     vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
@@ -844,7 +853,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def __init__(
         self,
         openai_file_content: FileTypes,
-        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+        map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
