@@ -489,7 +489,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                             # Keep the id the provider sent (Ollama assigns one
                             # per tool call); only mint one when it is missing
                             # (#46543, preserving the #11262 uuid fallback).
-                            tool_call["id"] = tool_call.get("id") or str(uuid.uuid4())
+                            entry: dict[str, object] = tool_call
+                            entry["id"] = entry.get("id") or str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
