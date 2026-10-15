@@ -15,9 +15,10 @@ from typing import (
 )
 
 import httpx
+from openai.types.audio.transcription_create_params import FileTypes
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.utils import FileTypes, GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import EmbeddingResponse, ImageResponse, ModelResponse
 
 from .base import BaseLLM
@@ -103,8 +104,7 @@ class CustomLLM(BaseLLM):
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> (
-        Coroutine[object, object, Union[ModelResponse, "CustomStreamWrapper"]]
-        | Union[ModelResponse, "CustomStreamWrapper"]
+        Coroutine[None, None, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]
     ):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 

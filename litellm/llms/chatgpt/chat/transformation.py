@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -10,7 +10,7 @@ from ..common_utils import (
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
 )
-from .streaming_utils import ChatGPTChunkStream, ChatGPTToolCallNormalizer
+from .streaming_utils import ChatGPTToolCallNormalizer
 
 
 class ChatGPTConfig(OpenAIConfig):
@@ -72,7 +72,7 @@ class ChatGPTConfig(OpenAIConfig):
         default_headers: Final = get_chatgpt_default_headers(api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
-    def post_stream_processing(self, stream: ChatGPTChunkStream) -> ChatGPTToolCallNormalizer:
+    def post_stream_processing(self, stream: Any) -> Any:
         return ChatGPTToolCallNormalizer(stream)
 
     def map_openai_params(

@@ -1373,6 +1373,167 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     )
 
 
+def _gemini_tool_result_fixture(
+    content: str,
+) -> tuple[ChatCompletionToolMessage, dict]:
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_schema",
+        content=content,
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_schema",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "inspect_schema", "arguments": "{}"},
+            }
+        ],
+    }
+    return message, last_message_with_tool_calls
+
+
+def test_convert_gemini_tool_result_wraps_output_containing_json_schema_ref():
+    """
+    Gemini treats {"$ref": ...} objects inside function_response.response as
+    references to named parts in function_response.parts, so schema-bearing
+    tool output must be delivered opaquely instead of structurally.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    schema_json = (
+        '{"$defs":{"humanScalar":{"type":"string"}},'
+        '"type":"object","properties":{"value":{"$ref":"#/$defs/humanScalar"}}}'
+    )
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == {"content": schema_json}
+
+
+def test_convert_gemini_tool_result_wraps_deeply_nested_json_schema_ref():
+    """
+    A $ref key at any depth must trigger opaque delivery.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    nested_json = '{"results":[{"schemas":[{"node":{"$ref":"#/$defs/deep"}}]}]}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(nested_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["response"] == {"content": nested_json}
+
+
+def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
+    """Gemini reads any non-empty string $ref as a part name, a MongoDB DBRef included."""
+    dbref_json = '{"owner":{"$ref":"users","$id":{"$oid":"64b7f0c2a1"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(dbref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": dbref_json}
+
+
+def test_convert_gemini_tool_result_wraps_top_level_ref():
+    """A $ref on the tool result's root object is read as a part name too."""
+    root_ref_json = '{"$ref":"#/$defs/Config","$defs":{"Config":{"type":"object"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(root_ref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": root_ref_json}
+
+
+def _json_unicode_escape(text: str) -> str:
+    return "".join(f"\\u{ord(char):04x}" for char in text)
+
+
+@pytest.mark.parametrize(
+    "ref_key",
+    ["$ref"[:index] + _json_unicode_escape("$ref"[index]) + "$ref"[index + 1 :] for index in range(4)],
+)
+def test_convert_gemini_tool_result_wraps_unicode_escaped_ref_key(ref_key: str):
+    """A $ref key spelled with JSON unicode escapes still decodes to $ref, so it must be wrapped too."""
+    escaped_json = '{"v":{"' + ref_key + '":"#/a"}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(escaped_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": escaped_json}
+
+
+@pytest.mark.parametrize(
+    "schema_json",
+    [
+        '{"$defs":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"definitions":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"status":"ok","count":2,"tags":["a","b"]}',
+        '{"v":{"$ref":null}}',
+        '{"v":{"$ref":""}}',
+        '{"v":{"$ref":5}}',
+        '{"v":{"$ref":true}}',
+        '{"v":{"$ref":{"a":1}}}',
+        '{"v":{"$ref":["#/a"]}}',
+        '{"columns":["user","name"],"rows":[[{"$ref":"#/users/1"},"alice"]]}',
+        '{"a":[1,[{"b":{"$ref":"x"}}]]}',
+    ],
+)
+def test_convert_gemini_tool_result_preserves_structured_passthrough_without_part_references(
+    schema_json: str,
+):
+    """
+    Gemini only rejects a $ref holding a non-empty string outside a list nested
+    directly in a list, so tool output with no $ref, a $ref holding any other
+    value, or a $ref under a list of lists stays structured.
+    Google does not document that rule. It was observed on the Gemini API and
+    Vertex AI (gemini-3.8-flash, gemini-4-argon) on 2026-10-15.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == json.loads(schema_json)
+
+
+def test_convert_gemini_tool_result_malformed_json_still_wrapped_as_content():
+    """Unparseable tool output keeps taking the existing content-wrapping path."""
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture("{not valid json")
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": "{not valid json"}
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly

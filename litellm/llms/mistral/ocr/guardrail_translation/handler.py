@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
-    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class OCRHandler(BaseTranslation):
@@ -91,7 +90,7 @@ class OCRHandler(BaseTranslation):
         response: "OCRResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: "UserAPIKeyAuth | None" = None,
+        user_api_key_dict: object | None = None,
         request_data: dict | None = None,
     ) -> "OCRResponse":
         """

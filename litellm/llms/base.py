@@ -83,10 +83,10 @@ class BaseLLM:
 
     def completion(
         self, *args, **kwargs
-    ) -> object:  # logic for parsing in - calling - parsing out model completion calls
+    ) -> object | None:  # logic for parsing in - calling - parsing out model completion calls
         return None
 
     def embedding(
         self, *args, **kwargs
-    ) -> object:  # logic for parsing in - calling - parsing out model embedding calls
+    ) -> object | None:  # logic for parsing in - calling - parsing out model embedding calls
         return None
