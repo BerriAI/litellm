@@ -7,6 +7,7 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import dataclasses
 import json
+import math
 import uuid as uuid_lib
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -98,14 +99,14 @@ TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 
 
 def _number_setting(value: JsonValue) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     return float(value)
 
 
-def _whole_number_setting(value: JsonValue) -> int | None:
+def _token_count_setting(value: JsonValue) -> int | None:
     number: Final = _number_setting(value)
-    return int(number) if number is not None and number.is_integer() else None
+    return None if number is None else int(number)
 
 
 def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
@@ -117,7 +118,7 @@ def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple
             "max_response_output_tokens",
             max_output_tokens is not None
             and max_output_tokens != "inf"
-            and _whole_number_setting(max_output_tokens) is None,
+            and _token_count_setting(max_output_tokens) is None,
         ),
     )
     return tuple(name for name, is_malformed in malformed if is_malformed)
@@ -444,7 +445,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             output_rate_hertz if isinstance(output_rate_hertz, int) else format_sample_rate
         )
         requested_temperature: Final = _number_setting(temperature)
-        requested_max_tokens: Final = _whole_number_setting(max_output_tokens)
+        requested_max_tokens: Final = _token_count_setting(max_output_tokens)
         locked_temperature: Final = requested_temperature if requested_temperature is not None else base.temperature
         explicit_max_tokens: Final = requested_max_tokens if requested_max_tokens is not None else base.max_tokens
         max_tokens: Final = None if max_output_tokens == "inf" else explicit_max_tokens
@@ -469,7 +470,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 code="invalid_type",
                 message=(
                     f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a number for temperature "
-                    "and an integer or 'inf' for max_response_output_tokens. Set drop_params to drop it instead"
+                    "and a number or 'inf' for max_response_output_tokens. Set drop_params to drop it instead"
                 ),
                 param=f"session.{malformed[0]}",
             )

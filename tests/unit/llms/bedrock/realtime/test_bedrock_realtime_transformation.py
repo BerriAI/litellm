@@ -1626,9 +1626,10 @@ class TestBedrockRealtimeUserEventsAndUsage:
         messages: Final = config.transform_session_update_event({"type": "session.update", "session": session})
         return json.loads(messages[0])["event"]["sessionStart"]["inferenceConfiguration"]
 
-    def test_integral_float_max_tokens_reaches_session_start_as_an_integer(self):
+    @pytest.mark.parametrize("max_output_tokens", [4096.0, 4096.5])
+    def test_float_max_tokens_reaches_session_start_as_an_integer(self, max_output_tokens):
         inference: Final = self._inference_configuration(
-            BedrockRealtimeConfig(), {"max_response_output_tokens": 4096.0, "temperature": 1}
+            BedrockRealtimeConfig(), {"max_response_output_tokens": max_output_tokens, "temperature": 1}
         )
         assert inference["maxTokens"] == 4096
         assert isinstance(inference["maxTokens"], int)
@@ -1640,7 +1641,8 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"temperature": "0.2"}, "session.temperature"),
             ({"temperature": True}, "session.temperature"),
             ({"max_response_output_tokens": "4096"}, "session.max_response_output_tokens"),
-            ({"max_response_output_tokens": 4096.5}, "session.max_response_output_tokens"),
+            ({"temperature": float("nan")}, "session.temperature"),
+            ({"max_response_output_tokens": float("inf")}, "session.max_response_output_tokens"),
             ({"max_response_output_tokens": True}, "session.max_response_output_tokens"),
         ],
     )
@@ -1655,7 +1657,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
         "session",
         [
             {"temperature": "0.2", "max_response_output_tokens": "4096"},
-            {"temperature": True, "max_response_output_tokens": 4096.5},
+            {"temperature": True, "max_response_output_tokens": float("nan")},
         ],
     )
     def test_malformed_number_setting_is_dropped_with_drop_params(self, session):
