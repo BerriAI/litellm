@@ -500,16 +500,17 @@ class LiteLLMAnthropicMessagesAdapter:
                     user_message = ChatCompletionUserMessage(role="user", content=message_content)
                 elif message_content and isinstance(message_content, list):
                     for content in message_content:
-                        if content.get("type") == "text":
+                        if (block_type := content.get("type")) == "text":
                             text_obj = ChatCompletionTextObject(type="text", text=content.get("text", ""))
                             self._add_cache_control_if_applicable(content, text_obj, model)
                             new_user_content_list.append(
                                 self._add_prompt_cache_breakpoint_if_present(content, text_obj)
                             )
-                        elif content.get("type") == "image":
+                        elif block_type == "image":
                             # Convert Anthropic image format to OpenAI format
-                            source = content.get("source", {})
-                            openai_image_url = self._translate_anthropic_image_to_openai(cast(dict, source))
+                            openai_image_url = self._translate_anthropic_image_to_openai(
+                                cast(dict, content.get("source", {}))
+                            )
 
                             if openai_image_url:
                                 image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
@@ -518,17 +519,18 @@ class LiteLLMAnthropicMessagesAdapter:
                                 new_user_content_list.append(
                                     self._add_prompt_cache_breakpoint_if_present(content, image_obj)
                                 )
-                        elif content.get("type") == "document":
+                        elif block_type == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
-                            source = content.get("source", {})
-                            openai_image_url = self._translate_anthropic_image_to_openai(cast(dict, source))
+                            openai_image_url = self._translate_anthropic_image_to_openai(
+                                cast(dict, content.get("source", {}))
+                            )
 
                             if openai_image_url:
                                 image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
                                 doc_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
-                        elif content.get("type") == "tool_result":
+                        elif block_type == "tool_result":
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
@@ -536,6 +538,24 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
+                        elif block_type == "container_upload" and custom_llm_provider not in (
+                            None,
+                            "anthropic",
+                            "anthropic_text",
+                        ):
+                            # custom_llm_provider is None for guardrail scanning and context-compaction
+                            # token counting, which reuse this converter without knowing the real target;
+                            # raising there would break requests actually bound for Anthropic.
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "'container_upload' content blocks reference a file uploaded to Anthropic's "
+                                    "server-side container and are only supported when the target model is "
+                                    "Anthropic. Remove this content block, or route this request to an "
+                                    "Anthropic model."
+                                ),
+                                model=model or "",
+                                llm_provider=custom_llm_provider,
+                            )
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
