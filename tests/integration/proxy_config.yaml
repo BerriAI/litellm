@@ -339,6 +339,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-mantle-key
       aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-6-astra
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6-astra
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
   - model_name: bedrock_mantle/openai.gpt-6.1-sol
     litellm_params:
       model: bedrock_mantle/openai.gpt-6.1-sol

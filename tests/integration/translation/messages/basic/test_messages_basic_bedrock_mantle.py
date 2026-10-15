@@ -10,6 +10,7 @@ from integration.translation.messages.bases.bedrock_mantle import (
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
     GPT_6_1_SOL_TEST_CASE,
+    GPT_6_ASTRA_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
 from integration.translation.runner import assert_translation
@@ -25,6 +26,7 @@ from integration.translation.runner import assert_translation
         GPT_5_6_SOL_TEST_CASE,
         GPT_5_6_LUNA_TEST_CASE,
         GPT_6_LUNA_TEST_CASE,
+        GPT_6_ASTRA_TEST_CASE,
         GPT_6_1_SOL_TEST_CASE,
     ],
     ids=lambda case: case.id,
