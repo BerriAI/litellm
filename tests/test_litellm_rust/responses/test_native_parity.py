@@ -44,6 +44,16 @@ _COMPARED_LOG_FIELDS: Final = (
     "status",
 )
 
+TEXT_MESSAGE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "id": "msg_0a1b2c3d4e5f",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "annotations": [], "logprobs": [], "text": "Paris"}],
+    }
+)
+
 TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "id": "resp_0a1b2c3d4e5f",
@@ -61,13 +71,7 @@ TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
                 "type": "reasoning",
                 "summary": [],
             },
-            {
-                "id": "msg_0a1b2c3d4e5f",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "annotations": [], "logprobs": [], "text": "Paris"}],
-            },
+            dict(TEXT_MESSAGE),
         ],
         "parallel_tool_calls": True,
         "previous_response_id": None,
@@ -122,6 +126,36 @@ WEATHER_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 
+ENCRYPTED_REASONING_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "output": [
+            {"id": "rs_0a1b2c3d4e5f", "type": "reasoning", "summary": [], "encrypted_content": "gAAAAB0a1b2c3d"},
+            {
+                "id": "ci_0a1b2c3d4e5f",
+                "type": "code_interpreter_call",
+                "status": "completed",
+                "code": "print(1)",
+                "container_id": "cntr_0a1b2c3d4e5f",
+                "outputs": [],
+            },
+            dict(TEXT_MESSAGE),
+        ],
+    }
+)
+
+AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
+    {
+        "type": "reasoning",
+        "id": ResponsesAPIRequestUtils._build_encrypted_item_id("deploy-1", "rs_0a1b2c3d4e5f"),  # pyright: ignore[reportPrivateUsage]  # the encoder Python applies on the way out
+        "summary": [],
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+            "gAAAAB0a1b2c3d", "deploy-1"
+        ),
+    },
+    {"role": "user", "content": "And Germany?"},
+]
+
 REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"type": "reasoning", "id": "rs_0a1b2c3d4e5f", "summary": [], "status": None},
     {"role": "user", "content": "And Germany?"},
@@ -157,30 +191,28 @@ class Case:
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
 
 
-ID_ENCODING_GAP: Final = MappingProxyType(
-    {"response": "native responses return the provider's raw response id instead of LiteLLM's encoded resp_ id"}
+DEPLOYMENT_METADATA: Final = MappingProxyType(
+    {"model_info": {"id": "deploy-1"}, "encrypted_content_affinity_enabled": True}
 )
 
 
-def _gaps(**request_gaps: str) -> Mapping[str, str]:
-    return MappingProxyType({**ID_ENCODING_GAP, **request_gaps})
+def _gaps(**gaps: str) -> Mapping[str, str]:
+    return MappingProxyType(gaps)
 
 
 CASES: Final = (
-    Case("plain_text", {"input": "What is the capital of France?"}, gaps=_gaps()),
+    Case("plain_text", {"input": "What is the capital of France?"}),
     Case(
         "instructions_and_input_items",
         {
             "instructions": "Answer in one word",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "Capital of France?"}]}],
         },
-        gaps=_gaps(),
     ),
     Case(
         "function_tool",
         {"input": "Weather in Paris?", "tools": [dict(WEATHER_TOOL)], "tool_choice": "auto"},
         upstream=FUNCTION_CALL_RESPONSE,
-        gaps=_gaps(),
     ),
     Case(
         "encoded_previous_response_id",
@@ -190,7 +222,16 @@ CASES: Final = (
                 custom_llm_provider="openai", model_id=None, response_id="resp_6f5e4d3c2b1a"
             ),
         },
-        gaps=_gaps(),
+    ),
+    Case(
+        "deployment_scoped_ids",
+        {"input": "hi", "litellm_metadata": dict(DEPLOYMENT_METADATA)},
+        upstream=ENCRYPTED_REASONING_RESPONSE,
+    ),
+    Case(
+        "affinity_encoded_reasoning_replay",
+        {"input": AFFINITY_REPLAY_INPUT, "litellm_metadata": dict(DEPLOYMENT_METADATA)},
+        upstream=ENCRYPTED_REASONING_RESPONSE,
     ),
     Case(
         "warm_up_probe_below_minimum_max_output_tokens",
@@ -215,7 +256,6 @@ CASES: Final = (
             ],
             "tools": [{**WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}],
         },
-        gaps=_gaps(),
     ),
     Case(
         "reasoning_replay_without_status",
