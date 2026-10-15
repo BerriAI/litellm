@@ -1075,6 +1075,47 @@ def test_config_callback_delete_skips_lists_the_config_file_owns(
     assert response.json()["remaining_callbacks"] == ["slack"]
 
 
+def test_config_callback_delete_removes_database_copy_when_config_file_owns_success_callback(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name the config file sets in success_callback is left there while its
+    database-owned failure_callback copy is removed."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["datadog"], "failure_callback": ["datadog", "sentry"]},
+        "datadog",
+        owned_by_config=frozenset({"success_callback"}),
+    )
+    assert response.status_code == 200
+    assert saved == {"success_callback": ["datadog"], "failure_callback": ["sentry"]}
+    assert response.json()["remaining_callbacks"] == ["sentry"]
+
+
+def test_config_callback_delete_from_string_valued_list(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A list written as a single string is matched and saved back as an empty list."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"failure_callback": "datadog"},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert saved == {"failure_callback": []}
+
+
 def test_config_callback_delete_case_insensitive(
     client: TestClient,
     auth_as: Callable[..., contextlib.AbstractContextManager[None]],

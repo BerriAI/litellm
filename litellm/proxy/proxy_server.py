@@ -19533,13 +19533,10 @@ async def delete_config_general_settings(
     return response
 
 
-_CALLBACK_LIST_KEYS: Final = ("success_callback", "failure_callback", "callbacks")
-
-
 def _configured_callback_names(value: object) -> tuple[JsonValue, ...]:
     if isinstance(value, str):
         return (value,)
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list):
         return tuple(cast(Iterable[JsonValue], value))  # cast-ok: config.yaml values are untyped
     return ()
 
@@ -19603,7 +19600,7 @@ async def delete_callback(
             config.get("litellm_settings", {}),
         )
         configured_lists: Final = {
-            key: _configured_callback_names(litellm_settings.get(key)) for key in _CALLBACK_LIST_KEYS
+            key: _configured_callback_names(litellm_settings.get(key)) for key in _DB_CONFIG_CALLBACK_EVENT_TYPES
         }
         matching_keys: Final = tuple(
             key
