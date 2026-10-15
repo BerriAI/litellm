@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, Optional
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -688,16 +689,23 @@ class ProxyExtrasDBManager:
         (connection_limit, pool_timeout, schema, pgbouncer, sslaccept, ...) and
         translate Prisma's TLS params back, since libpq reads ``sslcert`` as a
         client certificate where Prisma reads it as the CA."""
-        from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+        from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
         parsed: Final = urlparse(url)
+        netloc: Final = parsed.netloc
+        userinfo, separator, hostport = netloc.rpartition("@")
+        user, password_separator, password = userinfo.partition(":")
+        canonical_userinfo: Final = quote(unquote(user), safe="") + (
+            password_separator + quote(unquote(password), safe="") if password_separator else ""
+        )
+        canonical_netloc: Final = f"{canonical_userinfo}{separator}{hostport}" if separator else netloc
         if not parsed.query:
-            return url
+            return url if canonical_netloc == netloc else urlunparse(parsed._replace(netloc=canonical_netloc))
         pairs: Final = tuple(parse_qsl(parsed.query))
         kept: Final = tuple((k, v) for k, v in pairs if k in LIBPQ_URL_PARAMS)
         sslaccept: Final = next((v for k, v in pairs if k == "sslaccept"), None)
         libpq_pairs: Final = ProxyExtrasDBManager._libpq_tls_params(kept, sslaccept)
-        return urlunparse(parsed._replace(query=urlencode(libpq_pairs, quote_via=quote)))
+        return urlunparse(parsed._replace(netloc=canonical_netloc, query=urlencode(libpq_pairs, quote_via=quote)))
 
     @staticmethod
     def _libpq_tls_params(
