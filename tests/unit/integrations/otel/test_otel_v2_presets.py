@@ -123,7 +123,7 @@ def test_agentops_exporter_tolerates_fetch_failure(monkeypatch):
 
 def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
     """The fetch owns a short-lived client and closes it, rather than closing
-    the process-wide cached ``_get_httpx_client`` pool shared by other callers."""
+    the process-wide cached ``get_httpx_client`` pool shared by other callers."""
     closed = {"n": 0}
 
     class _FakeResponse:
@@ -146,7 +146,7 @@ def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
             return _FakeResponse()
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)
-    assert not hasattr(agentops_mod, "_get_httpx_client")
+    assert not hasattr(agentops_mod, "get_httpx_client")
 
     result = _fetch_agentops_jwt("api-key")
     assert result == {"token": "jwt-123"}

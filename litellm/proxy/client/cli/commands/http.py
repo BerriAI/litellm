@@ -1,11 +1,30 @@
 import json as json_lib
-from typing import Final
+from typing import Final, Protocol
 
 import click
 import requests
 import rich
+from typing_extensions import ReadOnly, TypedDict
 
 from ...http_client import HTTPClient
+
+
+class _CliContext(TypedDict):
+    base_url: ReadOnly[str]
+    api_key: ReadOnly[str | None]
+
+
+class _CliContextView(Protocol):
+    @property
+    def obj(self) -> _CliContext: ...
+
+
+class _JsonBodyView(TypedDict):
+    body: ReadOnly[object]
+
+
+def _cli_context(view: _CliContextView) -> _CliContext:
+    return view.obj
 
 
 @click.group()
@@ -79,21 +98,23 @@ def request(
             # If not JSON, use as raw data
             request_data = data
 
-    client: Final = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = HTTPClient(_cli_context(ctx)["base_url"], _cli_context(ctx)["api_key"])
     try:
-        response: Final = client.request(
-            method=method,
-            uri=uri,
-            data=request_data,
-            json=json_data,
-            headers=headers,
-        )
-        rich.print_json(data=response)
+        response: Final[_JsonBodyView] = {
+            "body": client.request(
+                method=method,
+                uri=uri,
+                data=request_data,
+                json=json_data,
+                headers=headers,
+            )
+        }
+        rich.print_json(data=response["body"])
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body: Final = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json_lib.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -66,7 +66,7 @@ def _gitlab_prompt_initializer(
     # You can store arbitrary integration-specific config on PromptLiteLLMParams.
     # If your dataclass doesn't have these attributes, add them or put inside
     # `litellm_params.extra` and pull them from there.
-    gitlab_config: Final[dict[str, Any]] = getattr(litellm_params, "gitlab_config", None) or {}
+    gitlab_config: Final[dict[str, object]] = getattr(litellm_params, "gitlab_config", None) or {}
     git_ref: Final[str | None] = getattr(litellm_params, "git_ref", None)
 
     if not gitlab_config:

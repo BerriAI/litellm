@@ -61,7 +61,7 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     placeholder: Final = "\x00"
 
     def _resolve(path: str) -> object:
-        parts = path.replace("\\.", placeholder).split(".")
+        parts: Final = path.replace("\\.", placeholder).split(".")
         current: Any = data
         for part in parts:
             part = part.replace(placeholder, ".")
@@ -77,13 +77,9 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     # path as written only when the legacy one is absent, which is what makes a
     # genuinely nested `metadata` object readable instead of silently falling back
     # to the defaults JWT auth applies when a claim is missing.
-    resolved: Any = NESTED_VALUE_MISSING_SENTINEL
-    if key_path.startswith("metadata."):
-        without_prefix: Final = key_path[len("metadata.") :]
-        if without_prefix:
-            resolved = _resolve(without_prefix)
-    if resolved is NESTED_VALUE_MISSING_SENTINEL:
-        resolved = _resolve(key_path)
+    without_prefix: Final = key_path[len("metadata.") :] if key_path.startswith("metadata.") else ""
+    legacy_resolved: Final = _resolve(without_prefix) if without_prefix else NESTED_VALUE_MISSING_SENTINEL
+    resolved: Final[Any] = _resolve(key_path) if legacy_resolved is NESTED_VALUE_MISSING_SENTINEL else legacy_resolved
 
     if resolved is NESTED_VALUE_MISSING_SENTINEL:
         return default
