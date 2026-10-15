@@ -5,7 +5,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import TypeAdapter
 
@@ -276,6 +276,14 @@ class StatementCountingRelay:
         )
 
 
+def plaintext_database_url(database_url: str) -> str:
+    parts: Final = urlsplit(database_url)
+    parameters: Final = tuple(
+        (name, value) for name, value in parse_qsl(parts.query, keep_blank_values=True) if name != "sslmode"
+    ) + (("sslmode", "disable"),)
+    return urlunsplit(parts._replace(query=urlencode(parameters)))
+
+
 def _relayed_url(database_url: str, port: int) -> str:
     parts: Final = urlsplit(database_url)
     credentials: Final = f"{parts.username}:{parts.password}@" if parts.username else ""
@@ -325,6 +333,6 @@ def statement_counting_relay(database_url: str) -> Generator[tuple[StatementCoun
     relay: Final = StatementCountingRelay(parts.hostname, parts.port)
     relay.start()
     try:
-        yield relay, _relayed_url(database_url, relay.port)
+        yield relay, plaintext_database_url(_relayed_url(database_url, relay.port))
     finally:
         relay.stop()
