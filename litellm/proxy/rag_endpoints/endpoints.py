@@ -223,6 +223,20 @@ def _forwarded_store_credentials(
     return explicit_request_credentials(request_data)
 
 
+def _with_body_drop_params(request_data: Mapping[str, object], body: Mapping[str, object]) -> Mapping[str, object]:
+    if body.get("drop_params") is not True:
+        return request_data
+    return MappingProxyType({**request_data, "drop_params": True})
+
+
+def _rag_ingest_body(body: Mapping[str, object]) -> Mapping[str, object]:
+    form_request: Final = body.get("request")
+    if not isinstance(form_request, (str, bytes)):
+        return body
+    parsed: Final[object] = orjson.loads(form_request)
+    return _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(parsed) if isinstance(parsed, dict) else body
+
+
 def _with_request_credentials(
     team_credentials: Mapping[str, object], request_data: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -672,7 +686,9 @@ async def rag_ingest(
             version=version,
             proxy_config=proxy_config,
         )
-        forwarded_credentials: Final = _forwarded_store_credentials(base, request_data)
+        forwarded_credentials: Final = _forwarded_store_credentials(
+            base, _with_body_drop_params(request_data, _rag_ingest_body(await read_request_body(request)))
+        )
         merged_vector_store_config: Final = {
             **_team_provider_credentials(base, llm_router, user_api_key_dict),
             **forwarded_credentials,
@@ -900,7 +916,7 @@ async def rag_query(
         )
         team_credentials: Final = _with_request_credentials(
             _team_provider_credentials(effective_vector_store_config, llm_router, user_api_key_dict),
-            request_data,
+            _with_body_drop_params(request_data, data),
         )
         vector_store_params: Final = (
             {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials

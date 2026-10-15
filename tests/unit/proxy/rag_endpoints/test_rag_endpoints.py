@@ -31,6 +31,7 @@ _OPENAI_SEARCH_PAGE: Final = {"object": "vector_store.search_results.page", "sea
 _BEDROCK_KNOWLEDGE_BASE_ID: Final = "KB12345678"
 _CALLER_AWS_ACCESS_KEY: Final = "caller-access-key"
 _TEAM_AWS_ACCESS_KEY: Final = "team-access-key"
+_HEADER_UNSAFE_PROVIDER_KEY: Final = "sk-forwarded\u00a0".encode("latin-1")
 
 
 @pytest.fixture
@@ -296,10 +297,20 @@ def _registry_with(store):
     return registry
 
 
-def _ingest_form(vector_store):
+def _ingest_form(vector_store, **request_fields):
     return {
         "files": {"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        "data": {"request": json.dumps({"ingest_options": {"vector_store": vector_store}})},
+        "data": {"request": json.dumps({"ingest_options": {"vector_store": vector_store}, **request_fields})},
+    }
+
+
+def _ingest_json(vector_store, **request_fields):
+    return {
+        "json": {
+            "file_url": "https://example.com/doc.txt",
+            "ingest_options": {"vector_store": vector_store},
+            **request_fields,
+        }
     }
 
 
@@ -385,7 +396,8 @@ def _post_rag_query(
     retrieval_config: Mapping[str, object],
     managed_stores: Sequence[LiteLLM_ManagedVectorStore],
     router: Router,
-    headers: Mapping[str, str] | None = None,
+    headers: Mapping[str, str | bytes] | None = None,
+    body: Mapping[str, object] | None = None,
 ) -> httpx.Response:
     with (
         patch.object(  # test-quality-ok: seeds the real managed-store registry the query path reads
@@ -402,6 +414,7 @@ def _post_rag_query(
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hello"}],
                 "retrieval_config": dict(retrieval_config),
+                **(body or {}),
             },
             headers=dict(headers or {}),
         )
@@ -469,6 +482,32 @@ def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentia
     assert response.status_code == 200, response.json()
     forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
     assert forwarded["api_key"] == forwarded_provider_key
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
+
+
+@pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
+def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(client_team_a, ingest_request):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            **ingest_request({"custom_llm_provider": "openai"}, drop_params=True),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
     assert forwarded["api_base"] == _TEAM_OPENAI_BASE
 
 
@@ -740,6 +779,32 @@ def test_rag_query_search_uses_the_forwarded_provider_key_over_team_provider_cre
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {forwarded_provider_key}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            body={"drop_params": True},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
 
 
 @pytest.mark.parametrize(
