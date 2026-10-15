@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,7 +12,11 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
-from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
@@ -20,7 +25,9 @@ from litellm.litellm_core_utils.realtime_streaming import (
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -787,12 +794,6 @@ def test_collect_user_input_empty_transcript_not_collected():
 @pytest.mark.asyncio
 async def test_usage_meter_snapshot_stored_in_model_call_details():
     """xAI metered usage from raw client/backend frames reaches the spend log."""
-    import base64
-
-    from litellm.constants import REALTIME_METERED_USAGE_KEY
-    from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
-    from litellm.types.llms.xai import RealtimeMeteredUsage
-
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()

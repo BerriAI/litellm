@@ -8965,9 +8965,8 @@ def test_live_session_skips_non_finite_rate_for_next_candidate(
     assert cost == pytest.approx(4 * 0.25)
 
 
-def test_xai_realtime_server_vad_bills_wall_clock_audio(
-    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.fixture
+def _xai_voice_test_model(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "grok-voice-test",
@@ -8979,6 +8978,9 @@ def test_xai_realtime_server_vad_bills_wall_clock_audio(
         },
     )
     litellm.get_model_info.cache_clear()
+
+
+def test_xai_realtime_server_vad_bills_wall_clock_audio(_xai_voice_test_model: None) -> None:
     start_time: Final = datetime.datetime(2025, 1, 1)
 
     cost: Final = handle_realtime_stream_cost_calculation(
@@ -8992,20 +8994,7 @@ def test_xai_realtime_server_vad_bills_wall_clock_audio(
     assert cost == pytest.approx(30 * 0.0013333333333333333)
 
 
-def test_xai_realtime_push_to_talk_bills_only_metered_audio(
-    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "grok-voice-test",
-        {
-            "litellm_provider": "xai",
-            "mode": "realtime",
-            "input_cost_per_second": 0.0013333333333333333,
-            "input_cost_per_text_message": 0.004,
-        },
-    )
-    litellm.get_model_info.cache_clear()
+def test_xai_realtime_push_to_talk_bills_only_metered_audio(_xai_voice_test_model: None) -> None:
     start_time: Final = datetime.datetime(2025, 1, 1)
     metered: Final = RealtimeMeteredUsage(
         push_to_talk=True, audio_seconds_sent=2.0, audio_seconds_received=3.0, text_messages=0
@@ -9024,18 +9013,7 @@ def test_xai_realtime_push_to_talk_bills_only_metered_audio(
     assert cost == pytest.approx(5 * 0.0013333333333333333)
 
 
-def test_xai_realtime_bills_text_messages(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "grok-voice-test",
-        {
-            "litellm_provider": "xai",
-            "mode": "realtime",
-            "input_cost_per_second": 0.0013333333333333333,
-            "input_cost_per_text_message": 0.004,
-        },
-    )
-    litellm.get_model_info.cache_clear()
+def test_xai_realtime_bills_text_messages(_xai_voice_test_model: None) -> None:
     start_time: Final = datetime.datetime(2025, 1, 1)
     metered: Final = RealtimeMeteredUsage(
         push_to_talk=False, audio_seconds_sent=0.0, audio_seconds_received=0.0, text_messages=1
@@ -9052,6 +9030,33 @@ def test_xai_realtime_bills_text_messages(_local_model_cost_map: None, monkeypat
     )
 
     assert cost == pytest.approx(30 * 0.0013333333333333333 + 0.004)
+
+
+def test_xai_realtime_missing_rates_bills_nothing(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "grok-voice-unpriced",
+        {"litellm_provider": "xai", "mode": "realtime"},
+    )
+    litellm.get_model_info.cache_clear()
+    start_time: Final = datetime.datetime(2025, 1, 1)
+    metered: Final = RealtimeMeteredUsage(
+        push_to_talk=True, audio_seconds_sent=2.0, audio_seconds_received=3.0, text_messages=2
+    )
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=_live_session_results({"type": "session.created", "session": {"model": "grok-voice-unpriced"}}),
+        combined_usage_object=Usage(),
+        custom_llm_provider="xai",
+        litellm_model_name="grok-voice-unpriced",
+        litellm_logging_obj=_live_logging_object(
+            start_time, start_time + datetime.timedelta(seconds=30), metered_usage=metered
+        ),
+    )
+
+    assert cost == 0.0
 
 
 def test_non_xai_realtime_ignores_metered_usage(_local_model_cost_map: None) -> None:

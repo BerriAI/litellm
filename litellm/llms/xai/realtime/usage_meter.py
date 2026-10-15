@@ -1,13 +1,4 @@
-"""Per-session xAI Grok Voice realtime usage meter.
-
-xAI realtime ``response.done`` events carry ``usage: {}``, so token billing is
-impossible and duration/text billing must be counted from the raw wire frames:
-client ``input_audio_buffer.append`` and billable ``conversation.item.create``
-frames, and backend ``response.output_audio.delta`` frames. Session config
-(client ``session.update``, backend ``session.created`` / ``session.updated``)
-decides the audio format used to convert base64 payload bytes into seconds and
-whether the session is push-to-talk (``turn_detection: null``), which changes
-how the session's audio is billed downstream in the cost calculator.
+"""Counts billable xAI Grok Voice realtime usage from raw wire frames.
 
 Audio format reference: https://docs.x.ai/voice-realtime.ws.json
 """
@@ -35,7 +26,6 @@ def _decoded_base64_length(value: object) -> int:
 
 
 def _audio_format_bytes_per_second(fmt: Mapping[str, object]) -> float:
-    """Bytes per second for a GA ``{type, rate}`` audio format object."""
     fmt_type: Final = fmt.get("type")
     if fmt_type is None or fmt_type == "audio/pcm":
         rate: Final = fmt.get("rate")
@@ -51,7 +41,6 @@ def _audio_format_bytes_per_second(fmt: Mapping[str, object]) -> float:
 
 
 def _beta_audio_format_bytes_per_second(name: object) -> float | None:
-    """Bytes per second for a flat beta ``input_audio_format`` / ``output_audio_format`` string."""
     if name == "pcm16":
         return float(2 * _PCM_DEFAULT_RATE)
     if name in ("g711_ulaw", "g711_alaw"):
@@ -116,13 +105,12 @@ class XAIRealtimeUsageMeter:
         )
 
     def _apply_session_config(self, session: Mapping[str, object]) -> None:
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
         if "turn_detection" in session:
             self._apply_turn_detection(session["turn_detection"])
-        else:
-            audio: Final = as_str_mapping(session.get("audio"))
-            audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
-            if audio_input is not None and "turn_detection" in audio_input:
-                self._apply_turn_detection(audio_input["turn_detection"])
+        elif audio_input is not None and "turn_detection" in audio_input:
+            self._apply_turn_detection(audio_input["turn_detection"])
 
         input_bps: Final = _beta_audio_format_bytes_per_second(session.get("input_audio_format"))
         if input_bps is not None:
@@ -131,15 +119,13 @@ class XAIRealtimeUsageMeter:
         if output_bps is not None:
             self._output_bytes_per_second = output_bps
 
-        audio_config: Final = as_str_mapping(session.get("audio"))
-        if audio_config is None:
+        if audio is None:
             return
-        input_config: Final = as_str_mapping(audio_config.get("input"))
-        if input_config is not None:
-            input_format: Final = as_str_mapping(input_config.get("format"))
+        if audio_input is not None:
+            input_format: Final = as_str_mapping(audio_input.get("format"))
             if input_format is not None:
                 self._input_bytes_per_second = _audio_format_bytes_per_second(input_format)
-        output_config: Final = as_str_mapping(audio_config.get("output"))
+        output_config: Final = as_str_mapping(audio.get("output"))
         if output_config is not None:
             output_format: Final = as_str_mapping(output_config.get("format"))
             if output_format is not None:
