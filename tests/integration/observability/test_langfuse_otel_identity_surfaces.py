@@ -7,6 +7,7 @@ from _langfuse_otel import (
     _generation_marker_span_attributes,
     _generation_span_attributes,
     _langfuse_proxy,
+    _marker_trace_span_attributes,
     _observability_proxy,
     _sink,
     _trace_user_span_attributes,
@@ -379,6 +380,63 @@ def test_langfuse_otel_v2_caller_trace_user_id_wins_over_the_end_user(gateway: G
         assert all(
             _identity(attributes) == {"user.id": f"caller-{marker}", "session.id": None} for attributes in user_spans
         ), user_spans
+
+
+def test_langfuse_otel_v2_responses_end_user_lands_on_every_user_span(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = uuid.uuid4().hex
+    with (
+        wire_server(lambda request: _upstream_reply_for(request, marker)) as provider,
+        wire_server(_sink) as collector,
+        _langfuse_proxy(gateway, tmp_path, collector.url, {"LITELLM_OTEL_V2": "1"}) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        owner: Final = scenario.user()
+        key: Final = scenario.key(user_id=owner)
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=provider.url + "/v1")
+        with _openai_client(candidate, key, marker) as client:
+            completion: Final = client.responses.create(
+                model=model, input=marker, extra_body={"cache": {"no-cache": True}}
+            )
+            assert marker in completion.output_text, completion.output_text
+        batches: Final[list[bytes]] = []
+        trace_spans: Final = eventually(
+            lambda: _marker_trace_span_attributes(collector, batches, marker),
+            lambda spans: sum("user.id" in attributes for attributes in spans) == 2,
+            seconds=30,
+        )
+        assert [_identity(attributes) for attributes in trace_spans if "user.id" in attributes] == [
+            {"user.id": f"end-user-{marker}", "session.id": None}
+        ] * 2, trace_spans
+
+
+async def test_langfuse_otel_v2_async_streaming_messages_end_user_lands_on_every_user_span(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with (
+        wire_server(lambda request: _upstream_reply_for(request, marker)) as provider,
+        wire_server(_sink) as collector,
+        _langfuse_proxy(gateway, tmp_path, collector.url, {"LITELLM_OTEL_V2": "1"}) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        owner: Final = scenario.user()
+        key: Final = scenario.key(user_id=owner)
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=provider.url + "/v1")
+        async with _async_anthropic_client(candidate, key, marker) as client:
+            stream: Final = await client.messages.create(
+                model=model, max_tokens=5, messages=[{"role": "user", "content": marker}], stream=True
+            )
+            events: Final = tuple([event async for event in stream])
+            assert events, events
+        batches: Final[list[bytes]] = []
+        trace_spans: Final = eventually(
+            lambda: _marker_trace_span_attributes(collector, batches, marker),
+            lambda spans: sum("user.id" in attributes for attributes in spans) == 2,
+            seconds=30,
+        )
+        assert [_identity(attributes) for attributes in trace_spans if "user.id" in attributes] == [
+            {"user.id": f"end-user-{marker}", "session.id": None}
+        ] * 2, trace_spans
 
 
 def test_arize_phoenix_header_end_user_keeps_session_mapping(gateway: Gateway, tmp_path: Path) -> None:

@@ -258,6 +258,19 @@ def _trace_user_span_attributes(sink: Wire, batches: list[bytes], marker: str) -
     )
 
 
+def _marker_trace_span_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
+    spans: Final = _drained_spans(sink, batches)
+    marker_trace: Final = next(
+        (
+            trace_id
+            for trace_id, attributes in spans
+            if any(isinstance(value, str) and marker in value for value in attributes.values())
+        ),
+        None,
+    )
+    return tuple(attributes for trace_id, attributes in spans if trace_id == marker_trace)
+
+
 def _user_id_session_id(attributes: Mapping[str, object]) -> dict[str, object]:
     return {key: attributes.get(key) for key in ("user.id", "session.id")}
 
