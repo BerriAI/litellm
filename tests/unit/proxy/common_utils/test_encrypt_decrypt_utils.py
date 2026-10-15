@@ -391,3 +391,69 @@ def test_bearer_token_uses_only_header_safe_characters(length: int):
 
     assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
     assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
+
+
+# ---------------------------------------------------------------------------
+# Secret writers must refuse (not silently store plaintext) when the
+# xsalsa20-poly1305 opt-in cannot be honored: PyNaCl missing or FIPS mode.
+# ---------------------------------------------------------------------------
+
+
+def _opt_into_xsalsa20(monkeypatch) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+
+
+def _without_pynacl(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+
+def test_guardrail_writer_refuses_xsalsa20_optin_without_pynacl(monkeypatch):
+    """encrypt_guardrail_litellm_params used to swallow LegacyEncryptionUnavailableError
+    and persist the secret as plaintext; it must refuse the write instead."""
+    _opt_into_xsalsa20(monkeypatch)
+    _without_pynacl(monkeypatch)
+    from litellm.proxy.guardrails.guardrail_registry import encrypt_guardrail_litellm_params
+
+    with pytest.raises(LegacyEncryptionUnavailableError):
+        encrypt_guardrail_litellm_params({"api_key": "sk-plain-secret"})
+
+
+def test_search_tool_writer_refuses_xsalsa20_optin_without_pynacl(monkeypatch):
+    _opt_into_xsalsa20(monkeypatch)
+    _without_pynacl(monkeypatch)
+    from litellm.proxy.search_endpoints.search_tool_registry import _encrypted_search_tool_value
+
+    with pytest.raises(LegacyEncryptionUnavailableError):
+        _encrypted_search_tool_value("sk-plain-secret")
+
+
+def test_callback_writer_refuses_xsalsa20_optin_without_pynacl(monkeypatch):
+    _opt_into_xsalsa20(monkeypatch)
+    _without_pynacl(monkeypatch)
+    from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
+
+    with pytest.raises(LegacyEncryptionUnavailableError):
+        _encrypt_if_plaintext("langfuse_public_key", "sk-plain-secret")
+
+
+def test_guardrail_writer_refuses_xsalsa20_optin_under_fips(monkeypatch):
+    _opt_into_xsalsa20(monkeypatch)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "1")
+    from litellm.proxy.guardrails.guardrail_registry import encrypt_guardrail_litellm_params
+
+    with pytest.raises(FipsModeError):
+        encrypt_guardrail_litellm_params({"api_key": "sk-plain-secret"})
+
+
+def test_secret_writers_still_encrypt_under_default_algorithm_without_pynacl(monkeypatch):
+    """Control: AES (the default) needs no PyNaCl, so a no-PyNaCl install still
+    encrypts secrets on every writer — only the refused opt-in changes behavior."""
+    _use_aes(monkeypatch)
+    _without_pynacl(monkeypatch)
+    from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
+    from litellm.proxy.search_endpoints.search_tool_registry import _encrypted_search_tool_value
+
+    assert _encrypted_search_tool_value("sk-plain-secret").startswith("v3:gcm:")
+    encrypted = _encrypt_if_plaintext("langfuse_public_key", "sk-plain-secret")
+    assert isinstance(encrypted, str) and encrypted.startswith("litellm_enc::v3:gcm:")

@@ -1126,6 +1126,10 @@ def _covered_table_rig(
                 litellm_params={
                     "mode": "pre_call",
                     "api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("guardrail-secret"),
+                    # Nested shapes the guardrails writer also encrypts: a sensitive key
+                    # inside a nested dict, and sensitive-keyed strings inside a list.
+                    "metadata": {"api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("nested")},
+                    "secret_headers": [CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("listed")],
                 },
             )
         )

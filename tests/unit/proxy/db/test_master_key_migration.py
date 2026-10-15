@@ -648,3 +648,87 @@ async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_ar
     assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
     assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
     assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]
+
+
+@pytest.mark.asyncio
+async def test_plaintext_config_and_nested_model_leaves_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """Without PyNaCl the count may only consider leaves the column's writers actually
+    encrypt. Plaintext noise — a config settings row, model tags — must not read as
+    values encrypted with the previous key, or the boot migration never finishes and a
+    FIPS image (which cannot install PyNaCl) is told forever to install the extra."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {"param_name": "general_settings", "param_value": {"store_model_in_db": "true", "alerting": ["slack"]}},
+        ],
+        "LiteLLM_ProxyModelTable": [
+            {
+                "model_id": "model-1",
+                "litellm_params": {
+                    "api_key": _encrypted("provider-key"),
+                    "tags": ["prod"],
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # only the api_key
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    # The one readable value migrated; the recount sees no previous-key value anywhere,
+    # so the operator is told the variable can go instead of being stuck on the extra.
+    assert outcome == Migrated(migrated=1, remaining=0, unreadable=0)
+    assert "You may now delete" in describe_outcome(outcome)
+
+    second_boot = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+    assert second_boot == NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
+    assert ("LiteLLM_ProxyModelTable", "litellm_params", "model-1") in database.writes
+    row = tables["LiteLLM_ProxyModelTable"][0]["litellm_params"]
+    assert row["tags"] == ["prod"]  # plaintext nested leaf untouched
+    assert decrypt_if_encrypted_with(str(row["api_key"]), NEW_KEY) == "provider-key"
+    assert tables["LiteLLM_Config"][0]["param_value"] == {
+        "store_model_in_db": "true",
+        "alerting": ["slack"],
+    }  # plaintext config row untouched
+
+
+@pytest.mark.asyncio
+async def test_guardrail_mode_and_unprefixed_params_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """A guardrails row's plaintext params never read as previous-key ciphertext either:
+    its writer marks every encrypted value, so only marked sensitive leaves count."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "gr-1",
+                "litellm_params": {
+                    "mode": "pre_call",
+                    "guardrail_name": "presidio",
+                    "api_key": "litellm_enc::" + _encrypted("guardrail-key"),
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # the marked api_key only

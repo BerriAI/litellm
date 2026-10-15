@@ -13,12 +13,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    LegacyEncryptionUnavailableError,
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decrypt_if_encrypted_with,
     encrypt_value_helper,
     get_salt_key,
     legacy_unreadable,
 )
+from litellm.proxy.common_utils.fips import FipsModeError
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SearchToolsRepository
@@ -77,6 +79,10 @@ def _encrypted_search_tool_value(value: object) -> object:
         return value
     try:
         return encrypt_value_helper(value=value)
+    except (FipsModeError, LegacyEncryptionUnavailableError):
+        # The configured algorithm cannot be honored (xsalsa20 opt-in under FIPS mode, or
+        # without PyNaCl): refuse the write instead of persisting the secret unencrypted.
+        raise
     except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
         return value
 

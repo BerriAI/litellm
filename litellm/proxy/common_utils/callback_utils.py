@@ -27,9 +27,11 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import FipsModeError
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -775,6 +777,10 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         return value
     try:
         return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value)
+    except (FipsModeError, LegacyEncryptionUnavailableError):
+        # The configured algorithm cannot be honored (xsalsa20 opt-in under FIPS mode, or
+        # without PyNaCl): refuse the write instead of persisting the secret unencrypted.
+        raise
     except Exception:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit

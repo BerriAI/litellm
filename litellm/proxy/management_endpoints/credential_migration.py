@@ -617,10 +617,14 @@ def _top_level_param_leaves(params: Mapping[str, object]) -> Iterator[tuple[str,
 
 
 def _iter_keyed_strings(obj: object) -> Iterator[tuple[str | None, str]]:
-    """Yield every (dict key, string leaf) pair in a nested structure, keyless for list items.
+    """Yield every (dict key, string leaf) pair in a nested structure.
 
-    Iterative like ``_iter_encrypted_strings``: the code-quality recursive-function
-    detector bans recursion here, and an explicit stack walks arbitrary depth safely.
+    A list item inherits the key of the dict entry that holds the list: the guardrails
+    writer encrypts sensitive-keyed strings inside arrays under the parent key, so
+    ``["litellm_enc::<ct>"]`` under ``api_key`` is a keyed secret leaf, while items of a
+    root-level list stay keyless. Iterative like ``_iter_encrypted_strings``: the
+    code-quality recursive-function detector bans recursion here, and an explicit stack
+    walks arbitrary depth safely.
     """
     stack: Final[list[tuple[str | None, object]]] = [(None, obj)]  # mutable-ok: walker stack
     while stack:
@@ -632,7 +636,7 @@ def _iter_keyed_strings(obj: object) -> Iterator[tuple[str | None, str]]:
             stack.extend(entries.items())
         elif isinstance(cur, list):
             items = cast("list[object]", cur)  # cast-ok: list items are walked as opaque objects
-            stack.extend((None, item) for item in items)
+            stack.extend((key, item) for item in items)
 
 
 def _guardrail_encrypted_leaves(raw: object) -> Iterator[tuple[str, bool]]:

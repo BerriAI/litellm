@@ -1,8 +1,8 @@
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, cast
 
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -86,13 +86,7 @@ async def count_values_encrypted_with(database: SupportsRawQueries, signing_key:
         # LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable.
         return value if legacy_unreadable(value) else None
 
-    return sum(
-        [
-            replace_ciphertexts(_STORED_VALUE.validate_python(row[secret_column.column]), keep)[1]
-            for secret_column in await _secret_columns_in(database)
-            for row in await _rows_of(database, secret_column)
-        ]
-    )
+    return await _count_secret_leaves(database, lambda leaf: keep(leaf) is not None)
 
 
 async def count_values_encrypted_with_or_none(
@@ -111,17 +105,96 @@ async def _count_values_legacy_unreadable(database: SupportsRawQueries) -> int:
     encrypted-with-previous-key count stays conservative and this walk explains the residual."""
     if legacy_encryption_available():
         return 0
+    return await _count_secret_leaves(database, legacy_unreadable)
 
-    def unreadable(value: str) -> str | None:
-        return value if legacy_unreadable(value) else None
 
-    async def unreadable_in(secret_column: _SecretColumn) -> int:
-        return sum(
-            replace_ciphertexts(_STORED_VALUE.validate_python(row[secret_column.column]), unreadable)[1]
+async def _count_secret_leaves(database: SupportsRawQueries, counted: Callable[[str], bool]) -> int:
+    """Count the writer-encrypted secret leaves across every secret column that satisfy ``counted``."""
+
+    def counted_in(secret_column: _SecretColumn, row: Mapping[str, object]) -> int:
+        stored: Final = _STORED_VALUE.validate_python(row[secret_column.column])
+        leaves: Final = _counted_secret_leaves(secret_column, row[secret_column.primary_key], stored)
+        return sum(1 for leaf in leaves if counted(leaf))
+
+    return sum(
+        [
+            counted_in(secret_column, row)
+            for secret_column in await _secret_columns_in(database)
             for row in await _rows_of(database, secret_column)
-        )
+        ]
+    )
 
-    return sum([await unreadable_in(secret_column) for secret_column in await _secret_columns_in(database)])
+
+# Columns whose writers encrypt each top-level string param and leave everything nested
+# inside a list/dict param (tags, routing metadata, …) stored as plaintext.
+_LITELLM_PARAMS_SECRET_COLUMNS: Final = frozenset(
+    (
+        ("LiteLLM_ProxyModelTable", "litellm_params"),
+        ("LiteLLM_SearchToolsTable", "litellm_params"),
+    )
+)
+_ENV_VARS_CONFIG_ROW: Final = "environment_variables"
+
+
+def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, stored: JsonValue) -> Iterator[str]:
+    """Yield the string leaves of one stored value the writers of this column actually encrypt.
+
+    Telling ciphertext from plaintext needs PyNaCl for unprefixed values, so a count over
+    every string leaf counts plaintext noise (config booleans, model tags, guardrail modes)
+    as possibly-encrypted-with-the-previous-key and the boot migration then never finishes
+    on an install that cannot install PyNaCl (a FIPS image). Restricting the candidates to
+    the leaves each column's writers encrypt keeps that noise out — the same per-column
+    selection the credential-migration scanner applies. Columns without a known writer
+    shape keep the conservative every-string-leaf walk. The callback-encryption marker is
+    stripped exactly as ``replace_ciphertexts`` strips it before the decrypt attempt."""
+    if secret_column.table == "LiteLLM_Config" and _PRIMARY_KEY.validate_python(primary_key) != _ENV_VARS_CONFIG_ROW:
+        # Only the environment_variables row's values are ever encrypted; every other
+        # config row (general_settings, …) stores plaintext by construction.
+        return
+    if (secret_column.table, secret_column.column) in _LITELLM_PARAMS_SECRET_COLUMNS:
+        params: Final[JsonValue] = stored
+        if isinstance(params, dict):
+            for value in params.values():
+                if isinstance(value, str):
+                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        return
+    if secret_column.table == "LiteLLM_GuardrailsTable":
+        yield from _sensitive_prefixed_leaves(stored)
+        return
+    yield from _string_leaves(stored)
+
+
+def _string_leaves(value: JsonValue) -> Iterator[str]:
+    """Every string leaf of a nested structure, marker-stripped, via an explicit stack."""
+    stack: Final[list[JsonValue]] = [value]  # mutable-ok: walker stack
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            yield cur.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        elif isinstance(cur, (list, dict)):
+            stack.extend(cur.values() if isinstance(cur, dict) else cur)
+
+
+def _sensitive_prefixed_leaves(value: JsonValue) -> Iterator[str]:
+    """Sensitive-keyed, marker-prefixed string leaves at any depth of a guardrails row.
+
+    The guardrails writer stores every sensitive-keyed string with the callback
+    encryption marker — including strings inside lists under the sensitive key — and
+    everything else as plaintext by construction, so only marked leaves are candidates."""
+    from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
+
+    stack: Final[list[tuple[str | None, JsonValue]]] = [(None, value)]  # mutable-ok: walker stack
+    while stack:
+        key, cur = stack.pop()
+        if isinstance(cur, str):
+            if key is not None and is_sensitive_callback_key(key) and cur.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+                yield cur.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        elif isinstance(cur, dict):
+            entries = cast("dict[str, JsonValue]", cur)  # cast-ok: JSON object keys are strings
+            stack.extend(entries.items())
+        elif isinstance(cur, list):
+            items = cast("list[JsonValue]", cur)  # cast-ok: JSON arrays hold JSON values
+            stack.extend((key, item) for item in items)
 
 
 async def reencrypt_stored_values(database: SupportsRawQueries, *, from_key: str, to_key: str) -> int:
