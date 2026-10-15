@@ -38,6 +38,7 @@ class PlannedRequest:
     stream: bool
     flag: Flag
     shape: RequestShape
+    input_tokens: int
 
     @property
     def blocked(self) -> bool:
@@ -104,6 +105,7 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
         stream = rng.random() < case.traffic.stream_share
         flag = _pick_flag(rng, case, stream=stream)
         shape = _pick(rng, case.traffic.shapes)
+        low, high = shape.input_tokens
         planned.append(
             PlannedRequest(
                 seq=seq,
@@ -114,6 +116,7 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
                 stream=stream,
                 flag=flag,
                 shape=shape,
+                input_tokens=rng.randint(low, high),
             )
         )
     return tuple(planned)

@@ -66,21 +66,20 @@ class Guardrail:
 
 @dataclass(frozen=True, slots=True)
 class RequestShape:
-    """What one request looks like, in tokens: a coding-agent session (`setup/corpus/session.py`, the system
-    prompt, the Read/Edit/Write/Bash/Grep/Glob tools when `tools` is set, then file-reading turns carrying real
-    source files until `input_tokens` is spent) and the output cap. The stock shapes are the ones the mocks hold
-    real provider captures for: a short chat under 40k tokens, a tool-calling turn around 64k, a long context
-    over 300k. A new shape needs its own captures or the mock answers with the nearest one."""
+    """What one request looks like: a coding-agent session (`setup/corpus/session.py`, the system prompt, the
+    Read/Edit/Write/Bash/Grep/Glob tools when `tools` is set, then file-reading turns carrying real source files)
+    whose size in input tokens is drawn per request from the `input_tokens` range, and the output cap. The mocks
+    answer with the real provider capture nearest in size and a time to first byte interpolated between the two
+    captures around that size."""
 
     name: str
-    input_tokens: int
+    input_tokens: tuple[int, int]
     tools: bool = False
     output_tokens: int = 1_024
 
 
-SHORT_CHAT: Final = RequestShape("short_chat", input_tokens=38_500, output_tokens=1_024)
-TOOL_CALL: Final = RequestShape("tool_call", input_tokens=63_600, tools=True, output_tokens=1_024)
-LONG_CONTEXT: Final = RequestShape("long_context", input_tokens=335_000, output_tokens=1_024)
+SHORT: Final = RequestShape("short", input_tokens=(5_000, 100_000), tools=True)
+LONG: Final = RequestShape("long", input_tokens=(300_000, 1_000_000), tools=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +93,7 @@ class Traffic:
     rps: float
     total_requests: int
     endpoints: Mapping[Endpoint, float] = field(default_factory=lambda: {"chat_completions": 1.0})
-    shapes: Mapping[RequestShape, float] = field(default_factory=lambda: {SHORT_CHAT: 1.0})
+    shapes: Mapping[RequestShape, float] = field(default_factory=lambda: {SHORT: 1.0})
     stream_share: float = 0.0
     intervene_share: float = 0.0
     block_share: float = 0.0
