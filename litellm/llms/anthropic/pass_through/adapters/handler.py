@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -725,7 +726,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        completion_response: Final = await acompletion_call(**completion_kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -864,7 +870,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = litellm.completion(**completion_kwargs)
+        from litellm.chat_completions.dispatch import forward_completion
+
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+        completion_response: Final = completion_call(**completion_kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(

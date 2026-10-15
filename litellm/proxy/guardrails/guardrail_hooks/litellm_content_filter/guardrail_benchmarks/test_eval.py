@@ -20,7 +20,9 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from functools import partial
 from typing import Final
 
 import pytest
@@ -60,7 +62,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 400:
-            detail: Final[dict[str, object]] = e.detail if isinstance(e.detail, dict) else {}
+            detail: Final[Mapping[str, object]] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -518,12 +520,15 @@ class _LlmJudgeChecker:
         self.model = model
 
     def check(self, text: str) -> str:
-        import litellm
 
         if not text or not text.strip():
             return text
 
-        response: Final = litellm.completion(
+        import litellm
+        from litellm.chat_completions.dispatch import forward_completion
+
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+        response: Final = completion_call(
             model=self.model,
             messages=[
                 {"role": "system", "content": LLM_JUDGE_SYSTEM_PROMPT},

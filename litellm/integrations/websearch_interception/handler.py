@@ -9,8 +9,9 @@ server-side using litellm router's search tools.
 import asyncio
 import math
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
@@ -1817,7 +1818,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         params.update(request_patch.optional_params)
         params.pop("tool_choice", None)
         patch_kwargs: Final = dict[str, object](request_patch.kwargs)
-        return await litellm.acompletion(
+
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        return await acompletion_call(
             model=request_patch.model or model,
             messages=request_patch.messages,
             **_NO_ACOMPLETION_NAMED,

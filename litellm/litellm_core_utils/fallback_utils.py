@@ -1,6 +1,7 @@
+from collections.abc import Coroutine
+from functools import partial
 from typing import Final
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import (
@@ -30,6 +31,13 @@ async def async_completion_with_fallbacks(**kwargs):
     Raises:
         Exception: If all models fail and no response is generated
     """
+
+    import litellm
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
     # Extract and prepare parameters
     nested_kwargs: Final = kwargs.pop("kwargs", {})
     original_model: Final = kwargs["model"]
@@ -59,7 +67,7 @@ async def async_completion_with_fallbacks(**kwargs):
             # Filter out internal parameters that shouldn't be sent to provider APIs
             completion_kwargs = filter_internal_params(completion_kwargs)
 
-            response = await litellm.acompletion(
+            response = await acompletion_call(
                 **completion_kwargs,
                 model=model,
                 litellm_logging_obj=litellm_logging_obj,

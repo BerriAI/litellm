@@ -13,7 +13,8 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Coroutine, Mapping, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeVar, Union, cast
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
@@ -551,7 +552,13 @@ async def _call_summary_model(
     router_acompletion: Final[_SummaryAcompletion | None] = getattr(llm_router, "acompletion", None)
     if llm_router is not None and router_acompletion is not None:
         return await router_acompletion(messages=summary_messages, **call_kwargs)
-    return await litellm.acompletion(messages=[*summary_messages], **call_kwargs)
+
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
+    return await acompletion_call(messages=[*summary_messages], **call_kwargs)
 
 
 def _extract_response_text(response: object) -> str | None:

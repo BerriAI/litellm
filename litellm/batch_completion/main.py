@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from functools import partial
 from typing import Final
 
 import litellm
@@ -56,6 +58,7 @@ def batch_completion(
     Returns:
         list: A list of completion results.
     """
+
     args: Final = locals()
 
     batch_messages: Final = messages
@@ -65,6 +68,8 @@ def batch_completion(
     if model.split("/", 1)[0] in litellm.provider_list:
         custom_llm_provider = model.split("/", 1)[0]
         model = model.split("/", 1)[1]
+    from litellm.chat_completions.dispatch import forward_completion
+
     if custom_llm_provider == "vllm":
         optional_params: Final = get_optional_params(
             functions=functions,
@@ -97,6 +102,7 @@ def batch_completion(
             for i in range(0, len(lst), n):
                 yield lst[i : i + n]
 
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
@@ -106,7 +112,7 @@ def batch_completion(
                     original_kwargs = {}
                     if "kwargs" in kwargs_modified:
                         original_kwargs = kwargs_modified.pop("kwargs")
-                    future = executor.submit(litellm.completion, **kwargs_modified, **original_kwargs)
+                    future = executor.submit(completion_call, **kwargs_modified, **original_kwargs)
                     completions.append(future)
 
         # Retrieve the results from the futures
@@ -143,15 +149,18 @@ def batch_completion_models(*args, **kwargs):
         It sends requests concurrently and returns the response from the first model that responds.
     """
 
+    from litellm.chat_completions.dispatch import forward_completion
+
+    completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
     if "model" in kwargs:
         kwargs.pop("model")
     if "models" in kwargs:
-        models: Final = kwargs["models"]
+        models: Final[list[object]] = kwargs["models"]
         kwargs.pop("models")
         futures = {}
         with ThreadPoolExecutor(max_workers=len(models)) as executor:
             for model in models:
-                futures[model] = executor.submit(litellm.completion, *args, model=model, **kwargs)
+                futures[model] = executor.submit(completion_call, *args, model=model, **kwargs)
 
             for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
                 if future.result() is not None:
@@ -160,7 +169,7 @@ def batch_completion_models(*args, **kwargs):
         deployments: Final = kwargs["deployments"]
         kwargs.pop("deployments")
         kwargs.pop("model_list")
-        nested_kwargs: Final = kwargs.pop("kwargs", {})
+        nested_kwargs: Final[Mapping[str, object]] = kwargs.pop("kwargs", {})
         futures = {}
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
@@ -168,7 +177,7 @@ def batch_completion_models(*args, **kwargs):
                     if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
                         deployment[key] = kwargs[key]
                 kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(litellm.completion, **kwargs)
+                futures[deployment["model"]] = executor.submit(completion_call, **kwargs)
 
             while futures:
                 # wait for the first returned future
@@ -220,6 +229,9 @@ def batch_completion_models_all_responses(*args, **kwargs):
     """
     import concurrent.futures
 
+    from litellm.chat_completions.dispatch import forward_completion
+
+    completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
     # ANSI escape codes for colored output
 
     if "model" in kwargs:
@@ -242,7 +254,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
     responses: Final = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-        futures: Final = [executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models]
+        futures: Final = [executor.submit(completion_call, *args, model=model, **kwargs) for model in models]
 
         for future in futures:
             try:

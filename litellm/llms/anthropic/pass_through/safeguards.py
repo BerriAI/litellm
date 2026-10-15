@@ -143,7 +143,7 @@ class SafeguardsEvaluator:
     transcript: str
     litellm_metadata: Mapping[str, object]
     allowed_model_region: str | None
-    acompletion: ClassifierAcompletion
+    acompletion: ClassifierAcompletion | Callable[..., Awaitable[object]]
     caller_model_verdict: CallerModelGate
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
     logging_kwargs: ProxySubCallLoggingKwargs = field(default_factory=ProxySubCallLoggingKwargs)

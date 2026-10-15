@@ -3,6 +3,7 @@ Handler for transforming responses api requests to litellm.completion requests
 """
 
 from collections.abc import Coroutine, Mapping
+from functools import partial
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -72,7 +73,10 @@ class LiteLLMCompletionTransformationHandler:
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
+        from litellm.chat_completions.dispatch import forward_completion
+
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = completion_call(
             **completion_args,
         )
 
@@ -119,7 +123,12 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await acompletion_call(
             **acompletion_args,
         )
 

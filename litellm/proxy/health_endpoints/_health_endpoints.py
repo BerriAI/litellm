@@ -6,8 +6,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Final, Literal, TypedDict
 
 import fastapi
@@ -373,6 +374,8 @@ async def health_services_endpoint(
     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
+    from litellm.chat_completions.dispatch import forward_acompletion, forward_completion
+
     try:
         from litellm.proxy.proxy_server import (
             general_settings,
@@ -402,7 +405,10 @@ async def health_services_endpoint(
             or (service_in_success_callbacks and service not in ("langfuse", "pointfive", "sqs", "aws_sqs"))
             or logger_without_dedicated_check_configured
         ):
-            _ = await litellm.acompletion(
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            _ = await acompletion_call(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 user="litellm:/health/services",
@@ -465,7 +471,9 @@ async def health_services_endpoint(
             auth_failure: Final = langfuse_logger.api_client.auth_check()
             if auth_failure is not None:
                 raise ValueError(f"langfuse auth_check failed: {auth_failure.reason}")
-            _ = litellm.completion(
+
+            completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+            _ = completion_call(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 user="litellm:/health/services",

@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Coroutine, Mapping
+from functools import partial
 from typing import Final, cast
 
 import litellm
@@ -73,8 +74,13 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
+        from litellm.chat_completions.dispatch import forward_acompletion
+
         try:
-            completion_response: Final = await litellm.acompletion(**completion_kwargs)
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            completion_response: Final = await acompletion_call(**completion_kwargs)
 
             if stream:
                 # Check if completion_response is actually a stream or a ModelResponse
@@ -134,8 +140,11 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
+        from litellm.chat_completions.dispatch import forward_completion
+
         try:
-            completion_response: Final = litellm.completion(**completion_kwargs)
+            completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+            completion_response: Final = completion_call(**completion_kwargs)
 
             if stream:
                 # Check if completion_response is actually a stream or a ModelResponse

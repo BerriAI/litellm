@@ -27,6 +27,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Coroutine,
     Generator,
     Iterable,
     Iterator,
@@ -2765,6 +2766,10 @@ class Router:
             raise e
 
     def _completion(self, model: str, messages: list[dict[str, str]], **kwargs) -> ModelResponse | CustomStreamWrapper:
+
+        from litellm.chat_completions.dispatch import forward_completion
+
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
         model_name = None
         deployment = None
         try:
@@ -2834,7 +2839,7 @@ class Router:
                     **kwargs,
                 }
             )
-            response: Final = litellm.completion(**input_kwargs)
+            response: Final = completion_call(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             ## CHECK CONTENT FILTER ERROR ##
@@ -3917,6 +3922,12 @@ class Router:
         - semaphore specific to it's rpm
         - in the semaphore,  make a check against it's local rpm before running
         """
+
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
         model_name = None
         deployment = None
         _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
@@ -4014,7 +4025,7 @@ class Router:
                     logging_obj=logging_obj,
                     parent_otel_span=parent_otel_span,
                 )
-                response = await litellm.acompletion(**compacted_input)
+                response = await acompletion_call(**compacted_input)
 
                 ## CHECK CONTENT FILTER ERROR ##
                 if isinstance(response, ModelResponse):
@@ -4751,6 +4762,12 @@ class Router:
         messages: list[AllMessageValues],
         kwargs: dict[str, Any],
     ):
+
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
         if litellm_logging_object is None:
             litellm_logging_object, kwargs = function_setup(
@@ -4830,7 +4847,7 @@ class Router:
         _model_list: Final = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
             kwargs.pop("original_function")
-            return await litellm.acompletion(**kwargs)
+            return await acompletion_call(**kwargs)
 
         return await self.async_function_with_fallbacks(**kwargs)
 

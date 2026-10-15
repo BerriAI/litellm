@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Final, Literal
 
 import litellm
@@ -135,4 +136,10 @@ async def judge_acompletion(
             drop_params=True,
             **params,
         )
-    return await litellm.acompletion(model=judge_model, messages=messages, num_retries=0, drop_params=True, **params)
+
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
+    return await acompletion_call(model=judge_model, messages=messages, num_retries=0, drop_params=True, **params)

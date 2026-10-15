@@ -4,6 +4,8 @@ based on user-provided attack examples and descriptions.
 """
 
 import json
+from collections.abc import Coroutine
+from functools import partial
 from typing import Final
 
 import litellm
@@ -74,8 +76,13 @@ class AiPolicySuggester:
                 code=400,
             )
 
+        from litellm.chat_completions.dispatch import forward_acompletion
+
         try:
-            response: Final = await litellm.acompletion(
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            response: Final = await acompletion_call(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},

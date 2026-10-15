@@ -16,6 +16,21 @@ def embedding_dispatch_types() -> None:
     assert_type(pending, Coroutine[object, object, EmbeddingResponse])  # pyright: ignore[reportUnusedCoroutine]  # the coroutine is produced only to assert its type
 
 
+async def completion_dispatch_types() -> None:
+    from litellm.types.utils import ModelResponse
+    from litellm.utils import CustomStreamWrapper
+
+    assert_type(
+        litellm.completion(model="m", messages=[]),  # pyright: ignore[reportUnknownMemberType]  # legacy signature leaves many params unannotated
+        ModelResponse | CustomStreamWrapper,
+    )
+    assert_type(
+        await litellm.acompletion(model="m", messages=[]),  # pyright: ignore[reportUnknownMemberType]  # legacy signature leaves many params unannotated
+        ModelResponse | CustomStreamWrapper,
+    )
+    litellm.completion(model=1, messages=[])  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # model is typed str; legacy signature leaves other params unannotated
+
+
 def anthropic_messages_dispatch_rejects_wrong_types() -> None:
     litellm.anthropic_messages_handler(max_tokens="x", messages=[], model="m")  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # max_tokens is typed int; legacy signature leaves other params unannotated
 
