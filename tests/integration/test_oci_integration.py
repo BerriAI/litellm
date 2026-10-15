@@ -389,7 +389,7 @@ async def test_async_tool_use(m: _M, oci_params):
 # Reasoning-effort tests (reasoning models only)
 # ---------------------------------------------------------------------------
 
-# Reasons at LOW and accepts reasoningEffort NONE on OCI (gpt-oss and Gemini Pro reject NONE, xAI Grok the param).
+# Reasons at LOW and accepts reasoningEffort NONE on OCI (gpt-oss and Gemini Pro reject NONE, Grok 4.20 the param).
 _REASONING_MODEL = "google.gemini-2.5-flash"
 
 

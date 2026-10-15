@@ -44034,7 +44034,7 @@
         "supports_vision": true,
         "supports_native_streaming": true,
         "supports_image_size": false,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_system_messages": true,
         "supports_pdf_input": true,
         "supports_audio_input": true,
