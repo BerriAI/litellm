@@ -16,6 +16,9 @@ from litellm.llms.bedrock.realtime.transformation import (
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import OpenAIRealtimeEventTypes
 
+OBJECT_PARAMETERS: Final = {"type": "object"}
+CONFLICT_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": OBJECT_PARAMETERS}
+
 
 class TestBedrockRealtimeConfig:
     """Test suite for BedrockRealtimeConfig class"""
@@ -1365,24 +1368,6 @@ class TestBedrockRealtimeUserEventsAndUsage:
         block, two role TOOL blocks each carrying a toolUse with a distinct toolUseId,
         then the post-tool-result ASSISTANT answer (LIT-9465)"""
         args_json: Final = '{"location":"New York"}'
-
-        def tool_block(tool_use_id: str) -> list[dict[str, object]]:
-            return [
-                {"event": {"contentStart": {"role": "TOOL", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
-                {
-                    "event": {
-                        "toolUse": {
-                            "content": args_json,
-                            "contentId": f"c_{tool_use_id}",
-                            "role": "TOOL",
-                            "toolName": "get_weather",
-                            "toolUseId": tool_use_id,
-                        }
-                    }
-                },
-                {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
-            ]
-
         events: Final = self._run(
             BedrockRealtimeConfig(),
             [
@@ -1398,8 +1383,8 @@ class TestBedrockRealtimeUserEventsAndUsage:
                 {"event": {"textOutput": {"content": "ready"}}},
                 {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
             ]
-            + tool_block("tooluse_A")
-            + tool_block("tooluse_B")
+            + self._tool_block("tooluse_A", args_json)
+            + self._tool_block("tooluse_B", args_json)
             + self._assistant_text_block(
                 "SPECULATIVE", "The current weather in New York is sunny and 72 degrees.", "END_TURN"
             ),
@@ -1432,13 +1417,13 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert len(response_ids) == 3
 
     @staticmethod
-    def _tool_block(tool_use_id: str) -> list[dict[str, object]]:
+    def _tool_block(tool_use_id: str, arguments: str = '{"city":"Paris"}') -> list[dict[str, object]]:
         return [
             {"event": {"contentStart": {"role": "TOOL", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
             {
                 "event": {
                     "toolUse": {
-                        "content": '{"city":"Paris"}',
+                        "content": arguments,
                         "contentId": f"c_{tool_use_id}",
                         "role": "TOOL",
                         "toolName": "get_weather",
@@ -1530,37 +1515,23 @@ class TestBedrockRealtimeUserEventsAndUsage:
             {"type": "audio", "transcript": ""},
         ]
 
-    def test_session_update_conflict(self):
-        config: Final = BedrockRealtimeConfig()
-        tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
-        other_tool: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object"}}
-
-        def update(**session) -> dict[str, object]:
-            return {"type": "session.update", "session": session}
-
-        # Before the prompt starts, nothing conflicts
-        assert config.session_update_conflict(update(tools=[tool])) is None
-
-        # First update starts the prompt with the tool applied
-        config.transform_session_update_event(update(tools=[tool]))
-        assert config.prompt_started
-
-        # Omitted fields and identical repeats do not conflict, even with reordered tool keys
-        assert config.session_update_conflict(update(modalities=["text"])) is None
+    def test_session_update_conflict_before_prompt_start(self):
         assert (
-            config.session_update_conflict(
-                update(tools=[{"parameters": {"type": "object"}, "name": "get_weather", "type": "function"}])
+            BedrockRealtimeConfig().session_update_conflict(
+                {"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}}
             )
             is None
         )
 
-        # Changed tools or instructions conflict
-        assert config.session_update_conflict(update(tools=[other_tool])) is not None
-        assert config.session_update_conflict(update(instructions="Be brief.")) is not None
-
     @pytest.mark.parametrize(
         "session,expects_conflict",
         [
+            ({"modalities": ["text"]}, False),
+            ({"tools": [CONFLICT_TOOL]}, False),
+            ({"tools": [{"parameters": OBJECT_PARAMETERS, "name": "get_weather", "type": "function"}]}, False),
+            ({"tools": [{"type": "function", "name": "get_time", "parameters": OBJECT_PARAMETERS}]}, True),
+            ({"tools": []}, True),
+            ({"instructions": "Be brief."}, True),
             ({"instructions": DEFAULT_SYSTEM_PROMPT}, False),
             ({"instructions": ""}, False),
             ({"voice": "amy"}, True),
@@ -1574,7 +1545,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
     )
     def test_session_update_conflict_locked_settings(self, session, expects_conflict):
         config: Final = BedrockRealtimeConfig()
-        config.transform_session_update_event({"type": "session.update", "session": {"modalities": ["text"]}})
+        config.transform_session_update_event({"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}})
         assert config.prompt_started
 
         conflict: Final = config.session_update_conflict({"type": "session.update", "session": session})

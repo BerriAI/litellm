@@ -2,7 +2,7 @@
 
 The handler dials ``api_base`` with ``invoke_model_with_bidirectional_stream`` through
 ``AWSCRTHTTPClient``, which only speaks h2 over TLS ALPN, so this peer is a loopback TLS
-server offering ``h2`` on a thread-owned asyncio loop (same shape as ``async_server.py``).
+server offering ``h2`` on ``async_server.LoopbackServer``'s thread-owned asyncio loop.
 It answers ``POST /model/{id}/invoke-with-bidirectional-stream``, decodes the client's
 signed event-stream chunks into the ``{"event": {...}}`` documents Bedrock would read,
 and answers each consumed ``Turn`` with event-stream ``chunk`` frames carrying
@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import ssl
 import struct
 import uuid
 from collections.abc import Iterator, Mapping
@@ -30,17 +29,17 @@ from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from queue import SimpleQueue
-from threading import Thread
 from typing import Final, Literal
 
 import h2.config
 import h2.connection
 import h2.events
 import h2.exceptions
+from integration._support.async_server import Handler, LoopbackServer
+from integration._support.process import _free_port
+from integration._support.tls import server_context
+from integration._support.upstream import aws_event_stream_frame
 from pydantic import JsonValue, TypeAdapter
-
-from tests.integration._support.tls import server_context
-from tests.integration._support.upstream import aws_event_stream_frame
 
 BedrockEvent = Mapping[str, JsonValue]
 
@@ -403,78 +402,12 @@ class _H2Session:
             self._h2.end_stream(stream_id)
 
 
-class _LoopbackTls:
-    """TLS h2 server on a thread-owned loop; one instance per peer."""
+def _session_handler(state: _PeerState) -> Handler:
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        with suppress(ConnectionError, OSError, asyncio.IncompleteReadError, h2.exceptions.StreamClosedError):
+            await _H2Session(state, reader, writer).run()
 
-    def __init__(self, port: int, context: ssl.SSLContext, state: _PeerState) -> None:
-        self.loop: Final = asyncio.new_event_loop()
-        self._port: Final = port
-        self._context: Final = context
-        self._state: Final = state
-        self._server: asyncio.Server | None = None
-        self._thread: Final = Thread(target=self._run, name=f"bedrock-realtime-peer-{port}", daemon=True)
-        self._connections: tuple[asyncio.Task[None], ...] = ()
-
-    def start(self) -> None:
-        try:
-            self._thread.start()
-            asyncio.run_coroutine_threadsafe(self._bind(), self.loop).result(timeout=10)
-        except BaseException:
-            self.stop()
-            raise
-
-    def stop(self) -> None:
-        if not self._thread.is_alive():
-            if not self.loop.is_closed():
-                self.loop.close()
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(self._close(), self.loop).result(timeout=10)
-        finally:
-            self.loop.call_soon_threadsafe(self.loop.stop)
-            self._thread.join(10)
-            assert not self._thread.is_alive(), "Bedrock realtime peer thread did not stop"
-
-    def _run(self) -> None:
-        asyncio.set_event_loop(self.loop)
-        try:
-            self.loop.run_forever()
-        finally:
-            self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-            self.loop.close()
-
-    async def _bind(self) -> None:
-        self._server = await asyncio.start_server(self._serve, "127.0.0.1", self._port, ssl=self._context)
-
-    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task: Final = asyncio.current_task()
-        assert task is not None
-        self._connections = (*self._connections, task)
-        try:
-            await _H2Session(self._state, reader, writer).run()
-        except (ConnectionError, OSError, asyncio.IncompleteReadError, h2.exceptions.StreamClosedError):
-            pass
-        finally:
-            writer.close()
-            with suppress(ConnectionError, OSError):
-                await writer.wait_closed()
-            self._connections = tuple(connection for connection in self._connections if connection is not task)
-
-    async def _close(self) -> None:
-        server: Final = self._server
-        if server is not None:
-            server.close()
-        connections: Final = self._connections
-        for task in connections:
-            task.cancel()
-        await asyncio.gather(*connections, return_exceptions=True)
-        current: Final = asyncio.current_task()
-        remaining: Final = tuple(task for task in asyncio.all_tasks(self.loop) if task is not current)
-        for task in remaining:
-            task.cancel()
-        await asyncio.gather(*remaining, return_exceptions=True)
-        if server is not None:
-            await server.wait_closed()
+    return serve
 
 
 @contextmanager
@@ -484,15 +417,11 @@ def bedrock_realtime_peer(turns: tuple[Turn, ...], cert: tuple[Path, Path]) -> I
     `cert` is the self-signed pair the owned proxy already trusts via SSL_CERT_FILE.
     SigV4 headers are ignored; the stream closes cleanly when the client ends it.
     """
-    import socket
-
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: Final = probe.getsockname()[1]
+    port: Final = _free_port()
     context: Final = server_context(cert[0], cert[1])
     context.set_alpn_protocols(["h2"])
     state: Final = _PeerState(turns)
-    server: Final = _LoopbackTls(port, context, state)
+    server: Final = LoopbackServer(port, _session_handler(state), ssl_context=context)
     server.start()
     try:
         yield BedrockRealtimePeer(api_base=f"https://localhost:{port}", _state=state, _drained=[])

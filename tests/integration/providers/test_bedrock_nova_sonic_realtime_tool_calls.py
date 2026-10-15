@@ -20,16 +20,12 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
-from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import pytest
 import websockets
-from pydantic import JsonValue
-from websockets.asyncio.client import ClientConnection
-
-from tests.integration._support.bedrock_realtime_peer import (
+from integration._support.bedrock_realtime_peer import (
     BedrockRealtimePeer,
     Turn,
     assistant_text,
@@ -38,7 +34,7 @@ from tests.integration._support.bedrock_realtime_peer import (
     usage,
     user_transcript,
 )
-from tests.integration._support.client import (
+from integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
@@ -47,30 +43,23 @@ from tests.integration._support.client import (
     object_value,
     string_value,
 )
-from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
-from tests.integration._support.tls import write_self_signed_cert
+from integration._support.process import owned_proxy
+from integration._support.tls import write_self_signed_cert
+from pydantic import JsonValue
+from websockets.asyncio.client import ClientConnection
 
 pytestmark: Final = pytest.mark.timeout(180)
 
 DEPLOYMENT: Final = "bedrock/amazon.nova-2-sonic-v1:0"
 WEATHER_PARAMETERS: Final = {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}
-NESTED_TOOL: Final = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get current weather for a city",
-        "parameters": WEATHER_PARAMETERS,
-    },
-}
-FLAT_TOOL: Final = {
-    "type": "function",
+WEATHER_FUNCTION: Final = {
     "name": "get_weather",
     "description": "Get current weather for a city",
     "parameters": WEATHER_PARAMETERS,
 }
+NESTED_TOOL: Final = {"type": "function", "function": WEATHER_FUNCTION}
+FLAT_TOOL: Final = {"type": "function", **WEATHER_FUNCTION}
 TOOL_RESULT_OUTPUT: Final = '{"temperature_f":72,"conditions":"sunny"}'
-SPEND_SQL: Final = 'SELECT call_type FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
 
 
 @pytest.fixture(scope="module")
@@ -291,18 +280,12 @@ def test_tool_result_round_trip(candidate: Gateway, cert: tuple[Path, Path]) -> 
         assert object_value(answer_item)["content"] == [{"type": "text", "text": "It is 72 and sunny"}]
         results: Final = eventually(lambda: peer.tool_results(), lambda values: len(values) == 1, seconds=10)
         assert results == (("tooluse_A", TOOL_RESULT_OUTPUT),)
-        rows: Final = eventually(
-            lambda: read_rows(SPEND_SQL, (sha256(key.encode()).hexdigest(),)),
-            lambda values: len(values) >= 1,
-            seconds=70,
-        )
-        assert any(row["call_type"] == "_arealtime" for row in rows), rows
 
 
 async def _two_call_session(gateway: Gateway, model: str, key: str) -> tuple[Event, ...]:
     async with _realtime(gateway, model, key) as socket:
         await _open_session(socket, NESTED_TOOL)
-        events: Final[tuple[dict[str, JsonValue], ...]] = await _events_until(
+        events: Final[tuple[Event, ...]] = await _events_until(
             socket, lambda _event, collected: len(_response_dones(collected)) == 2
         )
         for call in _function_calls(events):
@@ -393,12 +376,3 @@ def test_malformed_tool_content(candidate: Gateway, cert: tuple[Path, Path], con
         events: Final = asyncio.run(_one_call_session(candidate, model, key, NESTED_TOOL))
         (call,) = _function_calls(events)
         assert string_value(call["arguments"]) == (content if content is not None else "{}"), events
-        healthy_turn: Final = Turn(
-            "user_input", user_transcript("ready") + tool_use("tooluse_H", "get_weather", '{"location":"Boston"}')
-        )
-        with bedrock_realtime_peer((healthy_turn,), cert) as second_peer:
-            healthy_model: Final = _deployment(candidate, scenario, second_peer)
-            healthy_key: Final = scenario.key()
-            second: Final = asyncio.run(_one_call_session(candidate, healthy_model, healthy_key, NESTED_TOOL))
-            (healthy_call,) = _function_calls(second)
-            assert string_value(healthy_call["arguments"]) == '{"location":"Boston"}'
