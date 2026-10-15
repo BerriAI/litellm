@@ -23,6 +23,7 @@ from fastapi import Request, status
 from pydantic import TypeAdapter, ValidationError
 from redis.exceptions import RedisError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
@@ -37,6 +38,8 @@ from litellm.constants import (
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
 from litellm.secret_managers.main import get_secret_bool
+
+_LOGIN_THROTTLE_TARGET: Final = "login_throttle"
 
 DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE: Final = 10
 DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 60
@@ -346,6 +349,7 @@ class LoginThrottle:
             return Block(scope="user", retry_after=user_ttl)
         return None
 
+    @with_service_target("login_throttle")
     async def _shared_block_ttls(self, keys: _Keys) -> _BlockTtls:
         if self.redis_cache is None:
             return LOGIN_THROTTLE_NOT_BLOCKED
@@ -366,6 +370,7 @@ class LoginThrottle:
             return 0
         return max(math.ceil(expires_at - time.time()), 0)
 
+    @with_service_target("login_throttle")
     async def record_failure(self, username: str) -> _BlockTtls:
         keys: Final = self._keys(username)
         source_limit: Final = self.source_limit or 0
@@ -393,6 +398,7 @@ class LoginThrottle:
         self.blocks.set_cache(block_key, time.time() + self.block_seconds, ttl=self.block_seconds)
         return self.block_seconds
 
+    @with_service_target(_LOGIN_THROTTLE_TARGET)
     async def clear_pair(self, username: str) -> None:
         pair_counter: Final = self._keys(username).pair_counter
         if self.redis_cache is not None:
@@ -416,7 +422,7 @@ class LoginThrottle:
             type=ProxyErrorTypes.auth_error,
             param="username",
             code=status.HTTP_429_TOO_MANY_REQUESTS,
-            headers={"Retry-After": str(retry_after)},  # mutable-ok: ProxyException writes into its headers dict
+            headers={"Retry-After": str(retry_after)},
         )
 
 

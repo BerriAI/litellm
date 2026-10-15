@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import re
 import signal
 import threading
@@ -17,12 +16,11 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process, stop_root_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
@@ -394,7 +392,6 @@ class RigFactory:
                 "callbacks": ["signoz"],
                 "provider_url_destination_allowed_hosts": [self.tenant_sink.wire.url],
             },
-            "general_settings": {**object_value(loaded["general_settings"]), "disable_model_info_refresh": True},
         }
         path: Final = self.directory / f"signoz-{uuid.uuid4().hex}.yaml"
         path.write_text(yaml.safe_dump(config))
@@ -916,28 +913,25 @@ def test_slow_sink_during_a_burst_lands_every_response_exactly_once(rig: Rig) ->
 
 
 def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates_a_span(rig: Rig) -> None:
-    root: Final = psutil.Process(rig.process.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(rig.process.worker_pids, lambda found: len(found) == 2, seconds=30)
     markers: Final = tuple(_marker() for _ in range(24))
 
-    def one(index: int) -> tuple[str, str | None]:
-        if index == 8:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            response: Final = rig.chat(markers[index])
-            return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
-        except httpx.HTTPError as error:
-            return f"chatcmpl-{markers[index]}", repr(error)
+    with rig.process.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(24)))
-    assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
-    after: Final = rig.chat(_marker())
-    assert after.status_code == 200, after.text
+        def one(index: int) -> tuple[str, str | None]:
+            if index == 8:
+                kill()
+            try:
+                response: Final = rig.chat(markers[index])
+                return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
+            except httpx.HTTPError as error:
+                return f"chatcmpl-{markers[index]}", repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(24)))
+        assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
+        after: Final = rig.chat(_marker())
+        assert after.status_code == 200, after.text
     rig.sink.single_span(_body_id(after))
     failures: Final = tuple(error for _, error in results if error)
     assert all(error.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for error in failures), (
@@ -970,8 +964,8 @@ def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exi
     assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
     identities: Final = tuple(_body_id(response) for response in responses)
     pending_at_signal: Final = rig.sink.landed(identities)
-    rig.process.process.terminate()
-    assert rig.process.process.wait(timeout=40) in (0, -signal.SIGTERM)
+    assert stop_root_process(rig.process.process), "Proxy did not exit within the graceful stop budget"
+    assert rig.process.process.returncode in (0, -signal.SIGTERM)
     with pytest.raises(httpx.ConnectError):
         next(started)
     landed: Final = rig.sink.landed(identities)

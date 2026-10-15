@@ -310,13 +310,13 @@ class TinyFishPassthroughLoggingHandler:
         safe_run_id: Final = urllib.parse.quote(run_id, safe="")
         resolved_client: Final = client or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": 30.0},  # mutable-ok: get_async_httpx_client takes a plain dict of client params
+            params={"timeout": 30.0},
         )
         try:
             # screenshots=none keeps the poll payload small (no per-step screenshot URLs needed)
             response: Final = await resolved_client.get(
                 f"{resolve_tinyfish_agent_api_base()}/v1/runs/{safe_run_id}?screenshots=none",
-                headers={"X-API-Key": api_key},  # mutable-ok: httpx headers= takes a plain dict
+                headers={"X-API-Key": api_key},
             )
             if not (200 <= response.status_code < 300):
                 verbose_proxy_logger.warning(
@@ -373,7 +373,7 @@ class TinyFishPassthroughLoggingHandler:
         kwargs: Mapping[str, object],
     ) -> _TinyfishLoggingPayload:
         response_cost: Final = _run_cost(run)
-        updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+        updated_kwargs: Final = {
             **kwargs,
             "model": TINYFISH_MODEL_NAME,
             "custom_llm_provider": "tinyfish",
@@ -383,7 +383,7 @@ class TinyFishPassthroughLoggingHandler:
             # the poller paths pass no request kwargs, so SLO attribution (key hash, team, tags) needs the stored params
             "litellm_params": kwargs.get("litellm_params")
             or logging_obj.model_call_details.get("litellm_params")
-            or {},  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            or {},
         }
         logging_obj.model_call_details.update(
             model=TINYFISH_MODEL_NAME,

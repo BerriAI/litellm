@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -30,7 +31,11 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
+from litellm.litellm_core_utils.classifier_logging import (
+    CLASSIFIER_AUDIT_FIELDS,
+    classifier_audit_fields,
+    without_classifier_audit,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
@@ -47,7 +52,12 @@ from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
+from litellm.proxy._types import (
+    SpendLogsMetadata,
+    SpendLogsMetadataFields,
+    SpendLogsPayload,
+    SpendLogsRouterMetadata,
+)
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -86,7 +96,7 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
+def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
     considered equivalent — only the raw master-key string matches.
@@ -94,6 +104,9 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     if _master_key is None or api_key is None:
         return False
     return secrets.compare_digest(api_key, _master_key)
+
+
+_is_master_key: Final = is_master_key
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
@@ -158,6 +171,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        "litellm_roi_estimator",
     )
 )
 
@@ -211,6 +225,7 @@ def _get_spend_logs_metadata(
             usage_object=None,
             guardrail_information=None,
             internal_call_origin=None,
+            litellm_roi_estimator=False,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
@@ -244,6 +259,7 @@ def _get_spend_logs_metadata(
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
+        litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -759,6 +775,15 @@ def get_logging_payload(
             if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
+    drop_requester_ip_address: Final = requester_ip_address_logging_disabled()
+    error_information: Final = clean_metadata["error_information"]
+    if drop_requester_ip_address:
+        clean_metadata["requester_ip_address"] = None
+    if drop_requester_ip_address and isinstance(error_information, Mapping):
+        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
+            StandardLoggingPayloadErrorInformation,
+            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
+        )
 
     if litellm.cache is None:
         cache_key = "Cache OFF"
@@ -820,6 +845,7 @@ def get_logging_payload(
                     else litellm_params
                 ),
                 kwargs=kwargs,
+                drop_requester_ip_address=drop_requester_ip_address,
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -1095,16 +1121,32 @@ def _get_messages_for_spend_logs_payload(
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+_TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
+_TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
     return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
 
 
+def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
+    block_type: Final = parent.get("type")
+    block_type_name: Final = block_type if isinstance(block_type, str) else None
+    return (
+        key in ("arguments", "logprobs")
+        or (key == "input" and block_type_name in _TOOL_INPUT_BLOCK_TYPES)
+        or (
+            key in ("content", "output")
+            and (block_type_name in _TOOL_OUTPUT_BLOCK_TYPES or parent.get("role") == "tool")
+        )
+    )
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
+    mask_credentials: bool = True,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1112,7 +1154,8 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
-    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING.
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
+    and logprobs.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1130,11 +1173,13 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: object) -> object:
+    def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db, mask_credentials
+            )
         elif isinstance(value, list):
-            return [_sanitize_value(item) for item in value]
+            return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
             if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
@@ -1170,7 +1215,9 @@ def _sanitize_request_body_for_spend_logs_payload(
         return value
 
     return {
-        k: REDACTED_BY_LITELM_STRING if _is_request_body_credential(k, v) else _sanitize_value(v)
+        k: REDACTED_BY_LITELM_STRING
+        if mask_credentials and _is_request_body_credential(k, v)
+        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
     }
@@ -1387,7 +1434,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     return {**redacted, "guardrail_response": preserved_stats}
 
 
-def _sanitize_error_information_for_spend_logs(
+def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
@@ -1425,7 +1472,15 @@ def _sanitize_error_information_for_spend_logs(
                 sanitized[field] = _redact_prompt_leaks_in_error_string(value)
 
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
-    return cast(StandardLoggingPayloadErrorInformation, sanitized)
+    return cast(
+        StandardLoggingPayloadErrorInformation,
+        _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(sanitized))
+        if requester_ip_address_logging_disabled()
+        else sanitized,
+    )
+
+
+_sanitize_error_information_for_spend_logs: Final = sanitize_error_information_for_spend_logs
 
 
 def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = None, max_depth: int = 20) -> object:
@@ -1545,10 +1600,146 @@ def _placeholder_stored_request_body(
     )
 
 
+_CLIENT_IP_HEADERS: Final = frozenset(
+    {
+        "x-forwarded-for",
+        "x-real-ip",
+        "forwarded",
+        "true-client-ip",
+        "cf-connecting-ip",
+        "x-client-ip",
+        "x-cluster-client-ip",
+        "fastly-client-ip",
+        "x-original-forwarded-for",
+        "x-envoy-external-address",
+        "x-azure-clientip",
+        "cloudfront-viewer-address",
+        "fly-client-ip",
+        "cf-connecting-ipv6",
+        "cf-pseudo-ipv4",
+        "x-appengine-user-ip",
+        "x-vercel-forwarded-for",
+        "x-arr-clientip",
+    }
+)
+_REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
+_MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
+_LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
+_IPV6_ADDRESS_CANDIDATE: Final = re.compile(
+    r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
+)
+
+
+def _masked_ipv6_address(candidate: re.Match[str]) -> str:
+    """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
+    text: Final = candidate.group(0)
+    unlabelled: Final = text.partition(":")[2]
+    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
+        try:
+            ipaddress.IPv6Address(address)
+        except ValueError:
+            continue
+        return REDACTED_BY_LITELM_STRING
+    return text
+
+
+def _without_ip_addresses(text: str) -> str:
+    return _IPV6_ADDRESS_CANDIDATE.sub(_masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
+
+
+def _is_ip_address_piece(piece: str) -> bool:
+    return any(char.isdigit() or char == ":" for char in piece)
+
+
+def _without_ip_piece_before_cut(text: str) -> str:
+    run: Final = text[len(text.rstrip(_IP_ADDRESS_CHARACTERS)) :]
+    long_groups: Final = list(_LONG_HEX_GROUP.finditer(run))
+    piece: Final = run[long_groups[-1].end() if long_groups else 0 :][-_MAX_IP_ADDRESS_LENGTH:].lstrip(".:")
+    return text[: len(text) - len(piece)] + REDACTED_BY_LITELM_STRING if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_piece_after_cut(text: str) -> str:
+    run: Final = text[: len(text) - len(text.lstrip(_IP_ADDRESS_CHARACTERS))]
+    long_group: Final = _LONG_HEX_GROUP.search(run)
+    piece: Final = run[: long_group.start() if long_group else len(run)][:_MAX_IP_ADDRESS_LENGTH].rstrip(".:")
+    return REDACTED_BY_LITELM_STRING + text[len(piece) :] if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_pieces_beside_cuts(text: str, *, after_cut: bool, before_cut: bool) -> str:
+    after: Final = _without_ip_piece_after_cut(text) if after_cut else text
+    return _without_ip_piece_before_cut(after) if before_cut else after
+
+
+def _masked_ip_text(text: str) -> str:
+    """The text with every IP address masked, plus the run of short hex, digit, dot and colon groups beside each
+    truncation marker when that run holds a digit or a colon."""
+    parts: Final = _TRUNCATION_MARKER_GROUP.split(_without_ip_addresses(text))
+    last: Final = len(parts) - 1
+    return "".join(
+        part if index % 2 else _without_ip_pieces_beside_cuts(part, after_cut=index > 0, before_cut=index < last)
+        for index, part in enumerate(parts)
+    )
+
+
+def _error_information_without_ip_addresses(error_information: Mapping[object, object]) -> Mapping[object, object]:
+    """The error information with every IP address in its error message and traceback masked."""
+    return {
+        key: _masked_ip_text(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
+        for key, value in error_information.items()
+    }
+
+
+def _stored_value_without_requester_ip_address(key: object, value: object) -> object:
+    if key == "requester_ip_address":
+        return None
+    if key == "error_information" and isinstance(value, Mapping):
+        return _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(value))
+    return _without_requester_ip_address(value, headers=key == "headers")
+
+
+def _without_requester_ip_address(value: object, *, headers: bool = False) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _masked_ip_text(item)
+            if headers and isinstance(item, str)
+            else _stored_value_without_requester_ip_address(key, item)
+            for key, item in _OBJECT_MAPPING.validate_python(value).items()
+            if not (headers and isinstance(key, str) and key.lower() in _CLIENT_IP_HEADERS)
+        }
+    if isinstance(value, list):
+        return [_without_requester_ip_address(item) for item in _OBJECT_LIST.validate_python(value)]
+    return value
+
+
+def _request_metadata_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+    return {
+        key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
+        for key, value in request_body.items()
+    }
+
+
+def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+    """The request body, and the classifier input and originating request a classifier row stores in it, with
+    `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP address in the other header
+    values and in the error text masked inside their metadata."""
+    return {
+        key: _request_metadata_without_requester_ip_address(_OBJECT_MAPPING.validate_python(value))
+        if key in CLASSIFIER_AUDIT_FIELDS and isinstance(value, Mapping)
+        else value
+        for key, value in _request_metadata_without_requester_ip_address(request_body).items()
+    }
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: Mapping[str, object],
     kwargs: dict | None = None,
+    drop_requester_ip_address: bool = False,
 ) -> str:
     """
     Only store if should_store_prompts_and_responses_in_spend_logs() is True
@@ -1589,7 +1780,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
-            _request_body_json_str: Final = safe_dumps(_request_body)
+            stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
+            _request_body_json_str: Final = safe_dumps(
+                _stored_request_without_requester_ip_address(stored_request_body)
+                if drop_requester_ip_address
+                else stored_request_body
+            )
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
                     "Spend Log: request body was truncated before storing in DB. %s",
@@ -1694,6 +1890,51 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+
+
+_SPEND_LOGS_METADATA_FIELDS_ADAPTER: Final[TypeAdapter[SpendLogsMetadataFields | None]] = TypeAdapter(
+    SpendLogsMetadataFields | None
+)
+_SPEND_LOGS_METADATA_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def configured_spend_logs_metadata_fields() -> SpendLogsMetadataFields | None:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return _SPEND_LOGS_METADATA_FIELDS_ADAPTER.validate_python(
+            general_settings_view().get("spend_logs_metadata_fields")
+        )
+    except ValidationError as e:
+        verbose_proxy_logger.error("Ignoring invalid general_settings.spend_logs_metadata_fields: %s", e)
+        return None
+
+
+_OPTIONAL_BOOL_ADAPTER: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def requester_ip_address_logging_disabled() -> bool:
+    """True when `general_settings.disable_requester_ip_address_logging` holds a value the settings API accepts as true."""
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return (
+            _OPTIONAL_BOOL_ADAPTER.validate_python(general_settings_view().get("disable_requester_ip_address_logging"))
+            is True
+        )
+    except ValidationError:
+        return False
+
+
+def spend_log_row_with_retained_metadata(
+    row: Mapping[str, object], fields: SpendLogsMetadataFields | None
+) -> Mapping[str, object]:
+    metadata_json: Final = row.get("metadata")
+    if fields is None or not isinstance(metadata_json, str):
+        return row
+    metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
+    retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
+    return {**row, "metadata": safe_dumps(retained)}
 
 
 def _get_status_for_spend_log(

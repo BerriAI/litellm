@@ -72,7 +72,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         # The base path segment is data-driven per model (use_openai_responses_path
         # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
         # /v1. An explicit api_base still wins over the derived default.
@@ -83,6 +83,15 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
+        model: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key, litellm_params, model)
 
     def validate_environment(
         self,
@@ -118,7 +127,31 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             )
             if supported and param not in base_params
         )
-        return [*base_params, *extra_params]  # mutable-ok: fresh list required by the inherited signature
+        return [*base_params, *extra_params]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
+        mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
+        )
+        if not gpt_reasoning_model or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            param: value
+            for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
+            if param != "max_tokens"
+        }
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

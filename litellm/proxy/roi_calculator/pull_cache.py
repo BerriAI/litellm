@@ -2,7 +2,6 @@ import hashlib
 import json
 from typing import Final
 
-from litellm.proxy.roi_calculator.estimator import cache_context
 from litellm.proxy.roi_calculator.github import GitHubPullListItem
 from litellm.types.roi_calculator import ROISettings
 
@@ -19,12 +18,15 @@ def cache_key(
         return None
     value: Final = json.dumps(
         (
-            "pull-v1",
-            settings.github_api_url.rstrip("/"),
+            "pull-v2-branches",
+            settings.source_provider,
+            settings.source_api_url.rstrip("/"),
             context,
-            repo.casefold(),
+            repo.casefold() if settings.source_provider == "github" else repo,
             pull.number,
             head,
+            pull.head.ref if pull.head is not None else "",
+            pull.head.repo.full_name if pull.head is not None and pull.head.repo is not None else "",
             pull.title,
             pull.body or "",
             login.casefold(),
@@ -37,7 +39,8 @@ def cache_key(
 def settings_fingerprint(settings: ROISettings) -> str:
     value: Final = json.dumps(
         (
-            settings.github_api_url.rstrip("/"),
+            settings.source_provider,
+            settings.source_api_url.rstrip("/"),
             settings.repos,
             settings.estimator_model,
             settings.estimator_prompt,
@@ -46,7 +49,3 @@ def settings_fingerprint(settings: ROISettings) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-def current_cache_context(settings: ROISettings) -> str:
-    return cache_context(settings)
