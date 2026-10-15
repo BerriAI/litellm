@@ -219,6 +219,7 @@ jobs:
               tests/unit/llms/test_custom_llm.py
               tests/unit/llms/test_file_content_block.py
               tests/unit/llms/test_file_search_responses.py
+              tests/unit/llms/test_get_complete_url_trailing_slash.py
               tests/unit/llms/test_lifecycle_fix.py
               tests/unit/llms/test_oss_decision.py
               tests/unit/llms/test_polling_url_origin_match.py
