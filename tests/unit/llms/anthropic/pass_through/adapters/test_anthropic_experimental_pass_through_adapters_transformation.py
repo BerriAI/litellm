@@ -2847,6 +2847,37 @@ def test_translate_completion_input_params_keeps_provider_native_tools():
     assert translated["tools"] == [{"googleMaps": {}}]
 
 
+def _gemini_request_with_budget(budget: object, **extra: object) -> dict[str, object]:
+    return {
+        "model": "gemini/gemini-2.5-flash",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "Say ok"}],
+        "thinking": {"type": "enabled", "budget_tokens": budget},
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("budget", ["2048", True])
+def test_translate_completion_input_params_rejects_a_non_numeric_budget_without_drop_params(
+    budget: object, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens must be a number"):
+        AnthropicAdapter().translate_completion_input_params(_gemini_request_with_budget(budget))
+
+
+@pytest.mark.parametrize("budget", ["2048", True])
+def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop_params(
+    budget: object, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    translated = AnthropicAdapter().translate_completion_input_params(
+        _gemini_request_with_budget(budget, drop_params=True)
+    )
+    assert translated is not None
+    assert not {"reasoning_effort", "thinking"} & translated.keys()
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.

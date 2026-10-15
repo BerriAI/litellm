@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -242,7 +243,10 @@ class AnthropicAdapter:
         Note: Use translate_completion_input_params_with_tool_mapping() if you need
         the tool name mapping for restoring original names in responses.
         """
-        result, _ = self.translate_completion_input_params_with_tool_mapping(kwargs)
+        result, _ = self.translate_completion_input_params_with_tool_mapping(
+            kwargs,
+            drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
+        )
         return result
 
     def translate_completion_input_params_with_tool_mapping(
