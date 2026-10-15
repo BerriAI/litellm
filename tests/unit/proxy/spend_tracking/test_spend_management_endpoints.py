@@ -1,4 +1,3 @@
-from typing import Final
 import asyncio
 import collections
 import datetime
@@ -7,8 +6,10 @@ import json
 import re
 import sqlite3
 from datetime import timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import prisma
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -278,6 +279,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
+from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
 
@@ -4118,7 +4120,7 @@ async def test_view_spend_tags(client, monkeypatch):
     ]
 
     # Mock the get_spend_by_tags function
-    async def mock_get_spend_by_tags(prisma_client, start_date=None, end_date=None):
+    async def mock_get_spend_by_tags(prisma_client, read_scope, start_date=None, end_date=None):
         return mock_response
 
     monkeypatch.setattr(
@@ -4162,6 +4164,116 @@ async def test_view_spend_tags(client, monkeypatch):
         data = response.json()
         assert isinstance(data, list)
         assert len(data) == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _tag_query_prisma_client(assert_query_raw):
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            return assert_query_raw(sql_query, params)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    return MockPrismaClient()
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags_scopes_internal_user_to_own_and_team_logs(client, monkeypatch):
+    def assert_query_raw(sql_query, params):
+        assert '("user" = $1 OR team_id = ANY($2::text[]))' in sql_query
+        assert params[0] == "user-1"
+        assert tuple(params[1]) == ("team-9",)
+        return [{"individual_request_tag": "own-tag", "log_count": 1, "total_spend": 0.01}]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
+
+    async def permitted_teams(*args, **kwargs):
+        return ["team-9"]
+
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: permitted_teams)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
+    )
+
+    try:
+        response = client.get("/spend/tags", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 200
+        assert [row["individual_request_tag"] for row in response.json()] == ["own-tag"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags_admin_sees_unscoped_aggregates_with_date_filter(client, monkeypatch):
+    def assert_query_raw(sql_query, params):
+        assert '"user"' not in sql_query
+        assert "team_id" not in sql_query
+        assert '"startTime" >= ($1' in sql_query
+        assert "$2::timestamptz + INTERVAL '1 day'" in sql_query
+        assert params == (
+            datetime.datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime.datetime(2024, 1, 31, tzinfo=timezone.utc),
+        ), "dates must be bound as UTC datetimes so the window is session-timezone independent"
+        return [{"individual_request_tag": "any-tag", "log_count": 2, "total_spend": 0.05}]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/tags",
+            params={"start_date": "2024-01-01", "end_date": "2024-01-31"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags_rejects_malformed_dates_with_400(client, monkeypatch):
+    def assert_query_raw(sql_query, params):
+        pytest.fail("malformed dates must never reach the database")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/tags",
+            params={"start_date": "01/31/2024"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        assert "start_date" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags_key_without_user_id_gets_no_rows(client, monkeypatch):
+    def assert_query_raw(sql_query, params):
+        assert "WHERE FALSE" in sql_query
+        assert params == ()
+        return []
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.TEAM, user_id=None
+    )
+
+    try:
+        response = client.get("/spend/tags", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 200
+        assert response.json() == []
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7999,3 +8111,61 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
     scope = await resolve_owned_read_scope(auth.user_id, lookup)
     assert scope == OwnedRows("caller")
     assert team_reads == []
+
+
+class _PrismaJournal:
+    def __init__(self) -> None:
+        self.statements: tuple[tuple[str, str], ...] = ()
+
+    def __call__(self, **kwargs: object) -> "_ReadOnlyReplicaPrisma":
+        return _ReadOnlyReplicaPrisma(self, "reader" if "datasource" in kwargs else "writer")
+
+    def record(self, role: str, query: str) -> None:
+        self.statements = (*self.statements, (role, query.strip()))
+
+
+class _ReadOnlyReplicaPrisma:
+    def __init__(self, journal: _PrismaJournal, role: str) -> None:
+        self.journal = journal
+        self.role = role
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def connect(self, timeout: object = None) -> None:
+        return None
+
+    def _run(self, query: str) -> None:
+        self.journal.record(self.role, query)
+        if self.role == "reader" and not query.lstrip().upper().startswith("SELECT"):
+            raise Exception(f"cannot execute {query.split()[0]} in a read-only transaction")
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, str]]:
+        self._run(query)
+        return [{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        self._run(query)
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final = _PrismaJournal()
+    monkeypatch.setattr(prisma, "Prisma", journal)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://writer@localhost/litellm")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader@localhost/litellm")
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        PrismaClient(database_url="postgresql://writer@localhost/litellm", proxy_logging_obj=ps.proxy_logging_obj),
+    )
+
+    response: Final = await spend_management_endpoints.global_spend_refresh()
+
+    assert response == {"message": "MonthlyGlobalSpend view refreshed", "status": "success"}, journal.statements
+    assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
+        ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
+    ]

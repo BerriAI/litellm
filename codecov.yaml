@@ -71,6 +71,8 @@ flag_management:
       carryforward: false
     - name: lens-python-310
       carryforward: false
+    - name: lens-postgres
+      carryforward: false
     - name: proxy-db-key-generation
       carryforward: false
     - name: proxy-db-auth-checks

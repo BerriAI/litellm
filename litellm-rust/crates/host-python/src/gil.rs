@@ -3,7 +3,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::prelude::*;
+
+use crate::Error;
 
 /// The caller's `contextvars` context, captured at the Python entry point so blocking Python
 /// work started from Rust sees the same request-local values as the Python caller.
@@ -49,7 +51,7 @@ impl PythonContext {
             .lock()
             .expect("context value slot poisoned")
             .take()
-            .ok_or_else(|| PyRuntimeError::new_err("the context body produced no value"))
+            .ok_or_else(|| Error::ContextBodyProducedNothing.into())
     }
 }
 

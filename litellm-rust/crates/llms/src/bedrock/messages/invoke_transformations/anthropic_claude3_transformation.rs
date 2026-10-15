@@ -19,6 +19,9 @@ use litellm_llms_types::formats::messages::{
     MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
+use litellm_llms_types::providers::bedrock::{
+    INVOCATION_METRICS_KEY, INVOKE_PATH, INVOKE_STREAM_PATH,
+};
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
 
@@ -35,8 +38,6 @@ use crate::{
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
 };
 
-const INVOCATION_METRICS_KEY: &str = "amazon-bedrock-invocationMetrics";
-
 const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
     ("input_tokens", "inputTokenCount"),
     ("output_tokens", "outputTokenCount"),
@@ -44,8 +45,6 @@ const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
     ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
 ];
 
-const INVOKE_PATH: &str = "invoke";
-const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
 
 const SECRET_NAMES: &[&str] = &[
@@ -333,7 +332,7 @@ mod tests {
     use litellm_auth_aws::constants::DEFAULT_BEDROCK_REGION;
 
     use super::*;
-    use crate::base_llm::messages::streaming::encode_anthropic_sse;
+    use crate::base_llm::messages::streaming;
 
     fn event(value: Value) -> MessagesStreamEvent {
         serde_json::from_value(value).unwrap()
@@ -494,7 +493,7 @@ mod tests {
         .boxed();
 
         let sse = bedrock_anthropic_messages_event_stream(bytes)
-            .map_ok(|event| encode_anthropic_sse(&event).unwrap())
+            .map_ok(|event| streaming::encode(&event).unwrap())
             .try_collect::<Vec<_>>()
             .await
             .unwrap()
@@ -509,7 +508,7 @@ mod tests {
             )),
         ]
         .iter()
-        .flat_map(|event| encode_anthropic_sse(event).unwrap())
+        .flat_map(|event| streaming::encode(event).unwrap())
         .collect();
         assert_eq!(sse, expected);
     }

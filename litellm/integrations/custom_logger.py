@@ -22,6 +22,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StandardAuditLogPayload,
+    StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -35,12 +36,12 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
         MCPPreCallResponseObject,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.router import PreRoutingHookResponse
 
     Span = _Span
@@ -194,6 +195,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
+
+    async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
+        """Called once per part of a finished batch's lines, when this logger is listed in batch_line_item_callbacks."""
 
     #### PROMPT MANAGEMENT HOOKS ####
 

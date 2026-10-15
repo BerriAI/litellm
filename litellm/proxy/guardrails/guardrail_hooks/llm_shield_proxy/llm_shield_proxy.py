@@ -371,8 +371,10 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return response
 
         pending: Final[SlotSink] = []
+        choice: object
+        tool_call: object
         for choice in choices:
-            message = getattr(choice, "message", None)
+            message: object = getattr(choice, "message", None)
             if message is None:
                 text = read_field(choice, "text")
                 if isinstance(text, str) and text:
@@ -382,11 +384,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             if isinstance(content, str) and content:
                 pending.append((content, functools.partial(setattr, message, "content")))
             for tool_call in getattr(message, "tool_calls", None) or ():
-                function = getattr(tool_call, "function", None)
+                function: object = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
                 if isinstance(arguments, str) and arguments:
                     pending.append((arguments, functools.partial(setattr, function, "arguments")))
-            legacy = getattr(message, "function_call", None)
+            legacy: object = getattr(message, "function_call", None)
             legacy_arguments = getattr(legacy, "arguments", None) if legacy is not None else None
             if isinstance(legacy_arguments, str) and legacy_arguments:
                 pending.append((legacy_arguments, functools.partial(setattr, legacy, "arguments")))
@@ -448,6 +450,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         function_call_output holds `output` -- so the two directions stay symmetric.
         """
         slots: Final[SlotSink] = []
+        item: object
         for item in getattr(response, "output", None) or ():
             collect_response_item(item, slots)
         return tuple(slots)
@@ -501,6 +504,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 continue
             restored_chunk = detached(chunk)
             last_chunk = restored_chunk
+            choice: object
             for choice in getattr(restored_chunk, "choices", None) or ():
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk
@@ -532,6 +536,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         await self._restore_content_window(delta, (index, None), carries, session_id, is_final)
 
+        tool_call: object
         for tool_call in getattr(delta, "tool_calls", None) or ():
             await self._restore_tool_call_window(tool_call, index, carries, session_id)
 

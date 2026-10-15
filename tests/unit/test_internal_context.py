@@ -29,6 +29,7 @@ _CACHE_LAYER_DIRS: Final = ("litellm/caching", "litellm/_v2/cache")
 # Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
+        "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
         "litellm/utils.py",
@@ -53,6 +54,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
         "litellm/llms/custom_httpx/http_handler.py",
+        "litellm/llms/databricks/agent/transformation.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
         "litellm/llms/litellm_proxy/skills/handler.py",

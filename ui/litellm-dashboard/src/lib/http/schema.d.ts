@@ -2386,7 +2386,7 @@ export interface paths {
          *
          *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
-         *     to it through `object_permission.skills` on the key or its team.
+         *     to it through `object_permission.skills` or an access group on the key or its team.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -2449,6 +2449,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Registration status (action is always "created") and plugin information.
@@ -2515,6 +2516,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Update status (action is always "updated") and plugin information.
@@ -2985,11 +2987,14 @@ export interface paths {
          *
          *     Updates the cost_discount_config in litellm_settings.
          *     Discounts should be between 0 and 1 (e.g., 0.05 = 5% discount).
+         *     A key may also be <provider>/<model-pattern>, where the pattern is an
+         *     fnmatch glob matched against the model name.
          *
          *     Example:
          *     ```json
          *     {
          *         "vertex_ai": 0.05,
+         *         "vertex_ai/claude-*": 0.20,
          *         "gemini": 0.05,
          *         "openai": 0.01
          *     }
@@ -4703,7 +4708,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
@@ -6131,6 +6148,9 @@ export interface paths {
          * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
          *     cache hits vs successful LLM API requests vs failed requests, plus totals
          *     for the stat cards and the available key-alias/model filter options.
+         *
+         *     Admin callers see proxy-wide activity; all other callers see only their own
+         *     spend logs and those of teams they may view, exactly like ``/spend/logs/ui``.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -7483,6 +7503,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/deployment_warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deployment Warnings
+         * @description List the active deployment warnings with their severity and whether an admin ignored or snoozed them.
+         *     Readable by proxy admins and proxy admin viewers.
+         */
+        get: operations["get_deployment_warnings_health_deployment_warnings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/deployment_warnings/{warning_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Deployment Warning Ignore
+         * @description Ignore, snooze, or restore one deployment warning for every admin of this proxy.
+         *     Only proxy admins can call this, and it needs a database.
+         */
+        patch: operations["update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch"];
+        trace?: never;
+    };
     "/health/drain": {
         parameters: {
             query?: never;
@@ -8333,7 +8395,7 @@ export interface paths {
          *     - key_alias: Optional[str] - User defined key alias
          *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
-         *     - user_id: Optional[str] - The user id of the key
+         *     - user_id: Optional[str] - The user id of the key. Non-admin callers may only pass their own id, except a team admin creating a key in a team they administer for another member of that team, when a proxy admin has added `create_member_keys` to `team_admin_editable_team_fields`. That member must have the `internal_user` or `internal_user_viewer` role, and the key is always an `llm_api` key.
          *     - agent_id: Optional[str] - The agent id associated with the key.
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
@@ -8503,7 +8565,8 @@ export interface paths {
          *           hour), so subtracting budget_duration from it does not give the window's start
          *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-         *           the key has per-model budgets
+         *           the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+         *           window ends and its spend resets, or None when no window is open or it ends after year 9999
          *         - budget_limits: list | None - Concurrent budget windows, exactly as stored
          *         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
          *           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -9120,6 +9183,26 @@ export interface paths {
         };
         /** Get Ui Config */
         get: operations["get_ui_config_litellm__well_known_litellm_ui_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10802,6 +10885,26 @@ export interface paths {
         put?: never;
         /** Image Generation */
         post: operations["image_generation_openai_deployments__model__images_generations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_3"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13336,6 +13439,9 @@ export interface paths {
          *
          *     If an agent has `inherit_credentials_from_provider`, the provider's credential
          *     fields are automatically appended to the agent's credential_fields.
+         *
+         *     Reads from the bundled local files. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_agent_fields_public_agents_fields_get"];
         put?: never;
@@ -13440,9 +13546,9 @@ export interface paths {
         };
         /**
          * Get Litellm Blog Posts
-         * @description Public endpoint to get the latest LiteLLM blog posts.
+         * @description Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
          *
-         *     Fetches from GitHub with a 1-hour in-process cache.
+         *     Fetches the docs RSS feed with a 1-hour in-process cache.
          *     Falls back to the bundled local backup on any failure.
          */
         get: operations["get_litellm_blog_posts_public_litellm_blog_posts_get"];
@@ -13557,6 +13663,9 @@ export interface paths {
         /**
          * Get Provider Fields
          * @description Return provider metadata required by the dashboard create-model flow.
+         *
+         *     Reads from the bundled local file. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_provider_fields_public_providers_fields_get"];
         put?: never;
@@ -15526,6 +15635,11 @@ export interface paths {
          * View Spend Tags
          * @description LiteLLM Enterprise - View Spend Per Request Tag
          *
+         *     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+         *       across every spend log.
+         *     - All other callers see aggregates over their own spend logs and those of
+         *       teams they may view, exactly like ``/spend/logs/ui``.
+         *
          *     Example Request:
          *     ```
          *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
@@ -15837,7 +15951,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_systemone_post"];
         delete?: never;
         options?: never;
@@ -16878,9 +17004,11 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+         *     - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -17106,9 +17234,11 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+         *     - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -17242,6 +17372,10 @@ export interface paths {
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+         *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+         *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
+         *         - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -17415,6 +17549,91 @@ export interface paths {
          *     ```
          */
         get: operations["team_member_me_team__team_id__members_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Telemetry Reports
+         * @description Stored telemetry reports, oldest first, for installs that keep telemetry local instead of sending it.
+         *     Page with ``after=next_after&after_id=next_after_id`` until ``next_after`` is null. Another worker can commit a
+         *     report just after a newer one is exported, so resume a later export a few windows before the last cursor and skip
+         *     ids already seen
+         */
+        get: operations["export_telemetry_reports_telemetry_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Telemetry Settings
+         * @description Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report.
+         *     Nothing is recorded until a destination is chosen by ``LITELLM_TELEMETRY_DESTINATION`` or a saved setting
+         */
+        get: operations["get_telemetry_settings_telemetry_settings_get"];
+        /**
+         * Update Telemetry Settings
+         * @description Store the telemetry groups and destination for every worker, applied from the next report window
+         */
+        put: operations["update_telemetry_settings_telemetry_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ui Event
+         * @description Count one Admin UI page view or tab click. Events are dropped unless Page navigation is on
+         */
+        post: operations["record_ui_event_telemetry_ui_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ui Events Enabled */
+        get: operations["ui_events_enabled_telemetry_ui_events_enabled_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -18264,6 +18483,23 @@ export interface paths {
         };
         /** Get User Daily Activity Aggregated Search */
         get: operations["get_user_daily_activity_aggregated_search_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Aggregated Users */
+        get: operations["get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -19622,7 +19858,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_v1_decisions_post"];
         delete?: never;
         options?: never;
@@ -20201,6 +20449,26 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -21967,7 +22235,19 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_v1_systemone_post"];
         delete?: never;
         options?: never;
@@ -23336,6 +23616,7 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         blocked: Filter by routing status (false = active, true = paused).
          *         access_group: Only return deployments in this model access group.
          *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
@@ -24841,12 +25122,18 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
             assigned_team_ids?: string[] | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
         };
         /** AccessGroupInfo */
         AccessGroupInfo: {
@@ -24886,6 +25173,11 @@ export interface components {
             access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
+            /**
+             * Access Skill Names
+             * @default []
+             */
+            access_skill_names: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -24903,6 +25195,10 @@ export interface components {
             created_by?: string | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
             /**
              * Updated At
              * Format: date-time
@@ -24921,12 +25217,18 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
             assigned_team_ids?: string[] | null;
             /** Description */
             description?: string | null;
+            /** Mcp Tool Permissions */
+            mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
         };
         /**
          * AcknowledgedSafetyCheck
@@ -25226,6 +25528,26 @@ export interface components {
             callback_vars: {
                 [key: string]: string;
             };
+        };
+        /** AdminIgnore */
+        AdminIgnore: {
+            /**
+             * Ignored At
+             * Format: date-time
+             */
+            ignored_at: string;
+            /** Ignored By */
+            ignored_by: string;
+            /**
+             * Ignored Until
+             * @description When the snooze ends. Null means the warning is ignored until an admin restores it.
+             */
+            ignored_until?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "admin";
         };
         /**
          * AgentCapabilities
@@ -26688,10 +27010,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -26702,6 +27029,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
@@ -26791,7 +27128,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -26820,7 +27157,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.
              * @default fail_closed
              * @enum {string}
              */
@@ -26944,6 +27281,11 @@ export interface components {
             date: string;
             /** Description */
             description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
             /** Title */
             title: string;
             /** Url */
@@ -27125,7 +27467,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -27216,6 +27558,19 @@ export interface components {
         Body_video_generation_videos_post: {
             /** Input Reference */
             input_reference?: string | null;
+        };
+        /** BoxAnswer */
+        BoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * BreakdownMetrics
@@ -27992,7 +28347,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -28437,6 +28792,8 @@ export interface components {
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
             /** Data */
             data?: string;
+            /** Index */
+            index?: number;
             /**
              * Type
              * @constant
@@ -28475,6 +28832,8 @@ export interface components {
             cache_control?: {
                 [key: string]: unknown;
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
+            /** Index */
+            index?: number;
             /** Signature */
             signature?: string | null;
             /** Thinking */
@@ -28541,6 +28900,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Defer Loading */
+            defer_loading?: boolean;
             /** Eager Input Streaming */
             eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
@@ -28612,6 +28973,24 @@ export interface components {
              * @enum {string}
              */
             role: "user" | "assistant";
+        };
+        /** ChoiceAnswer */
+        ChoiceAnswer: {
+            /** Choice */
+            choice: string;
+            /** Confidence */
+            confidence: number;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        } & {
+            [key: string]: unknown;
         };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
@@ -29439,10 +29818,20 @@ export interface components {
              */
             disable_env_credential_login?: boolean | null;
             /**
+             * Disable Fallbacks On Per Model Rate Limits
+             * @description If true, a request rejected by a key/team/org/project per-model rate limit (model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the configured fallbacks
+             */
+            disable_fallbacks_on_per_model_rate_limits?: boolean | null;
+            /**
              * Disable Password Login When Sso Enabled
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Requester Ip Address Logging
+             * @description If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.
+             */
+            disable_requester_ip_address_logging?: boolean | null;
             /**
              * Disable Responses Id Security
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
@@ -29466,7 +29855,7 @@ export interface components {
             enable_public_model_hub: boolean;
             /**
              * Enforce Fallback Model Access
-             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
+             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.
              */
             enforce_fallback_model_access?: boolean | null;
             /**
@@ -30833,6 +31222,17 @@ export interface components {
             /** Api Keys */
             api_keys: components["schemas"]["KeyActivityRow"][];
         };
+        /** DailyActivityUserPageResponse */
+        DailyActivityUserPageResponse: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total Users */
+            total_users: number;
+            /** Users */
+            users: components["schemas"]["UserActivityRow"][];
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -30938,6 +31338,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Ptu Hours
+             * @default 0
+             */
+            total_ptu_hours: number;
+            /**
              * Total Response Time Ms
              * @default 0
              */
@@ -30962,6 +31367,67 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /**
+         * DecisionModelCheck
+         * @description One predicate the decision model scores the request or response against.
+         */
+        DecisionModelCheck: {
+            /**
+             * Action
+             * @default block
+             * @enum {string}
+             */
+            action: "block" | "log";
+            /** Instructions */
+            instructions: string;
+            /** Name */
+            name: string;
+            /**
+             * Threshold
+             * @default 0.7
+             */
+            threshold: number;
+        };
+        /** DecisionsBox */
+        DecisionsBox: {
+            /** Bottom */
+            bottom: number;
+            /** Left */
+            left: number;
+            /** Right */
+            right: number;
+            /** Top */
+            top: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DecisionsResponse */
+        DecisionsResponse: {
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"] | components["schemas"]["BoxAnswer"];
+            };
+            /** Model */
+            model?: string | null;
+            usage?: components["schemas"]["DecisionsUsage"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DecisionsUsage */
+        DecisionsUsage: {
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * DefaultInternalUserParams
@@ -31171,6 +31637,47 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /** DeploymentWarning */
+        DeploymentWarning: {
+            /** Id */
+            id: string;
+            /** Ignore */
+            ignore?: (components["schemas"]["AdminIgnore"] | components["schemas"]["EnvVarIgnore"]) | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+        };
+        /** DeploymentWarningIgnoreResponse */
+        DeploymentWarningIgnoreResponse: {
+            /** Id */
+            id: string;
+            ignore: components["schemas"]["AdminIgnore"] | null;
+        };
+        /** DeploymentWarningIgnoreUpdate */
+        DeploymentWarningIgnoreUpdate: {
+            /**
+             * Ignored
+             * @description True ignores the warning for every admin, false restores it.
+             */
+            ignored: boolean;
+            /**
+             * Snooze Seconds
+             * @description How long to ignore the warning, up to 30 days. Leave it out to ignore it forever.
+             */
+            snooze_seconds?: number | null;
+        };
+        /** DeploymentWarningsResponse */
+        DeploymentWarningsResponse: {
+            /**
+             * Ignore Available
+             * @description False when no database is connected, so warnings cannot be ignored.
+             */
+            ignore_available: boolean;
+            /** Warnings */
+            warnings: components["schemas"]["DeploymentWarning"][];
         };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
@@ -31509,6 +32016,16 @@ export interface components {
             service_principal_id?: string | null;
             /** Tenant Id */
             tenant_id: string;
+        };
+        /** EnvVarIgnore */
+        EnvVarIgnore: {
+            /** Env Var */
+            env_var: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "env_var";
         };
         /** EnvironmentReport */
         EnvironmentReport: {
@@ -32517,6 +33034,8 @@ export interface components {
             content_filter_settings?: {
                 [key: string]: unknown;
             } | null;
+            /** Decision Model Providers */
+            decision_model_providers?: string[];
             /** Pii Entity Categories */
             pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
             /** Providers Without Directional Logging Only Scope */
@@ -34576,6 +35095,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
@@ -35765,8 +36286,11 @@ export interface components {
              * @default true
              */
             ccr_retrieval: boolean;
-            /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
-            checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
+            /**
+             * Checks
+             * @description Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'
+             */
+            checks?: components["schemas"]["BedrockChecksConfigModel"] | components["schemas"]["DecisionModelCheck"][] | null;
             /**
              * Chunk Budget Chars
              * @description ApplyGuardrail: batch size, in characters, used to re-send content after AWS has rejected a request as too large. Requests AWS accepts are always sent in a single call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS still rejects is bisected automatically, so this value only trades round trips against batch size and cannot fail a request on its own.
@@ -35828,6 +36352,11 @@ export interface components {
              * @description Python-like code containing the apply_guardrail function for custom guardrail logic
              */
             custom_code?: string | null;
+            /**
+             * Decision Model
+             * @description For guardrail='decision_model': the Decisions-API model that scores each check
+             */
+            decision_model?: string | null;
             /**
              * Deepkeep Firewall Id
              * @description The DeepKeep Firewall ID to use for guardrail evaluation. If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked.
@@ -36008,10 +36537,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API
@@ -36028,6 +36562,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request
@@ -36328,7 +36872,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -36405,6 +36949,11 @@ export interface components {
              * @description Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.
              */
             violation_message_template?: string | null;
+            /**
+             * Wingback App Id
+             * @description Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).
+             */
+            wingback_app_id?: string | null;
             /**
              * Xecguard Model
              * @description XecGuard scanning model identifier. Defaults to 'xecguard_v2'.
@@ -36714,6 +37263,10 @@ export interface components {
             dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
+            /** Id Jag Resource Client Id */
+            id_jag_resource_client_id?: string | null;
+            /** Id Jag Resource Client Secret */
+            id_jag_resource_client_secret?: string | null;
             /** Id Jag Resource Token Endpoint */
             id_jag_resource_token_endpoint?: string | null;
             /** Redirect Uris */
@@ -37412,6 +37965,8 @@ export interface components {
             reasoning_content?: string | null;
             /** Reasoning Items */
             reasoning_items?: components["schemas"]["ChatCompletionReasoningItem"][] | null;
+            /** Refusal */
+            refusal?: string | null;
             /**
              * Role
              * @enum {string}
@@ -37536,6 +38091,8 @@ export interface components {
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            /** Description */
+            description?: string | null;
             /** Health Checked At */
             health_checked_at?: string | null;
             /** Health Response Time */
@@ -38428,6 +38985,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -38452,6 +39011,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Team Member Rpm Limit */
@@ -38778,6 +39341,18 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NoulAnswer */
+        NoulAnswer: {
+            /** Noul */
+            noul: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "noul";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * OAuth2SecurityScheme
          * @description Defines a security scheme using OAuth 2.0.
@@ -38816,6 +39391,152 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** OpenAIBoxAnswer */
+        OpenAIBoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        };
+        /** OpenAIChoiceAnswer */
+        OpenAIChoiceAnswer: {
+            /** Choice */
+            choice: string | boolean;
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIChoiceProbability"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        };
+        /** OpenAIChoiceProbability */
+        OpenAIChoiceProbability: {
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: string | boolean;
+        };
+        /** OpenAIDecisionInputTokensDetails */
+        OpenAIDecisionInputTokensDetails: {
+            /**
+             * Cache Write Tokens
+             * @default 0
+             */
+            cache_write_tokens: number;
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+        };
+        /** OpenAIDecisionOutputTokensDetails */
+        OpenAIDecisionOutputTokensDetails: {
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+        };
+        /** OpenAIDecisionResponse */
+        OpenAIDecisionResponse: {
+            /** Answers */
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIBoxAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            /** Model */
+            model: string;
+            usage: components["schemas"]["OpenAIDecisionUsage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OpenAIDecisionUsage */
+        OpenAIDecisionUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /**
+             * @default {
+             *       "cache_write_tokens": 0,
+             *       "cached_tokens": 0
+             *     }
+             */
+            input_tokens_details: components["schemas"]["OpenAIDecisionInputTokensDetails"];
+            /** Output Tokens */
+            output_tokens: number;
+            /**
+             * @default {
+             *       "reasoning_tokens": 0
+             *     }
+             */
+            output_tokens_details: components["schemas"]["OpenAIDecisionOutputTokensDetails"];
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** OpenAIPredicateAnswer */
+        OpenAIPredicateAnswer: {
+            /** Name */
+            name: string | null;
+            /** Probability */
+            probability: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "predicate";
+        };
+        /** OpenAIRefusalAnswer */
+        OpenAIRefusalAnswer: {
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "refusal";
+        };
+        /** OpenAIScoreAnswer */
+        OpenAIScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIScoreProbability"][];
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        };
+        /** OpenAIScoreProbability */
+        OpenAIScoreProbability: {
+            /** Label */
+            label: string;
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: number;
+        };
+        /** OpenAIToolSearchToolParam */
+        OpenAIToolSearchToolParam: {
+            /** Execution */
+            execution?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search";
+        };
         /**
          * OpenIdConnectSecurityScheme
          * @description Defines a security scheme using OpenID Connect.
@@ -38853,6 +39574,8 @@ export interface components {
              * @default true
              */
             circuit_breaker_enabled: boolean;
+            /** Deployment Name */
+            deployment_name?: string | null;
             /**
              * Instructions
              * @description Replaces the built-in classification instructions
@@ -39232,6 +39955,32 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** OutputToolSearchCall */
+        OutputToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * PageLinks
          * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
@@ -39513,6 +40262,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -39535,6 +40286,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -39736,6 +40491,8 @@ export interface components {
             homepage?: string | null;
             /** Id */
             id: string;
+            /** Installation Preference */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -39771,6 +40528,11 @@ export interface components {
              * @description Plugin unique ID
              */
             id: string;
+            /**
+             * Installation Preference
+             * @description Plugin installation preference
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Name
              * @description Plugin name
@@ -41189,6 +41951,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Keywords
              * @description Search keywords
@@ -43057,7 +43824,7 @@ export interface components {
             /** Tool Choice */
             tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
             /** Tools */
-            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
             /** Top Logprobs */
             top_logprobs?: number | null;
             /** Top P */
@@ -43191,7 +43958,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -43924,6 +44691,30 @@ export interface components {
              */
             window_seconds: number;
         };
+        /** ScoreAnswer */
+        ScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Legend */
+            legend: {
+                [key: string]: string | {
+                    [key: string]: unknown;
+                } | unknown[];
+            };
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * Screenshot
          * @description A screenshot action.
@@ -44025,6 +44816,8 @@ export interface components {
             api_base?: string | null;
             /** Api Key */
             api_key?: string | null;
+            /** Input Cost Per Query */
+            input_cost_per_query?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /** Search Provider */
@@ -44638,6 +45431,11 @@ export interface components {
              */
             prompt_tokens: number;
             /**
+             * Ptu Hours
+             * @default 0
+             */
+            ptu_hours: number;
+            /**
              * Spend
              * @default 0
              */
@@ -44872,6 +45670,16 @@ export interface components {
              * @default []
              */
             user_ids: string[];
+        };
+        /** StoredReport */
+        StoredReport: {
+            /** Id */
+            id: string;
+            report: components["schemas"]["JsonValue"];
+            /** Window End */
+            window_end: number;
+            /** Window Start */
+            window_start: number;
         };
         /**
          * SuccessfulKeyUpdate
@@ -45187,6 +45995,8 @@ export interface components {
             access_group_mcp_server_ids?: string[] | null;
             /** Access Group Models */
             access_group_models?: string[] | null;
+            /** Access Group Skill Names */
+            access_group_skill_names?: string[] | null;
             /**
              * Admins
              * @default []
@@ -45531,6 +46341,13 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /**
+             * Model Max Budget
+             * @description Per-model spend caps for this team member, each with its own budget_duration. Overrides the team's default per-model member budget. Pass an empty dict to fall back to the team default.
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Role */
             role?: ("admin" | "user") | null;
             /**
@@ -45568,6 +46385,10 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Team Id */
@@ -45680,6 +46501,71 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TelemetryDestination
+         * @enum {string}
+         */
+        TelemetryDestination: "local_table" | "http";
+        /**
+         * TelemetryGroup
+         * @description A telemetry group describes a group of metrics that can be toggled on/off separately. One
+         *     group may have dependencies on another.
+         * @enum {string}
+         */
+        TelemetryGroup: "heartbeat" | "request_success" | "token_info" | "request_taxonomy" | "event_details" | "instance_configuration" | "page_navigation";
+        /** TelemetryGroupInfo */
+        TelemetryGroupInfo: {
+            /** Enabled */
+            enabled: boolean;
+            group: components["schemas"]["TelemetryGroup"];
+            requires: components["schemas"]["TelemetryGroup"] | null;
+        };
+        /** TelemetryReportsResponse */
+        TelemetryReportsResponse: {
+            /** Next After */
+            next_after: number | null;
+            /** Next After Id */
+            next_after_id: string | null;
+            /** Reports */
+            reports: components["schemas"]["StoredReport"][];
+        };
+        /** TelemetrySettingsResponse */
+        TelemetrySettingsResponse: {
+            /** Available Destinations */
+            available_destinations: components["schemas"]["TelemetryDestination"][];
+            destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Destination Set By Environment */
+            destination_set_by_environment: boolean;
+            /** Editable */
+            editable: boolean;
+            /** Environment Variables */
+            environment_variables: string[];
+            /** Flush Interval Seconds */
+            flush_interval_seconds: number;
+            /** Groups */
+            groups: components["schemas"]["TelemetryGroupInfo"][];
+            /** Report */
+            report: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Report Is Sample */
+            report_is_sample: boolean;
+            /** Retention Days */
+            retention_days: number;
+            /** Set By Environment */
+            set_by_environment: boolean;
+            stored_destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Stored Groups */
+            stored_groups: components["schemas"]["TelemetryGroup"][] | null;
+            /** Vetoed */
+            vetoed: boolean;
+        };
+        /** TelemetrySettingsUpdate */
+        TelemetrySettingsUpdate: {
+            destination?: components["schemas"]["TelemetryDestination"] | null;
+            /** Groups */
+            groups: string[];
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -46666,6 +47552,33 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * UIAction
+         * @enum {string}
+         */
+        UIAction: "view" | "click" | "submit";
+        /** UIEventAccepted */
+        UIEventAccepted: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+        };
+        /** UIEventBody */
+        UIEventBody: {
+            action: components["schemas"]["UIAction"];
+            /** Page */
+            page: string;
+            /** Target */
+            target?: string | null;
+        };
+        /** UIEventsEnabledResponse */
+        UIEventsEnabledResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** UIField */
         UIField: {
             /** Key */
@@ -46783,6 +47696,8 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /** Gateway Base Url */
+            gateway_base_url?: string | null;
             /**
              * Hide Default Credentials Hint
              * @default false
@@ -47210,6 +48125,11 @@ export interface components {
              */
             homepage?: string | null;
             /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
              * Keywords
              * @description Search keywords
              */
@@ -47333,6 +48253,8 @@ export interface components {
             cooldown_time?: number | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Fallback On Unsupported Params */
+            fallback_on_unsupported_params?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
@@ -47486,6 +48408,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -47508,6 +48432,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -48241,6 +49169,50 @@ export interface components {
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
         };
+        /** UserActivityRow */
+        UserActivityRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** UserBanner */
         UserBanner: {
             /**
@@ -48967,6 +49939,10 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Ptu Shares */
+            ptu_shares?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
@@ -49329,6 +50305,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
@@ -51470,6 +52448,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 resource?: string | null;
+                scope?: string | null;
             };
             header?: never;
             path?: never;
@@ -56433,7 +57412,229 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56441,7 +57642,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -60124,6 +61325,61 @@ export interface operations {
             };
         };
     };
+    get_deployment_warnings_health_deployment_warnings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningsResponse"];
+                };
+            };
+        };
+    };
+    update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warning_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentWarningIgnoreUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningIgnoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_drain_health_drain_get: {
         parameters: {
             query?: never;
@@ -62136,6 +63392,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UiDiscoveryEndpoints"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -64750,6 +66024,24 @@ export interface operations {
             };
         };
     };
+    websocket_live_sessions_websocket_endpoint_get_3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
@@ -64886,7 +66178,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -68350,7 +69642,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -70550,7 +71842,218 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -70558,7 +72061,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -72397,6 +73900,147 @@ export interface operations {
             };
         };
     };
+    export_telemetry_reports_telemetry_reports_get: {
+        parameters: {
+            query?: {
+                /** @description window_end of the last report already exported */
+                after?: number;
+                /** @description id of the last report already exported */
+                after_id?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryReportsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telemetry_settings_telemetry_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+        };
+    };
+    update_telemetry_settings_telemetry_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetrySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_ui_event_telemetry_ui_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UIEventBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_events_enabled_telemetry_ui_events_enabled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventsEnabledResponse"];
+                };
+            };
+        };
+    };
     test_endpoint_test_get: {
         parameters: {
             query?: never;
@@ -73788,6 +75432,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityUserPageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -75671,7 +77361,229 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -75679,7 +77591,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -76572,6 +78484,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -78367,7 +80297,7 @@ export interface operations {
                     /** Tool Choice */
                     tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -78844,7 +80774,218 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -78852,7 +80993,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -80999,6 +83140,8 @@ export interface operations {
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;
+                /** @description Filter by routing status: false = active deployments, true = paused (blocked) deployments. Omit to return both. */
+                blocked?: boolean | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
                 /** @description Only return deployments whose `model_info.access_groups` contains this access group */
