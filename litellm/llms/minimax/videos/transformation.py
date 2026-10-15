@@ -5,6 +5,7 @@ only upscales a finished 768P task to 2K and ignores the prompt, so it is not ex
 
 import base64
 import re
+import time
 from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from math import gcd
@@ -35,6 +36,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
     encode_video_id_with_provider,
     extract_original_video_id,
 )
@@ -133,6 +135,7 @@ _DELETE_RESPONSE_ADAPTER: Final = TypeAdapter(_DeleteResponse)
 _CONTENT_ITEMS_ADAPTER: Final = TypeAdapter(list[_ContentItem])
 _CALLER_MEDIA_ADAPTER: Final = TypeAdapter(list[_CallerMediaItem])
 _FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_DROP_KEYS_ADAPTER: Final = TypeAdapter(frozenset[str])
 
 _STATUS_MAP: Final = MappingProxyType(
     {
@@ -152,8 +155,12 @@ _DROP_FROM_CREATE_BODY: Final = frozenset(
         "extra_headers",
         "extra_query",
         "extra_body",
+        "drop_params",
+        "additional_drop_params",
     }
 )
+
+_CONTENT_VARIANT: Final = "video"
 
 _CREATE_BODY_KEYS: Final = (
     "resolution",
@@ -342,6 +349,22 @@ def _video_object_from_task(task: _MiniMaxTask) -> VideoObject:
     )
 
 
+def _polled_model_id(logging_obj: object) -> str | None:
+    litellm_params: Final[object] = getattr(logging_obj, "litellm_params", None)
+    match litellm_params:
+        case {"video_id": str(video_id)}:
+            return decode_video_id_with_provider(video_id).get("model_id") or None
+        case _:
+            return None
+
+
+def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
+    try:
+        return _DROP_KEYS_ADAPTER.validate_python(params.get("additional_drop_params") or ())
+    except ValidationError:
+        return frozenset()
+
+
 def _billable_input_image_count(model: str, input_image_count: int) -> int:
     """MiniMax bills input images beyond a per-model free allowance on top of output seconds."""
     try:
@@ -410,8 +433,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
+        dropped_keys: Final = _DROP_FROM_CREATE_BODY | _additional_drop_keys(video_create_optional_params)
         for key, value in video_create_optional_params.items():
-            if value is None or key in _DROP_FROM_CREATE_BODY:
+            if value is None or key in dropped_keys:
                 continue
             if key == "seconds":
                 mapped_params["duration"] = _duration_param(value, model)
@@ -446,8 +470,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         resolved_api_key: Final = (
             api_key
             or (litellm_params.api_key if litellm_params is not None and litellm_params.api_key else None)
-            or litellm.api_key
             or get_secret_str("MINIMAX_API_KEY")
+            or litellm.api_key
         )
 
         if resolved_api_key is None:
@@ -554,6 +578,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             id=task_id,
             object="video",
             status="queued",
+            created_at=int(time.time()),
             model=model,
             seconds=str(duration) if duration is not None else None,
         )
@@ -595,7 +620,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         task: Final = _parse_task_response(raw_response)
         video_obj: Final = _video_object_from_task(task)
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, task.model)
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, _polled_model_id(logging_obj) or task.model
+            )
         return video_obj
 
     def transform_video_content_request(
@@ -606,6 +633,11 @@ class MinimaxVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         variant: str | None = None,
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        if variant is not None and variant != _CONTENT_VARIANT:
+            raise UnsupportedParamsError(
+                message=f"MiniMax only serves the video itself; variant {variant!r} is not available.",
+                llm_provider="minimax",
+            )
         original_task_id: Final = extract_original_video_id(video_id)
         encoded_task_id: Final = encode_url_path_segment(original_task_id, field_name="video_id")
         return f"{api_base}/v2/query/video_generation/{encoded_task_id}", _EMPTY_PARAMS

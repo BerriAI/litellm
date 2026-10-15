@@ -5,6 +5,7 @@ Tests for MiniMax-H3 video generation transformation.
 import base64
 import io
 import json
+import time
 from typing import Final
 from unittest.mock import Mock
 
@@ -427,6 +428,18 @@ class TestMinimaxVideoCreateResponse:
         assert video_obj.usage["video_resolution"] == "768p"
         assert "input_image_count" not in video_obj.usage
 
+    def test_create_response_carries_its_creation_time(self):
+        before: Final = int(time.time())
+        video_obj = MinimaxVideoConfig().transform_video_create_response(
+            model="MiniMax-H3",
+            raw_response=_mock_response({"task_id": "t1"}),
+            logging_obj=None,
+            custom_llm_provider="minimax",
+            request_data={"duration": 4},
+        )
+
+        assert before <= video_obj.created_at <= int(time.time())
+
 
 class TestMinimaxVideoStatusUsage:
     def test_finished_task_reports_no_token_counts(self):
@@ -735,6 +748,45 @@ class TestMinimaxVideoContentDownload:
 
         assert raised.value.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_status_returns_the_polled_id_when_minimax_omits_the_model(self):
+        encoded = encode_video_id_with_provider("123456789", "minimax", "MiniMax-H3")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"task": {"id": "123456789", "status": "failed", "error": {"code": "1026", "message": "x"}}},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            video_obj = await avideo_status(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert video_obj.id == encoded
+
+    @pytest.mark.asyncio
+    async def test_a_variant_minimax_cannot_serve_is_a_client_error_instead_of_the_full_video(self):
+        encoded = encode_video_id_with_provider("123456789", "minimax", "MiniMax-H3")
+        sent: Final[list[httpx.Request]] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"task": {"id": "123456789", "status": "succeeded"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.BadRequestError, match="thumbnail") as raised:
+                await avideo_content(
+                    video_id=encoded, variant="thumbnail", api_key="sk-test", api_base=API_BASE, client=handler
+                )
+
+        assert raised.value.status_code == 400
+        assert sent == []
+
 
 class TestMinimaxVideoList:
     def test_request_maps_limit_and_extra_query(self):
@@ -899,6 +951,30 @@ class TestMinimaxVideoEnvironment:
 
         assert headers["Authorization"] == "Bearer env-key"
 
+    def test_minimax_env_key_wins_over_the_global_litellm_key(self, monkeypatch):
+        monkeypatch.setenv("MINIMAX_API_KEY", "env-key")
+        monkeypatch.setattr("litellm.api_key", "global-key")
+
+        headers = MinimaxVideoConfig().validate_environment(
+            headers={},
+            model="MiniMax-H3",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers["Authorization"] == "Bearer env-key"
+
+    def test_global_litellm_key_is_the_last_fallback(self, monkeypatch):
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+        monkeypatch.setattr("litellm.api_key", "global-key")
+
+        headers = MinimaxVideoConfig().validate_environment(
+            headers={},
+            model="MiniMax-H3",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers["Authorization"] == "Bearer global-key"
+
 
 class TestMinimaxVideoEndToEndRequest:
     """
@@ -954,6 +1030,22 @@ class TestMinimaxVideoEndToEndRequest:
         image_item = body["content"][1]
         assert image_item["role"] == "first_frame"
         assert image_item["image_url"]["url"] == f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
+
+    @pytest.mark.asyncio
+    async def test_deployment_drop_settings_are_honored_and_never_sent(self):
+        body = await self._wire_body(
+            model="minimax/MiniMax-H3",
+            prompt="p",
+            ratio="1:1",
+            aigc_watermark=True,
+            drop_params=False,
+            additional_drop_params=["aigc_watermark"],
+        )
+
+        assert body["ratio"] == "1:1"
+        assert "aigc_watermark" not in body
+        assert "drop_params" not in body
+        assert "additional_drop_params" not in body
 
     @pytest.mark.asyncio
     async def test_a_param_minimax_cannot_honor_is_rejected_before_the_billed_call(self):
