@@ -12,7 +12,6 @@ use litellm_host_python::present;
 use litellm_inference_responses::{ResponsesRoute, route::Responses};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
-use serde_json::Value;
 pub(crate) use websocket::ResponsesWebSocketConnection;
 
 use super::{
@@ -56,15 +55,6 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
     if !native_provider {
         return Err(RustBridgeDeclined::new_err(
             "native HTTP responses provider",
-        ));
-    }
-    if argument("stream")?
-        .map(|value| litellm_host_python::from_py::<Value>(&value))
-        .transpose()?
-        .is_some_and(|value| value == Value::Bool(true))
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native Python responses streaming",
         ));
     }
     let host = InferenceHost::new(call.view()?, ROUTE_HOST_MODULE);
