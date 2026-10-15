@@ -17,6 +17,7 @@ pub struct ResponsesCall {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
+    pub api_version: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
 }

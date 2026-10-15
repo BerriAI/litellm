@@ -64,6 +64,10 @@ pub(super) fn project(
         api_key: call.options.api_key,
         api_base: call.options.api_base,
         custom_llm_provider: call.options.custom_llm_provider,
+        api_version: host
+            .argument(py, arguments, "api_version")?
+            .map(|value| value.extract())
+            .transpose()?,
         extra_headers: call.options.extra_headers,
         timeout: call.options.timeout,
     })

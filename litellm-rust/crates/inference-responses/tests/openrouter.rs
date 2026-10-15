@@ -22,6 +22,7 @@ fn call() -> ResponsesCall {
         api_key: None,
         api_base: None,
         custom_llm_provider: None,
+        api_version: None,
         extra_headers: None,
         timeout: None,
     }

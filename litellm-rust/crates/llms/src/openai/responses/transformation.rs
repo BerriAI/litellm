@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 
-use super::request::{self, ItemValidation};
+use super::request::{self, ResponsesHost};
 use crate::{
     Error,
     base_llm::{
@@ -149,15 +149,16 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
+        _api_version: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String {
+    ) -> Result<String, Error> {
         let base = api_base
             .filter(|base| !base.is_empty())
             .map(str::to_owned)
             .or_else(|| lookup("OPENAI_BASE_URL"))
             .or_else(|| lookup("OPENAI_API_BASE"))
             .unwrap_or_else(|| OPENAI_RESPONSES_DEFAULT_API_BASE.into());
-        format!("{}/responses", base.trim_end_matches('/'))
+        Ok(format!("{}/responses", base.trim_end_matches('/')))
     }
 
     fn transform_responses_api_request(
@@ -166,7 +167,7 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        responses_request(model, input, params, ItemValidation::OpenAi)
+        responses_request(model, input, params, ResponsesHost::OpenAi)
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
@@ -179,7 +180,7 @@ pub fn responses_request(
     model: &str,
     input: Value,
     params: Map<String, Value>,
-    validation: ItemValidation,
+    host: ResponsesHost,
 ) -> Result<Value, Error> {
     if !input.is_string() && !input.is_array() {
         return Err(Error::InvalidRequest(
@@ -192,7 +193,7 @@ pub fn responses_request(
     {
         return Err(Error::InvalidRequest("stream must be a boolean".into()));
     }
-    let (input, params) = request::shape(input, params, validation)?;
+    let (input, params) = request::shape(input, params, host)?;
     Ok(Value::Object(
         params
             .into_iter()

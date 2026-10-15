@@ -23,8 +23,9 @@ pub trait BaseResponsesApiConfig: Sync {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
+        api_version: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String;
+    ) -> Result<String, Error>;
 
     fn transform_responses_api_request(
         &self,
