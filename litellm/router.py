@@ -1327,9 +1327,11 @@ class Router:
         _content_policy_fallbacks: Final = content_policy_fallbacks or litellm.content_policy_fallbacks
         self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
         self.content_policy_fallbacks = _content_policy_fallbacks
-        self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
-        self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
-        self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
+        self.total_calls: defaultdict[object, int] = defaultdict(int)  # dict to store total calls made to each model
+        self.fail_calls: defaultdict[object, int] = defaultdict(int)  # dict to store fail_calls made to each model
+        self.success_calls: defaultdict[object, int] = defaultdict(
+            int
+        )  # dict to store success_calls  made to each model
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -2656,13 +2658,15 @@ class Router:
         """
         try:
             _deployment_copy: Final = copy.deepcopy(deployment)
-            litellm_params: Final[dict] = _deployment_copy["litellm_params"]
+            litellm_params: Final[dict[str, object]] = _deployment_copy["litellm_params"]
 
             if litellm.redact_user_api_key_info:
                 masker: Final = SensitiveDataMasker(visible_prefix=2, visible_suffix=0)
                 _deployment_copy["litellm_params"] = masker.mask_dict(litellm_params)
             elif "api_key" in litellm_params:
-                litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+                _api_key: Final[object] = litellm_params["api_key"]
+                if isinstance(_api_key, str):
+                    litellm_params["api_key"] = _api_key[:2] + "*" * 10
 
             return _deployment_copy
         except Exception as e:
@@ -6310,7 +6314,7 @@ class Router:
         except Exception as e:
             raise e
 
-    def _embedding(self, input: str | list, model: str, **kwargs):
+    def _embedding(self, input: str | list, model: str, **kwargs) -> EmbeddingResponse:
         model_name = None
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s; kwargs: %s", model, kwargs)
@@ -6341,7 +6345,8 @@ class Router:
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            response: Final = litellm.embedding(
+            forward: Final[partial[EmbeddingResponse]] = partial(litellm.embedding)
+            response: Final = forward(
                 **{
                     **data,
                     "input": input,
@@ -6974,9 +6979,10 @@ class Router:
         # Check all models in parallel
         results: Final = await asyncio.gather(*[try_retrieve_batch(model) for model in filtered_model_list])
 
-        final_results: Final[dict] = {
+        final_data: Final = []
+        final_results: Final[dict[str, object]] = {
             "object": "list",
-            "data": [],
+            "data": final_data,
             "first_id": None,
             "last_id": None,
             "has_more": False,
@@ -6988,7 +6994,7 @@ class Router:
                 if final_results["first_id"] is None and hasattr(result, "first_id"):
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
-                final_results["data"].extend(result.data)
+                final_data.extend(result.data)
 
                 ## check 'has_more'
                 if getattr(result, "has_more", False) is True:
@@ -8140,9 +8146,11 @@ class Router:
             num_retries = self.num_retries if self.num_retries is not None else 0
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-        _metadata: Final[dict] = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
-        if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
-            model_list: Final = self.get_model_list(model_name=_metadata["model_group"])
+        _metadata_raw: Final[object] = kwargs.get("litellm_metadata", kwargs.get("metadata"))
+        _metadata: Final[dict[str, object]] = _metadata_raw if isinstance(_metadata_raw, dict) else {}
+        _metadata_model_group: Final = _metadata.get("model_group")
+        if "model_group" in _metadata and isinstance(_metadata_model_group, str):
+            model_list: Final = self.get_model_list(model_name=_metadata_model_group)
             if model_list is not None:
                 _metadata.update({"model_group_size": len(model_list)})
 
@@ -8189,7 +8197,12 @@ class Router:
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
                 # kwargs.get("model") at this point is the deployment model, not the model_group
-                _model_group_for_retry_policy = model_group or _metadata.get("model_group") or kwargs.get("model")
+                _kwargs_model: Final[object] = kwargs.get("model")
+                _model_group_for_retry_policy: Final[str | None] = (
+                    (model_group if isinstance(model_group, str) else None)
+                    or (_metadata_model_group if isinstance(_metadata_model_group, str) else None)
+                    or (_kwargs_model if isinstance(_kwargs_model, str) else None)
+                )
                 # Use per-request model_group_retry_policy if provided, otherwise use self
                 _retry_policy_retries: Final = _get_num_retries_from_retry_policy(
                     exception=original_exception,
@@ -10545,7 +10558,9 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        model_info: Final[dict[str, object]] = deployment.model_info.model_dump(  # mutable-ok: built in place
+            exclude_none=True
+        )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:

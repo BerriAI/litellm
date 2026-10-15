@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Generic, TypeAlias, TypeVar
+from typing import (
+    Final,
+    Generic,
+    ParamSpec,
+    TypeAlias,
+    TypeVar,
+    cast,  # noqa: TID251  # typed_as casts the dispatch wrapper back to the legacy signature
+)
 
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
@@ -14,7 +21,19 @@ RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
 ResultT: Final = TypeVar("ResultT")
 
+T: Final = TypeVar("T")
+P: Final = ParamSpec("P")
+R: Final = TypeVar("R")
+
 NativeHook: TypeAlias = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+
+
+def typed_as(legacy: T) -> Callable[[Callable[..., object]], T]:
+    return lambda wrapper: cast(T, wrapper)  # cast-ok: the wrapper forwards the legacy call shape unchanged
+
+
+def typed_params(shape: Callable[P, object]) -> Callable[[Callable[..., R]], Callable[P, R]]:
+    return lambda wrapper: cast(Callable[P, R], wrapper)  # cast-ok: the wrapper keeps the binder's call shape
 
 
 def call_hook(

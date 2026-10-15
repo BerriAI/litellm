@@ -4,7 +4,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm import main
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, typed_as
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
@@ -60,6 +60,7 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+@typed_as(main.embedding)
 def embedding(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public embedding call shape
@@ -73,6 +74,7 @@ def embedding(
     )
 
 
+@typed_as(main.aembedding)
 async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # kwargs-ok: preserve the public call shape
     return await _ADISPATCH.arun(
         args,

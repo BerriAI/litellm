@@ -6194,7 +6194,10 @@ async def aresponses_with_retries(*args, **kwargs):
 
 ### EMBEDDING ENDPOINTS ####################
 @client
-async def aembedding(*args, **kwargs) -> EmbeddingResponse:
+async def aembedding(
+    *args: object,
+    **kwargs: object,  # kwargs-ok: forwards the embedding keyword contract unchanged
+) -> EmbeddingResponse:
     """
     Asynchronously calls the `embedding` function with the given arguments and keyword arguments.
 
@@ -6218,7 +6221,8 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
+        provider_fn: Final[partial[tuple[str, str, str | None, str | None]]] = partial(get_llm_provider)
+        _, custom_llm_provider, _, _ = provider_fn(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base", None),
@@ -6258,8 +6262,8 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 # Overload for when aembedding=True (returns coroutine)
 @overload
 def embedding(
-    model,
-    input=[],
+    model: str,
+    input: str | Sequence[object] = [],
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
@@ -6271,12 +6275,12 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
+    custom_llm_provider: str | None = None,
+    litellm_call_id: str | None = None,
+    logger_fn: Callable[..., object] | None = None,
     *,
     aembedding: Literal[True],
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, EmbeddingResponse]: 
     ...
 
@@ -6284,8 +6288,8 @@ def embedding(
 # Overload for when aembedding=False or not specified (returns EmbeddingResponse)
 @overload
 def embedding(
-    model,
-    input=[],
+    model: str,
+    input: str | Sequence[object] = [],
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
@@ -6297,12 +6301,12 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
+    custom_llm_provider: str | None = None,
+    litellm_call_id: str | None = None,
+    logger_fn: Callable[..., object] | None = None,
     *,
     aembedding: Literal[False] = False,
-    **kwargs,
+    **kwargs: object,
 ) -> EmbeddingResponse: 
     ...
 

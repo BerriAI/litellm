@@ -1,8 +1,9 @@
 {
     "extends": "../../pyrightconfig.json",
-    "include": ["openai_sdk_compat.py"],
+    "include": ["openai_sdk_compat.py", "public_dispatch.py"],
     "exclude": [],
     "extraPaths": ["../.."],
     "pythonVersion": "3.10",
-    "reportMissingImports": true
+    "reportMissingImports": true,
+    "reportUnnecessaryTypeIgnoreComment": "error"
 }

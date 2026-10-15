@@ -1,4 +1,4 @@
-from collections.abc import Coroutine, Mapping
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -7,7 +7,7 @@ import httpx
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, typed_params
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str, signature
 
@@ -69,10 +69,11 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+@typed_params(_bind_request)
 def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
-) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+) -> OCRResponse:
     return _DISPATCH.run(
         args,
         kwargs,
@@ -82,6 +83,7 @@ def ocr(
     )
 
 
+@typed_params(_bind_request)
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     return await _ADISPATCH.arun(
         args,

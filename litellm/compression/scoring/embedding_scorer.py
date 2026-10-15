@@ -6,9 +6,11 @@ Computes cosine similarity between the query embedding and each message embeddin
 
 import math
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 from litellm.caching.dual_cache import DualCache
+from litellm.types.utils import EmbeddingResponse
 
 
 def _extract_content(message: dict) -> str:
@@ -83,7 +85,8 @@ def embedding_score_messages(
     if embedding_model_params:
         kwargs = {**kwargs, **embedding_model_params}
 
-    response: Final = litellm.embedding(**kwargs)
+    forward: Final[partial[EmbeddingResponse]] = partial(litellm.embedding)
+    response: Final = forward(**kwargs)
 
     # Extract embedding vectors
     embeddings: Final = [item["embedding"] for item in response.data]
