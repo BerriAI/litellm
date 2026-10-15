@@ -1,6 +1,8 @@
 from typing import Final, cast
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
+
 import litellm
 from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
@@ -14,6 +16,12 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+
+def invalid_provider_routing_hints_message(error: ValidationError) -> str:
+    return "; ".join(
+        f"Invalid {'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}" for detail in error.errors()
+    )
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
