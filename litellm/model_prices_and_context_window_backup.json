@@ -74822,5 +74822,32 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "jp.amazon.nova-2-lite-v1:0": {
+        "cache_read_input_token_cost": 9.9e-08,
+        "cache_read_input_token_cost_flex": 4.95e-08,
+        "cache_read_input_token_cost_priority": 1.7325e-07,
+        "input_cost_per_token": 3.96e-07,
+        "input_cost_per_token_batches": 1.98e-07,
+        "input_cost_per_token_flex": 1.98e-07,
+        "input_cost_per_token_priority": 6.93e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 3.311e-06,
+        "output_cost_per_token_batches": 1.6555e-06,
+        "output_cost_per_token_flex": 1.6555e-06,
+        "output_cost_per_token_priority": 5.79425e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-northeast-1/index.json",
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
     }
 }
