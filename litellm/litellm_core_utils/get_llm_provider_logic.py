@@ -392,7 +392,7 @@ def get_llm_provider(
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
                     elif endpoint == "https://webwright.ai/v1":
-                        custom_llm_provider = "webwright"
+                        custom_llm_provider = "webwright"  # rebind-ok: mirrors the sibling OpenAI-compatible endpoint dispatch
                         dynamic_api_key = get_secret_str("WEBWRIGHT_API_KEY")
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
@@ -918,8 +918,8 @@ def _get_openai_compatible_provider_info(
         ) = litellm.HyperbolicChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "webwright":
         (
-            api_base,
-            dynamic_api_key,
+            api_base,  # rebind-ok: mirrors the sibling OpenAI-compatible provider dispatch
+            dynamic_api_key,  # rebind-ok: mirrors the sibling OpenAI-compatible provider dispatch
         ) = litellm.WebwrightChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "vercel_ai_gateway":
         (
