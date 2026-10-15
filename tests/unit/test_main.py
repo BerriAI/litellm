@@ -4556,7 +4556,7 @@ def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
     logging_obj: Final = LiteLLMLogging(
-        model="us.anthropic.claude-opus-5",
+        model="us.anthropic.claude-opus-9",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="completion",
@@ -4580,6 +4580,41 @@ def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     assert response is not None
     assert getattr(response.usage, "cost", None) is None
     assert response._hidden_params.get("response_cost") is None
+
+
+def test_stream_chunk_builder_prices_alias_response_at_its_deployment_model():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    deployment_model: Final = "us.anthropic.claude-opus-5"
+    logging_obj: Final = LiteLLMLogging(
+        model=deployment_model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-alias-priced",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("bedrock-claude-opus-5", "")
+    usage_chunk.usage = Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45)
+    chunks: Final = [
+        _stream_builder_text_chunk("bedrock-claude-opus-5", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    entry: Final = litellm.model_cost[deployment_model]
+    expected_cost: Final = 40 * entry["input_cost_per_token"] + 5 * entry["output_cost_per_token"]
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == pytest.approx(expected_cost)
+    assert response._hidden_params.get("response_cost") == pytest.approx(expected_cost)
 
 
 def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
