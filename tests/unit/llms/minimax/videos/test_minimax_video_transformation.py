@@ -1179,6 +1179,20 @@ class TestMinimaxVideoPricing:
         assert body["resolution"] == MINIMAX_VIDEO_DEFAULT_RESOLUTION
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "resolution_kwargs",
+        [{"resolution": "480P"}, {"parameters": {"resolution": "480P"}}, {"extra_body": {"resolution": "480p"}}],
+    )
+    async def test_a_deployment_dropping_resolution_sends_the_default_instead_of_rejecting_one_without_a_price(
+        self, resolution_kwargs
+    ):
+        body = await TestMinimaxVideoEndToEndRequest._wire_body(
+            model="minimax/MiniMax-H3", prompt="p", additional_drop_params=["resolution"], **resolution_kwargs
+        )
+
+        assert body["resolution"] == MINIMAX_VIDEO_DEFAULT_RESOLUTION
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("model,resolution", [("MiniMax-H3", "2K"), ("MiniMax-H3-Max", "480P")])
     async def test_a_priced_resolution_is_sent_as_asked(self, model, resolution):
         body = await TestMinimaxVideoEndToEndRequest._wire_body(

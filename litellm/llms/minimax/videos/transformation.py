@@ -579,8 +579,12 @@ class MinimaxVideoConfig(BaseVideoConfig):
             "model": model,
             "content": content,
         }
-        dropped_keys: Final = _additional_drop_keys(litellm_params.model_dump()) | _unpriced_resolution_drop(
-            model, video_create_optional_request_params.get("resolution"), litellm_params
+        additional_drops: Final = _additional_drop_keys(litellm_params.model_dump())
+        dropped_keys: Final = (
+            additional_drops
+            if "resolution" in additional_drops
+            else additional_drops
+            | _unpriced_resolution_drop(model, video_create_optional_request_params.get("resolution"), litellm_params)
         )
         for key in _CREATE_BODY_KEYS:
             if key not in dropped_keys and video_create_optional_request_params.get(key) is not None:
