@@ -219,6 +219,8 @@ def test_empty_principal_fields_rejected_at_construction():
         SessionPrincipal(user_id="", client_id="c")
     with pytest.raises(ValidationError):
         SessionPrincipal(user_id="u", client_id="")
+    with pytest.raises(ValidationError):
+        SessionPrincipal(user_id="u", client_id="c", resource_server_ids=())
 
 
 def test_short_signing_key_rejected_at_construction():
@@ -246,6 +248,46 @@ def _decoded_claims(token: str, prefix: str) -> dict:
         algorithms=["HS256"],
         options={"verify_exp": False},
     )
+
+
+def test_single_server_scope_keeps_the_scalar_wire_claim():
+    principal = SessionPrincipal(
+        user_id="user-123",
+        client_id="llm_client_abc",
+        resource_server_ids=("alpha-id",),
+    )
+    minted = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+
+    claims = _decoded_claims(minted.token.get_secret_value(), SESSION_TOKEN_PREFIX)
+    opened = open_session_token(minted.token.get_secret_value(), KEYS, NOW)
+    assert claims["resource_server_id"] == "alpha-id"
+    assert "resource_server_ids" not in claims
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal.resource_server_ids == ("alpha-id",)
+
+
+def test_multi_server_scope_round_trips_through_the_list_claim():
+    principal = SessionPrincipal(
+        user_id="user-123",
+        client_id="llm_client_abc",
+        resource_server_ids=("alpha-id", "beta-id"),
+    )
+    minted = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+
+    claims = _decoded_claims(minted.token.get_secret_value(), SESSION_TOKEN_PREFIX)
+    opened = open_session_token(minted.token.get_secret_value(), KEYS, NOW)
+    assert claims["resource_server_ids"] == ["alpha-id", "beta-id"]
+    assert "resource_server_id" not in claims
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+
+
+def test_token_with_both_server_scope_claims_is_malformed():
+    token = _sign_claims(_valid_claims(resource_server_id="alpha-id", resource_server_ids=["alpha-id", "beta-id"]))
+
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
 
 
 def test_mcp_principal_wire_claims_carry_no_audience_or_team_keys():

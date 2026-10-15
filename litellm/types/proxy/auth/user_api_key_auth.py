@@ -168,7 +168,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # path via post-construction assignment and stripped from validated input like the markers
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
-    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
+    mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -229,7 +229,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("requires_fresh_policy", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
-        values.pop("mcp_session_resource_server_id", None)
+        values.pop("mcp_session_resource_server_ids", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
