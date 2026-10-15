@@ -23,7 +23,7 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 
 
 # gpt-5.3-codex
@@ -1930,6 +1930,82 @@ GPT_5_4_MINI_CACHE_READ: Final = CostTrackingTestCase(
                 "prompt_tokens_details": {"cached_tokens": 12288},
             },
         },
+    ),
+    expected=ExactExpected(
+        spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE: Final = CostTrackingTestCase(
+    name="gpt-5.4-mini-stream_cache_read_choice_bearing_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-5.4-mini",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6c1f0b2a9d4e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "scripted answer 6c1f0b2a9d4e"},
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}}],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288},
+                },
+            },
+            done=True,
+        ),
     ),
     expected=ExactExpected(
         spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
@@ -11108,7 +11184,17 @@ GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
 )
 
 
+GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
+    update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
+    update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_5_6_SLASH_ALIAS,
+    GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
     GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
@@ -11161,6 +11247,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_STREAM_FULL_USAGE,
     GPT_5_4_MINI_INPUT_TEXT,
     GPT_5_4_MINI_CACHE_READ,
+    GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE,
     GPT_5_4_MINI_AUDIO_INPUT,
     GPT_5_4_MINI_AUDIO_OUTPUT,
     GPT_5_4_MINI_REASONING,
@@ -11347,6 +11434,27 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/messages",),
+    ),
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="openai/responses/gpt-5.6"),
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),

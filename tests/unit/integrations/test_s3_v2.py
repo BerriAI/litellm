@@ -5848,3 +5848,126 @@ class TestS3Logger(S3Logger):
         self.recorded_requests[response_obj["id"]] = start_time
         self.logged_standard_logging_payload = kwargs["standard_logging_object"]
         return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+
+
+def _batch_line_items_payload() -> dict:
+    line = {
+        "batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA",
+        "custom_id": "ok-1",
+        "status": "success",
+        "request": {"custom_id": "ok-1", "body": {"messages": [{"role": "user", "content": "hi"}]}},
+        "response": {"custom_id": "ok-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-1"}}},
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        "response_cost": 0.005,
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "metadata": {"user_api_key_hash": "hash-alice"},
+    }
+    return {
+        "batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA",
+        "finished_at": 1791494130,
+        "part": 0,
+        "lines": (line, {**line, "custom_id": "ok-2"}),
+    }
+
+
+def _s3_logger_answering(
+    status: int, s3_path: str | None, content: bytes = b""
+) -> tuple[S3Logger, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, content=content, request=request)
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_region_name="us-east-1",
+        s3_path=s3_path,
+        s3_aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        s3_aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        s3_flush_interval=3600,
+    )
+    logger.async_httpx_client = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    return logger, requests
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_one_ndjson_object_under_the_configured_path():
+    logger, requests = _s3_logger_answering(200, "cold/")
+    payload = _batch_line_items_payload()
+
+    await logger.async_log_batch_line_items(payload)
+
+    (request,) = requests
+    assert request.method == "PUT"
+    assert request.url.path == "/cold/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
+    assert request.headers["Content-Type"] == "application/x-ndjson"
+    assert request.headers["Content-Disposition"] == 'inline; filename="bGl0ZWxsbV9wcm94eTtiYXRjaA-part-00000.jsonl"'
+    assert [json.loads(line) for line in request.content.decode().splitlines()] == list(payload["lines"])
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_without_an_s3_path_sit_at_the_bucket_root():
+    logger, requests = _s3_logger_answering(200, None)
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert [request.url.path for request in requests] == [
+        "/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_batch_line_items_upload_is_logged_with_the_batch_id(caplog):
+    logger, requests = _s3_logger_answering(400, "cold")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert len(requests) == 1
+    assert any(
+        "bGl0ZWxsbV9wcm94eTtiYXRjaA" in record.getMessage() and "were not stored" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_batch_line_items_object_the_bucket_refuses_for_good_is_not_kept_in_memory():
+    logger, requests = _s3_logger_answering(400, "cold", b"<Error><Code>InvalidArgument</Code></Error>")
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+    await logger.flush_queue()
+
+    assert len(requests) == 1
+    assert logger._flush_dropped == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(monkeypatch):
+    import threading
+
+    import litellm.integrations.s3_v2 as s3_v2_module
+
+    logger, requests = _s3_logger_answering(200, "cold/")
+    serialize = s3_v2_module.batch_line_items_ndjson
+    prepare = logger._prepare_put
+    threads = {}
+
+    def _serialize(payload):
+        threads["serialize"] = threading.current_thread()
+        return serialize(payload)
+
+    def _prepare(element):
+        threads["hash"] = threading.current_thread()
+        return prepare(element)
+
+    monkeypatch.setattr(s3_v2_module, "batch_line_items_ndjson", _serialize)
+    monkeypatch.setattr(logger, "_prepare_put", _prepare)
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert len(requests) == 1
+    assert set(threads) == {"serialize", "hash"}
+    assert threading.main_thread() not in threads.values()

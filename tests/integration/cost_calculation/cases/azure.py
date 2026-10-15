@@ -19,7 +19,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -6170,7 +6170,9 @@ AZURE_GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
         "total_tokens": 13308,
     },
     ExactExpected(spend=0.002327, input_cost=0.00208, output_cost=0.000247, prompt_tokens=12928, completion_tokens=380),
-    choice_updates={"content_filter_result": {"error": {"code": "content_filter_error", "message": "The contents are not filtered"}}},
+    choice_updates={
+        "content_filter_result": {"error": {"code": "content_filter_error", "message": "The contents are not filtered"}}
+    },
 )
 AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
     AZURE_GPT_6_ASTRA_CACHE_READ,
@@ -6317,6 +6319,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (AZURE_GPT_5_6_INPUT_TEXT, AZURE_GPT_5_6_CACHE_READ, AZURE_GPT_5_6_STREAM, AZURE_GPT_5_6_REASONING),
+        ("/v1/messages",),
+    ),
     BridgeCostParityTestCase(native=AZURE_GPT_6_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),

@@ -757,6 +757,7 @@ def owned_proxy_process(
     coverage_file: Path | None = None,
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
     inherited: Mapping[str, str] = os.environ,
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
@@ -788,7 +789,7 @@ def owned_proxy_process(
     process: Final = launch.process
     try:
         with httpx.Client(
-            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
     finally:

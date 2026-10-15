@@ -644,3 +644,176 @@ def test_legacy_gateway_calls_modern_upstream_without_initialize(
             assert metadata["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
             assert "io.modelcontextprotocol/clientCapabilities" in metadata
             assert b"mcp-session-id" not in row.get("headers", {})
+
+
+@pytest.mark.parametrize("guardrail_action", ["off", "MASK", "BLOCK"])
+@pytest.mark.parametrize("protocol", ["2025-11-25", "2026-07-28"])
+def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
+    tmp_path, protocol: str, guardrail_action: str
+) -> None:
+    import asyncio
+    import os
+    from pathlib import Path
+    from threading import Event
+    from contextlib import asynccontextmanager
+
+    import httpx
+    import httpx2
+    import yaml
+    from mcp import ClientSession, MCPError
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.server.mcpserver import Context, MCPServer
+    from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.types import DiscoverResult
+    from sse_starlette.sse import AppStatus
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import _drain_sse_streams
+    from integration._support.process import owned_proxy
+
+    upstream: Final = MCPServer("progress-cancellation-peer")
+    started: Final = Event()
+    stopped: Final = Event()
+    completed: Final = Event()
+
+    @upstream.tool()
+    async def progress(ctx: Context) -> str:
+        await ctx.report_progress(1, 2, "halfway")
+        return "done"
+
+    @upstream.tool()
+    async def final_text() -> str:
+        return "halfway"
+
+    @upstream.tool()
+    async def slow() -> str:
+        started.set()
+        try:
+            await asyncio.sleep(20)
+            completed.set()
+            return "completed"
+        finally:
+            stopped.set()
+
+    async def exercise(gateway: Gateway) -> None:
+        observed: Final[list[tuple[float, float | None, str | None]]] = []
+
+        async def receive_progress(value: float, total: float | None, message: str | None) -> None:
+            observed.append((value, total, message))
+
+        async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
+            async with streamable_http_client(
+                str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
+            ) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
+                    if protocol == "2026-07-28":
+                        session.adopt(DiscoverResult.model_validate(await session.send_discover(protocol)))
+                    else:
+                        await session.initialize()
+                    listed = await session.list_tools()
+                    assert {"peer-progress", "peer-slow"} <= {tool.name for tool in listed.tools}
+                    if guardrail_action != "off":
+                        try:
+                            checked = await session.call_tool("peer-final_text", {})
+                        except MCPError:
+                            assert guardrail_action == "BLOCK"
+                        else:
+                            if guardrail_action == "BLOCK":
+                                assert checked.is_error
+                            else:
+                                assert not checked.is_error
+                                assert "halfway" not in str(checked.content)
+                    result = await session.call_tool("peer-progress", {}, progress_callback=receive_progress)
+                    assert not result.is_error
+                    assert len(observed) == 1
+                    assert observed[0][:2] == (1.0, 2.0)
+                    if guardrail_action == "BLOCK":
+                        assert observed[0][2] is None
+                    elif guardrail_action == "MASK":
+                        assert observed[0][2] and "halfway" not in observed[0][2]
+                    else:
+                        assert observed[0][2] == "halfway"
+                    call = asyncio.create_task(session.call_tool("peer-slow", {}))
+                    try:
+                        assert await asyncio.to_thread(started.wait, 5), "Upstream tool did not start"
+                        call.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await call
+                        assert await asyncio.to_thread(stopped.wait, 2), "Cancelled upstream work kept running"
+                        assert not completed.is_set()
+                        followup = await session.call_tool("peer-progress", {})
+                        assert not followup.is_error, "Cancellation must leave later calls usable"
+                    finally:
+                        call.cancel()
+                        await asyncio.gather(call, return_exceptions=True)
+
+    app: Final = upstream.streamable_http_app(
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette):
+        AppStatus.should_exit = False
+        async with app.router.lifespan_context(app):
+            yield
+        _drain_sse_streams()
+        watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
+        await asyncio.wait_for(asyncio.gather(*watchers), 2)
+
+    hosted: Final = Starlette(routes=[Mount("/", app=app)], lifespan=lifespan)
+    with asgi_server(hosted) as upstream_url, httpx.Client() as client:
+        config: Final = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "guardrails": []
+                    if guardrail_action == "off"
+                    else [
+                        {
+                            "guardrail_name": "progress-policy",
+                            "litellm_params": {
+                                "guardrail": "litellm_content_filter",
+                                "mode": "post_mcp_call",
+                                "default_on": True,
+                                "blocked_words": [{"keyword": "halfway", "action": guardrail_action}],
+                            },
+                        }
+                    ],
+                    "mcp_servers": {
+                        "peer": {"url": upstream_url + "/mcp", "transport": "http", "protocol_version": protocol}
+                    },
+                    "general_settings": {
+                        "master_key": "sk-progress-cancellation-test",
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                    },
+                }
+            )
+        )
+        source: Final = Path(__file__).resolve().parents[3]
+        environment: Final = {
+            "PYTHONPATH": os.pathsep.join((str(source), str(source / "tests"))),
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true",
+        }
+        seed: Final = Gateway(client, "sk-progress-cancellation-test", upstream_url)
+        with owned_proxy(
+            seed,
+            tmp_path / "gateway",
+            environment,
+            config=config,
+            database_setup=(),
+            remove_environment=(
+                "DATABASE_URL",
+                "DATABASE_URL_READ_REPLICA",
+                "DIRECT_URL",
+                "INTEGRATION_PROXY_DATABASE_URL",
+                "INTEGRATION_PROXY_READ_REPLICA_URL",
+            ),
+        ) as gateway:
+            asyncio.run(exercise(gateway))

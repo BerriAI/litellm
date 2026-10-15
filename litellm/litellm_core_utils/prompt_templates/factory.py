@@ -2897,13 +2897,8 @@ def anthropic_messages_pt(
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
-                        thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
-                        if (
-                            m.get("type", "") == "thinking"
-                            and len(thinking_block) > 0
-                            and not is_unsignable_thinking_block(m)
-                        ):  # don't pass empty text blocks. anthropic api raises errors.
+                        if m.get("type", "") == "thinking" and not is_unsignable_thinking_block(m):
                             anthropic_message: ChatCompletionThinkingBlock | AnthropicMessagesTextParam = cast(
                                 ChatCompletionThinkingBlock, m
                             )

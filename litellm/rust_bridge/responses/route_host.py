@@ -12,8 +12,9 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, Respons
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
 
 
-def connection_defaults(_provider: str) -> tuple[str | None, str | None]:
-    return litellm.api_key or litellm.openai_key, litellm.api_base
+def connection_defaults(provider: str) -> tuple[str | None, str | None]:
+    provider_key: Final = litellm.openai_key if provider == "openai" else None
+    return litellm.api_key or provider_key, litellm.api_base
 
 
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:

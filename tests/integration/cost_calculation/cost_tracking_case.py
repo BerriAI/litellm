@@ -9,6 +9,7 @@ from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 PRIOR_RESPONSE_ID_MARKER: Final = "$PRIOR_RESPONSE_ID"
+ALIAS_MARKER: Final = "$MARKER"
 
 
 class SearchContextCostPerQuery(BaseModel):
@@ -132,6 +133,17 @@ class CostMapEntry(BaseModel):
     provider_specific_entry: ProviderSpecificEntry | None = None
 
 
+class OffPeakPricing(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hours_utc: str
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
+ALWAYS_OPEN_OFF_PEAK_WINDOW: Final = "00:00-00:00"
+
+
 class Deployment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -140,6 +152,7 @@ class Deployment(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     search_cost_per_query: float | None = None
+    off_peak_pricing: OffPeakPricing | None = None
 
 
 class WavUpload(BaseModel):
@@ -286,6 +299,7 @@ class CostTrackingTestCase(BaseModel):
     covers: str
     known_bug: str | None = None
     model: str
+    alias: str | None = None
     endpoint: (
         Literal[
             "/v1/chat/completions",
@@ -312,6 +326,13 @@ class CostTrackingTestCase(BaseModel):
     fallback_from: StoredResponse | None = None
     disconnect_after_frames: int | None = Field(default=None, ge=1)
     upstream_body: dict[str, JsonValue] | None = None
+
+    @field_validator("alias")
+    @classmethod
+    def validate_alias(cls, value: str | None) -> str | None:
+        if value is not None and ALIAS_MARKER not in value:
+            raise ValueError(f"alias must contain {ALIAS_MARKER} so every run registers a unique model_name")
+        return value
 
     @property
     def rates(self) -> CostMapEntry:
@@ -664,9 +685,7 @@ def with_response_usage(
     if not isinstance(base.response, JsonResponse):
         raise TypeError(f"{base.name}: with_response_usage needs a JsonResponse base")
     body: Final = {**base.response.body, "usage": dict(usage)}
-    response_body: Final = (
-        _with_choice_updates(body, choice_updates) if choice_updates is not None else body
-    )
+    response_body: Final = _with_choice_updates(body, choice_updates) if choice_updates is not None else body
     return base.model_copy(
         update={
             "name": name,
