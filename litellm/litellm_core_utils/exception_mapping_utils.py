@@ -101,6 +101,7 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            "context_length_exceeded",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -2303,6 +2304,14 @@ def _map_exception_by_status(
     message: Final = f"{exception_provider} - {error_str}"
     response: Final = original_exception.response if hasattr(original_exception, "response") else None
     match status_code:
+        case 400 if ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+            raise ContextWindowExceededError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
         case 401:
             raise AuthenticationError(
                 message=message,

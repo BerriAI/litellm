@@ -111,6 +111,46 @@ def test_inferenceapis_chat_completion_reads_key_and_base_from_env(monkeypatch: 
     assert route.calls.last.request.headers["authorization"] == "Bearer inferenceapis-env-key"
 
 
+def test_inferenceapis_chat_completion_sends_provider_specific_params_in_the_body():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
+            200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
+        )
+        response: Final = litellm.completion(
+            model=INFERENCEAPIS_MODEL,
+            messages=[{"role": "user", "content": "Say hello"}],
+            top_k=5,
+            chat_template_kwargs={"enable_thinking": False},
+            api_key="inferenceapis-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["top_k"] == 5
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert response.choices[0].message.content == "Hello from Inference APIs"
+
+
+def test_inferenceapis_context_length_error_raises_context_window_exceeded():
+    with respx.mock() as upstream:
+        upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
+            400,
+            json={
+                "error": {
+                    "message": "Input too long: 150055 input tokens, limit is 131072 for this model",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "context_length_exceeded",
+                }
+            },
+        )
+        with pytest.raises(litellm.ContextWindowExceededError):
+            litellm.completion(
+                model=INFERENCEAPIS_MODEL,
+                messages=[{"role": "user", "content": "Say hello"}],
+                api_key="inferenceapis-test-key",
+            )
+
+
 def test_inferenceapis_responses_request():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/responses").respond(
