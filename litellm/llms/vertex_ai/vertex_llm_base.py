@@ -6,7 +6,6 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
-import os
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -26,6 +25,12 @@ from .common_utils import (
     get_vertex_base_model_name,
     get_vertex_base_url,
     get_vertex_url,
+)
+from .credentials_source import (
+    VertexCredentialsJson,
+    build_vertex_credentials,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
 )
 
 
@@ -130,83 +135,21 @@ class VertexBase:
     ) -> tuple[_VertexCredentialsObject | None, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path: Final = os.path.exists(
-                    credentials
-                )  # credentials is from server config (litellm_params), not user input
-                verbose_logger.debug(
-                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    _is_path,
-                    os.getcwd(),
-                )
-
-                try:
-                    if _is_path:
-                        with open(credentials) as f:
-                            json_obj = json.load(f)
-                    else:
-                        json_obj = json.loads(credentials)
-                except Exception as e:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. "
-                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        f"Parse error: {type(e).__name__}"
-                    )
+                source: Final = load_vertex_credentials_source(credentials)
+                if not isinstance(source, VertexCredentialsJson):
+                    raise_vertex_credentials_failure(source)
+                json_obj: Mapping[str, object] = source.value
+                creds = build_vertex_credentials(source, self._credentials_from_json)
             elif isinstance(credentials, dict):
                 json_obj = credentials
+                creds = self._credentials_from_json(credentials)
             else:
                 raise ValueError(f"Invalid credentials type: {type(credentials)}")
 
-            # Check if the JSON object contains Workload Identity Federation configuration
-            if "type" in json_obj and json_obj["type"] == "external_account":
-                # If environment_id key contains "aws" value it corresponds to an AWS config file
-                credential_source: Final = json_obj.get("credential_source", {})
-                environment_id: Final = (
-                    credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
-                )
-                if isinstance(environment_id, str) and "aws" in environment_id:
-                    # Check if explicit AWS params are in the JSON (bypasses metadata)
-                    from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
-                        VertexAIAwsWifAuth,
-                    )
-
-                    aws_params: Final = VertexAIAwsWifAuth.extract_aws_params(json_obj)
-                    if aws_params:
-                        creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
-                            json_obj,
-                            aws_params=aws_params,
-                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                        )
-                    else:
-                        creds = self._credentials_from_identity_pool_with_aws(
-                            json_obj,
-                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                        )
-                elif isinstance(credential_source, dict) and "executable" in credential_source:
-                    creds = self._credentials_from_pluggable(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-                else:
-                    creds = self._credentials_from_identity_pool(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
-            elif "type" in json_obj and json_obj["type"] == "authorized_user":
-                creds = self._credentials_from_authorized_user(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-                if project_id is None:
-                    project_id = (
-                        creds.quota_project_id
-                    )  # authorized user credentials don't have a project_id, only quota_project_id
-            else:
-                creds = self._credentials_from_service_account(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-
+            if project_id is None and json_obj.get("type") == "authorized_user":
+                project_id = (
+                    creds.quota_project_id
+                )  # authorized user credentials don't have a project_id, only quota_project_id
             if project_id is None:
                 project_id = getattr(creds, "project_id", None)
         else:
@@ -225,6 +168,54 @@ class VertexBase:
             raise TypeError(f"Expected project_id to be a str but got {type(project_id)}")
 
         return creds, project_id
+
+    def _credentials_from_json(self, json_obj: Mapping[str, object]) -> _VertexCredentialsObject:
+        # Check if the JSON object contains Workload Identity Federation configuration
+        if "type" in json_obj and json_obj["type"] == "external_account":
+            # If environment_id key contains "aws" value it corresponds to an AWS config file
+            credential_source: Final = json_obj.get("credential_source", {})
+            environment_id: Final = (
+                credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
+            )
+            if isinstance(environment_id, str) and "aws" in environment_id:
+                # Check if explicit AWS params are in the JSON (bypasses metadata)
+                from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
+                    VertexAIAwsWifAuth,
+                )
+
+                aws_params: Final = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                if aws_params:
+                    return VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                        json_obj,
+                        aws_params=aws_params,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                else:
+                    return self._credentials_from_identity_pool_with_aws(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+            elif isinstance(credential_source, dict) and "executable" in credential_source:
+                return self._credentials_from_pluggable(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+            else:
+                return self._credentials_from_identity_pool(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+        # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+        elif "type" in json_obj and json_obj["type"] == "authorized_user":
+            return self._credentials_from_authorized_user(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            return self._credentials_from_service_account(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
     def _credentials_from_identity_pool(self, json_obj, scopes) -> _VertexCredentialsObject:

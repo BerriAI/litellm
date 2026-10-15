@@ -821,7 +821,11 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     if block_reasoning_content is not None
                     else DatabricksConfig.extract_top_level_reasoning_content(choice["delta"])
                 )
-                choice["delta"]["thinking_blocks"] = thinking_blocks
+                choice["delta"]["thinking_blocks"] = (
+                    [{**block, "index": position} for position, block in enumerate(thinking_blocks)]
+                    if thinking_blocks
+                    else thinking_blocks
+                )
                 translated_choices.append(choice)
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:

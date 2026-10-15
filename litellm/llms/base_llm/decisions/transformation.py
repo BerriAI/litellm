@@ -15,6 +15,8 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
+    BoxAnswer,
+    BoxQuestion,
     ChoiceAnswer,
     ChoiceQuestion,
     DecisionAnswer,
@@ -22,6 +24,8 @@ from litellm.types.decisions import (
     DecisionsBase64Image,
     DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -99,6 +103,8 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
                 ),
                 extra=extra,
             )
+        case BoxQuestion():
+            return DecisionsIRBoxQuestion(name=name, instructions=question.instructions, extra=extra)
         case _:
             assert_never(question)
 
@@ -106,6 +112,7 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
 def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=DecisionsIRState(state=request.state, images=tuple(request.images or ())),
+        assets=MappingProxyType(dict(request.assets or {})),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
@@ -283,6 +290,8 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                 "criteria": [_level_criterion(level) for level in question.levels],
                 **question.extra,
             }
+        case DecisionsIRBoxQuestion():
+            return {"type": "box", "instructions": question.instructions, **question.extra}
         case _:
             assert_never(question)
 
@@ -312,6 +321,11 @@ def ir_to_systemone_request(
         ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
         **({"images": [_systemone_image(image) for image in images]} if images else {}),
+        **(
+            {"assets": {key: asset.model_dump(exclude_none=True) for key, asset in request.assets.items()}}
+            if request.assets
+            else {}
+        ),
     }
 
 
@@ -352,6 +366,10 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
             return _ir_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), ScoreAnswer():
             return _ir_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), BoxAnswer():
+            return DecisionsIRBoxAnswer(
+                box=answer.box, confidence=answer.confidence, extra=MappingProxyType(answer.model_extra or {})
+            )
         case _:
             return DecisionsIRRefusal()
 
@@ -403,6 +421,10 @@ def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
                     "legend": {str(item.value): item.label for item in answer.probabilities},
                     "probabilities": {str(item.value): item.probability for item in answer.probabilities},
                 }
+            )
+        case DecisionsIRBoxAnswer():
+            return BoxAnswer.model_validate(
+                {**answer.extra, "type": "box", "box": answer.box, "confidence": answer.confidence}
             )
         case DecisionsIRRefusal():
             return None
@@ -507,6 +529,19 @@ class BaseDecisionsConfig(ABC):
         litellm_params: Mapping[str, object],
     ) -> tuple[Mapping[str, str], bytes | None]:
         return headers, None
+
+    def supports_images_in(
+        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+    ) -> bool:
+        return self.supports_images
+
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return False
+
+    def supports_box_questions(self, model: str, custom_llm_provider: str, headers: Mapping[str, str]) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_box_questions(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(

@@ -3015,6 +3015,10 @@ def supports_video_input(model: str, custom_llm_provider: str | None = None) -> 
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_video_input")
 
 
+def supports_box_questions(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_box_questions")
+
+
 def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports pdf input in a chat completion call"""
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_pdf_input")
@@ -6344,6 +6348,7 @@ def get_model_info_helper(
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 cost_per_second=_model_info.get("cost_per_second", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -6444,6 +6449,7 @@ def get_model_info_helper(
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
+                supports_box_questions=_model_info.get("supports_box_questions", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
@@ -6595,6 +6601,7 @@ def get_model_info(
             supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_video_input: Optional[bool]
+            supports_box_questions: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]

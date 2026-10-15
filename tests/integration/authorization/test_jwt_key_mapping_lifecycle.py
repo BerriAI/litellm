@@ -22,7 +22,7 @@ from tests.integration._support.client import (
     eventually,
     gateway_from_environment,
 )
-from tests.integration._support.database import read_rows
+from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -116,6 +116,11 @@ class _ProxyError(BaseModel):
 
 class _ErrorResponse(BaseModel):
     error: _ProxyError
+
+
+_UNKNOWN_KEY_ERROR: Final = _ProxyError(
+    message="Authentication Error, Invalid API key provided.", type="token_not_found_in_db", param="key", code="401"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -727,6 +732,49 @@ def test_deleting_a_jwt_mapped_key_stops_its_mapping_on_both_workers(
         _assert_unmapped(first_refusal, client_id)
         assert _spend_count(first, key_hash) == warm_spend_count
         _assert_upstream_requests(upstream, tuple(_expected_chat_request(backend, prompt) for prompt in prompts[:2]))
+
+
+def test_a_cached_mapping_to_a_key_row_that_is_gone_answers_the_generic_401_on_both_workers(
+    jwt_lifecycle: _JWTLifecycleRuntime,
+) -> None:
+    first: Final = jwt_lifecycle.first
+    second: Final = jwt_lifecycle.second
+    upstream: Final = jwt_lifecycle.upstream
+    model: Final = jwt_lifecycle.model
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    prompts: Final = (
+        "stale mapping warm primary " + uuid.uuid4().hex,
+        "stale mapping warm peer " + uuid.uuid4().hex,
+        "stale mapping primary " + uuid.uuid4().hex,
+        "stale mapping peer " + uuid.uuid4().hex,
+    )
+    token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
+    upstream.drain()
+    with first.scenario() as scenario:
+        key: Final = _create_key(first, model)
+        scenario.cleanups.callback(delete_key_if_present, first, key)
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        mapping: Final = _create_mapping(first, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, first, mapping.id)
+        _assert_chat(first, model, token, prompts[0], key_hash)
+        _assert_chat(second, model, token, prompts[1], key_hash)
+
+        update: Final = first.request("POST", "/key/update", {"key": key, "metadata": {"rotated": "out-of-band"}})
+        assert update.status_code == 200, update.text
+        write_rows('DELETE FROM "LiteLLM_VerificationToken" WHERE token=%s', (key_hash,))
+        assert read_rows('SELECT id FROM "LiteLLM_JWTKeyMapping" WHERE id=%s', (mapping.id,)) == []
+
+        second_refusal: Final = eventually(
+            lambda: _chat(second, model, token, prompts[3]),
+            lambda response: response.status_code == 401,
+            seconds=3,
+        )
+        first_refusal: Final = _chat(first, model, token, prompts[2])
+        for refusal in (first_refusal, second_refusal):
+            assert refusal.status_code == 401, refusal.text
+            assert _ErrorResponse.model_validate_json(refusal.content).error == _UNKNOWN_KEY_ERROR, refusal.text
+            assert key_hash not in refusal.text
+        _assert_upstream_requests(upstream, tuple(_expected_chat_request(model, prompt) for prompt in prompts[:2]))
 
 
 def test_issuer_scoped_mappings_with_the_same_claim_resolve_per_issuer(

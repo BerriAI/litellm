@@ -74,6 +74,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
@@ -685,6 +687,7 @@ class ModelResponseIterator:
         self._response = response
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
+        self.thinking_block_index = -1
         self.json_mode = json_mode
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
@@ -832,13 +835,18 @@ class ModelResponseIterator:
                     ChatCompletionThinkingBlock(
                         type="thinking",
                         thinking=thinking_content,
+                        index=self.thinking_block_index,
                     )
                 ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking", thinking="", signature=signature, index=self.thinking_block_index
+                    )
+                ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
@@ -869,6 +877,7 @@ class ModelResponseIterator:
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
                 data=content_block_start["content_block"]["data"],
+                index=self.thinking_block_index,
             )
         ]
         provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -970,6 +979,8 @@ class ModelResponseIterator:
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
+                if self.current_content_block_type in _THINKING_BLOCK_TYPES:
+                    self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + content_block_start["content_block"]["text"]
                 elif (

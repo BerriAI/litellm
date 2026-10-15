@@ -35679,6 +35679,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35796,6 +35797,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35972,6 +35974,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36048,6 +36051,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36133,6 +36137,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36206,6 +36211,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36281,6 +36287,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36355,6 +36362,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36429,6 +36437,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36714,6 +36723,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36776,6 +36786,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36830,6 +36841,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36881,6 +36893,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36935,6 +36948,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -36992,6 +37006,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -37045,6 +37060,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37097,6 +37113,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37152,6 +37169,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37206,6 +37224,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37559,6 +37578,7 @@
         "supports_response_schema": true,
         "supports_system_messages": false,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -69855,7 +69875,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.typesafe.ai/models"
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
     },
     "typesafe/jev-latest": {
         "input_cost_per_token": 4.2e-08,
@@ -69871,7 +69892,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.typesafe.ai/models"
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 3e-08,
@@ -72272,6 +72294,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
