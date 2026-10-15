@@ -8421,3 +8421,42 @@ async def test_atranscription_answers_a_non_string_provider_hint_with_a_bad_requ
     assert raised.value.status_code == 400
     assert f"Invalid {hint}" in raised.value.message
     assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_aspeech_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
+    base_url: Final = "https://api.groq.com/openai/v1"
+    route: Final = respx_mock.post(f"{base_url}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="my-tts",
+        input="hello",
+        voice="alloy",
+        base_url=base_url,
+        api_key="fake_groq_api_key",
+        client=AsyncOpenAI(api_key="fake_groq_api_key", base_url=base_url, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
+    base_url: Final = "https://api.groq.com/openai/v1"
+    route: Final = respx_mock.post(f"{base_url}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="my-whisper",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        base_url=base_url,
+        api_key="fake_groq_api_key",
+        client=AsyncOpenAI(api_key="fake_groq_api_key", base_url=base_url, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.text == "four score"

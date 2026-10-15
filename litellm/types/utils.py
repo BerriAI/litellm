@@ -4741,3 +4741,4 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
 class ProviderRoutingHints(TypedDict, total=False):
     custom_llm_provider: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
+    base_url: ReadOnly[str | None]

@@ -1,16 +1,18 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
@@ -671,6 +673,39 @@ async def test_arealtime_routes_a_bare_model_name_to_its_explicit_provider():
             litellm_logging_obj=FakeLogging(),
         )
     assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=my-realtime"
+
+
+class _GatewayThatRecordsTheUrl:
+    url: str | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.url = str(request.url)
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "route_kwargs", "path"),
+    [
+        (realtime_main.acreate_realtime_client_secret, {}, "client_secrets"),
+        (realtime_main.acreate_realtime_transcription_session, {}, "transcription_sessions"),
+        (realtime_main.arealtime_calls, {"openai_ephemeral_key": "ek_test", "sdp_body": b"v=0"}, "calls"),
+    ],
+)
+async def test_realtime_http_routes_send_a_bare_model_name_to_its_explicit_provider(
+    route: Callable[..., Awaitable[object]], route_kwargs: Mapping[str, object], path: str
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheUrl()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        **route_kwargs,
+    )
+    assert gateway.url == f"https://realtime-gateway.example/v1/realtime/{path}"
 
 
 class _ClientWebSocketWithHeaders:

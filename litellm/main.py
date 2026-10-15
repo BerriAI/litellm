@@ -7918,7 +7918,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
-            api_base=provider_hints.get("api_base"),
+            api_base=provider_hints.get("api_base") or provider_hints.get("base_url"),
         )
 
         # Await normally
@@ -8256,7 +8256,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
-            api_base=provider_hints.get("api_base"),
+            api_base=provider_hints.get("api_base") or provider_hints.get("base_url"),
         )
 
         # Await normally
