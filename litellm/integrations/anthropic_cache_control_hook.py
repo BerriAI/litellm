@@ -10,6 +10,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
+import itertools
 import os
 import re
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
@@ -237,6 +238,16 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answ
     )
 
 
+def _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(messages: Sequence[object]) -> frozenset[str]:
+    tool_calls: Final = itertools.chain.from_iterable(
+        _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
+    )
+    if not any(_attribute_or_key(tool_call, "cache_control") is not None for tool_call in tool_calls):
+        return frozenset()
+    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: request messages the factory sanitizes
+    return tool_call_ids_answered_by_client(chat_messages)
+
+
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
     return _carries_cache_breakpoint(tool) or (
         isinstance(tool, dict) and _carries_cache_breakpoint(tool.get("function"))
@@ -426,7 +437,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             sum(1 for block in system if _carries_cache_breakpoint(block)) if isinstance(system, list) else 0
         )
         message_list: Final = tuple(messages)
-        answered_tool_ids: Final = tool_call_ids_answered_by_client(message_list)
+        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(message_list)
         return system_blocks + sum(
             AnthropicCacheControlHook._count_cache_control_blocks(msg, answered_tool_ids) for msg in message_list
         )
@@ -514,7 +525,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
-        answered_tool_ids: Final = tool_call_ids_answered_by_client(messages)
+        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(messages)
 
         limit_reached = False
         for point in points:

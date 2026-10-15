@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     THOUGHT_SIGNATURE_SEPARATOR,
     find_anthropic_server_tool_result,
 )
@@ -1908,8 +1909,15 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
 def tool_call_is_rebuilt_as_server_tool_use(
     tool_call_id: object, provider_specific_fields: object, answered_tool_ids: Container[str] = frozenset()
 ) -> bool:
+    if (
+        not isinstance(tool_call_id, str)
+        or not tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        or tool_call_id in answered_tool_ids
+        or provider_specific_fields is None
+    ):
+        return False
     fields: Final = _validated_claude_code_mapping(provider_specific_fields)
-    if not isinstance(tool_call_id, str) or tool_call_id in answered_tool_ids or fields is None:
+    if fields is None:
         return False
     return (
         find_anthropic_server_tool_result(

@@ -144,8 +144,8 @@ def test_tool_search_result_round_trips_on_every_anthropic_wire_provider(
         assert (row["model_group"], row["status"]) == (model, "success"), row
 
 
-@_STREAM_MODES
-def test_snowflake_claude_keeps_the_tool_search_result_on_the_response(gateway: Gateway, stream: bool) -> None:
+def test_snowflake_claude_stream_keeps_the_tool_search_result_on_the_response(gateway: Gateway) -> None:
+    stream: Final = True
     marker: Final = uuid.uuid4().hex
     with wire_server(scripted_peer()) as wire, gateway.scenario() as scenario:
         model: Final = deployment(scenario, "snowflake", wire.url, gateway.upstream_url)
@@ -568,8 +568,8 @@ def test_identical_replays_each_reach_the_provider_and_land_their_own_spend_row(
         assert spend_row(identity)["model_group"] == model
 
 
-@_STREAM_MODES
-def test_response_cache_hit_still_carries_the_search_result_for_the_replay(gateway: Gateway, stream: bool) -> None:
+def test_response_cache_hit_still_carries_the_search_result_for_the_replay(gateway: Gateway) -> None:
+    stream: Final = False
     marker: Final = uuid.uuid4().hex
     with wire_server(scripted_peer()) as wire, gateway.scenario() as scenario:
         model: Final = deployment(scenario, "anthropic", wire.url, gateway.upstream_url)

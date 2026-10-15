@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 import os
 import subprocess
@@ -21,6 +22,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
+    anthropic_messages_pt,
     convert_to_anthropic_tool_invoke,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1166,28 +1168,38 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
 
 
+_SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
+_GO_ON: Final = {"role": "user", "content": "Go on"}
+
+
+def _wire_cache_marks(messages: list[AllMessageValues]) -> int:
+    wire_messages: Final = anthropic_messages_pt(
+        copy.deepcopy(messages), model="claude-opus-5-5", llm_provider="anthropic"
+    )
+    blocks: Final = itertools.chain.from_iterable(
+        message["content"] for message in wire_messages if isinstance(message["content"], list)
+    )
+    return sum(1 for block in blocks if isinstance(block, dict) and "cache_control" in block)
+
+
 @pytest.mark.parametrize(
-    ("follow_ups", "expected_breakpoints"),
+    ("follow_ups", "modify_params", "expected_breakpoints"),
     [
-        pytest.param((), 0, id="rebuilt_from_its_kept_result"),
-        pytest.param(
-            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},),
-            1,
-            id="replayed_with_the_client_answer",
-        ),
-        pytest.param(
-            (
-                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},
-                {"role": "user", "content": "Go on"},
-            ),
-            0,
-            id="client_answer_replaced_by_the_kept_result",
-        ),
+        pytest.param((), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param((_SEARCH_ANSWER,), True, 1, id="replayed_with_the_client_answer_under_modify_params"),
+        pytest.param((_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"),
+        pytest.param((_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
     ],
 )
-def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_the_call_replays_as_tool_use(
-    follow_ups: tuple[AllMessageValues, ...], expected_breakpoints: int
+def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_receives_it(
+    monkeypatch: pytest.MonkeyPatch,
+    follow_ups: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expected_breakpoints: int,
 ):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
     search_call: Final = cast(
         AllMessageValues,
         {
@@ -1201,11 +1213,26 @@ def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_the_call_re
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            "provider_specific_fields": {"tool_results": [{"tool_use_id": "srvtoolu_01Search"}]},
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Search",
+                        "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                    }
+                ]
+            },
         },
     )
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        search_call,
+        *follow_ups,
+    ]
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([search_call, *follow_ups]) == expected_breakpoints
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert (census, _wire_cache_marks(messages)) == (expected_breakpoints, expected_breakpoints)
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])

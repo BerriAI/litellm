@@ -1858,6 +1858,8 @@ def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
     from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
 
     provider_specific_fields: Final = message_field(message, "provider_specific_fields")
+    if provider_specific_fields is None:
+        return frozenset()
     return frozenset(
         tool_call_id
         for tool_call in parts_of(message_field(message, "tool_calls"))
@@ -1889,8 +1891,9 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
     )
 
 
-def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
-    return _tool_call_ids_in_tool_messages(messages) - server_tool_answers_replaced_by_their_result(messages)
+def tool_call_ids_answered_by_client(messages: Sequence[AllMessageValues]) -> frozenset[str]:
+    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+    return _tool_call_ids_in_tool_messages(sanitized) - server_tool_answers_replaced_by_their_result(sanitized)
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]

@@ -9,11 +9,11 @@ import anthropic
 import httpx
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _API_KEY: Final = "scripted-anthropic-key"
 _OAUTH_TOKEN: Final = "sk-ant-oat01-scripted-proxy-token"
