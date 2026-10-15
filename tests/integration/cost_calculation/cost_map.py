@@ -1335,3 +1335,13 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "cache_read_input_token_cost_above_272k_tokens": 4.8e-07,
     },
 }
+
+FALLBACK_GENERALIZATIONS: Final[dict[str, JsonValue]] = {
+    "rules": [
+        {
+            "name": "claude-family-baseline",
+            "pattern": "claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?",
+            "model_info": {"mode": "chat", "max_input_tokens": 200000, "max_output_tokens": 64000},
+        }
+    ]
+}
