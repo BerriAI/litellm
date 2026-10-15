@@ -67,6 +67,19 @@ DecisionQuestionMap: TypeAlias = Annotated[
 ]
 
 
+class DecisionsBase64Image(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^image/\S+$", description="An image/* media type, such as image/png")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsImage: TypeAlias = (
+    Annotated[str, Field(pattern=r"^(?i:data:image/[^;,\s]+(?:;[^;,\s]+)*;base64,.+|https?://\S+)$")]
+    | DecisionsBase64Image
+)
+
+
 class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
     content_type: Annotated[str, Field(pattern=r"^audio/\S+$", description="An audio/* media type, such as audio/wav")]
     base64: Annotated[str, Field(min_length=1, description="Base64-encoded audio bytes")]
@@ -118,6 +131,10 @@ class DecisionsRequestBody(DecisionsMediaBody):
         DecisionQuestionMap,
         Field(description="Named noul, choice and score questions. Each key becomes a key in the answers"),
     ]
+    images: Annotated[
+        Sequence[DecisionsImage] | None,
+        Field(description="Images as data URLs or content_type plus base64, for providers that look at images"),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -131,6 +148,7 @@ class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
+    images: ReadOnly[Sequence[DecisionsImage] | None]
     audio: ReadOnly[Sequence[DecisionsAudio]]
     videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
@@ -419,6 +437,7 @@ _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
 @dataclass(frozen=True, slots=True)
 class DecisionsIRState:
     state: DecisionsJSON
+    images: tuple[DecisionsImage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

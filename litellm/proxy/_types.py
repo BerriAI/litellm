@@ -318,6 +318,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime",
         "/v1/realtime",
         "/openai/v1/realtime",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
@@ -823,6 +826,8 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/lens",
         "/lens/{path:path}",
+        "/telemetry/ui_events",
+        "/telemetry/ui_events/enabled",
         # update_team resolves proxy/org/team admin itself and filters team admins
         # through the team_admin_editable_team_fields setting
         "/team/update",
@@ -944,6 +949,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/telemetry/ui_events",
             "/lens/traces/findings",
             "/lens/traces/signals",
             "/lens/feedback/summary",
@@ -2786,6 +2792,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_requester_ip_address_logging: bool | None = Field(
+        None,
+        description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
+    )
     spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
         None,
         description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
@@ -2796,7 +2806,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     enforce_fallback_model_access: bool | None = Field(
         None,
-        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.",
     )
     disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
         None,
@@ -4254,6 +4264,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     models: tuple[str, ...]
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
+    skill_names: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4268,6 +4279,7 @@ class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
     may_raise_max_budget: bool = False
+    proxy_controlled_metadata_keys: tuple[str, ...] = ()
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
@@ -4291,6 +4303,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
+    # Listed group ids with no row; skill grants are suspended while this is non-empty.
+    unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.

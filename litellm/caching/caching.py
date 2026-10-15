@@ -709,7 +709,7 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:

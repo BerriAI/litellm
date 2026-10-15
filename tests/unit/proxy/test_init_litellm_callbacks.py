@@ -50,7 +50,7 @@ class TestInitLitellmCallbacks:
         proxy_logging = self._make_proxy_logging()
 
         with patch(
-            "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+            "litellm.litellm_core_utils.litellm_logging.build_custom_logger_compatible_class",
             return_value=fake_logger,
         ):
             proxy_logging._init_litellm_callbacks(llm_router=None)
@@ -107,7 +107,7 @@ class TestInitLitellmCallbacks:
     )
     def test_should_handle_unrecognized_string_callback(self, _mock_hooks):
         """
-        When _init_custom_logger_compatible_class returns None for a string callback,
+        When build_custom_logger_compatible_class returns None for a string callback,
         the string should remain in litellm.callbacks (not crash).
         """
         litellm.callbacks = ["unknown_callback"]  # type: ignore
@@ -115,7 +115,7 @@ class TestInitLitellmCallbacks:
         proxy_logging = self._make_proxy_logging()
 
         with patch(
-            "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+            "litellm.litellm_core_utils.litellm_logging.build_custom_logger_compatible_class",
             return_value=None,
         ):
             proxy_logging._init_litellm_callbacks(llm_router=None)
@@ -152,7 +152,7 @@ class TestInitLitellmCallbacks:
             return fake_logger_b
 
         with patch(
-            "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+            "litellm.litellm_core_utils.litellm_logging.build_custom_logger_compatible_class",
             side_effect=mock_init_class,
         ):
             proxy_logging._init_litellm_callbacks(llm_router=None)

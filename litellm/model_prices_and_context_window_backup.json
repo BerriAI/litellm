@@ -901,7 +901,7 @@
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
@@ -911,10 +911,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 3e-05,
-        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07
     },
@@ -923,7 +919,7 @@
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
@@ -935,11 +931,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 3e-05,
-        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07
+        "supports_vision": true
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -3343,13 +3335,13 @@
     },
     "azure/ada": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/codex-mini": {
         "cache_read_input_token_cost": 3.75e-07,
@@ -5235,12 +5227,13 @@
         "supports_tool_choice": true
     },
     "azure/gpt-3.5-turbo-instruct-0914": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-35-turbo": {
         "input_cost_per_token": 5e-07,
@@ -5279,20 +5272,22 @@
         "supports_tool_choice": true
     },
     "azure/gpt-35-turbo-instruct": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-35-turbo-instruct-0914": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-4": {
         "deprecation_date": "2025-06-06",
@@ -5369,38 +5364,41 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo-2024-04-09": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "azure/gpt-4-turbo-vision-preview": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -11064,33 +11062,33 @@
     },
     "azure/text-embedding-3-large": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1.3e-07,
+        "input_cost_per_token": 1.43e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/text-embedding-3-small": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 2e-08,
+        "input_cost_per_token": 2.2e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/text-embedding-ada-002": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/speech/azure-tts": {
         "input_cost_per_character": 1.5e-05,
@@ -11123,9 +11121,10 @@
     },
     "azure/tts-1-hd": {
         "deprecation_date": "2026-12-15",
-        "input_cost_per_character": 3e-05,
+        "input_cost_per_character": 3.3e-05,
         "litellm_provider": "azure",
-        "mode": "audio_speech"
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/us/gpt-4.1-2025-04-14": {
         "deprecation_date": "2027-04-14",
@@ -16030,7 +16029,8 @@
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/models/clef-omni/",
         "supports_audio_input": true,
-        "supports_video_input": true
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "cloudflare/@cf/cloudflare/clef-omni": {
         "input_cost_per_token": 1.5e-07,
@@ -16040,7 +16040,8 @@
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/models/clef-omni/",
         "supports_audio_input": true,
-        "supports_video_input": true
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "cloudflare/clef": {
         "input_cost_per_token": 2.4e-07,
@@ -16048,7 +16049,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+        "supports_vision": true
     },
     "cloudflare/clef-flash": {
         "input_cost_per_token": 9e-08,
@@ -16056,7 +16058,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+        "supports_vision": true
     },
     "cloudflare/@cf/cloudflare/clef": {
         "input_cost_per_token": 2.4e-07,
@@ -16064,7 +16067,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+        "supports_vision": true
     },
     "cloudflare/@cf/cloudflare/clef-flash": {
         "input_cost_per_token": 9e-08,
@@ -16072,7 +16076,8 @@
         "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+        "supports_vision": true
     },
     "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
         "input_cost_per_token": 1.923e-06,
@@ -17869,6 +17874,281 @@
             "/v1/images/generations"
         ]
     },
+    "dashscope/wan3.0-video": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video",
+        "output_cost_per_second": 0.165025,
+        "output_cost_per_second_480p": 0.041256,
+        "output_cost_per_second_720p": 0.082513,
+        "output_cost_per_second_1080p": 0.165025,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 all-in-one video generation (text, first/last frame, multimodal reference, edit, extend). Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/wan3.0-video-prime": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video-prime",
+        "output_cost_per_second": 0.254399,
+        "output_cost_per_second_480p": 0.0636,
+        "output_cost_per_second_720p": 0.127199,
+        "output_cost_per_second_1080p": 0.254399,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 fast tier. Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.1-t2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-t2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 text-to-video. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.1-i2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-i2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 image-to-video from a first frame. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.1-r2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-r2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 reference-to-video, 1 to 9 reference images. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.0-t2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-t2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 text-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.0-i2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-i2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 image-to-video from a first frame. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/happyhorse-1.0-r2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-r2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 reference-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/wan2.7-t2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-t2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 text-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/wan2.7-i2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-i2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 image-to-video (first frame, first and last frame, continuation). No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "dashscope/wan2.7-r2v": {
+        "litellm_provider": "dashscope",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-r2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 reference-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
     "qwencloud/deepseek-v4-flash": {
         "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 2e-07,
@@ -18820,6 +19100,281 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "qwencloud/wan3.0-video": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video",
+        "output_cost_per_second": 0.2,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "output_cost_per_second_1080p": 0.2,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 all-in-one video generation (text, first/last frame, multimodal reference, edit, extend). Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/wan3.0-video-prime": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video-prime",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.28,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 fast tier. Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.1-t2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-t2v",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_480p": 0.07,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.18,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 text-to-video. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.1-i2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-i2v",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_480p": 0.07,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.18,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 image-to-video from a first frame. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.1-r2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-r2v",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_480p": 0.07,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.18,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 reference-to-video, 1 to 9 reference images. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.0-t2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-t2v",
+        "output_cost_per_second": 0.24,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.24,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 text-to-video. No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.0-i2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-i2v",
+        "output_cost_per_second": 0.24,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.24,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 image-to-video from a first frame. No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/happyhorse-1.0-r2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-r2v",
+        "output_cost_per_second": 0.24,
+        "output_cost_per_second_720p": 0.14,
+        "output_cost_per_second_1080p": 0.24,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 reference-to-video. No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/wan2.7-t2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-t2v",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 text-to-video. No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/wan2.7-i2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-i2v",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 image-to-video (first frame, first and last frame, continuation). No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwencloud/wan2.7-r2v": {
+        "litellm_provider": "qwencloud",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-r2v",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 reference-to-video. No 480P tier. Singapore list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
     },
     "qwen_ai_platform/deepseek-v4-flash": {
         "cache_read_input_token_cost": 4e-08,
@@ -19812,6 +20367,281 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "qwen_ai_platform/wan3.0-video": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video",
+        "output_cost_per_second": 0.165025,
+        "output_cost_per_second_480p": 0.041256,
+        "output_cost_per_second_720p": 0.082513,
+        "output_cost_per_second_1080p": 0.165025,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 all-in-one video generation (text, first/last frame, multimodal reference, edit, extend). Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/wan3.0-video-prime": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan3-0-video-prime",
+        "output_cost_per_second": 0.254399,
+        "output_cost_per_second_480p": 0.0636,
+        "output_cost_per_second_720p": 0.127199,
+        "output_cost_per_second_1080p": 0.254399,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 3.0 fast tier. Billed duration is usage.duration, which adds input video seconds for the edit and extend modes. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.1-t2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-t2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 text-to-video. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.1-i2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-i2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 image-to-video from a first frame. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.1-r2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-1-r2v",
+        "output_cost_per_second": 0.165026,
+        "output_cost_per_second_480p": 0.0618845,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.165026,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.1 reference-to-video, 1 to 9 reference images. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.0-t2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-t2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 text-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.0-i2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-i2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 image-to-video from a first frame. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/happyhorse-1.0-r2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/happyhorse-1-0-r2v",
+        "output_cost_per_second": 0.220034,
+        "output_cost_per_second_720p": 0.123769,
+        "output_cost_per_second_1080p": 0.220034,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "HappyHorse 1.0 reference-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/wan2.7-t2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-t2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 text-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/wan2.7-i2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-i2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "first_frame"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 image-to-video (first frame, first and last frame, continuation). No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
+    },
+    "qwen_ai_platform/wan2.7-r2v": {
+        "litellm_provider": "qwen_ai_platform",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/wan2-7-r2v",
+        "output_cost_per_second": 0.143353,
+        "output_cost_per_second_720p": 0.086012,
+        "output_cost_per_second_1080p": 0.143353,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "dashscope_video_reference_input": "reference_image"
+        },
+        "metadata": {
+            "comment": "Wan 2.7 reference-to-video. No 480P tier. China (Beijing) list price per output second, USD, matching this prefix's default host. The base rate is the 1080P default tier."
+        }
     },
     "databricks/databricks-bge-large-en": {
         "cache_creation_input_token_cost": 1.0003e-07,
@@ -23450,7 +24280,7 @@
         }
     },
     "agentcore/search": {
-        "input_cost_per_query": 0.0,
+        "input_cost_per_query": 0.007,
         "litellm_provider": "agentcore",
         "mode": "search",
         "metadata": {
@@ -26238,7 +27068,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-r1": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 163840,
         "max_output_tokens": 20480,
         "max_tokens": 20480,
         "mode": "chat",
@@ -26250,7 +27080,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 160000,
+        "max_input_tokens": 163840,
         "max_output_tokens": 160000,
         "max_tokens": 160000,
         "mode": "chat",
@@ -26262,7 +27092,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": {
         "input_cost_per_token": 5.5e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 163840,
         "max_output_tokens": 20480,
         "max_tokens": 20480,
         "mode": "chat",
@@ -26274,7 +27104,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v3": {
         "input_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
@@ -26407,7 +27237,7 @@
     "fireworks_ai/accounts/fireworks/models/glm-4p5": {
         "input_cost_per_token": 5.5e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 96000,
         "max_tokens": 96000,
         "mode": "chat",
@@ -26421,7 +27251,7 @@
     "fireworks_ai/accounts/fireworks/models/glm-4p5-air": {
         "input_cost_per_token": 2.2e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 96000,
         "max_tokens": 96000,
         "mode": "chat",
@@ -26436,7 +27266,7 @@
         "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.19e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 202752,
         "max_output_tokens": 202800,
         "max_tokens": 202800,
         "mode": "chat",
@@ -26450,7 +27280,7 @@
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 202752,
         "max_output_tokens": 202800,
         "max_tokens": 202800,
         "mode": "chat",
@@ -26465,7 +27295,7 @@
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 202752,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
@@ -26629,7 +27459,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26642,7 +27472,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26655,7 +27485,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26669,7 +27499,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26682,7 +27512,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26695,7 +27525,7 @@
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
         "input_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
@@ -26733,7 +27563,7 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 204800,
+        "max_input_tokens": 196608,
         "max_output_tokens": 204800,
         "max_tokens": 204800,
         "mode": "chat",
@@ -26834,7 +27664,7 @@
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 202752,
         "max_output_tokens": 202800,
         "max_tokens": 202800,
         "mode": "chat",
@@ -26849,7 +27679,7 @@
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 202800,
+        "max_input_tokens": 202752,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
@@ -27024,7 +27854,7 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 204800,
+        "max_input_tokens": 196608,
         "max_output_tokens": 204800,
         "max_tokens": 204800,
         "mode": "chat",
@@ -45595,6 +46425,7 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.04e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -45710,14 +46541,14 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-06,
-        "source": "https://api.together.ai/v1/models",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://www.together.ai/pricing",
         "supports_prompt_caching": true
     },
     "together_ai/Qwen/Qwen3.7-Plus": {
@@ -45751,6 +46582,7 @@
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -45805,13 +46637,13 @@
         "supports_prompt_caching": true
     },
     "together_ai/moonshotai/Kimi-K3": {
-        "cache_read_input_token_cost": 2.7e-07,
-        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.35e-05,
+        "output_cost_per_token": 1.5e-05,
         "reasoning_effort_levels": [
             "low",
             "high",
@@ -52631,7 +53463,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/ernie-4p5-21b-a3b-pt": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 131072,
         "max_output_tokens": 4096,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
@@ -52640,7 +53472,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/ernie-4p5-300b-a47b-pt": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 131072,
         "max_output_tokens": 4096,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
@@ -53100,7 +53932,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/minimax-m2": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 196608,
         "max_output_tokens": 4096,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
@@ -53271,7 +54103,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-nano-v2-12b-vl": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 131072,
         "max_output_tokens": 4096,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
@@ -53334,7 +54166,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-12b-v2": {
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 128000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
@@ -53343,7 +54175,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-9b-v2": {
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 128000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
@@ -53939,7 +54771,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-instruct-bf16": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 262144,
         "max_output_tokens": 4096,
         "input_cost_per_token": 9e-07,
         "output_cost_per_token": 9e-07,
@@ -54057,7 +54889,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-vl-8b-instruct": {
         "max_tokens": 4096,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 262144,
         "max_output_tokens": 4096,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
@@ -56145,6 +56977,7 @@
         ]
     },
     "gemini-2.0-flash-exp-image-generation": {
+        "deprecation_date": "2025-11-14",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gemini",
         "max_input_tokens": 32768,
@@ -56165,6 +56998,7 @@
         "supports_vision": true
     },
     "gemini/gemini-2.0-flash-exp-image-generation": {
+        "deprecation_date": "2025-11-14",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gemini",
         "max_input_tokens": 32768,
@@ -59473,16 +60307,16 @@
     },
     "tencent/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 3.625e-09,
-        "input_cost_per_token": 4.35e-07,
-        "input_cost_per_token_cache_hit": 3.625e-09,
+        "cache_read_input_token_cost": 1.45e-07,
+        "input_cost_per_token": 1.74e-06,
+        "input_cost_per_token_cache_hit": 1.45e-07,
         "litellm_provider": "tencent",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
-        "source": "https://www.tencentcloud.com/products/tokenhub",
+        "output_cost_per_token": 3.48e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59508,7 +60342,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://www.tencentcloud.com/products/tokenhub",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59523,6 +60357,310 @@
         "supports_reasoning": true,
         "supports_vision": false
     },
+    "tencent/deepseek-v4-pro-0813": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 1.32e-06,
+        "input_cost_per_token_cache_hit": 4.4e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.2e-08,
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "weekday_timezone": "Asia/Shanghai",
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 3.96e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "tencent/deepseek-v4.1-flash": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "weekday_timezone": "Asia/Shanghai",
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "tencent/glm-5.3-flashx": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 3.7e-07,
+        "input_cost_per_token_cache_hit": 7.5e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "tencent/glm-5.3-flash": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_token_cache_hit": 3e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "tencent/glm-5.3": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "input_cost_per_token_cache_hit": 2.6e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "tencent/glm-5.2": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "input_cost_per_token_cache_hit": 2.6e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "tencent/kimi-k3": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_cache_hit": 3e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "tencent/kimi-k2.8-preview": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_cache_hit": 2.5e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "tencent/kimi-k2.7-code-highspeed": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 3.8e-07,
+        "input_cost_per_token": 1.9e-06,
+        "input_cost_per_token_cache_hit": 3.8e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "tencent/kimi-k2.7-code": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "input_cost_per_token_cache_hit": 1.9e-07,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "tencent/minimax-m3": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 6e-08,
@@ -59532,7 +60670,7 @@
         "max_input_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://www.tencentcloud.com/products/tokenhub",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -71433,10 +72571,12 @@
     "gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
+        "cache_read_input_token_cost_flex": 7.5e-08,
         "cache_read_input_token_cost_priority": 2.7e-07,
         "input_cost_per_image": 0.00168,
         "input_cost_per_token": 1.5e-06,
         "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
         "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 131072,
@@ -71447,6 +72587,7 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_flex": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
@@ -71479,10 +72620,12 @@
     "vertex_ai/gemini-nano-banana-2.1": {
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
+        "cache_read_input_token_cost_flex": 7.5e-08,
         "cache_read_input_token_cost_priority": 2.7e-07,
         "input_cost_per_image": 0.00168,
         "input_cost_per_token": 1.5e-06,
         "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
         "input_cost_per_token_priority": 2.7e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 131072,
@@ -71493,6 +72636,7 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_flex": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
@@ -72443,5 +73587,287 @@
         "supports_system_messages": false,
         "supports_vision": false,
         "supports_function_calling": false
+    },
+    "vertex_ai/gemini-robotics-er-2-preview": {
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "input_cost_per_audio_token": 1e-06,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 5e-06,
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_batches": 2.5e-06,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "gemini-robotics-er-2-preview": {
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "input_cost_per_audio_token": 1e-06,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 5e-06,
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_batches": 2.5e-06,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "gemini/gemini-4-argon": {
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "cache_read_input_token_cost_flex": 5e-08,
+        "cache_read_input_token_cost_priority": 1.8e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "input_cost_per_token_flex": 1e-06,
+        "input_cost_per_token_priority": 3.6e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "output_cost_per_token_priority": 1.8e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "rpm": 2000.0,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "tpm": 800000.0,
+        "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-4-argon": {
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "cache_read_input_token_cost_flex": 5e-08,
+        "cache_read_input_token_cost_priority": 1.8e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_audio_token": 2e-06,
+        "input_cost_per_audio_token_batches": 1e-06,
+        "input_cost_per_audio_token_priority": 3.6e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "input_cost_per_token_flex": 1e-06,
+        "input_cost_per_token_priority": 3.6e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "output_cost_per_token_priority": 1.8e-05,
+        "prompt_cache_min_tokens": 6144.0,
+        "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-4-argon-cyber-permissive": {
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
+        "cache_read_input_token_cost_flex": 1e-07,
+        "cache_read_input_token_cost_priority": 3.6e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_audio_token": 4e-06,
+        "input_cost_per_audio_token_batches": 2e-06,
+        "input_cost_per_audio_token_priority": 7.2e-06,
+        "input_cost_per_token": 4e-06,
+        "input_cost_per_token_batches": 2e-06,
+        "input_cost_per_token_flex": 2e-06,
+        "input_cost_per_token_priority": 7.2e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 2e-05,
+        "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1e-05,
+        "output_cost_per_token_flex": 1e-05,
+        "output_cost_per_token_priority": 3.6e-05,
+        "prompt_cache_min_tokens": 6144.0,
+        "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "github_copilot/gemini-4-argon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }

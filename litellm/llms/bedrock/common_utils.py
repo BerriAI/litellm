@@ -1164,6 +1164,24 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+    """
+    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+
+    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss 400 on it (checked live in us-west-2 on
+    2026-10-14), so every other target keeps dropping the block. A model id that names its model decides on
+    its own. An ARN that hides its model, like an application inference profile, falls back to the
+    deployment's ``base_model`` and counts as non-Claude without one.
+    """
+    if base_model is None or "." in get_bedrock_base_model(model):
+        return _is_claude(model)
+    return _is_claude(base_model)
+
+
+def _is_claude(model: str) -> bool:
+    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
@@ -1191,8 +1209,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity.
     """
-    if model is None:
-        return True
+    return model is None or bedrock_declared_cache_point_support(model) is not False
+
+
+def bedrock_declared_cache_point_support(model: str) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     map_keys: Final = (model, get_bedrock_base_model(model))
@@ -1209,7 +1229,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if explicit_marker_support is not None:
         return explicit_marker_support
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys

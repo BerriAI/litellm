@@ -1181,7 +1181,13 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+
+
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1236,11 +1242,23 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if not close_on_auth_error:
+            raise
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+
+
+async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+    """Re-authorize an already accepted WebSocket for a model it named after the upgrade.
+
+    Runs the same key, team, member, user, project and agent checks, plus budget reservation, as
+    the upgrade does for ``?model=``, but raises auth errors without closing the socket so the
+    caller can reply with an error frame.
+    """
+    return await user_api_key_auth_websocket_for_model(websocket, model, close_on_auth_error=False)
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:
@@ -3423,6 +3441,7 @@ async def run_centralized_common_checks(
     route: str,
     *,
     force_virtual_key_checks: bool = False,
+    sub_call: bool = False,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
     boundary, regardless of which ``_user_api_key_auth_builder`` path
@@ -3439,6 +3458,11 @@ async def run_centralized_common_checks(
       vector-store / tool-allowlist enforcement applies to admin keys
       too. Admin status is honored where the underlying check exempts it
       (``_is_api_route_allowed``, ``organization_role_based_access_check``).
+    - ``sub_call`` marks a proxy-made call inside an already admitted
+      request. Its model's budgets are checked, the key's own
+      ``max_budget`` included, because the builder checked that only for
+      the parent's model, which may be free. Nothing is reserved, because
+      the sub-call is charged once it runs.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -3641,7 +3665,7 @@ async def run_centralized_common_checks(
             _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
         )
 
-    user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
+    user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3802,6 +3826,12 @@ async def run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+            if sub_call and RouteChecks.is_llm_api_route(route=route):
+                await virtual_key_max_budget_check(
+                    valid_token=user_api_key_auth_obj,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_object,
+                )
 
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
@@ -3819,7 +3849,7 @@ async def run_centralized_common_checks(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            skip_budget_checks=skip_budget_checks,
+            skip_budget_checks=skip_budget_checks or sub_call,
             general_settings=general_settings,
         )
     finally:
