@@ -172,6 +172,13 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
     if secret_column.table == "LiteLLM_SSOConfig":
         yield from _top_level_string_leaves(stored)
         return
+    if secret_column.table == "LiteLLM_CacheConfig":
+        # The cache-settings writer (update_cache_settings → encrypt_env_variables)
+        # encrypts top-level string fields only — encrypt_value_helper skips non-strings —
+        # so nested list/dict fields (redis kwargs, namespace lists, …) are plaintext
+        # by construction.
+        yield from _top_level_string_leaves(stored)
+        return
     if secret_column.only_rows_with_marked_ciphertexts:
         # The metadata columns' writers store ciphertext only as marked sensitive
         # callback vars; every other string in the metadata JSON (callback names,

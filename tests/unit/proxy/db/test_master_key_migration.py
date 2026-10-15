@@ -872,3 +872,71 @@ async def test_sso_structured_fields_and_callback_metadata_do_not_block_a_pynacl
     team_logging = tables["LiteLLM_TeamTable"][0]["metadata"]["logging"][0]
     assert team_logging["callback_vars"]["langfuse_host"] == "https://cloud.langfuse.com"
     assert team_logging["callback_name"] == "langfuse"
+
+
+@pytest.mark.asyncio
+async def test_cache_settings_structured_fields_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """The cache-settings writer (update_cache_settings → encrypt_env_variables) encrypts
+    top-level string fields only — encrypt_value_helper skips non-strings — so nested
+    list/dict fields (redis kwargs, namespace lists, …) are plaintext by construction and
+    must not read as previous-key ciphertext on a no-PyNaCl install."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_CacheConfig": [
+            {
+                "id": "cache_config",
+                "cache_settings": {
+                    "password": _encrypted("redis-secret"),
+                    "host": _encrypted("redis.example.internal"),
+                    "namespace": ["team1", "team2"],
+                    "redis_kwargs": {"socket_timeout": 5, "retry": {"retries": 3}},
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 2  # top-level strings only
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=2, remaining=0, unreadable=0)
+    settings = tables["LiteLLM_CacheConfig"][0]["cache_settings"]
+    assert settings["namespace"] == ["team1", "team2"]  # plaintext nested leaves untouched
+    assert settings["redis_kwargs"] == {"socket_timeout": 5, "retry": {"retries": 3}}
+    assert decrypt_if_encrypted_with(str(settings["password"]), NEW_KEY) == "redis-secret"
+    assert decrypt_if_encrypted_with(str(settings["host"]), NEW_KEY) == "redis.example.internal"
+
+    second_boot = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+    assert second_boot == NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
+
+    # Control: an unprefixed top-level secret (a value only PyNaCl could read) still
+    # gates the boot instead of reading as converged.
+    control = _FakeDatabase(
+        {"LiteLLM_CacheConfig": [{"id": "cache_config", "cache_settings": {"password": "unprefixed-redis-secret"}}]}
+    )
+    assert await count_values_encrypted_with(control, PREVIOUS_KEY) == 1
+    control_outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=control,
+        log=lambda message: None,
+    )
+    assert control_outcome == Migrated(migrated=0, remaining=1, unreadable=1)
+    assert "You may now delete" not in describe_outcome(control_outcome)
