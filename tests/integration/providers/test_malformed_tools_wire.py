@@ -213,6 +213,40 @@ def _drained(rig: _Rig) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class _FieldGroups:
+    anthropic: str
+    gemini: str
+
+
+@pytest.fixture(scope="module")
+def field_groups(rig: _Rig) -> Iterator[_FieldGroups]:
+    with rig.gateway.scenario() as scenario:
+        built: Final = _FieldGroups(
+            anthropic=scenario.model(
+                model=f"anthropic/{_CLAUDE_BACKEND}",
+                api_base=rig.wire.url,
+                api_key=_PROVIDER_KEY,
+                additional_drop_params=["tools"],
+            ),
+            gemini=scenario.model(
+                model=f"gemini/{_GEMINI_BACKEND}",
+                api_base=rig.wire.url,
+                api_key=_PROVIDER_KEY,
+                additional_drop_params=["tools"],
+            ),
+        )
+        for group in (built.anthropic, built.gemini):
+            wait_for_worker_readiness(rig.gateway, group, 1, _PROXY_WORKERS)
+        yield built
+
+
+@pytest.fixture(scope="module")
+def limited_key(rig: _Rig) -> Iterator[str]:
+    with rig.gateway.scenario() as scenario:
+        yield scenario.key(rpm_limit=0)
+
+
+@dataclass(frozen=True, slots=True)
 class _Family:
     name: str
     tool: dict[str, JsonValue]
@@ -1163,3 +1197,300 @@ def test_a_dropped_request_shares_the_cache_entry_of_its_clean_twin(rig: _Rig) -
     _assert_answered(CHAT, clean, marker)
     (sent,) = _delivered(rig, marker)
     assert _JSON_OBJECT.validate_json(sent.body)["tools"] == [CHAT.tool]
+
+
+def _field_group(rig: _Rig, groups: _FieldGroups, family: _Family) -> str:
+    return {MESSAGES.name: groups.anthropic, GENERATE.name: groups.gemini}.get(family.name, rig.field_group)
+
+
+_FIELD_GROUP_FAMILIES: Final = pytest.mark.parametrize(
+    "family", (MESSAGES, RESPONSES, GENERATE), ids=("messages", "responses", "generate_content")
+)
+
+
+@_FIELD_GROUP_FAMILIES
+def test_each_family_rejects_malformed_tools_when_a_request_list_replaces_the_deployment_list(
+    rig: _Rig, field_groups: _FieldGroups, family: _Family
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        family,
+        marker,
+        False,
+        model=_field_group(rig, field_groups, family),
+        tools=[family.tool, 5],
+        additional_drop_params=["web_search_options"],
+    )
+    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    assert _delivered(rig, marker) == ()
+
+
+@pytest.mark.parametrize(
+    ("family", "forwarded"),
+    [(MESSAGES, ()), (RESPONSES, ()), (GENERATE, ("get_weather",))],
+    ids=("messages", "responses", "generate_content"),
+)
+def test_each_family_answers_malformed_tools_a_deployment_list_drops(
+    rig: _Rig, field_groups: _FieldGroups, family: _Family, forwarded: tuple[str, ...]
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig, family, marker, False, model=_field_group(rig, field_groups, family), tools=[family.tool, 5]
+    )
+    _assert_answered(family, response, marker)
+    assert _tool_names(family, _one_delivery(rig, marker, family.target(False))) == forwarded
+
+
+@_FIELD_GROUP_FAMILIES
+def test_each_family_forwards_well_formed_tools_a_request_list_keeps(
+    rig: _Rig, field_groups: _FieldGroups, family: _Family
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        family,
+        marker,
+        False,
+        model=_field_group(rig, field_groups, family),
+        tools=[family.tool],
+        additional_drop_params=["web_search_options"],
+    )
+    _assert_answered(family, response, marker)
+    assert _tool_names(family, _one_delivery(rig, marker, family.target(False))) == ("get_weather",)
+
+
+_NOT_A_NAME_LIST: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "empty_list": [],
+        "null": None,
+        "string": "tools",
+        "empty_string": "",
+        "five_kb_string": "x" * 5120,
+        "int": 5,
+        "list_with_an_int": ["tools", 5],
+    }
+)
+
+
+@pytest.mark.parametrize("value", _NOT_A_NAME_LIST.values(), ids=_NOT_A_NAME_LIST.keys())
+def test_a_request_additional_drop_params_that_is_no_list_of_names_still_replaces_the_deployment_list(
+    rig: _Rig, value: JsonValue
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig, CHAT, marker, False, model=rig.field_group, tools=[CHAT.tool, 5], additional_drop_params=value
+    )
+    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    assert _delivered(rig, marker) == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], None, "tools", "", "x" * 5120],
+    ids=["empty_list", "null", "string", "empty_string", "five_kb_string"],
+)
+def test_a_request_additional_drop_params_replacing_the_deployment_list_keeps_well_formed_tools(
+    rig: _Rig, value: JsonValue
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig, CHAT, marker, False, model=rig.field_group, tools=[CHAT.tool], additional_drop_params=value
+    )
+    _assert_answered(CHAT, response, marker)
+    assert _one_delivery(rig, marker, "/v1/chat/completions")["tools"] == [CHAT.tool]
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "status"),
+    [('["tools"]', '["web_search_options"]', 400), ('["web_search_options"]', '["tools"]', 200)],
+    ids=["other_field_last", "tools_last"],
+)
+def test_duplicate_additional_drop_params_keys_use_the_last_one(rig: _Rig, first: str, last: str, status: int) -> None:
+    marker: Final = _marker()
+    prefix: Final = json.dumps(
+        {"model": rig.openai, "messages": [{"role": "user", "content": marker}], "tools": [CHAT.tool, 5]}
+    )[:-1]
+    response: Final = rig.gateway.client.post(
+        "/v1/chat/completions",
+        content=f'{prefix}, "additional_drop_params": {first}, "additional_drop_params": {last}}}'.encode(),
+        headers={"Authorization": f"Bearer {rig.gateway.key}", "Content-Type": "application/json"},
+    )
+    assert response.status_code == status, response.text
+    if status == 400:
+        _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+        assert _delivered(rig, marker) == ()
+        return
+    _assert_answered(CHAT, response, marker)
+    assert "tools" not in _one_delivery(rig, marker, "/v1/chat/completions")
+
+
+def test_count_tokens_drops_the_bad_entry_a_deployment_list_names(rig: _Rig, field_groups: _FieldGroups) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {**_count_body(rig, marker, tools=[MESSAGES.tool, 5]), "model": field_groups.anthropic},
+    )
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.content) == {"input_tokens": _COUNT}, response.text
+    assert _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"] == [MESSAGES.tool]
+
+
+def test_count_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_deployment_list(
+    rig: _Rig, field_groups: _FieldGroups
+) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {
+            **_count_body(rig, marker, tools=[MESSAGES.tool, 5], additional_drop_params=["web_search_options"]),
+            "model": field_groups.anthropic,
+        },
+    )
+    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    assert _delivered(rig, marker) == ()
+
+
+def test_responses_input_tokens_drops_the_bad_entry_a_deployment_list_names(
+    rig: _Rig, field_groups: _FieldGroups
+) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/responses/input_tokens",
+        {"model": field_groups.anthropic, "input": marker, "tools": [RESPONSES.tool, 5]},
+    )
+    assert response.status_code == 200, response.text
+    tools: Final = _one_delivery(rig, marker, "/v1/messages/count_tokens")["tools"]
+    assert isinstance(tools, list) and len(tools) == 1 and "get_weather" in json.dumps(tools), tools
+
+
+def test_responses_input_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_deployment_list(
+    rig: _Rig, field_groups: _FieldGroups
+) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/responses/input_tokens",
+        {
+            "model": field_groups.anthropic,
+            "input": marker,
+            "tools": [RESPONSES.tool, 5],
+            "additional_drop_params": ["web_search_options"],
+        },
+    )
+    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    assert _delivered(rig, marker) == ()
+
+
+def _text_items(marker: str) -> list[JsonValue]:
+    return [{"role": "user", "content": marker}]
+
+
+@pytest.mark.parametrize("compact_input", [_text_items, lambda marker: marker], ids=["list_input", "string_input"])
+def test_a_compact_rejection_logs_one_failure_row_as_compact(
+    rig: _Rig, compact_input: Callable[[str], JsonValue]
+) -> None:
+    marker: Final = _marker()
+    call_id: Final = _call_id()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/responses/compact",
+        {"model": rig.openai, "input": compact_input(marker), "tools": 5},
+        headers={"x-litellm-call-id": call_id},
+    )
+    _assert_rejected(response, _NOT_A_LIST)
+    assert _delivered(rig, marker) == ()
+    row: Final = _logged_once(call_id)
+    assert (row["call_type"], row["status"]) == ("acompact_responses", "failure"), row
+
+
+@dataclass(frozen=True, slots=True)
+class _Limited:
+    path: Callable[[_Rig], str]
+    body: Callable[[_Rig, str], dict[str, JsonValue]]
+    call_type: str
+
+
+_LIMITED: Final[Mapping[str, _Limited]] = MappingProxyType(
+    {
+        "chat": _Limited(
+            lambda rig: "/v1/chat/completions", lambda rig, k: _chat_body(rig.openai, k, False), "acompletion"
+        ),
+        "messages": _Limited(
+            lambda rig: "/v1/messages", lambda rig, k: _messages_body(rig.anthropic, k, False), "anthropic_messages"
+        ),
+        "responses_list_input": _Limited(
+            lambda rig: "/v1/responses", lambda rig, k: {"model": rig.openai, "input": _text_items(k)}, "aresponses"
+        ),
+        "compact_list_input": _Limited(
+            lambda rig: "/v1/responses/compact",
+            lambda rig, k: {"model": rig.openai, "input": _text_items(k)},
+            "acompact_responses",
+        ),
+        "generate_content": _Limited(
+            lambda rig: _generate_path(rig.gemini, False),
+            lambda rig, k: _generate_body(rig.gemini, k, False),
+            "agenerate_content",
+        ),
+        "interactions_list_input": _Limited(
+            lambda rig: "/v1beta/interactions",
+            lambda rig, k: {"model": rig.gemini, "input": [{"type": "text", "text": k}]},
+            "acreate_interaction",
+        ),
+        "video_generation": _Limited(
+            lambda rig: "/v1/videos", lambda rig, k: {"model": rig.openai, "prompt": k}, "avideo_generation"
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("limited", _LIMITED.values(), ids=_LIMITED.keys())
+def test_a_rate_limited_request_logs_one_failure_row_with_its_endpoint_call_type(
+    rig: _Rig, limited_key: str, limited: _Limited
+) -> None:
+    marker: Final = _marker()
+    call_id: Final = _call_id()
+    response: Final = rig.gateway.request(
+        "POST",
+        limited.path(rig),
+        limited.body(rig, marker),
+        key=limited_key,
+        headers={"x-litellm-call-id": call_id},
+    )
+    assert response.status_code == 429, response.text
+    assert _delivered(rig, marker) == ()
+    row: Final = _logged_once(call_id)
+    assert (row["call_type"], row["status"]) == (limited.call_type, "failure"), row
+
+
+@pytest.mark.parametrize("family", (CHAT, MESSAGES), ids=("chat", "messages"))
+def test_a_rate_limited_twin_of_a_cached_request_logs_its_endpoint_call_type(
+    rig: _Rig, limited_key: str, family: _Family
+) -> None:
+    marker: Final = _marker()
+    _assert_answered(family, _send(rig, family, marker, False, tools=[family.tool]), marker)
+    await_entry(redis_store(), _answer(_tag(marker)))
+    call_id: Final = _call_id()
+    response: Final = _send(rig, family, marker, False, key=limited_key, call_id=call_id, tools=[family.tool])
+    assert response.status_code == 429, response.text
+    assert len(_delivered(rig, marker)) == 1
+    row: Final = _logged_once(call_id)
+    assert (row["call_type"], row["status"]) == (family.call_type(False), "failure"), row
+
+
+def test_a_rate_limited_image_edit_logs_one_failure_row_as_an_image_edit(rig: _Rig, limited_key: str) -> None:
+    marker: Final = _marker()
+    call_id: Final = _call_id()
+    response: Final = rig.gateway.client.post(
+        "/v1/images/edits",
+        data={"model": rig.openai, "prompt": marker},
+        files={"image": ("edit.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        headers={"Authorization": f"Bearer {limited_key}", "x-litellm-call-id": call_id},
+    )
+    assert response.status_code == 429, response.text
+    assert _delivered(rig, marker) == ()
+    row: Final = _logged_once(call_id)
+    assert (row["call_type"], row["status"]) == ("aimage_edit", "failure"), row

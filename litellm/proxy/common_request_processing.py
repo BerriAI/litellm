@@ -693,10 +693,20 @@ def _deployment_params(
 ) -> tuple[Mapping[object, object], ...]:
     if llm_router is None or not isinstance(model, str):
         return ()
+    by_id: Final = None if model in llm_router.model_names else llm_router.get_deployment(model_id=model)
+    if by_id is not None:
+        return (_REQUEST_FIELDS.validate_python(by_id.litellm_params.model_dump(exclude_none=True)),)
     return tuple(
         _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
         for deployment in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
     )
+
+
+def _router_defaults(llm_router: Router | None) -> Mapping[object, object]:
+    configured: Final[object] = getattr(llm_router, "default_litellm_params", None)
+    if configured is None:
+        return {}
+    return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
 
 
 def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, team_id: str | None) -> DropPolicy:
@@ -708,11 +718,14 @@ def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, t
     group_drop_fields: Final = (
         group_field_names[0].intersection(*group_field_names[1:]) if group_field_names else frozenset[str]()
     )
-    requested: Final = data.get("drop_params") if "drop_params" in data else group_drops
+    requested_params: Final = {**_router_defaults(llm_router), **data}
+    requested: Final = requested_params.get("drop_params") if "drop_params" in requested_params else group_drops
     return DropPolicy(
         drop_params=litellm.drop_params is True or normalize_drop_params(requested) is True,
         additional_drop_params=(
-            _field_names(data.get("additional_drop_params")) if "additional_drop_params" in data else group_drop_fields
+            _field_names(requested_params.get("additional_drop_params"))
+            if "additional_drop_params" in requested_params
+            else group_drop_fields
         ),
     )
 

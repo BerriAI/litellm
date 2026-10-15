@@ -819,6 +819,54 @@ class TestProxyBaseLLMRequestProcessing:
         assert exc_info.value.param == "tools"
 
     @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_the_router_default_drops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+        router: Final = Router(
+            model_list=[{"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}}],
+            default_litellm_params={"additional_drop_params": ["tools"]},
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj, llm_router=router)
+
+        assert "tools" not in forwarded
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_the_deployment_named_by_id_drops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "deployment-1", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.2",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.2",
+                        "api_key": "sk-test",
+                        "additional_drop_params": ["tools"],
+                    },
+                    "model_info": {"id": "deployment-1"},
+                },
+                {
+                    "model_name": "gpt-5.2",
+                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"},
+                    "model_info": {"id": "deployment-2"},
+                },
+            ]
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj, llm_router=router)
+
+        assert "tools" not in forwarded
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_drops_malformed_tools_when_every_deployment_drops_params(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
