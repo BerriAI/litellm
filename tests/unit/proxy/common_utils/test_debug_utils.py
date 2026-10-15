@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 import socket
@@ -17,6 +18,7 @@ from litellm.proxy.common_utils.debug_utils import (
     PSUTIL_MISSING_ERROR,
     _ProcFilesystemProcess,
     _summary_process_memory,
+    freeze_gc_after_startup,
     get_memory_summary,
 )
 from litellm.proxy.common_utils.debug_utils import router as debug_router
@@ -198,3 +200,27 @@ def test_memory_routes_count_prompt_caching_pins(
 
     assert response.status_code == 200
     assert pin_count(response.json()) == expected
+
+
+@pytest.fixture
+def unfrozen_gc() -> Iterator[None]:
+    yield
+    gc.unfreeze()
+
+
+def test_freeze_gc_after_startup_freezes_existing_objects(unfrozen_gc: None) -> None:
+    gc.unfreeze()
+    startup_object = {"loaded": "at startup"}
+
+    freeze_gc_after_startup(enabled=True)
+
+    assert gc.get_freeze_count() > 0
+    assert not any(obj is startup_object for obj in gc.get_objects())
+
+
+def test_freeze_gc_after_startup_is_off_by_default(unfrozen_gc: None) -> None:
+    gc.unfreeze()
+
+    freeze_gc_after_startup()
+
+    assert gc.get_freeze_count() == 0
