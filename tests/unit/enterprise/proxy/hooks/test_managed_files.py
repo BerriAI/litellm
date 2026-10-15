@@ -6048,3 +6048,103 @@ async def test_create_from_raw_provider_file_id_skips_managed_ownership_lookup(c
 
     assert isinstance(result, dict) and result[file_field] == "file-raw-provider-id", result
     assert not any("unified_file_id" in where for where in table.find_first_calls), table.find_first_calls
+
+
+_MANAGED_READ_SALT_KEY: Final = "managed-read-unit-test-salt-key"
+
+
+def _proxy_issued_response_id(encrypted: bool) -> str:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    routed_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        "openai", "deployment-1", "resp_provider_job"
+    )
+    if not encrypted:
+        return routed_id
+    issuer: Final = ResponsesIDSecurity(
+        general_settings_reader=lambda: {}, signing_key_reader=lambda: _MANAGED_READ_SALT_KEY
+    )
+    return issuer._encrypt_response_id(
+        ResponsesAPIResponse(id=routed_id, created_at=1, output=[], status="queued"),
+        UserAPIKeyAuth(user_id="alice"),
+    ).id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+@pytest.mark.parametrize("encrypted", [False, True], ids=["after_id_security", "before_id_security"])
+async def test_a_read_of_a_proxy_issued_response_id_is_marked_managed(
+    call_type: str, encrypted: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cost poll bills a background response the proxy issued, so a client read of that id is
+    marked managed and priced at zero, whichever order the ID security hook runs in."""
+    from litellm.constants import MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _MANAGED_READ_SALT_KEY)
+    addressed_id: Final = _proxy_issued_response_id(encrypted)
+
+    result: Final = await PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock()).async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice"),
+        cache=MagicMock(),
+        data={"response_id": addressed_id, "litellm_metadata": {"user_api_key_user_id": "alice"}},
+        call_type=call_type,
+    )
+
+    assert result == {
+        "response_id": addressed_id,
+        "litellm_metadata": {"user_api_key_user_id": "alice", MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_raw_provider_response_id_is_not_marked_managed() -> None:
+    """A raw provider id names no deployment, so the proxy never stored that response and its read
+    keeps pricing normally."""
+    from litellm.constants import MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    result: Final = await PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock()).async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice"),
+        cache=MagicMock(),
+        data={"response_id": "resp_raw_provider_job", "metadata": {}},
+        call_type="aget_responses",
+    )
+
+    assert isinstance(result, dict)
+    assert MANAGED_BACKGROUND_RESPONSE_METADATA_KEY not in result["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_fields, marked",
+    [
+        ({"stream": True, "background": True}, True),
+        ({"stream": True, "extra_body": {"background": True}}, True),
+        ({"stream": False, "background": True}, False),
+        ({"stream": True}, False),
+    ],
+    ids=["streamed_background", "streamed_background_in_extra_body", "not_streamed", "not_background"],
+)
+async def test_only_a_streamed_background_create_is_marked_for_the_managed_bill(
+    create_fields: Mapping[str, object], marked: bool
+) -> None:
+    """A streamed background create is billed once through its managed row when its stream ends,
+    so only that create is marked free, and only in litellm_metadata, which never reaches the
+    provider."""
+    from litellm.constants import MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    result: Final = await PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock()).async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice"),
+        cache=MagicMock(),
+        data={"model": "gpt-5.6", "input": "hello", "metadata": {"run": "nightly"}, "litellm_metadata": {}, **create_fields},
+        call_type="aresponses",
+    )
+
+    assert isinstance(result, dict)
+    assert (MANAGED_BACKGROUND_RESPONSE_METADATA_KEY in result["litellm_metadata"]) is marked
+    assert result["metadata"] == {"run": "nightly"}

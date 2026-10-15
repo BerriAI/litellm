@@ -214,7 +214,7 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
-    is_background_response_cost_poll_not_found,
+    is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
@@ -3617,7 +3617,7 @@ class Router:
                 # fallback_iterator, or any future wrapper). Without this
                 # the proxy's container-ownership hook (which reads
                 # ``getattr(stream_response, "completed_response", None)``
-                # via _extract_completed_responses_response) silently
+                # via extract_completed_responses_response) silently
                 # records nothing on streaming /v1/responses calls — every
                 # follow-up /v1/containers/<id>/files call then 403s for
                 # the very key that created the container (#30210).
@@ -8743,10 +8743,10 @@ class Router:
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
 
-            if is_background_response_cost_poll_not_found(exception, litellm_params):
+            if is_background_response_poll_not_found(exception, litellm_params):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Provider 404 came from the background response cost poll, not the deployment's health."
+                    "Provider 404 came from the background response poll, not the deployment's health."
                 )
                 return False
 

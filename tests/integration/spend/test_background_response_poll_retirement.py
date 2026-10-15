@@ -16,7 +16,7 @@ from integration.cost_calculation.cost_tracking_case import JsonResponse, Routed
 from pydantic import JsonValue
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.proxy.spend_tracking.spend_tracking_utils import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 INPUT_COST_PER_TOKEN: Final = 0.001
@@ -240,30 +240,21 @@ def test_a_provider_error_other_than_404_keeps_the_row_queued_for_retry(gateway:
         assert _row_status(unified_id) == [{"status": "queued"}]
 
 
-def _polled_provider_id(row: dict[str, JsonValue]) -> str:
-    return ResponsesAPIRequestUtils.decode_responses_api_response_id(string_value(row["request_id"]))["response_id"]
-
-
-def _poll_spend_rows(handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
-    billed: Final = read_rows(
-        'SELECT request_id, call_type, status, prompt_tokens, completion_tokens, spend FROM "LiteLLM_SpendLogs" '
-        "WHERE metadata->>'internal_call_origin' = %s",
-        (BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,),
+def _poll_spend_rows(unified_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT call_type, status, prompt_tokens, completion_tokens, spend FROM "LiteLLM_SpendLogs" '
+        "WHERE request_id = %s AND metadata->>'internal_call_origin' = %s",
+        (f"{unified_id}{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}", BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN),
     )
-    return [
-        {column: value for column, value in row.items() if column != "request_id"}
-        for row in billed
-        if _polled_provider_id(row) == f"resp_{handle.scenario_id}"
-    ]
 
 
 @pytest.mark.timeout(180)
 def test_a_completed_response_is_marked_completed_and_its_poll_is_billed(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        model, handle = _scripted_deployment(scenario, "done", _routes("queued", _json(_response_body("completed"))))
+        model, _ = _scripted_deployment(scenario, "done", _routes("queued", _json(_response_body("completed"))))
         unified_id: Final = _submit_background_response(scenario, scenario.key(), model)
         _await_status(unified_id, "completed", ONE_POLL_SECONDS)
-        spend_rows: Final = eventually(lambda: _poll_spend_rows(handle), lambda rows: len(rows) >= 1, seconds=70)
+        spend_rows: Final = eventually(lambda: _poll_spend_rows(unified_id), lambda rows: len(rows) >= 1, seconds=70)
         assert spend_rows[0] == {
             "call_type": "aget_responses",
             "status": "success",
@@ -305,7 +296,7 @@ def test_responses_gone_at_the_provider_do_not_starve_a_newer_response_out_of_co
             )
             for index in range(MAX_OBJECTS_PER_POLL_CYCLE)
         )
-        completable_model, completable = _scripted_deployment(
+        completable_model, _ = _scripted_deployment(
             scenario, "done", _routes("queued", _json(_response_body("completed")))
         )
         completable_id: Final = _submit_background_response(scenario, key, completable_model)
@@ -313,7 +304,7 @@ def test_responses_gone_at_the_provider_do_not_starve_a_newer_response_out_of_co
         assert [_row_status(gone_id) for gone_id in gone_ids] == [
             [{"status": "stale_expired"}]
         ] * MAX_OBJECTS_PER_POLL_CYCLE
-        spend_rows: Final = eventually(lambda: _poll_spend_rows(completable), lambda rows: len(rows) >= 1, seconds=70)
+        spend_rows: Final = eventually(lambda: _poll_spend_rows(completable_id), lambda rows: len(rows) >= 1, seconds=70)
         assert spend_rows[0]["spend"] == pytest.approx(
             INPUT_TOKENS * INPUT_COST_PER_TOKEN + OUTPUT_TOKENS * OUTPUT_COST_PER_TOKEN
         )
