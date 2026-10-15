@@ -731,6 +731,34 @@ def test_breakpoints_on_one_converse_tool_result_take_one_slot_under_drop_params
     assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
 
 
+def test_a_breakpoint_reaches_bedrock_mantle_claude_as_cache_control(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {"role": "user", "content": "Say hi."},
+        ],
+        api_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert json.loads(route.calls.last.request.content)["system"] == [
+        {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):

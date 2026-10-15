@@ -119,6 +119,7 @@ from litellm.llms.bedrock.common_utils import (
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
+from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1092,6 +1093,8 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
 
 
 def _is_claude_prompt_cache_target(custom_llm_provider: str | None, model: str, base_model: str | None) -> bool:
+    if custom_llm_provider == "bedrock_mantle":
+        return is_mantle_claude_model(model)
     if custom_llm_provider in ("anthropic", "bedrock") and "claude" not in model.lower():
         return base_model is not None and "claude" in base_model.lower()
     return _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
