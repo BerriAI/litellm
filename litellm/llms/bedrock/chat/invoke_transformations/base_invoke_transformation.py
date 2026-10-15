@@ -28,7 +28,7 @@ from litellm.llms.bedrock.request_metadata import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
@@ -49,6 +49,10 @@ _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAd
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
+)
+
+_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
+    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
 )
 
 
@@ -455,6 +459,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = await make_call(
@@ -469,6 +474,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -494,9 +500,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
-            _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
+            get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
@@ -512,6 +519,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -564,7 +572,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if provider is not None:
             return provider
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in _INVOKE_PROVIDERS:
             if provider in model:
                 return provider
         return None

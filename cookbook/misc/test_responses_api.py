@@ -1,8 +1,10 @@
 import base64
+import os
+
 from openai import OpenAI
 import time
 
-client = OpenAI(base_url="http://0.0.0.0:4001", api_key="sk-1234")
+client = OpenAI(base_url="http://0.0.0.0:4001", api_key=os.environ["LITELLM_MASTER_KEY"])
 
 
 # Function to encode the image

@@ -8,6 +8,7 @@ Tests that:
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -282,6 +283,91 @@ class TestManagedWebSocketHandlerIntegration:
         await handler._process_response_create(frame)
 
         assert captured["model"] == "bedrock_mantle/openai.gpt-5.5"
+
+    @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
+    @pytest.mark.asyncio
+    async def test_truncated_turn_is_kept_as_history_for_the_next_turn(self, monkeypatch, terminal_type: str):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        terminal_response: Final = {
+            "type": terminal_type,
+            "response": {
+                "id": "resp_turn1",
+                "status": "incomplete" if terminal_type == "response.incomplete" else "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "PELICAN noted"}],
+                    }
+                ],
+            },
+        }
+
+        async def first_stream():
+            yield terminal_response
+
+        async def empty_stream():
+            return
+            yield {}
+
+        aresponses_mock: Final = AsyncMock(side_effect=(first_stream(), empty_stream()))
+        monkeypatch.setattr(litellm, "aresponses", aresponses_mock)
+
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="bedrock_mantle/openai.gpt-5.5",
+            logging_obj=Logging(
+                model="bedrock_mantle/openai.gpt-5.5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"model_group": "gpt-5.5-mantle"},
+        )
+
+        turn_one_user: Final[dict[str, object]] = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "My secret word is PELICAN"}],
+        }
+        turn_two_user: Final[dict[str, object]] = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What is my secret word?"}],
+        }
+        turn_one_frame: Final = json.dumps({"type": "response.create", "input": [turn_one_user]})
+        turn_two_frame: Final = json.dumps(
+            {
+                "type": "response.create",
+                "previous_response_id": "resp_turn1",
+                "input": [turn_two_user],
+            }
+        )
+
+        await handler._process_response_create(turn_one_frame)
+        await handler._process_response_create(turn_two_frame)
+
+        expected_input: Final[list[dict[str, object]]] = [
+            turn_one_user,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "PELICAN noted"}],
+            },
+            turn_two_user,
+        ]
+        second_call_input: Final = aresponses_mock.call_args_list[1].kwargs["input"]
+        assert second_call_input == expected_input, terminal_type
 
     @pytest.mark.asyncio
     async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
@@ -2888,7 +2974,7 @@ def _wrapped_reasoning_item():
     return {
         "type": "reasoning",
         "id": ResponsesAPIRequestUtils._build_encrypted_item_id("dep-1", "rs_orig"),
-        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1"),
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1"),
         "summary": [],
     }
 
@@ -2977,7 +3063,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
 
         await handler.backend_to_client()
 
-        wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1")
+        wrapped_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1")
         item_done = json.loads(websocket.send_text.await_args_list[0][0][0])
         assert item_done["item"]["encrypted_content"] == wrapped_content
         completed = json.loads(websocket.send_text.await_args_list[1][0][0])
@@ -3033,7 +3119,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "failure_frame, expected_status",
+        "failure_frame, expected_status, expected_message",
         [
             (
                 {
@@ -3045,6 +3131,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
                     },
                 },
                 400,
+                "The encrypted content for item rs_1 could not be verified.",
             ),
             (
                 {
@@ -3056,11 +3143,17 @@ class TestNativeWebSocketEncryptedContentAffinity:
                     },
                 },
                 500,
+                "upstream blew up",
+            ),
+            (
+                {"type": "error", "code": "rate_limit_exceeded", "message": "Rate limit reached for gpt-5.6"},
+                429,
+                "Rate limit reached for gpt-5.6",
             ),
         ],
     )
     async def test_backend_to_client_books_failure_frames_as_failures(
-        self, failure_frame: dict[str, object], expected_status: int
+        self, failure_frame: dict[str, object], expected_status: int, expected_message: str
     ):
         import asyncio
         from unittest.mock import AsyncMock
@@ -3080,7 +3173,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
         logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.0)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3097,7 +3190,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         logging_obj.dispatch_failure_handlers.assert_awaited_once()
         exception = logging_obj.dispatch_failure_handlers.await_args[0][0]
         assert exception.status_code == expected_status
-        assert failure_frame.get("error", failure_frame.get("response", {}).get("error"))["message"] in str(exception)
+        assert expected_message in str(exception)
 
     @pytest.mark.asyncio
     async def test_backend_to_client_bills_completed_turns_before_a_failure(self):
@@ -3129,7 +3222,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
         logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.01)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.01)
         handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, logging_obj=logging_obj, request_data={})
 
         await handler.backend_to_client()
@@ -3185,7 +3278,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
         logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.0)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,

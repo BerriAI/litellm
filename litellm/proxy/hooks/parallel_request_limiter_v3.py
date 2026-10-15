@@ -32,6 +32,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import (
     BatchResult,
@@ -75,6 +76,8 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -157,6 +160,12 @@ def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return fail_closed_rate_limit_enforcement_enabled(general_settings)
+
+
+def _force_redis_hash_tag_grouping_from_litellm_settings() -> bool:
+    from litellm import force_redis_hash_tag_grouping
+
+    return force_redis_hash_tag_grouping is True
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -481,6 +490,22 @@ CacheCounterValue: TypeAlias = int | float | str | bytes
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
 
+def _values_in_caller_order(
+    keys: Sequence[str],
+    key_groups: Sequence[tuple[str, list[str]]],
+    grouped_values: CacheCounterValues,
+) -> list[CacheCounterValue | None]:
+    tag_by_key: Final = dict(
+        itertools.chain.from_iterable(((key, tag) for key in group_keys) for tag, group_keys in key_groups)
+    )
+    caller_positions: Final = itertools.chain.from_iterable(
+        tuple(position for position, key in enumerate(keys) if tag_by_key[key] == tag)
+        for tag, _group_keys in key_groups
+    )
+    value_by_position: Final = dict(zip(caller_positions, grouped_values))
+    return [value_by_position.get(position) for position in range(len(keys))]
+
+
 def _as_counter_values(reply: object) -> list[CacheCounterValue]:
     """A Lua reply read back off the pipeline is the same array the script returns when called directly."""
     if not isinstance(reply, (list, tuple)):
@@ -764,12 +789,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
+        force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
         self._fail_closed_resolver = fail_closed_resolver
+        self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -840,10 +867,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self._batch_rate_limiter is None:
             try:
                 from litellm.proxy.hooks.batch_rate_limiter import (
-                    _PROXY_BatchRateLimiter,
+                    PROXY_BatchRateLimiter,
                 )
 
-                self._batch_rate_limiter = _PROXY_BatchRateLimiter(
+                self._batch_rate_limiter = PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
                     parallel_request_limiter=self,
                     time_provider=self._time_provider,
@@ -978,6 +1005,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_limit: int | None,
         call_type: str | None,
         configured_output_tokens: int | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """Hard-cap generation length when the request has no explicit cap.
 
@@ -994,18 +1022,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return
-        base_capped_floor: Final = _PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
+        base_capped_floor: Final = PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
         capped_floor: Final = (
             max(base_capped_floor, RESPONSES_API_MIN_OUTPUT_TOKENS)
             if call_type in RESPONSES_API_CALL_TYPES
             else base_capped_floor
         )
         baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-        is_embedding: Final = _PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
+        is_embedding: Final = PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
         if (
             capped_floor >= baseline_floor
-            or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
+            or PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
             or is_embedding
+            or endpoint_type == EndpointType.DECISIONS
         ):
             return
         effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
@@ -1013,8 +1042,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
             config: Final = data.get(config_field)
             if config is None or isinstance(config, dict):
-                data[config_field] = {  # rebind-ok: routed request needs cap  # mutable-ok: downstream needs dict
-                    **(config or {}),  # mutable-ok: downstream native routing requires a mutable request config
+                data[config_field] = {  # rebind-ok: routed request needs cap
+                    **(config or {}),
                     "maxOutputTokens": effective_cap,
                 }
             return
@@ -1166,6 +1195,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
         )
 
+    @with_service_target("rate_limits")
     async def in_memory_cache_sliding_window(
         self,
         keys: list[str],
@@ -1362,12 +1392,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Group keys by their Redis hash tag to ensure cluster compatibility.
 
         For Redis clusters, uses slot calculation to group keys that belong to the same slot.
-        For regular Redis, no grouping is needed - all keys can be processed together.
+        For regular Redis, grouping is skipped unless forced by configuration.
         """
         groups: Final[dict[str, list[str]]] = {}
 
-        # Use slot calculation for Redis clusters only
-        if self._is_redis_cluster():
+        if self._is_redis_cluster() or self._force_hash_tag_grouping_resolver():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
@@ -1504,7 +1533,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
 
-        return all_cache_values
+        return _values_in_caller_order(keys_to_fetch, key_groups, all_cache_values)
 
     async def _refund_later_pipelined_groups(
         self,
@@ -1522,6 +1551,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 continue
             await self._refund_counter_increments(self._counter_refunds_from_batch_values(group_keys, group_values))
 
+    @with_service_target("rate_limits")
     async def should_rate_limit(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2018,6 +2048,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     local_only=True,
                 )
 
+    @with_service_target("rate_limits")
     async def atomic_check_and_increment_by_n(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2159,7 +2190,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not descriptor_groups:
             return RateLimitResponse(
                 overall_code="OK",
-                statuses=[],  # mutable-ok: response contract requires a status list
+                statuses=[],
             )
         applied: Final[list[tuple[CounterRefund, ...]]] = []
         statuses: Final[list[RateLimitStatus]] = []
@@ -2338,8 +2369,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for refund in refunds:
             try:
                 await self.window_guarded_token_increment_script(
-                    keys=[refund.window_key, refund.counter_key],  # mutable-ok: Redis script API takes a list
-                    args=[refund.window_start, -refund.increment, 0],  # mutable-ok: Redis script API takes a list
+                    keys=[refund.window_key, refund.counter_key],
+                    args=[refund.window_start, -refund.increment, 0],
                 )
             except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
                 log_redis_failure(
@@ -2471,7 +2502,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             descriptor_state.append(
-                {  # mutable-ok: local atomic-counter state is updated during pass two
+                {
                     "window_expired": window_expired,
                     "current": current_counter,
                     "window_start": str(now_int if window_expired else int(window_start)),
@@ -2530,6 +2561,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         )
 
+    @with_service_target("rate_limits")
     async def reserve_tpm_tokens(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2560,7 +2592,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             for d in descriptors
             if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None  # mutable-ok: optional descriptor
+            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
         ]
         if not tpm_descriptors:
             return RateLimitResponse(overall_code="OK", statuses=[])
@@ -2613,6 +2645,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parent_otel_span=parent_otel_span,
         )
 
+    @with_service_target("rate_limits")
     async def reserve_io_tokens(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2636,23 +2669,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         configured, or if the reservation failed), for the caller to stash
         for post-call reconciliation.
         """
-        itpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
-            d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
-        ]
-        otpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
-            d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-        ]
+        itpm_descriptors: Final = [d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY]
+        otpm_descriptors: Final = [d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY]
 
         if not itpm_descriptors and not otpm_descriptors:
-            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0  # mutable-ok: response contract uses a list
+            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0
 
         itpm_response: Final = (
             await self.atomic_check_and_increment_by_n(
                 descriptors=itpm_descriptors,
-                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
-                    {"tokens": estimated_input_tokens}  # mutable-ok: atomic limiter increment record
-                    for _ in itpm_descriptors
-                ],
+                increments=[{"tokens": estimated_input_tokens} for _ in itpm_descriptors],
                 parent_otel_span=parent_otel_span,
             )
             if itpm_descriptors
@@ -2665,25 +2691,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if otpm_descriptors:
             otpm_response: Final = await self.atomic_check_and_increment_by_n(
                 descriptors=otpm_descriptors,
-                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
-                    {"tokens": estimated_output_tokens}  # mutable-ok: atomic limiter increment record
-                    for _ in otpm_descriptors
-                ],
+                increments=[{"tokens": estimated_output_tokens} for _ in otpm_descriptors],
                 parent_otel_span=parent_otel_span,
             )
             if otpm_response["overall_code"] == "OVER_LIMIT":
                 if itpm_reserved > 0:
                     await self._refund_reserved_tokens(
-                        scopes=[  # mutable-ok: reservation rollback accepts collected scopes
-                            (d["key"], d["value"]) for d in itpm_descriptors
-                        ],
+                        scopes=[(d["key"], d["value"]) for d in itpm_descriptors],
                         amount=itpm_reserved,
                         reservation_windows=itpm_response.get("reservation_windows", frozenset()),
                         parent_otel_span=parent_otel_span,
                     )
                 return otpm_response, 0, 0
             statuses: Final = (
-                [  # mutable-ok: response contract uses a list
+                [
                     *itpm_response["statuses"],
                     *otpm_response["statuses"],
                 ]
@@ -2710,6 +2731,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         assert itpm_response is not None
         return itpm_response, itpm_reserved, 0
 
+    @with_service_target("rate_limits")
     async def enforce_project_io_token_quota_for_frame(
         self,
         user_api_key_dict: UserAPIKeyAuth | None,
@@ -2963,6 +2985,48 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+    async def enforce_mcp_server_rate_limits(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        server: MCPServer,
+    ) -> None:
+        descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: existing descriptor helpers append in place
+        mcp_server_name: Final = server.alias or server.server_name or server.name
+        if user_api_key_dict is not None:
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+        if server.rpm is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="mcp_server",
+                    value=server.server_id,
+                    rate_limit={
+                        "requests_per_unit": server.rpm,
+                        "tokens_per_unit": None,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+        if not descriptors:
+            return
+
+        parent_otel_span: Final = user_api_key_dict.parent_otel_span if user_api_key_dict is not None else None
+        response: Final = await self.atomic_check_and_increment_by_n(
+            descriptors=descriptors,
+            increments=[{"requests": 1} for _ in descriptors],
+            parent_otel_span=parent_otel_span,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response, descriptors)
+
     def _should_enforce_rate_limit(
         self,
         limit_type: str | None,
@@ -3040,7 +3104,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Resolve the agent_id from either the API key or request metadata.
         Key-level agent_id takes precedence over metadata/header-supplied agent_id.
         """
-        key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
+        key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
         metadata: Final = data.get("metadata") or {}
@@ -3124,7 +3188,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if (limit := tag_limits.get(tag)) is not None
         )
 
-    def _create_rate_limit_descriptors(
+    def create_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
@@ -3249,21 +3313,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # REST MCP calls pass the raw body through this hook before server
-        # resolution; only the later synthetic hook payload may carry this key.
-        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
-            mcp_server_name: Final = data.get("mcp_server_name", None)
-            self._add_mcp_per_key_rate_limit_descriptor(
-                user_api_key_dict=user_api_key_dict,
-                mcp_server_name=mcp_server_name,
-                descriptors=descriptors,
-            )
-            self._add_mcp_per_team_rate_limit_descriptor(
-                user_api_key_dict=user_api_key_dict,
-                mcp_server_name=mcp_server_name,
-                descriptors=descriptors,
-            )
-
         self._add_team_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model if isinstance(requested_model, str) else None,
@@ -3287,6 +3336,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         return descriptors
+
+    _create_rate_limit_descriptors = create_rate_limit_descriptors
 
     async def _check_model_has_recent_failures(
         self,
@@ -3474,7 +3525,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitDescriptor(
                     key=PROJECT_ITPM_DESCRIPTOR_KEY,
                     value=descriptor_value,
-                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                    rate_limit={
                         "requests_per_unit": None,
                         "tokens_per_unit": model_itpm_limit,
                         "window_size": self.window_size,
@@ -3486,7 +3537,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitDescriptor(
                     key=PROJECT_OTPM_DESCRIPTOR_KEY,
                     value=descriptor_value,
-                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                    rate_limit={
                         "requests_per_unit": None,
                         "tokens_per_unit": model_otpm_limit,
                         "window_size": self.window_size,
@@ -3543,6 +3594,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                     model=resolved_model,
                     llm_provider=llm_provider,
+                    descriptor_key=descriptor_key,
                 )
 
     @staticmethod
@@ -3607,12 +3659,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if not isinstance(content, list):
                 sanitized.append(message)
                 continue
-            filtered_content = [  # mutable-ok: token_counter requires list content blocks
+            filtered_content = [
                 block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
             ]
-            sanitized.append(
-                {**message, "content": filtered_content}  # mutable-ok: token_counter requires message dicts
-            )
+            sanitized.append({**message, "content": filtered_content})
         return sanitized
 
     @staticmethod
@@ -3757,6 +3807,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_reservation_scopes: Sequence[tuple[str, str]],
         tpm_reservation_amount: int,
         call_type: str | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -3770,21 +3821,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not isinstance(data, dict):
             return
         stash: Final = claim_request_stash_for_data(data)
-        io_token_descriptors: Final = [  # mutable-ok: reservation API requires descriptor lists
+        io_token_descriptors: Final = [
             d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
         ]
         if not io_token_descriptors:
             return
 
-        configured_otpm_limits: Final = [  # mutable-ok: min calculation materializes validated limits
+        configured_otpm_limits: Final = [
             int(v)
             for d in io_token_descriptors
             if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-            for v in [  # mutable-ok: comprehension binds the optional descriptor value
-                (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
-                    "tokens_per_unit"
-                )
-            ]
+            for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
             if v is not None
         ]
         min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
@@ -3810,6 +3857,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data,
             min_configured_limit=min_configured_otpm_limit,
             call_type=call_type,
+            endpoint_type=endpoint_type,
         )
 
         io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
@@ -3898,9 +3946,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if requested_model and self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type)
             else False
         )
-        descriptors: Final = self._create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
+        descriptors: Final = self.create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
             user_api_key_dict=user_api_key_dict,
-            data=dict(data),  # mutable-ok: legacy descriptor helpers accept a request dictionary
+            data=dict(data),
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
@@ -3916,7 +3964,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
-        return [  # mutable-ok: the shared generation reservation helpers require a list
+        return [
             *descriptors,
             *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
             *await self._create_tag_rate_limit_descriptors(data),
@@ -3945,7 +3993,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
         acquisition: Final = ParallelSlotAcquisition(
             slot_id=uuid.uuid4().hex,
-            counter_keys=[  # mutable-ok: the shared slot-release contract requires a list
+            counter_keys=[
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
                 for d in descriptors
                 if d["rate_limit"] is not None and d["rate_limit"].get("max_parallel_requests") is not None
@@ -3978,13 +4026,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if cancellation is not None:
                 raise cancellation
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+        endpoint_type: EndpointType = EndpointType.GENERIC,
+    ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to check rate limits before making the API call.
         Supports dynamic rate limiting based on deployment health.
@@ -4115,6 +4165,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     min_configured_limit=min_configured_tpm_limit,
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
+                    endpoint_type=endpoint_type,
                 )
 
                 # Floor at 1 token so contentless requests (/responses,
@@ -4171,10 +4222,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         (d["key"], d["value"])
                         for d in descriptors
                         if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-                        and (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
-                            "tokens_per_unit"
-                        )
-                        is not None
+                        and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
                     )
                     tpm_reservation_scopes = tuple(  # rebind-ok: record successful reservation scopes
                         stash.reserved_scopes
@@ -4201,6 +4249,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 tpm_reservation_scopes=tpm_reservation_scopes,
                 tpm_reservation_amount=tpm_reservation_amount,
                 call_type=call_type,
+                endpoint_type=endpoint_type,
             )
 
     def _create_pipeline_operations(
@@ -4230,7 +4279,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return pipeline_operations
 
     def _get_total_tokens_from_usage(
-        self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]
+        self, usage: object | None, rate_limit_type: Literal["output", "input", "total"]
     ) -> int:
         """
         Get total tokens from response usage for rate limiting.
@@ -4396,6 +4445,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
         return True
 
+    @with_service_target("rate_limits")
     async def async_increment_tokens_with_ttl_preservation(
         self,
         pipeline_operations: list["RedisPipelineIncrementOperation"],
@@ -4481,11 +4531,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if self.window_guarded_token_increment_script is not None:
                 try:
                     await self.window_guarded_token_increment_script(
-                        keys=[  # mutable-ok: Redis script interface requires a key list
+                        keys=[
                             window_key,
                             operation["key"],
                         ],
-                        args=[  # mutable-ok: Redis script interface requires an argument list
+                        args=[
                             expected_window_start,
                             operation["increment_value"],
                             operation["ttl"] or 0,
@@ -4507,6 +4557,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ttl=operation["ttl"],
                 )
 
+    @with_service_target("rate_limits")
     async def async_increment_reservation_aware_tokens(
         self,
         pipeline_operations: Sequence[ReservationAwareIncrementOperation],
@@ -4999,17 +5050,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("rate_limits")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         rate_limit_type: Final = self.get_rate_limit_type()
 
-        litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
@@ -5045,6 +5097,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_logging_hook(
         self,
         kwargs: dict,
@@ -5115,7 +5168,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("rate_limits")
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
@@ -5125,11 +5179,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         usage instead of refunding it.
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         try:
-            litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
 
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
@@ -5222,6 +5276,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5242,7 +5297,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    @with_service_target("rate_limits")
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
         """
         Release completed-request slots and update rate limit headers in the response.
         """
@@ -5296,6 +5352,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if popped is not None:
                 await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
+    @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -5422,3 +5479,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
         return
+
+
+PROXY_MaxParallelRequestsHandler_v3 = _PROXY_MaxParallelRequestsHandler_v3

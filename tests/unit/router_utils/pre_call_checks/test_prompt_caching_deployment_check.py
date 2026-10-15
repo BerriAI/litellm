@@ -1,12 +1,15 @@
 import asyncio
 import copy
+import os
 import functools
+import uuid
 from typing import Final, cast
 
 import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
@@ -14,7 +17,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
     _get_min_token_count_for_deployments,
 )
-from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
@@ -181,6 +184,56 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     assert filtered == [deployments[1]]
 
 
+class _PinLookupCounter(DualCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pin_lookups = 0
+
+    async def async_batch_get_cache(
+        self,
+        keys: list[str],
+        parent_otel_span: object = None,
+        local_only: bool = False,
+        throttle_redis: bool = True,
+        **kwargs: object,
+    ):
+        self.pin_lookups += 1
+        return await super().async_batch_get_cache(
+            keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
+            throttle_redis=throttle_redis,
+            **kwargs,
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_skips_prefix_hash_for_a_single_deployment():
+    """
+    With one healthy deployment there is nothing to pin to, so the check must hand the group
+    back without hashing the prefix or probing the pin cache: on a 400k-token Claude Code
+    prompt that hash alone is ~30 ms of GIL-holding work per request.
+    """
+    cache = _PinLookupCounter()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-1", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+    )
+
+    assert filtered == deployments
+    assert cache.pin_lookups == 0
+
+    two = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    assert await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=two, messages=messages
+    ) == [two[0]]
+    assert cache.pin_lookups == 1
+
+
 @pytest.mark.asyncio
 async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
     cache = DualCache()
@@ -262,9 +315,11 @@ async def test_replayed_redacted_thinking_block_still_records_and_pins():
         kwargs={
             "standard_logging_object": {
                 "call_type": "anthropic_messages",
+                "custom_llm_provider": "anthropic",
                 "model": model,
                 "messages": messages,
                 "model_id": "dep-2",
+                "model_map_information": {"model_map_key": model, "model_map_value": None},
             }
         },
         response_obj=None,
@@ -300,10 +355,13 @@ def _affinity_messages(messages: list[AllMessageValues]) -> list[AllMessageValue
 
 
 class _SentMessagesCapture(CustomLogger):
-    def __init__(self):
+    def __init__(self, litellm_call_id: str):
+        self.litellm_call_id = litellm_call_id
         self.messages: list[AllMessageValues] | None = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if kwargs.get("litellm_call_id") != self.litellm_call_id:
+            return
         standard_logging_object = kwargs.get("standard_logging_object")
         if standard_logging_object is not None:
             self.messages = standard_logging_object["messages"]
@@ -330,7 +388,8 @@ async def test_affinity_key_matches_the_messages_auto_caching_actually_sends(mon
     request was actually sent with, otherwise auto-injected caching gets no affinity at all.
     """
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-    capture = _SentMessagesCapture()
+    call_id: Final = str(uuid.uuid4())
+    capture = _SentMessagesCapture(call_id)
     monkeypatch.setattr(litellm, "callbacks", [capture])
     messages = _auto_caching_messages()
 
@@ -339,6 +398,7 @@ async def test_affinity_key_matches_the_messages_auto_caching_actually_sends(mon
         messages=copy.deepcopy(messages),
         mock_response="ok",
         api_key="sk-fake",
+        litellm_call_id=call_id,
     )
     sent_messages = await _eventually(lambda: capture.messages)
     assert sent_messages is not None
@@ -374,7 +434,7 @@ async def test_repeated_auto_cached_prefix_pins_to_one_deployment(monkeypatch, l
     served_by = first._hidden_params["model_id"]
 
     affinity_key = PromptCachingCache.get_prompt_caching_cache_key(_affinity_messages(messages), None)
-    assert await _eventually(lambda: router.cache.get_cache(key=affinity_key)) is not None
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.get_cache(key=affinity_key)) is not None
 
     subsequent = [
         (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
@@ -573,7 +633,7 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
-    deployments = _deployments("anthropic/claude-fable-5")
+    deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
     messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
 
     result, took, lags = await timed_with_loop_lags(
@@ -604,9 +664,11 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     )
     standard_logging_object = {
         "call_type": "acompletion",
+        "custom_llm_provider": "anthropic",
         "model": "anthropic/claude-fable-5",
         "messages": messages,
         "model_id": "dep-1",
+        "model_map_information": {"model_map_key": "anthropic/claude-fable-5", "model_map_value": None},
     }
 
     _, took, lags = await timed_with_loop_lags(
@@ -622,6 +684,103 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model_id": "dep-1"
     }
     assert_loop_stayed_free(took, lags)
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1_700_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + seconds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "model_map_value", "pinned_past_five_minutes"),
+    [
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 6e-06},
+            True,
+            id="one-hour-cache-writes-priced",
+        ),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            False,
+            id="no-one-hour-cache-writes",
+        ),
+        pytest.param("anthropic", "claude-sonnet-4-5", None, False, id="model-not-in-cost-map"),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 0.0},
+            False,
+            id="one-hour-cache-writes-priced-at-zero",
+        ),
+        pytest.param(
+            "bedrock",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            True,
+            id="bedrock-forwards-1h-from-the-base-model-entry",
+        ),
+        pytest.param(
+            "bedrock",
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            {"cache_creation_input_token_cost_above_1hr": 6.6e-06},
+            False,
+            id="bedrock-drops-1h-for-a-profile-arn-whatever-its-base-model",
+        ),
+    ],
+)
+async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
+    custom_llm_provider: str,
+    model: str,
+    model_map_value: dict[str, float | None] | None,
+    pinned_past_five_minutes: bool,
+):
+    clock: Final = _ManualClock()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "word " * 6000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                ],
+            }
+        ],
+    )
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "custom_llm_provider": custom_llm_provider,
+                "model": model,
+                "messages": messages,
+                "model_id": "dep-1",
+                "model_map_information": {"model_map_key": model, "model_map_value": model_map_value},
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    pins: Final = PromptCachingCache(cache=cache)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-1"}
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert (await pins.async_get_model_id(messages=messages, tools=None) is not None) is pinned_past_five_minutes
 
 
 LONG_PROMPT = "word " * 3000
@@ -854,13 +1013,18 @@ async def test_pin_matches_when_the_success_event_truncated_an_image_payload(mon
     replaced by size placeholders, while routing sees the raw request. Hashing the raw bytes on the
     read side would key every image-carrying session past its own pin.
     """
-    capture = _SentMessagesCapture()
+    call_id: Final = str(uuid.uuid4())
+    capture = _SentMessagesCapture(call_id)
     monkeypatch.setattr(litellm, "callbacks", [capture])
     image = {"type": "image_url", "image_url": {"url": ONE_PIXEL_PNG}}
     turn_one = _turn({"role": "user", "content": [image, _marked(LONG_PROMPT)]})
 
     await litellm.acompletion(
-        model=AUTO_CACHING_MODEL, messages=copy.deepcopy(turn_one), mock_response="ok", api_key="sk-fake"
+        model=AUTO_CACHING_MODEL,
+        messages=copy.deepcopy(turn_one),
+        mock_response="ok",
+        api_key="sk-fake",
+        litellm_call_id=call_id,
     )
     logged = await _eventually(lambda: capture.messages)
     assert logged is not None
@@ -907,7 +1071,109 @@ async def test_claude_code_style_session_stays_on_one_deployment_across_turns(lo
         response = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=request, mock_response="ok")
         served.append(response._hidden_params["model_id"])
         pin_key = PromptCachingCache.get_prompt_caching_cache_key(request, None)
-        assert await _eventually(functools.partial(router.cache.get_cache, key=pin_key)) is not None
+        assert await _eventually(functools.partial(router.prompt_caching_pin_cache.get_cache, key=pin_key)) is not None
         history = [*history, {"role": "user", "content": [_text(text)]}, {"role": "assistant", "content": "ok"}]
 
     assert served == [served[0]] * len(user_turns)
+
+
+@pytest.fixture
+def anthropic_messages():
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_router_with_prompt_caching(anthropic_messages):
+    """
+    if prompt caching supported model called with prompt caching valid prompt,
+    then 2nd call should go to the same model.
+    """
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
+                    "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+                    "mock_response": "The sky is blue.",
+                },
+            },
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "mock_response": "The sky is green.",
+                },
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+
+    response = await router.acompletion(
+        messages=anthropic_messages,
+        model="claude-model",
+        mock_response="The sky is blue.",
+    )
+    print("response=", response)
+
+    initial_model_id = response._hidden_params["model_id"]
+
+    cache = PromptCachingCache(
+        cache=router.prompt_caching_pin_cache,
+    )
+
+    cached_model_id = await _eventually(lambda: cache.get_model_id(messages=anthropic_messages, tools=None))
+
+    assert cached_model_id is not None
+    prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages=anthropic_messages, tools=None)
+    print(f"prompt_caching_cache_key: {prompt_caching_cache_key}")
+    assert cached_model_id["model_id"] == initial_model_id
+
+    new_messages = anthropic_messages + [{"role": "user", "content": "What is the weather in SF?"}]
+
+    for _ in range(20):
+        response = await router.acompletion(
+            messages=new_messages,
+            model="claude-model",
+            mock_response="The sky is blue.",
+        )
+        print("response=", response)
+
+        assert response._hidden_params["model_id"] == initial_model_id

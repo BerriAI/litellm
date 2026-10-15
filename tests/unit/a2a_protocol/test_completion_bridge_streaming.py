@@ -356,6 +356,7 @@ async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call
                     "custom_llm_provider": "langgraph",
                     "model": "agent",
                     "agent_card_path": "agentCard/v1.0",
+                    "a2a_protocol_version": "0.3",
                 },
                 api_base="http://localhost:2024",
             )
@@ -363,3 +364,80 @@ async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call
 
     assert len(events) == 4
     assert "agent_card_path" not in mock_acompletion.call_args.kwargs
+    assert "a2a_protocol_version" not in mock_acompletion.call_args.kwargs
+
+
+AGENTCORE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/unit-agent-abc123"
+AGENTCORE_INVOCATIONS_URL = (
+    "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+    + AGENTCORE_ARN.replace(":", "%3A").replace("/", "%2F")
+    + "/invocations"
+)
+
+
+@pytest.mark.asyncio
+async def test_a2a_completion_bridge_bedrock_agentcore(respx_mock, monkeypatch):
+    """
+    A2A streaming via the completion bridge against a scripted Bedrock AgentCore
+    upstream: asserts the outbound invocation request and the emitted A2A event
+    sequence.
+    """
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    import httpx
+    from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
+    from uuid import uuid4
+
+    from litellm.a2a_protocol import asend_message_streaming
+
+    sse_body = (
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Machine "}}]}\n\n'
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"learning."}}]}\n\n'
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    invoke_route = respx_mock.post(
+        url__regex=r"https://bedrock-agentcore\.us-west-2\.amazonaws\.com/runtimes/.*/invocations.*"
+    ).mock(
+        return_value=httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+    )
+
+    send_message_payload = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Explain machine learning in simple terms"}],
+            "messageId": uuid4().hex,
+        }
+    }
+    request = SendStreamingMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(**send_message_payload),  # type: ignore
+    )
+
+    chunks = []
+    async for chunk in asend_message_streaming(
+        request=request,
+        api_base=None,
+        litellm_params={
+            "custom_llm_provider": "bedrock",
+            "model": f"bedrock/agentcore/{AGENTCORE_ARN}",
+            "api_key": "unit-jwt-token",
+        },
+    ):
+        chunks.append(chunk)
+
+    assert invoke_route.call_count == 1
+    invoke_request = invoke_route.calls.last.request
+    encoded_arn = AGENTCORE_ARN.replace(":", "%3A").replace("/", "%2F")
+    assert encoded_arn in str(invoke_request.url)
+    assert invoke_request.headers["authorization"] == "Bearer unit-jwt-token"
+
+    assert len(chunks) == 3
+    content = "".join(
+        chunk["choices"][0]["delta"]["content"]
+        for chunk in chunks
+        if chunk["choices"][0].get("delta", {}).get("content")
+    )
+    assert content == "Machine learning."
+    assert chunks[-1]["choices"][0].get("finish_reason") == "stop"
