@@ -3359,7 +3359,7 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
 
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
@@ -3371,8 +3371,7 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
                 json_before_value = self.before_value
 
             if json_before_value is not None:
-                json_before_value = masker.mask_dict(json_before_value)
-                self.before_value = json.dumps(json_before_value, default=str)
+                self.before_value = json.dumps(mask_credentials_in_payload(json_before_value, masker), default=str)
 
         if self.updated_values is not None:
             json_updated_values: dict | None = None
@@ -3382,8 +3381,7 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
                 json_updated_values = self.updated_values
 
             if json_updated_values is not None:
-                json_updated_values = masker.mask_dict(json_updated_values)
-                self.updated_values = json.dumps(json_updated_values, default=str)
+                self.updated_values = json.dumps(mask_credentials_in_payload(json_updated_values, masker), default=str)
 
         return self
 
