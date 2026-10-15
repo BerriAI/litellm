@@ -381,7 +381,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
 
 class PerformanceConfigBlock(TypedDict):
-    latency: Literal["optimized", "throughput"]
+    latency: Literal["standard", "optimized"]
 
 
 class JsonSchemaDefinition(TypedDict, total=False):
