@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.decisions.transformation import (
     ir_to_systemone_request,
@@ -195,7 +195,9 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
     audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
-    video_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos}))
+    video_only: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos})
+    )
 
     assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
         "model": "clef-omni",
@@ -207,5 +209,58 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
         **_SYSTEMONE_REQUEST,
         "videos": videos,
     }
-    assert isinstance(ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest)
-    assert isinstance(ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest)
+    assert isinstance(
+        ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest
+    )
+    assert isinstance(
+        ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest
+    )
+
+
+_ASSET_REQUEST: Final[Mapping[str, object]] = {
+    "state": {"photo": "img-7f3a"},
+    "questions": {"has_square": {"type": "noul", "instructions": "Is there a red square in `photo`?"}},
+}
+
+
+@pytest.mark.parametrize(
+    "assets",
+    [
+        {"   ": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+        {"r" * 1025: {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+        {"img-7f3a": {"type": "image", "format": "png", "data_base64": "not base64!"}},
+    ],
+    ids=["blank-reference", "reference-over-1024-bytes", "bad-base64"],
+)
+def test_assets_typesafe_would_reject_are_rejected_by_validation(assets: Mapping[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _SYSTEMONE_BODY.validate_python({**_ASSET_REQUEST, "assets": assets})
+
+
+def test_an_asset_reference_of_exactly_1024_bytes_is_accepted() -> None:
+    reference: Final = "r" * 1024
+    body: Final = _SYSTEMONE_BODY.validate_python(
+        {**_ASSET_REQUEST, "assets": {reference: {"type": "image", "format": "png", "data_base64": "iVBO"}}}
+    )
+
+    assert tuple(body.assets or {}) == (reference,)
+
+
+def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
+    request: Final = {**_ASSET_REQUEST, "questions": {"square": {"type": "box", "instructions": "the square"}}}
+    payload: Final = {
+        "model": "jev-1.14.0",
+        "answers": {
+            "square": {
+                "type": "box",
+                "box": {"top": 0.5, "bottom": 0.75, "left": 0.25, "right": 0.5},
+                "confidence": None,
+            }
+        },
+        "usage": {"input_tokens": 737, "output_tokens": 20},
+    }
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(request))
+
+    response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
+
+    assert response.model_dump(mode="json") == payload
