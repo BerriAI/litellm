@@ -1,6 +1,7 @@
 import copy
 import itertools
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     EXTERNAL_BREAKPOINTS_STAMP,
@@ -1170,6 +1172,18 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
 
 _SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
 _GO_ON: Final = {"role": "user", "content": "Go on"}
+_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+    "cache_control": {"type": "ephemeral"},
+}
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    "cache_control": {"type": "ephemeral"},
+}
 
 
 def _wire_cache_marks(messages: list[AllMessageValues]) -> int:
@@ -1183,18 +1197,30 @@ def _wire_cache_marks(messages: list[AllMessageValues]) -> int:
 
 
 @pytest.mark.parametrize(
-    ("follow_ups", "modify_params", "expected_breakpoints"),
+    ("tool_calls", "follow_ups", "modify_params", "expected_breakpoints"),
     [
-        pytest.param((), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
-        pytest.param((), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
-        pytest.param((_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
-        pytest.param((_SEARCH_ANSWER,), True, 1, id="replayed_with_the_client_answer_under_modify_params"),
-        pytest.param((_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"),
-        pytest.param((_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param((_SEARCH_CALL,), (), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((_SEARCH_CALL,), (), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_CALL,), (_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER,), True, 1, id="replayed_with_the_client_answer_under_modify_params"
+        ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"
+        ),
+        pytest.param((_SEARCH_CALL,), (_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL),
+            (_SEARCH_ANSWER,),
+            True,
+            1,
+            id="client_answer_replaced_when_modify_params_answers_the_other_call",
+        ),
     ],
 )
 def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_receives_it(
     monkeypatch: pytest.MonkeyPatch,
+    tool_calls: tuple[dict[str, object], ...],
     follow_ups: tuple[AllMessageValues, ...],
     modify_params: bool,
     expected_breakpoints: int,
@@ -1205,14 +1231,7 @@ def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_r
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "id": "srvtoolu_01Search",
-                    "type": "function",
-                    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+            "tool_calls": list(tool_calls),
             "provider_specific_fields": {
                 "tool_results": [
                     {
@@ -4599,3 +4618,25 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_request_builder(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]}),
+        cast(AllMessageValues, weather_answer),
+        cast(AllMessageValues, weather_answer),
+    ]
+    monkeypatch.setattr(verbose_logger, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    warnings_from_the_hook: Final = len(caplog.records)
+    wire_marks: Final = _wire_cache_marks(messages)
+
+    assert (census, wire_marks) == (1, 1)
+    assert (warnings_from_the_hook, len(caplog.records)) == (0, 1)

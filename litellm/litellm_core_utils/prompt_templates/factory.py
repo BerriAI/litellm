@@ -1892,8 +1892,8 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
 
 
 def tool_call_ids_answered_by_client(messages: Sequence[AllMessageValues]) -> frozenset[str]:
-    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
-    return _tool_call_ids_in_tool_messages(sanitized) - server_tool_answers_replaced_by_their_result(sanitized)
+    paired: Final = _pair_tool_calls_with_results(messages) if litellm.modify_params else messages
+    return _tool_call_ids_in_tool_messages(paired) - server_tool_answers_replaced_by_their_result(paired)
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
@@ -2201,7 +2201,7 @@ def _sanitize_empty_text_content(
 
 def _add_missing_tool_results(
     current_message: AllMessageValues,
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
     current_index: int,
 ) -> tuple[list[AllMessageValues], int]:
     """
@@ -2420,35 +2420,7 @@ def sanitize_messages_for_tool_calling(
     """
     if not litellm.modify_params:
         return messages
-
-    sanitized_messages: list[AllMessageValues] = []
-    i = 0
-
-    while i < len(messages):
-        current_message = messages[i]
-
-        # Case C: Sanitize empty text content
-        current_message = _sanitize_empty_text_content(current_message)
-
-        # Case A: Check if assistant message has tool_calls without following tool results
-        if current_message.get("role") == "assistant":
-            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
-
-            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
-            if len(result_messages) > 1:
-                sanitized_messages.extend(result_messages)
-                # Skip the assistant message and any actual tool results that were included
-                i += 1 + messages_consumed
-                continue
-
-        # Case B: Check for orphaned tool results
-        if _is_orphaned_tool_result(current_message, sanitized_messages):
-            i += 1
-            continue  # Skip this orphaned tool result
-
-        # Add the message to sanitized list
-        sanitized_messages.append(current_message)
-        i += 1
+    sanitized_messages: Final = _pair_tool_calls_with_results(messages)
 
     # Case D: Deduplicate tool results with the same tool_call_id.
     # Anthropic requires exactly one tool_result per tool_use. Session history
@@ -2486,10 +2458,40 @@ def sanitize_messages_for_tool_calling(
             # a turn boundary and would mask real within-block duplicates.
             seen_in_block = {}
 
-    if duplicates_to_remove:
-        sanitized_messages = [msg for idx, msg in enumerate(sanitized_messages) if idx not in duplicates_to_remove]
+    return [msg for idx, msg in enumerate(sanitized_messages) if idx not in duplicates_to_remove]
 
-    return sanitized_messages
+
+def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    sanitized_messages: list[AllMessageValues] = []
+    i = 0
+
+    while i < len(messages):
+        current_message = messages[i]
+
+        # Case C: Sanitize empty text content
+        current_message = _sanitize_empty_text_content(current_message)
+
+        # Case A: Check if assistant message has tool_calls without following tool results
+        if current_message.get("role") == "assistant":
+            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
+
+            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
+            if len(result_messages) > 1:
+                sanitized_messages.extend(result_messages)
+                # Skip the assistant message and any actual tool results that were included
+                i += 1 + messages_consumed
+                continue
+
+        # Case B: Check for orphaned tool results
+        if _is_orphaned_tool_result(current_message, sanitized_messages):
+            i += 1
+            continue  # Skip this orphaned tool result
+
+        # Add the message to sanitized list
+        sanitized_messages.append(current_message)
+        i += 1
+
+    return tuple(sanitized_messages)
 
 
 def _replayable_thinking_blocks(
