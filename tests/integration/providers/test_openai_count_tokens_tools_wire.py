@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -34,6 +34,96 @@ def _deployment(scenario: Scenario, api_base: str) -> str:
 
 def _count_response(_request: Request) -> Reply:
     return Reply(body=json.dumps({"input_tokens": _COUNT}).encode())
+
+
+_PDF_BASE64: Final = "JVBERi0xLjQK"
+_PNG_BASE64: Final = "aW1hZ2U="
+_LOOKUP_TOOL: Final[dict[str, JsonValue]] = {
+    "name": "lookup",
+    "description": "Find a record",
+    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+_RESPONSES_REPLY: Final[Mapping[str, JsonValue]] = {
+    "id": "resp_count_parity",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-4o-mini",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_count_parity",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+}
+_ANTHROPIC_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = {
+    "base64-pdf": {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize the attached contract."},
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64},
+                    },
+                ],
+            }
+        ],
+    },
+    "base64-image": {
+        "system": [{"type": "text", "text": "Describe images briefly."}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_BASE64}},
+                    {"type": "text", "text": "What is this?"},
+                ],
+            }
+        ],
+    },
+    "tool-turns": {
+        "system": "Use the lookup tool.",
+        "tools": [_LOOKUP_TOOL],
+        "messages": [
+            {"role": "user", "content": "Find record 14."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Looking it up."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {"query": "14"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "14. Indemnification."}],
+            },
+        ],
+    },
+}
+
+
+def _responses_peer(request: Request) -> Reply:
+    if request.target == "/v1/responses/input_tokens":
+        return _count_response(request)
+    if request.target == "/v1/responses":
+        return Reply(body=json.dumps(_RESPONSES_REPLY).encode())
+    return Reply(status=404, body=json.dumps({"error": request.target}).encode())
+
+
+def _body_for(wire_requests: tuple[Request, ...], target: str) -> dict[str, JsonValue]:
+    matching: Final = tuple(request for request in wire_requests if request.target == target)
+    assert len(matching) == 1, [request.target for request in wire_requests]
+    return _JSON_OBJECT.validate_json(matching[0].body)
+
+
+def _counted_fields(body: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {key: body[key] for key in ("input", "instructions", "tools") if body.get(key) is not None}
 
 
 def _count_body(wire: Wire) -> dict[str, JsonValue]:
@@ -159,3 +249,23 @@ def test_utils_token_counter_keeps_chat_tool_conversion(counting_proxy: OwnedPro
                 "parameters": _TOOL_SCHEMA,
             }
         ]
+
+
+@pytest.mark.parametrize("case", sorted(_ANTHROPIC_BODIES))
+def test_messages_count_tokens_sends_the_input_v1_messages_inference_sends(
+    counting_proxy: OwnedProxy, case: str
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_responses_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        body: Final = {"model": model, **_ANTHROPIC_BODIES[case]}
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+        assert generated.status_code == 200, generated.text
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT
+        requests: Final = wire.drain()
+        inference_body: Final = _body_for(requests, "/v1/responses")
+        count_body: Final = _body_for(requests, "/v1/responses/input_tokens")
+        assert _counted_fields(count_body) == _counted_fields(inference_body)
+        assert count_body["model"] == inference_body["model"]
