@@ -2756,6 +2756,41 @@ class TestConvertToModelResponseObjectCompletion:
         assert result.choices[0].message.content == "The answer is 4."
         assert result.choices[0].message.reasoning_content == "2+2=4"
 
+    @staticmethod
+    def _inline_thinking_response() -> dict[str, object]:
+        return {
+            "id": "chatcmpl-5",
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "<thinking>2+2=4</thinking>The answer is 4.", "role": "assistant"},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+    def test_inline_thinking_tag_moves_to_reasoning_content_by_default(self):
+        result = convert_to_model_response_object(
+            response_object=self._inline_thinking_response(),
+            model_response_object=ModelResponse(),
+        )
+        assert (result.choices[0].message.content, result.choices[0].message.reasoning_content) == (
+            "The answer is 4.",
+            "2+2=4",
+        )
+
+    def test_inline_thinking_tag_stays_in_content_when_inline_extraction_disabled(self, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+        result = convert_to_model_response_object(
+            response_object=self._inline_thinking_response(),
+            model_response_object=ModelResponse(),
+        )
+        message = result.choices[0].message
+        assert message.content == "<thinking>2+2=4</thinking>The answer is 4."
+        assert getattr(message, "reasoning_content", None) is None, message
+
     def test_reasoning_content_not_mirrored_into_provider_specific_fields(self):
         """Mirroring reasoning_content into provider_specific_fields made
         cache-replayed messages diverge from live Anthropic messages, which

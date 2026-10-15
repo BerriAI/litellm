@@ -2447,7 +2447,11 @@ class AmazonConverseConfig(BaseConfig):
                 (
                     extracted_reasoning_content_str,
                     _content_str,
-                ) = parse_content_for_reasoning(content["text"])
+                ) = (
+                    (None, content["text"])
+                    if litellm.disable_inline_reasoning_extraction
+                    else parse_content_for_reasoning(content["text"])
+                )
                 if _content_str is not None:
                     content_str += _content_str
             if "toolUse" in content:

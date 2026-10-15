@@ -348,6 +348,7 @@ anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
 )
 openai_system_messages_first: bool = False
 disable_vertex_batch_output_transformation: bool = False
+disable_inline_reasoning_extraction: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False

@@ -2034,7 +2034,7 @@ def extract_reasoning_content(message: Mapping[str, object]) -> tuple[str | None
         return _provider_text_or_none(message["reasoning_content"]), _provider_text_or_none(message_content)
     elif "reasoning" in message:
         return _provider_text_or_none(message["reasoning"]), _provider_text_or_none(message_content)
-    elif isinstance(message_content, str):
+    elif isinstance(message_content, str) and not litellm.disable_inline_reasoning_extraction:
         return parse_content_for_reasoning(message_content)
     return None, _provider_text_or_none(message_content)
 

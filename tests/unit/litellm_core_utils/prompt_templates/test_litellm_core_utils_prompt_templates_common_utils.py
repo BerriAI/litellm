@@ -8,6 +8,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
+    extract_reasoning_content,
     get_file_ids_from_messages,
     get_format_from_file_id,
     get_semantic_cache_prompt_from_messages,
@@ -2334,3 +2336,31 @@ def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(da
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
 def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
     assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+_INLINE_REASONING_TEXTS: Final = (
+    "<think>step 1</think>Final answer: 42",
+    "<thinking>step 1</thinking>Final answer: 42",
+    "<budget:thinking>step 1</budget:thinking>Final answer: 42",
+)
+
+
+@pytest.mark.parametrize("text", _INLINE_REASONING_TEXTS)
+def test_extract_reasoning_content_moves_leading_tag_span_by_default(text: str) -> None:
+    assert extract_reasoning_content({"role": "assistant", "content": text}) == ("step 1", "Final answer: 42")
+
+
+@pytest.mark.parametrize("text", _INLINE_REASONING_TEXTS)
+def test_extract_reasoning_content_keeps_leading_tag_span_when_inline_extraction_disabled(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+    assert extract_reasoning_content({"role": "assistant", "content": text}) == (None, text)
+
+
+def test_extract_reasoning_content_still_returns_native_reasoning_when_inline_extraction_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+    message: Final = {"role": "assistant", "content": "<think>inline</think>answer", "reasoning_content": "native"}
+    assert extract_reasoning_content(message) == ("native", "<think>inline</think>answer")
