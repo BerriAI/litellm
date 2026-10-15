@@ -222,12 +222,15 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # raises "Unknown items in responses API response: []".  Strip the
             # extra fields before building the response object.
             _EXTRA_FIELDS: Final = frozenset(("phase", "logprobs"))
-            clean_items: Final = []
+            clean_items: Final[list[dict[str, object]]] = []  # mutable-ok: grown by append while assembling the payload
             for _, item in sorted(streamed_output_items.items()):
                 ci = {k: v for k, v in item.items() if k not in _EXTRA_FIELDS}
                 content_parts: object = ci.get("content", [])
                 if isinstance(content_parts, list):
-                    ci["content"] = [{k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS} for c in content_parts]
+                    part_maps = cast(  # cast-ok: streamed content items are JSON objects
+                        list[Mapping[str, object]], content_parts
+                    )
+                    ci["content"] = [{k2: v2 for k2, v2 in p.items() if k2 not in _EXTRA_FIELDS} for p in part_maps]
                 clean_items.append(ci)
             response_payload["output"] = clean_items
         if "created_at" in response_payload:
