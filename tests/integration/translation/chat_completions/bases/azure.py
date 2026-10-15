@@ -753,17 +753,30 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
 GPT_6_ASTRA_CONTENT_FILTERS: Final[JsonValue] = [
     {
         "blocked": False,
+        "source_type": "prompt",
+        "content_filter_raw": [],
+        "content_filter_results": {
+            "hate": {"filtered": False, "severity": "safe"},
+            "sexual": {"filtered": False, "severity": "safe"},
+            "violence": {"filtered": False, "severity": "safe"},
+            "self_harm": {"filtered": False, "severity": "safe"},
+            "jailbreak": {"detected": False, "filtered": False},
+        },
+        "content_filter_offsets": {"start_offset": 0, "end_offset": 575, "check_offset": 0},
+    },
+    {
+        "blocked": False,
         "source_type": "completion",
         "content_filter_raw": [],
         "content_filter_results": {
-            "protected_material_text": {"detected": False, "filtered": False},
             "protected_material_code": {"detected": False, "filtered": False},
+            "protected_material_text": {"detected": False, "filtered": False},
             "hate": {"filtered": False, "severity": "safe"},
             "sexual": {"filtered": False, "severity": "safe"},
             "violence": {"filtered": False, "severity": "safe"},
             "self_harm": {"filtered": False, "severity": "safe"},
         },
-        "content_filter_offsets": {"start_offset": 0, "end_offset": 459, "check_offset": 0},
+        "content_filter_offsets": {"start_offset": 0, "end_offset": 511, "check_offset": 0},
     }
 ]
 
