@@ -7156,7 +7156,12 @@ def hash_token(token: str):
     return hashed_token
 
 
+# OWASP Password Storage Cheat Sheet recommendation
+# for PBKDF2-HMAC-SHA256.
 PBKDF2_ITERATIONS: Final = 600_000
+
+# Defensive upper bound against excessive CPU usage from
+# malformed or untrusted stored iteration counts.
 PBKDF2_MAX_ITERATIONS: Final = 10_000_000
 PBKDF2_PREFIX: Final = "pbkdf2:sha256:"
 SCRYPT_PREFIX: Final = "scrypt:"
