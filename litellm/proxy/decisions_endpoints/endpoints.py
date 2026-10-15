@@ -99,12 +99,16 @@ def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, o
     return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
+_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
+
+
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
     body: Final = await request.body()
     try:
-        return _REQUEST_DATA_ADAPTER.validate_json(body)
+        data: Final = _REQUEST_DATA_ADAPTER.validate_json(body)
     except ValidationError as error:
         raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict)
+    return {key: value for key, value in data.items() if key not in _DEPLOYMENT_ONLY_FIELDS}
 
 
 async def _process_decisions(
