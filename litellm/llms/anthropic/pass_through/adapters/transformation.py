@@ -535,7 +535,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content=self._tool_result_content(content.get("content")),
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
-                            if content.get("is_error") is True and self.target_consumes_tool_error(
+                            tool_result_block = cast(Mapping[str, object], content)  # cast-ok: untrusted client payload
+                            if tool_result_block.get("is_error") is True and self.target_consumes_tool_error(
                                 model, custom_llm_provider
                             ):
                                 tool_result["is_error"] = True
