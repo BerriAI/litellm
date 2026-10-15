@@ -195,12 +195,26 @@ def test_every_request_in_a_burst_is_rounded_across_a_proxy_restart(tmp_path: Pa
     _assert_all_answered(probe_outcomes)
 
 
-def _held_streams(gate: threading.Event) -> Callable[[Request], Reply]:
+def _held_streams() -> Callable[[Request], Reply]:
+    never_released: Final = threading.Event()
+
     def respond(request: Request) -> Reply:
         reply: Final = provider_reply(request)
-        return reply if reply.chunks is None else dataclasses.replace(reply, gate_after_first=gate)
+        return reply if reply.chunks is None else dataclasses.replace(reply, gate_after_first=never_released)
 
     return respond
+
+
+def _assert_cut_short_with_an_error(outcomes: tuple[Outcome, ...], received: tuple[Request, ...]) -> None:
+    upstream: Final = tuple(marker_of(request) for request in received)
+    wrong: Final = tuple(
+        (outcome.shot.kind, outcome.status, outcome.text[-300:])
+        for outcome in outcomes
+        if answer(outcome.shot.marker) in outcome.text
+        or "error" not in outcome.text
+        or upstream.count(outcome.shot.marker) != 1
+    )
+    assert wrong == (), wrong
 
 
 def _slow_streams(request: Request) -> Reply:
@@ -209,28 +223,30 @@ def _slow_streams(request: Request) -> Reply:
 
 
 def test_requests_stay_rounded_when_the_upstream_stops_mid_burst_and_comes_back(gateway: Gateway) -> None:
-    gate: Final = threading.Event()
     before: Final = _shots(_BURST)
     during: Final = tuple(shot for shot in _shots(12) if not shot.kind.endswith("-stream"))
     after: Final = _shots(_BURST)
-    with gateway.scenario() as scenario:
-        with wire_server(_held_streams(gate)) as first:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=_BURST) as pool:
+        with wire_server(_held_streams()) as first:
             models: Final = Models(
                 deployment(scenario, "hosted_vllm", first, {"reasoning_effort_levels": list(KIMI_LEVELS)}),
                 deployment(scenario, "anthropic", first, {"reasoning_effort_levels": list(CLAUDE_LEVELS)}),
             )
             port: Final = _port(first)
-            with ThreadPoolExecutor(max_workers=_BURST) as pool:
-                pending: Final = tuple(pool.submit(_fire, gateway, models, shot) for shot in before)
-                eventually(first.received.qsize, lambda count: count == _BURST, seconds=30)
-                first_received: Final = first.drain()
-            held_outcomes: Final = tuple(future.result() for future in pending)
+            pending: Final = tuple(pool.submit(_fire, gateway, models, shot) for shot in before)
+            eventually(first.received.qsize, lambda count: count == _BURST, seconds=30)
+            first_received: Final = first.drain()
+        held_outcomes: Final = tuple(future.result() for future in pending)
         stopped_outcomes: Final = tuple(_fire(gateway, models, shot) for shot in during)
         with wire_server(provider_reply, port=port) as second:
             after_outcomes: Final = _burst(gateway, models, after, lambda: None)
             second_received: Final = second.drain()
+    completed: Final = tuple(outcome for outcome in held_outcomes if not outcome.shot.kind.endswith("-stream"))
+    cut_short: Final = tuple(outcome for outcome in held_outcomes if outcome.shot.kind.endswith("-stream"))
     _assert_every_upstream_effort_rounded(before, first_received)
-    _assert_answered_once(held_outcomes, first_received)
+    _assert_answered_once(completed, first_received)
+    _assert_all_answered(completed)
+    _assert_cut_short_with_an_error(cut_short, first_received)
     assert all(outcome.status is not None and outcome.status >= 500 for outcome in stopped_outcomes), [
         (outcome.status, outcome.text[:200]) for outcome in stopped_outcomes
     ]
