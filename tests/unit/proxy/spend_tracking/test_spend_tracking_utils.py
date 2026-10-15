@@ -6907,3 +6907,24 @@ def test_failure_error_information_masks_addresses_after_labels_and_before_ports
         "error_code": "500",
         "error_message": stored,
     }
+
+
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user"), [(True, ""), (None, "session-abc123")])
+def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user: str
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": cast(
+                StandardLoggingPayload,
+                {**_TRACE_ONLY_STANDARD_LOGGING, "metadata": {"user_api_key_end_user_id": "session-abc123"}},
+            ),
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["end_user"] == expected_end_user
