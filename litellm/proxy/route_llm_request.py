@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 else:
     LitellmRouter = Any
 
-_T = TypeVar("_T")
+_T: Final = TypeVar("_T")
 
 
 def _route_user_config_request(data: dict, route_type: str):
@@ -624,7 +624,7 @@ async def route_request(
 
 
 async def raise_if_model_not_routable(
-    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
+    data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
@@ -696,8 +696,8 @@ class _TeamModel:
     name: str
 
 
-def _decide_dispatch(
-    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
+def _decide_dispatch(  # noqa: C901  # one branch per dispatch target, moved out of _route_request_single_attempt
+    data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
@@ -706,7 +706,8 @@ def _decide_dispatch(
 
     Raises PermissionDeniedError (403) when every deployment of the requested model is blocked.
     """
-    team_id: Final = get_team_id_from_data(data)
+    model: Final = data.get("model")
+    team_id: Final = get_team_id_from_data(dict(data))
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
 
@@ -716,12 +717,7 @@ def _decide_dispatch(
         else:
             return _Dispatch.LITELLM
 
-    elif (
-        route_type == "acompletion"
-        and data.get("model", "") is not None
-        and "," in data.get("model", "")
-        and llm_router is not None
-    ):
+    elif route_type == "acompletion" and isinstance(model, str) and "," in model and llm_router is not None:
         # Handle batch completions with comma-separated models BEFORE user_config check
         # This ensures batch completion logic is applied even when user_config is set
         return _Dispatch.BATCH_COMPLETION
@@ -732,7 +728,7 @@ def _decide_dispatch(
     elif "router_settings_override" in data:
         return _Dispatch.ROUTER_SETTINGS_OVERRIDE
     elif llm_router is not None:
-        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
+        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=model, team_id=team_id)
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
@@ -797,31 +793,38 @@ def _decide_dispatch(
             "aget_skill",
             "adelete_skill",
             "aingest",
-        ] and (data.get("model") is None or data.get("model") == ""):
+        ] and (model is None or model == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
             return _Dispatch.LITELLM
 
         if "model" not in data:
             return _Dispatch.MISSING_MODEL
-        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        team_model_name: Final = (
+            llm_router.map_team_model(model, team_id)
+            if team_id is not None and (model is None or isinstance(model, str))
+            else None
+        )
         if team_model_name is not None:
             return _TeamModel(name=team_model_name)
 
-        elif (
-            is_proxy_admin_without_team
-            and data["model"] not in router_model_names
-            and data["model"] in llm_router.team_public_model_names
-        ) or llm_router.is_recognized_model(data["model"]):
+        elif isinstance(model, str) and (
+            (
+                is_proxy_admin_without_team
+                and model not in router_model_names
+                and model in llm_router.team_public_model_names
+            )
+            or llm_router.is_recognized_model(model)
+        ):
             return _Dispatch.ROUTER
 
-        elif data["model"] not in router_model_names:
+        elif model not in router_model_names:
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
                 return _Dispatch.LITELLM
             elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
                 return _Dispatch.ROUTER
-            elif data["model"] in llm_router.deployment_names:
+            elif model in llm_router.deployment_names:
                 # Only match deployment_names if no wildcard matched
                 return _Dispatch.ROUTER_SPECIFIC_DEPLOYMENT
             elif route_type in [
@@ -867,7 +870,7 @@ def _decide_dispatch(
                 # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
                 # try router first to allow for multi-deployment load balancing
                 return _Dispatch.ROUTER_THEN_LITELLM
-            elif _is_a2a_agent_model(data.get("model", "")):
+            elif _is_a2a_agent_model(model):
                 return _Dispatch.A2A_AGENT
 
     elif user_model is not None or route_type == "allm_passthrough_route":
@@ -877,7 +880,7 @@ def _decide_dispatch(
 
 
 def can_route_with_loaded_models(
-    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
+    data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
@@ -939,10 +942,57 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         case _Dispatch.USER_CONFIG:
             return _route_user_config_request(data, route_type)
         case _Dispatch.ROUTER_SETTINGS_OVERRIDE:
-            _merge_router_settings_override(data)
-            return getattr(llm_router if llm_router is not None else litellm, f"{route_type}")(**data)
+            # Apply per-request router settings overrides from key/team config
+            # Instead of creating a new Router (expensive), merge settings into kwargs
+            # The Router already supports per-request overrides for these settings
+            override_settings: Final = data.pop("router_settings_override")
+
+            # Settings that the Router accepts as per-request kwargs
+            # These override the global router settings for this specific request
+            per_request_settings: Final = [
+                "fallbacks",
+                "context_window_fallbacks",
+                "content_policy_fallbacks",
+                "num_retries",
+                "timeout",
+                "model_group_retry_policy",
+                "routing_strategy",
+                "enable_tag_filtering",
+            ]
+
+            for key in per_request_settings:
+                if override_settings.get(key) is not None and key not in data:
+                    data[key] = override_settings[key]
+
+            # Use main router with overridden kwargs
+            if llm_router is not None:
+                return getattr(llm_router, f"{route_type}")(**data)
+            else:
+                return getattr(litellm, f"{route_type}")(**data)
         case _Dispatch.EVAL:
-            _merge_eval_model_credentials(data, llm_router)
+            # If a model is provided, get its credentials from the router
+            model: Final = data.get("model")
+            if model and llm_router:
+                try:
+                    # Try to get deployment credentials for this model
+                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+                    if not deployment_creds:
+                        # Try by model group name
+                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        if (
+                            deployment
+                            and deployment.litellm_params
+                            and not llm_router.is_deployment_blocked(deployment)
+                        ):
+                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+
+                    # If we found credentials, merge them into data (but don't override user-provided values)
+                    if deployment_creds:
+                        data.update(deployment_creds)
+                except Exception:
+                    # If we can't get deployment creds, continue without them
+                    pass
+
             return getattr(litellm, f"{route_type}")(**data)
         case _TeamModel(name=team_model_name):
             data["model"] = team_model_name
@@ -960,55 +1010,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
             if result is not None:
                 return result
+        case _Dispatch.BATCH_COMPLETION | _Dispatch.MODEL_NOT_FOUND:
+            pass
 
     _raise_model_not_found(data=data, route_type=route_type)
-
-
-def _merge_router_settings_override(
-    data: dict,  # mutable-ok: merges into the request body route_request dispatches
-) -> None:
-    # Apply per-request router settings overrides from key/team config
-    # Instead of creating a new Router (expensive), merge settings into kwargs
-    # The Router already supports per-request overrides for these settings
-    override_settings: Final = data.pop("router_settings_override")
-
-    # Settings that the Router accepts as per-request kwargs
-    # These override the global router settings for this specific request
-    per_request_settings: Final = [
-        "fallbacks",
-        "context_window_fallbacks",
-        "content_policy_fallbacks",
-        "num_retries",
-        "timeout",
-        "model_group_retry_policy",
-        "routing_strategy",
-        "enable_tag_filtering",
-    ]
-
-    for key in per_request_settings:
-        if override_settings.get(key) is not None and key not in data:
-            data[key] = override_settings[key]
-
-
-def _merge_eval_model_credentials(
-    data: dict,  # mutable-ok: merges into the request body route_request dispatches
-    llm_router: LitellmRouter | None,
-) -> None:
-    # If a model is provided, get its credentials from the router
-    model: Final = data.get("model")
-    if model and llm_router:
-        try:
-            # Try to get deployment credentials for this model
-            deployment_creds = llm_router.get_deployment_credentials(model_id=model)
-            if not deployment_creds:
-                # Try by model group name
-                deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
-                if deployment and deployment.litellm_params and not llm_router.is_deployment_blocked(deployment):
-                    deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
-
-            # If we found credentials, merge them into data (but don't override user-provided values)
-            if deployment_creds:
-                data.update(deployment_creds)
-        except Exception:
-            # If we can't get deployment creds, continue without them
-            pass

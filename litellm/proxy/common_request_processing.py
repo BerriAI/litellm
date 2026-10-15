@@ -1813,7 +1813,7 @@ async def _team_member_within_fallback_model_budget(
 
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
-        self.data = data
+        self.data: dict[str, Any] = data  # mutable-ok: the request body every later step mutates in place
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
 
