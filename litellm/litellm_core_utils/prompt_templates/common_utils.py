@@ -1814,10 +1814,27 @@ LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | 
 
 
 def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
-    if not isinstance(tool_call, dict) or "provider_specific_fields" not in tool_call:
+    if not isinstance(tool_call, dict):
         return tool_call
     fields: Final = cast(dict[str, object], tool_call)  # cast-ok: untyped JSON tool call, keys forwarded verbatim
-    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+    function_fields: Final = (
+        cast("dict[str, object]", fields.get("function"))  # cast-ok: untyped JSON function chunk
+        if isinstance(fields.get("function"), dict)
+        else None
+    )
+    if "provider_specific_fields" not in fields and (
+        function_fields is None or "provider_specific_fields" not in function_fields
+    ):
+        return cast("dict[str, object]", tool_call)  # cast-ok: untyped JSON tool call, no strip needed
+    return {
+        key: (
+            {fkey: fvalue for fkey, fvalue in function_fields.items() if fkey != "provider_specific_fields"}
+            if key == "function" and function_fields is not None
+            else value
+        )
+        for key, value in fields.items()
+        if key != "provider_specific_fields"
+    }
 
 
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
