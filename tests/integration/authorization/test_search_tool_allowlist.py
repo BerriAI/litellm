@@ -106,7 +106,6 @@ _SCOPES: Final = (
 def test_search_tool_allowlist_refuses_the_model_spelling_before_any_upstream_call(
     gateway: Gateway, scope: str, make_key: Callable[[Scenario, str], str]
 ) -> None:
-    pytest.skip("BUG: POST /v1/search with model=<tool> bypasses the key and team search_tools allowlist")
     with wire_server(_exa_peer) as wire, gateway.scenario() as scenario:
         allowed, denied = _two_tools(gateway, scenario, wire)
         key: Final = make_key(scenario, allowed)
