@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -661,11 +661,14 @@ def _fix_enum_empty_strings(schema, depth=0):
 
 
 def _fix_enum_types(schema, depth=0):
-    """Remove `enum` fields when the schema type is not string.
+    """Make `enum` fields acceptable to Gemini / Vertex.
 
-    Gemini / Vertex APIs only allow enums for string-typed fields. When an enum
-    is present on a non-string typed property (or when `anyOf` types do not
-    include a string type), remove the enum to avoid provider validation errors.
+    Gemini / Vertex APIs only accept string enum values. An integer enum is sent
+    the way Gemini documents it: type INTEGER, `format: "enum"` and the values as
+    strings; the model still returns an integer. An integer enum already in that
+    form is kept, so a schema converted on an earlier call keeps its values. On
+    any other non-string typed property (or when `anyOf` types do not include a
+    string type), the enum is removed to avoid provider validation errors.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
@@ -690,7 +693,19 @@ def _fix_enum_types(schema, depth=0):
                             break
 
         if not keep_enum:
-            schema.pop("enum", None)
+            enum_values: Final = cast(Sequence[object], schema["enum"])  # cast-ok: the schema is an untyped JSON dict
+            is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
+            # integer strings too: a schema converted on an earlier call already holds its values as strings
+            is_integer_enum: Final = is_integer_type and all(
+                (isinstance(value, int) and not isinstance(value, bool))
+                or (isinstance(value, str) and value.lstrip("-").isdigit())
+                for value in enum_values
+            )
+            if is_integer_enum:
+                schema["format"] = "enum"  # rebind-ok: this function edits the schema in place by design
+                schema["enum"] = [str(value) for value in enum_values]  # rebind-ok: same in-place edit
+            else:
+                schema.pop("enum", None)
 
     # Recurse into nested structures
     properties: Final = schema.get("properties", None)
