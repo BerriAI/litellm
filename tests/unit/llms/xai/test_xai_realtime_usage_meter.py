@@ -185,3 +185,32 @@ def test_non_string_audio_payloads_are_ignored():
     snapshot = meter.snapshot()
     assert snapshot.audio_seconds_sent == 0.0
     assert snapshot.audio_seconds_received == 0.0
+
+
+def test_padding_only_audio_never_subtracts_seconds():
+    meter = XAIRealtimeUsageMeter()
+
+    meter.observe_client_event({"type": "input_audio_buffer.append", "audio": _b64(48000)})
+    for _ in range(10):
+        meter.observe_client_event({"type": "input_audio_buffer.append", "audio": "=="})
+
+    assert meter.snapshot().audio_seconds_sent == 1.0
+
+
+def test_push_to_talk_after_content_keeps_server_vad_billing():
+    meter = XAIRealtimeUsageMeter()
+
+    meter.observe_client_event({"type": "input_audio_buffer.append", "audio": _b64(48000)})
+    meter.observe_client_event({"type": "session.update", "session": {"turn_detection": None}})
+
+    assert meter.snapshot().push_to_talk is False
+
+
+def test_server_vad_after_content_disables_push_to_talk():
+    meter = XAIRealtimeUsageMeter()
+
+    meter.observe_client_event({"type": "session.update", "session": {"turn_detection": None}})
+    meter.observe_client_event({"type": "conversation.item.create", "item": {"type": "message", "content": []}})
+    meter.observe_client_event({"type": "session.update", "session": {"turn_detection": {"type": "server_vad"}}})
+
+    assert meter.snapshot().push_to_talk is False

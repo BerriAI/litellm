@@ -22,7 +22,7 @@ def _decoded_base64_length(value: object) -> int:
     if not isinstance(value, str):
         return 0
     padding: Final = min(len(value) - len(value.rstrip("=")), 2)
-    return len(value) * 3 // 4 - padding
+    return max(len(value) * 3 // 4 - padding, 0)
 
 
 def _audio_format_bytes_per_second(fmt: Mapping[str, object]) -> float:
@@ -68,6 +68,7 @@ class XAIRealtimeUsageMeter:
         self._audio_seconds_sent: float = 0.0
         self._audio_seconds_received: float = 0.0
         self._text_messages: int = 0
+        self._content_sent: bool = False
         self._input_bytes_per_second: float = float(2 * _PCM_DEFAULT_RATE)
         self._output_bytes_per_second: float = float(2 * _PCM_DEFAULT_RATE)
 
@@ -79,9 +80,11 @@ class XAIRealtimeUsageMeter:
                 self._apply_client_turn_detection(session)
                 self._apply_session_config(session)
         elif event_type == "input_audio_buffer.append":
+            self._content_sent = True
             if self._input_bytes_per_second > 0:
                 self._audio_seconds_sent += _decoded_base64_length(event.get("audio")) / self._input_bytes_per_second
         elif event_type == "conversation.item.create":
+            self._content_sent = True
             item: Final = as_str_mapping(event.get("item"))
             if item is not None:
                 parts: Final = _content_part_mappings(item)
@@ -149,10 +152,12 @@ class XAIRealtimeUsageMeter:
             self._apply_turn_detection(audio_input["turn_detection"])
 
     def _apply_turn_detection(self, value: object) -> None:
-        if value is None:
-            self._push_to_talk = True
-            return
         config: Final = as_str_mapping(value)
-        if config is None or "type" not in config:
+        if value is not None and (config is None or "type" not in config):
             return
-        self._push_to_talk = config["type"] is None
+        push_to_talk: Final = value is None or (config is not None and config["type"] is None)
+        # Switching to push-to-talk after content was sent keeps wall-clock
+        # billing, so a late session.update cannot discount an elapsed VAD session
+        if push_to_talk and self._content_sent:
+            return
+        self._push_to_talk = push_to_talk
