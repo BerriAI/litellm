@@ -346,6 +346,10 @@ def _tool_search_input_items(msg: object) -> tuple[Mapping[str, object], ...]:
     )
 
 
+def carries_tool_search_items(provider_specific_fields: object) -> bool:
+    return bool(_json_field(provider_specific_fields, _TOOL_SEARCH_ITEMS_KEY))
+
+
 def _tool_definition_name(tool: object) -> tuple[str, ...]:
     name: Final = _json_field(tool, "server_label" if _json_field(tool, "type") == "mcp" else "name")
     return (name,) if isinstance(name, str) else ()

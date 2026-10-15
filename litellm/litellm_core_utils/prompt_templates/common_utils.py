@@ -2,6 +2,8 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
+import binascii
 import io
 import json
 import mimetypes
@@ -2157,6 +2159,32 @@ def is_unsignable_thinking_block(block: object) -> bool:
         return True
     thinking_text: Final = mapping.get("thinking")
     return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+
+
+def native_redacted_thinking_data(data: str) -> str:
+    """Claude's own `data` string for a redacted_thinking block.
+
+    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
+    wrapper through as `data` until it started decoding Converse replies, so histories saved
+    before then still hold it. Claude's own value never decodes twice, since its first byte
+    decodes to a protobuf tag outside the base64 alphabet.
+    """
+    return _converse_wrapped_payload(data) or data
+
+
+def converse_redacted_content(data: str) -> str:
+    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
+    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
+
+
+def _converse_wrapped_payload(data: str) -> str | None:
+    try:
+        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
+        _ = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    else:
+        return payload
 
 
 def strip_encrypted_reasoning_from_messages(
