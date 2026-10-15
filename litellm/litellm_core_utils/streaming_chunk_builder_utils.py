@@ -2,7 +2,7 @@ import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
 
@@ -1330,10 +1330,29 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     _set_hidden_response_cost(response, float(computed_cost))
 
 
+def _field_of(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
+def _delta_reasoning_items(delta: object) -> Sequence[object]:
+    items: Final = _field_of(delta, "reasoning_items")
+    return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    choices: Final = _field_of(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
+
+
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
     "reasoning_content",
+    "reasoning_items",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1509,6 +1528,11 @@ def stream_chunk_builder(
             response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
                 reasoning_chunks
             )
+
+        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+        if reasoning_items:
+            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 
         annotation_chunks: Final = [
             chunk
