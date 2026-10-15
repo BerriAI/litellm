@@ -1,9 +1,11 @@
-from typing import Final
+from collections.abc import Generator
 
 import pytest
 
+from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.ocr.data import OCR_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.routing import native_route
 
 
 @pytest.fixture
@@ -12,8 +14,7 @@ def server(recording_server: RecordingServer) -> RecordingServer:
     return recording_server
 
 
-@pytest.fixture(params=[False, True], ids=["python", "rust"])
-def ocr_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
-    enabled: Final = bool(request.param)
-    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
-    return enabled
+@pytest.fixture(autouse=True)
+def native() -> Generator[None]:
+    with native_route(Route.OCR):
+        yield
