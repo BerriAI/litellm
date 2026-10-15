@@ -4149,6 +4149,7 @@ async def test_ProxyConfig_db_env_var_saved_before_a_stale_env_row_read_keeps_th
     _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
     clock: Final = _ManualClock()
     pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, stale_row, {})
     clock.now = 1
     pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": saved_logo})
 
@@ -4183,6 +4184,7 @@ async def test_ProxyConfig_sso_field_saved_before_a_stale_sso_table_read_keeps_t
     prisma_client: Final = _prisma_with_sso_table(_encrypted_sso_table(stale_table))
     clock: Final = _ManualClock()
     pc: Final = ProxyConfig(clock=clock)
+    await pc._init_sso_settings_in_db(prisma_client)
     clock.now = 1
     pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": saved_client_id})
 
@@ -4193,6 +4195,125 @@ async def test_ProxyConfig_sso_field_saved_before_a_stale_sso_table_read_keeps_t
     await pc._init_sso_settings_in_db(prisma_client)
 
     assert (within_the_hold, os.environ.get("GOOGLE_CLIENT_ID")) == (expected_within_the_hold, expected_after_the_hold)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("startup_logo", "changed_row", "expected"),
+    [
+        (None, {"UI_LOGO_PATH": "https://example.com/corrected.png"}, "https://example.com/corrected.png"),
+        ("https://example.com/startup.png", {}, "https://example.com/startup.png"),
+    ],
+    ids=["changed-to-a-new-value", "removed-with-a-startup-value"],
+)
+async def test_ProxyConfig_db_env_var_changed_elsewhere_during_the_hold_is_applied_at_the_next_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    startup_logo: str | None,
+    changed_row: Mapping[str, JsonValue],
+    expected: str,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    if startup_logo is not None:
+        monkeypatch.setenv("UI_LOGO_PATH", startup_logo)
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/older.png"}, {})
+    clock.now = 1
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/saved.png"})
+
+    clock.now = 2
+    await _sync_db_env_row(monkeypatch, pc, changed_row, {})
+
+    assert os.environ.get("UI_LOGO_PATH") == expected
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_hold_ends_once_a_sync_reads_the_saved_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+    clock.now = 1
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/saved.png"})
+
+    clock.now = 2
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/saved.png"}, {})
+    clock.now = 3
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert "UI_LOGO_PATH" not in os.environ
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stale_logo",
+    ["https://example.com/older.png", "https://example.com/first-save.png"],
+    ids=["value-before-both-saves", "value-of-the-first-save"],
+)
+async def test_ProxyConfig_db_env_var_saved_twice_during_the_hold_ignores_stale_reads_of_either_earlier_value(
+    monkeypatch: pytest.MonkeyPatch, stale_logo: str
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/older.png"}, {})
+    clock.now = 1
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/first-save.png"})
+    clock.now = 2
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/second-save.png"})
+
+    clock.now = 3
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": stale_logo}, {})
+
+    assert os.environ.get("UI_LOGO_PATH") == "https://example.com/second-save.png"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_value_replaced_before_the_hold_started_is_applied_when_read_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/older.png"}, {})
+    clock.now = 1
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/first-save.png"})
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 2
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/second-save.png"})
+
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 3
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/older.png"}, {})
+
+    assert os.environ.get("UI_LOGO_PATH") == "https://example.com/older.png"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tables_read", "expected"),
+    [
+        (({"google_client_id": "corrected-id"},), "corrected-id"),
+        (({"google_client_id": "saved-id"}, {}), None),
+    ],
+    ids=["changed-to-a-new-value", "cleared-after-the-saved-value-was-read"],
+)
+async def test_ProxyConfig_sso_field_changed_elsewhere_during_the_hold_is_applied_at_the_next_read(
+    monkeypatch: pytest.MonkeyPatch, tables_read: tuple[Mapping[str, str | None], ...], expected: str | None
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table({})))
+    clock.now = 1
+    pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": "saved-id"})
+
+    for read_at, table in enumerate(tables_read, start=2):
+        clock.now = read_at
+        await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table(table)))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == expected
 
 
 @pytest.mark.asyncio
@@ -4292,6 +4413,24 @@ async def test_ProxyConfig_sso_field_cleared_in_the_sso_table_takes_the_startup_
     await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table(cleared_sso_table)))
 
     assert os.environ.get("GOOGLE_CLIENT_ID") == startup_client_id
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_field_saved_over_its_startup_value_keeps_the_saved_value_over_a_stale_read_of_neither_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "startup-id")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "startup-id"}, {}, _prisma_with_sso_table({}))
+    clock.now = 1
+    pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": "saved-id"})
+
+    clock.now = 2
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, _prisma_with_sso_table({}))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "saved-id"
 
 
 @pytest.mark.asyncio

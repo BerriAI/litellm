@@ -1392,6 +1392,66 @@ class TestProxySettingEndpoints:
 
         assert "GOOGLE_CLIENT_ID" not in os.environ
 
+    def test_update_sso_settings_with_a_null_character_saves_nothing(self, mock_proxy_config, mock_auth, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "current-id")
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={"google_client_id": "saved-id", "google_client_secret": "secret\x00tail"},
+        )
+
+        assert (
+            response.status_code,
+            mock_prisma.db.litellm_ssoconfig.upsert.await_count,
+            mock_prisma.db.litellm_config.update.await_count,
+            os.environ.get("GOOGLE_CLIENT_ID"),
+        ) == (400, 0, 0, "current-id")
+
+    def test_update_sso_settings_keeps_the_saved_value_over_a_sync_that_runs_during_the_env_row_cleanup(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "placeholder")
+        monkeypatch.delenv("GOOGLE_CLIENT_ID")
+        legacy_row = SimpleNamespace(
+            param_name="environment_variables", param_value={"GOOGLE_CLIENT_ID": "legacy-id"}
+        )
+
+        async def env_row_with_the_legacy_value(_, param_name):
+            return legacy_row if param_name == "environment_variables" else None
+
+        async def cleanup_read_racing_a_sync(**_):
+            await proxy_config._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+            return legacy_row
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", env_row_with_the_legacy_value)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(side_effect=cleanup_read_racing_a_sync)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        response = client.patch("/update/sso_settings", json={"google_client_id": "saved-id"})
+
+        assert (response.status_code, os.environ.get("GOOGLE_CLIENT_ID")) == (200, "saved-id")
+
     def test_get_ui_theme_settings_includes_favicon_schema(self, mock_proxy_config):
         """Test UI theme settings includes favicon_url in schema"""
         response = client.get("/get/ui_theme_settings")

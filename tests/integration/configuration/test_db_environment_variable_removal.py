@@ -6,10 +6,11 @@ import json
 import os
 import socket
 import threading
+import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -33,6 +34,7 @@ from integration._support.database_relay import (
     TriggerScanner,
     database_relay,
     dropped_connection_relay,
+    held_statement_relay,
 )
 from integration._support.environment_probe import PROBE_HOOK, PROBE_ROUTE
 from integration._support.process import (
@@ -41,6 +43,7 @@ from integration._support.process import (
     WorkerHealthcheck,
     graceful_stop_seconds,
     owned_proxy_process,
+    setup_only_proxy_run,
 )
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseTextDeltaEvent
@@ -55,10 +58,18 @@ REPLY_TEXT: Final = "ok"
 PROCESS_KEY: Final = "sk-ant-from-the-process-environment"
 DB_KEY: Final = "sk-ant-from-the-database-row"
 LOGO_URL: Final = "https://example.com/db-env-removal-logo.png"
+THEME_ROUTE: Final = "/update/ui_theme_settings"
+SSO_ROUTE: Final = "/update/sso_settings"
 CONVERGE_SECONDS: Final = 60
 HOLD_SECONDS: Final = 5
 PROBES_PER_READ: Final = 12
 WORKERS: Final = 2
+CONFIG_CACHE_TTL_SECONDS: Final = 1
+SAVE_HOLD_SECONDS: Final = CONFIG_CACHE_TTL_SECONDS + 60
+HOLD_END_MARGIN_SECONDS: Final = 2
+STALE_REPLICA_SECONDS: Final = 15
+HELD_READ_SECONDS: Final = 8
+AFTER_RELEASE_SECONDS: Final = 4
 BURST: Final = 20
 SCRATCH_ONLY: Final = ("DATABASE_URL_READ_REPLICA",)
 CLI_ONLY: Final = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "UI_USERNAME", "UI_PASSWORD")
@@ -100,6 +111,7 @@ CLEARED_SSO_FIELDS: Final[Mapping[str, None]] = MappingProxyType(
     {"generic_client_id": None, **{field: None for field in GENERIC_SSO_FIELDS}}
 )
 SSO_ENVIRONMENT_KEYS: Final = ("GENERIC_CLIENT_ID", *(field.upper() for field in GENERIC_SSO_FIELDS))
+CLEARED_SSO_ENVIRONMENT: Final[Mapping[str, str | None]] = MappingProxyType(dict.fromkeys(SSO_ENVIRONMENT_KEYS))
 NOT_AN_OBJECT: Final[JsonValue] = ["lit9489", "not", "an", "object"]
 SALT_KEY: Final = "sk-lit9489-salt-key"
 RETIRED_SALT_KEY: Final = "sk-lit9489-retired-salt-key"
@@ -113,6 +125,7 @@ UNTOUCHED: Final[Mapping[str, str | None]] = MappingProxyType(
 )
 REQUEST_BODY: Final = TypeAdapter(dict[str, JsonValue])
 ENVIRONMENT_ROW: Final = TypeAdapter(dict[str, JsonValue])
+PORT: Final = TypeAdapter(int)
 
 pytestmark: Final = pytest.mark.timeout(
     2 * readiness_seconds(WORKERS) + 4 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS
@@ -176,7 +189,7 @@ def _process_environment(provider: Wire, database_url: str | None) -> Mapping[st
             YAML_SOURCE: YAML_SOURCE_VALUE,
             PROCESS_ONLY: PROCESS_ONLY_VALUE,
             "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
-            "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": "1",
+            "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": str(CONFIG_CACHE_TTL_SECONDS),
             "LITELLM_WORKER_STARTUP_HOOKS": PROBE_HOOK,
         }
     )
@@ -211,9 +224,8 @@ def _pod(
     )
 
 
-@pytest.fixture(scope="module")
-def pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
-    directory: Final = tmp_path_factory.mktemp("db-env-removal")
+@contextmanager
+def _two_pods(directory: Path) -> Generator[Pods]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_anthropic_message) as provider,
@@ -224,17 +236,45 @@ def pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
         yield Pods(writer, reader, provider, database_url)
 
 
+@pytest.fixture(scope="module")
+def pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
+    with _two_pods(tmp_path_factory.mktemp("db-env-removal")) as two_pods:
+        yield two_pods
+
+
+@pytest.fixture(scope="module")
+def held_pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
+    with _two_pods(tmp_path_factory.mktemp("db-env-removal-held")) as two_pods:
+        yield two_pods
+
+
+@dataclass(frozen=True, slots=True)
+class RelayAddress:
+    upstream_host: str
+    upstream_port: int
+    port: int
+    url: str
+
+
+def _relay_address(database_url: str) -> RelayAddress:
+    parts: Final = urlsplit(database_url)
+    assert parts.hostname is not None and parts.port is not None, "The scratch database URL names no host"
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port: Final = PORT.validate_python(reserve.getsockname()[1])
+    return RelayAddress(
+        parts.hostname,
+        parts.port,
+        port,
+        urlunsplit(parts._replace(netloc=f"{parts.username}:{parts.password}@127.0.0.1:{port}")),
+    )
+
+
 class SlowSsoReads:
     def __init__(self, database_url: str) -> None:
-        parts: Final = urlsplit(database_url)
-        assert parts.hostname is not None and parts.port is not None, "The scratch database URL names no host"
-        self._upstream_host: Final = parts.hostname
-        self._upstream_port: Final = parts.port
-        with socket.socket() as reserve:
-            reserve.bind(("127.0.0.1", 0))
-            self.port: Final[int] = reserve.getsockname()[1]
-        self.url: Final = urlunsplit(parts._replace(netloc=f"{parts.username}:{parts.password}@127.0.0.1:{self.port}"))
-        self._server: Final = LoopbackServer(self.port, self._serve)
+        self._address: Final = _relay_address(database_url)
+        self.url: Final = self._address.url
+        self._server: Final = LoopbackServer(self._address.port, self._serve)
         self.armed: Final = threading.Event()
         self.slowed: Final = threading.Event()
 
@@ -253,7 +293,9 @@ class SlowSsoReads:
             await close_writer(writer)
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-        server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
+        server_reader, server_writer = await asyncio.open_connection(
+            self._address.upstream_host, self._address.upstream_port
+        )
         await asyncio.gather(
             self._forward(client_reader, server_writer, True),
             self._forward(server_reader, client_writer, False),
@@ -264,6 +306,70 @@ class SlowSsoReads:
         return self
 
     def __exit__(self, *_: object) -> None:
+        self._server.stop()
+
+
+class HeldSsoReply:
+    def __init__(self, database_url: str) -> None:
+        self._address: Final = _relay_address(database_url)
+        self.url: Final = self._address.url
+        self._server: Final = LoopbackServer(self._address.port, self._serve)
+        self._loop: Final = self._server.loop
+        self._released: Final = asyncio.Event()
+        self.armed: Final = threading.Event()
+        self.holding: Final = threading.Event()
+
+    def release(self) -> None:
+        if not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._released.set)
+
+    async def _statements(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, claimed: asyncio.Event
+    ) -> None:
+        scanner: Final = TriggerScanner(SSO_ROW_ID)
+        try:
+            while chunk := await reader.read(65536):
+                if scanner.feed(chunk) and self.armed.is_set():
+                    self.armed.clear()
+                    claimed.set()
+                writer.write(chunk)
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            return
+        finally:
+            await close_writer(writer)
+
+    async def _replies(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, claimed: asyncio.Event
+    ) -> None:
+        try:
+            while chunk := await reader.read(65536):
+                if claimed.is_set():
+                    self.holding.set()
+                    await self._released.wait()
+                writer.write(chunk)
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            return
+        finally:
+            await close_writer(writer)
+
+    async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        server_reader, server_writer = await asyncio.open_connection(
+            self._address.upstream_host, self._address.upstream_port
+        )
+        claimed: Final = asyncio.Event()
+        await asyncio.gather(
+            self._statements(client_reader, server_writer, claimed),
+            self._replies(server_reader, client_writer, claimed),
+        )
+
+    def __enter__(self) -> HeldSsoReply:
+        self._server.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
         self._server.stop()
 
 
@@ -294,6 +400,44 @@ def sso_pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SsoPods]:
         ) as excluded,
     ):
         yield SsoPods(writer, reader, excluded, slow_reads)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplicaPod:
+    proxy: OwnedProxy
+    writer_url: str
+    replica_url: str
+
+
+def _push_the_schema(gateway: Gateway, directory: Path, provider: Wire, database_url: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    completed: Final = setup_only_proxy_run(
+        gateway,
+        _process_environment(provider, database_url),
+        config=_config(directory),
+        workers=1,
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
+@pytest.fixture(scope="module")
+def replica_pod(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ReplicaPod]:
+    directory: Final = tmp_path_factory.mktemp("db-env-removal-replica")
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as writer_url,
+        scratch_database() as replica_url,
+    ):
+        _push_the_schema(gateway, directory / "replica", provider, replica_url)
+        with _pod(
+            gateway,
+            directory / "pod",
+            provider,
+            writer_url,
+            environment={"DATABASE_URL_READ_REPLICA": replica_url, "LITELLM_SALT_KEY": SALT_KEY},
+        ) as proxy:
+            yield ReplicaPod(proxy, writer_url, replica_url)
 
 
 def _worker_environment(proxy: OwnedProxy, names: tuple[str, ...]) -> WorkerEnvironment:
@@ -504,12 +648,12 @@ def _logo_url(gateway: Gateway) -> str:
     return string_value(gateway.get("/get_logo_url")["logo_url"])
 
 
+def _theme(logo_url: str | None) -> Mapping[str, JsonValue]:
+    return MappingProxyType({"logo_url": logo_url, "logo_url_dark": None, "favicon_url": None})
+
+
 def _update_theme(gateway: Gateway, logo_url: str | None) -> None:
-    response: Final = gateway.request(
-        "PATCH",
-        "/update/ui_theme_settings",
-        {"logo_url": logo_url, "logo_url_dark": None, "favicon_url": None},
-    )
+    response: Final = gateway.request("PATCH", THEME_ROUTE, dict(_theme(logo_url)))
     assert response.status_code == 200, response.text
 
 
@@ -533,8 +677,12 @@ def _null_in_the_environment_row(pods: Pods) -> str:
 
 
 def _save_sso(proxy: OwnedProxy, fields: Mapping[str, JsonValue]) -> None:
-    response: Final = proxy.gateway.request("PATCH", "/update/sso_settings", dict(fields))
+    response: Final = proxy.gateway.request("PATCH", SSO_ROUTE, dict(fields))
     assert response.status_code == 200, response.text
+
+
+def _sso_fields(client_id: str) -> Mapping[str, JsonValue]:
+    return MappingProxyType({"generic_client_id": client_id, **GENERIC_SSO_FIELDS})
 
 
 def _sso_environment(client_id: str) -> Mapping[str, str]:
@@ -550,21 +698,28 @@ def _legacy_sso_in_the_environment_row(writer: OwnedProxy) -> str:
     return client_id
 
 
+def _legacy_sso_beside_a_cleared_sso_row(proxy: OwnedProxy, database_url: str) -> str:
+    _store_sso_row(database_url, dict(CLEARED_SSO_FIELDS))
+    client_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
+    _set_through_the_api(proxy, _sso_environment(client_id))
+    return client_id
+
+
 def _legacy_ciphertext(value: str, signing_key: str) -> str:
     return base64.urlsafe_b64encode(encrypt_value(value=value, signing_key=signing_key)).decode()
 
 
 def _store_sso_row(database_url: str, sso_settings: JsonValue) -> None:
     write_rows(
-        'UPDATE "LiteLLM_SSOConfig" SET sso_settings = %s::jsonb WHERE id = %s',
-        (json.dumps(sso_settings), SSO_ROW_ID.decode()),
+        'INSERT INTO "LiteLLM_SSOConfig" (id, sso_settings, updated_at) VALUES (%s, %s::jsonb, now()) '
+        "ON CONFLICT (id) DO UPDATE SET sso_settings = EXCLUDED.sso_settings, updated_at = now()",
+        (SSO_ROW_ID.decode(), json.dumps(sso_settings)),
         database_url=database_url,
     )
 
 
 def _encrypted_sso_row(client_id: str) -> dict[str, JsonValue]:
-    fields: Final = {"generic_client_id": client_id, **GENERIC_SSO_FIELDS}
-    return {field: _legacy_ciphertext(value, SALT_KEY) for field, value in fields.items()}
+    return {field: _legacy_ciphertext(string_value(value), SALT_KEY) for field, value in _sso_fields(client_id).items()}
 
 
 def _move_sso_keys_out_of_the_row(database_url: str, marker: str) -> None:
@@ -936,7 +1091,7 @@ def test_sso_save_on_one_pod_keeps_sso_login_on_the_other_pod_without_a_password
             pool.submit(lambda: tuple(_login_samples(sso_pods.reader, stop))) for _ in range(SAMPLERS)
         )
         try:
-            _save_sso(sso_pods.writer, {"generic_client_id": saved_id, **GENERIC_SSO_FIELDS})
+            _save_sso(sso_pods.writer, _sso_fields(saved_id))
             _settled(sso_pods.reader, {"GENERIC_CLIENT_ID": saved_id})
         finally:
             stop.set()
@@ -958,12 +1113,9 @@ def test_sso_save_reaches_a_pod_that_leaves_sso_settings_out(sso_pods: SsoPods) 
     _settled(sso_pods.excluded, {"GENERIC_CLIENT_ID": legacy_id})
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
 
-    _save_sso(sso_pods.writer, {"generic_client_id": saved_id, **GENERIC_SSO_FIELDS})
+    _save_sso(sso_pods.writer, _sso_fields(saved_id))
 
-    _settled(
-        sso_pods.excluded,
-        {"GENERIC_CLIENT_ID": saved_id, **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()}},
-    )
+    _settled(sso_pods.excluded, _sso_environment(saved_id))
     assert _sso_client_id(sso_pods.excluded) == saved_id
 
 
@@ -991,7 +1143,7 @@ def test_sso_keys_leaving_the_row_keep_their_values_until_the_sso_table_is_read(
             gateway, tmp_path / "pod", provider, _plaintext(relayed_url), environment={"LITELLM_SALT_KEY": SALT_KEY}
         ) as proxy,
     ):
-        legacy_id: Final = _legacy_sso_in_the_environment_row(proxy)
+        legacy_id: Final = _legacy_sso_beside_a_cleared_sso_row(proxy, database_url)
         _settled(proxy, _sso_environment(legacy_id))
 
         fail(relay, database_url, saved_id)
@@ -1049,3 +1201,219 @@ def test_rotation_reencrypts_every_value_it_can_decrypt_and_keeps_the_rest_as_st
             RETIRED_KEY: retired,
         }
         _settled(proxy, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired})
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedSave:
+    pid: int
+    started_at: float
+
+
+def _pinned_save(
+    proxy: OwnedProxy, route: str, body: Mapping[str, JsonValue], saved: Mapping[str, str | None]
+) -> PinnedSave:
+    names: Final = {"names": ",".join(saved)}
+    with httpx.Client(
+        base_url=_origin(proxy.gateway),
+        headers={"Authorization": f"Bearer {proxy.gateway.key}"},
+        limits=httpx.Limits(max_connections=1),
+        timeout=30,
+        trust_env=False,
+    ) as pinned:
+        before: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=names).content)
+        started_at: Final = time.monotonic()
+        response: Final = pinned.patch(route, json=dict(body))
+        after: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=names).content)
+    assert response.status_code == 200, response.text
+    assert (after.pid, dict(after.environment)) == (before.pid, dict(saved)), (before, after)
+    return PinnedSave(after.pid, started_at)
+
+
+def _samples_until(proxy: OwnedProxy, names: tuple[str, ...], until: float) -> Iterator[WorkerEnvironment]:
+    while time.monotonic() < until:
+        yield _worker_environment(proxy, names)
+
+
+def _misses(
+    samples: tuple[WorkerEnvironment, ...], expected: Mapping[str, str | None]
+) -> tuple[WorkerEnvironment, ...]:
+    return tuple(sample for sample in samples if dict(sample.environment) != dict(expected))
+
+
+def _expected_on(
+    pid: int, save: PinnedSave, saved: Mapping[str, str | None], elsewhere: Mapping[str, str | None]
+) -> dict[str, str | None]:
+    return dict(saved if pid == save.pid else elsewhere)
+
+
+def _only_its_worker_keeps_the_save(
+    proxy: OwnedProxy,
+    save: PinnedSave,
+    saved: Mapping[str, str | None],
+    elsewhere: Mapping[str, str | None],
+    until: float,
+) -> None:
+    samples: Final = tuple(_samples_until(proxy, tuple(saved), until))
+    misses: Final = tuple(
+        sample for sample in samples if dict(sample.environment) != _expected_on(sample.pid, save, saved, elsewhere)
+    )
+    sampled_workers: Final = frozenset(sample.pid for sample in samples)
+    assert (misses[:1], sampled_workers) == ((), proxy.worker_pids()), (save.pid, len(samples), misses[:3])
+
+
+def _every_worker_follows_before_the_hold_ends(
+    pods: Pods, save: PinnedSave, stored: Mapping[str, str | None]
+) -> None:
+    hold_ends: Final = save.started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+    eventually(
+        lambda: _environments(pods.writer, tuple(stored)),
+        lambda seen: (
+            frozenset(seen) == pods.writer.worker_pids()
+            and all(environment == dict(stored) for environment in seen.values())
+        ),
+        seconds=hold_ends - time.monotonic(),
+    )
+    _settled_on_both(pods, stored)
+
+
+def _catch_up(pod: ReplicaPod) -> None:
+    for row in read_rows('SELECT param_name, param_value FROM "LiteLLM_Config"', (), database_url=pod.writer_url):
+        write_rows(
+            'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, NULLIF(%s::jsonb, %s::jsonb)) '
+            "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value",
+            (string_value(row["param_name"]), json.dumps(row["param_value"]), "null"),
+            database_url=pod.replica_url,
+        )
+    for row in read_rows('SELECT sso_settings FROM "LiteLLM_SSOConfig"', (), database_url=pod.writer_url):
+        _store_sso_row(pod.replica_url, row["sso_settings"])
+
+
+@pytest.mark.parametrize("reset", (True, False), ids=("reset", "change"))
+def test_theme_change_on_another_pod_reaches_the_worker_that_saved_the_logo_at_its_next_sync(
+    held_pods: Pods, reset: bool
+) -> None:
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    stored: Final = {"UI_LOGO_PATH": None if reset else f"{LOGO_URL}?stored-{uuid.uuid4().hex}"}
+    save: Final = _pinned_save(held_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+    _settled(held_pods.reader, saved)
+
+    _update_theme(held_pods.reader.gateway, stored["UI_LOGO_PATH"])
+
+    _every_worker_follows_before_the_hold_ends(held_pods, save, stored)
+
+
+@pytest.mark.parametrize("cleared", (True, False), ids=("clear", "change"))
+def test_sso_change_on_another_pod_reaches_the_worker_that_saved_the_settings_at_its_next_sync(
+    held_pods: Pods, cleared: bool
+) -> None:
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    stored_id: Final = f"lit9489-stored-{uuid.uuid4().hex}"
+    save: Final = _pinned_save(held_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
+    _settled(held_pods.reader, _sso_environment(saved_id))
+
+    _save_sso(held_pods.reader, CLEARED_SSO_FIELDS if cleared else _sso_fields(stored_id))
+
+    _every_worker_follows_before_the_hold_ends(
+        held_pods, save, CLEARED_SSO_ENVIRONMENT if cleared else _sso_environment(stored_id)
+    )
+
+
+def test_theme_save_keeps_its_logo_while_the_read_replica_is_behind(replica_pod: ReplicaPod) -> None:
+    stale: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?stale-{uuid.uuid4().hex}"}
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    _set_through_the_api(replica_pod.proxy, stale)
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, stale)
+
+    save: Final = _pinned_save(replica_pod.proxy, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+
+    _only_its_worker_keeps_the_save(replica_pod.proxy, save, saved, stale, time.monotonic() + STALE_REPLICA_SECONDS)
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, saved)
+
+
+def test_sso_save_keeps_its_settings_while_the_read_replica_is_behind(replica_pod: ReplicaPod) -> None:
+    stale_id: Final = f"lit9489-stale-{uuid.uuid4().hex}"
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    _store_sso_row(replica_pod.writer_url, _encrypted_sso_row(stale_id))
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, _sso_environment(stale_id))
+
+    save: Final = _pinned_save(replica_pod.proxy, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
+
+    _only_its_worker_keeps_the_save(
+        replica_pod.proxy,
+        save,
+        _sso_environment(saved_id),
+        _sso_environment(stale_id),
+        time.monotonic() + STALE_REPLICA_SECONDS,
+    )
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, _sso_environment(saved_id))
+
+
+def test_sso_save_keeps_its_settings_when_an_sso_read_that_started_before_it_returns(tmp_path: Path) -> None:
+    stale_id: Final = f"lit9489-stale-{uuid.uuid4().hex}"
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        HeldSsoReply(_plaintext(database_url)) as held_reply,
+        _pod(
+            gateway, tmp_path / "pod", provider, held_reply.url, workers=1, environment={"LITELLM_SALT_KEY": SALT_KEY}
+        ) as proxy,
+    ):
+        _store_sso_row(database_url, _encrypted_sso_row(stale_id))
+        _settled(proxy, _sso_environment(stale_id))
+
+        held_reply.armed.set()
+        assert held_reply.holding.wait(CONVERGE_SECONDS), "No SSO refresh read the SSO table"
+        _save_sso(proxy, _sso_fields(saved_id))
+        while_held: Final = tuple(_samples_until(proxy, SSO_ENVIRONMENT_KEYS, time.monotonic() + HELD_READ_SECONDS))
+        held_reply.release()
+        after_release: Final = tuple(
+            _samples_until(proxy, SSO_ENVIRONMENT_KEYS, time.monotonic() + AFTER_RELEASE_SECONDS)
+        )
+
+    misses: Final = _misses((*while_held, *after_release), _sso_environment(saved_id))
+    assert misses[:1] == (), (len(while_held), len(after_release), misses[:3])
+
+
+def test_sso_save_keeps_its_settings_after_syncs_read_the_old_sso_keys_it_was_removing_from_the_row(
+    tmp_path: Path,
+) -> None:
+    legacy_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    cleanup_marker: Final = f"LIT9489_CLEANUP_MARKER_{uuid.uuid4().hex.upper()}"
+    with (
+        ThreadPoolExecutor(max_workers=1) as pool,
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        held_statement_relay(database_url, cleanup_marker.encode()) as (relay, relayed_url),
+        _pod(
+            gateway,
+            tmp_path / "pod",
+            provider,
+            _plaintext(relayed_url),
+            workers=1,
+            environment={"LITELLM_SALT_KEY": SALT_KEY},
+        ) as proxy,
+    ):
+        _merge_into_row(database_url, {**_sso_environment(legacy_id), cleanup_marker: "cleanup-marker"})
+        _settled(proxy, _sso_environment(legacy_id))
+
+        saving: Final = pool.submit(_save_sso, proxy, _sso_fields(saved_id))
+        assert relay.held.wait(CONVERGE_SECONDS), "The SSO save never rewrote the environment row"
+        assert not saving.done(), "Something other than the SSO save rewrote the environment row"
+        time.sleep(HELD_READ_SECONDS)
+        relay.release()
+        saving.result()
+        after_the_save: Final = tuple(
+            _samples_until(proxy, SSO_ENVIRONMENT_KEYS, time.monotonic() + AFTER_RELEASE_SECONDS)
+        )
+        _settled(proxy, _sso_environment(saved_id))
+
+    misses: Final = _misses(after_the_save, _sso_environment(saved_id))
+    assert misses[:1] == (), (len(after_the_save), misses[:3])

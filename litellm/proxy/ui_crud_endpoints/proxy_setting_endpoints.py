@@ -1282,6 +1282,14 @@ async def update_sso_settings(
         config["general_settings"] = {}
 
     sso_data: Final = sso_config.model_dump()
+    fields_with_null_characters: Final = sorted(
+        field_name for field_name in SSO_FIELD_ENV_VARS if "\0" in str(sso_data.get(field_name) or "")
+    )
+    if fields_with_null_characters:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"SSO settings cannot contain null characters: {', '.join(fields_with_null_characters)}"},
+        )
     encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
@@ -1297,10 +1305,6 @@ async def update_sso_settings(
             },
         },
     )
-    proxy_config.apply_saved_sso_environment_variables(
-        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
-    )
-
     asyncio.create_task(
         create_config_audit_log(
             param_name="sso_config",
@@ -1345,6 +1349,10 @@ async def update_sso_settings(
             status_code=500,
             detail={"error": f"Error updating environment_variables: {e}"},
         )
+
+    proxy_config.apply_saved_sso_environment_variables(
+        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
+    )
 
     return {
         "message": "SSO settings updated successfully",
