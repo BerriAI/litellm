@@ -915,8 +915,9 @@ def test_callback_message_redaction_withholds_system_instructions(
         {"standard_callback_dynamic_params": {"turn_off_message_logging": True}},
         {"standard_callback_dynamic_params": {"turn_off_message_logging": "true"}},
         {"litellm_params": {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}},
+        {"litellm_params": {"metadata": {"headers": None}}},
     ],
-    ids=["dynamic-param", "dynamic-param-string", "enable-redaction-header"],
+    ids=["dynamic-param", "dynamic-param-string", "enable-redaction-header", "undecidable-headers-fail-closed"],
 )
 def test_request_message_redaction_withholds_system_instructions(
     request_fields: Mapping[str, object], fail: bool
