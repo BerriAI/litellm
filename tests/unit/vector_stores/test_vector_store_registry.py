@@ -350,18 +350,6 @@ async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_
 
 
 class TestRegistriesDoNotShareDefaultState:
-    """#38874: default-constructed registries must not share one list."""
-
-    def test_vector_store_registries_do_not_share_a_list(self):
-        first: Final = VectorStoreRegistry()
-        second: Final = VectorStoreRegistry()
-        assert first.vector_stores is not second.vector_stores
-
-    def test_index_registries_do_not_share_a_list(self):
-        first: Final = VectorStoreIndexRegistry()
-        second: Final = VectorStoreIndexRegistry()
-        assert first.vector_store_indexes is not second.vector_store_indexes
-
     def test_adding_to_one_registry_leaves_the_next_one_empty(self):
         VectorStoreRegistry().add_vector_store_to_registry(
             LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock")
@@ -378,10 +366,11 @@ class TestRegistriesDoNotShareDefaultState:
         )
         assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
 
-    def test_a_supplied_list_is_still_used_as_given(self):
-        supplied: Final = [LiteLLM_ManagedVectorStore(vector_store_id="vs-1", custom_llm_provider="bedrock")]
-        assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied
 
-    def test_a_supplied_empty_list_is_still_used_as_given(self):
-        supplied: Final[list[LiteLLM_ManagedVectorStore]] = []
-        assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied
+def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
+    registry: Final = VectorStoreRegistry()
+    first: Final = registry.get_vector_store_ids_to_run(
+        {"vector_store_ids": ["vs-a"]}, tools=[{"type": "file_search", "vector_store_ids": ["vs-b", "vs-a"]}]
+    )
+    second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
+    assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])

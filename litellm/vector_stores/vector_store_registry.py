@@ -2,6 +2,7 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
@@ -394,17 +395,14 @@ class VectorStoreRegistry:
 
         return vector_stores_to_run
 
-    def _get_vector_store_ids_from_tool_calls(
-        self, tools: list[dict] | None = None, vector_store_ids: list[str] = []
-    ) -> list[str]:
+    def _get_vector_store_ids_from_tool_calls(self, tools: list[dict] | None, vector_store_ids: list[str]) -> list[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        if tools:
-            for tool in tools:
-                if "vector_store_ids" in tool:
-                    vector_store_ids.extend(tool["vector_store_ids"])
-        return vector_store_ids
+        return [
+            *vector_store_ids,
+            *chain.from_iterable(tool["vector_store_ids"] for tool in tools or () if "vector_store_ids" in tool),
+        ]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """
