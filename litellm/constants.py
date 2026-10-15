@@ -1862,6 +1862,10 @@ RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
 RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = get_env_int("PROXY_BATCH_POLLING_INTERVAL", 3600)
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, get_env_int("MAX_OBJECTS_PER_POLL_CYCLE", 50))
+# raw request and result bytes per batch line-item object, so a large batch is built and stored one part at a time
+BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
+    "BATCH_LINE_ITEMS_MAX_PART_BYTES", 16 * 1024 * 1024, 1, 1024 * 1024 * 1024
+)
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})

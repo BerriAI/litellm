@@ -5311,6 +5311,9 @@ def init_custom_logger_compatible_class_at_startup(
     )
 
 
+init_custom_logger_compatible_class: Final = _init_custom_logger_compatible_class
+
+
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
