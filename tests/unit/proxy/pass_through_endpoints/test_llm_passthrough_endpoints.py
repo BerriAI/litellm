@@ -257,3 +257,40 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.path == f"/{endpoint}"
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
+
+@pytest.mark.asyncio
+async def test_router_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
+    from fastapi import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
+    from litellm.proxy.utils import ProxyLogging
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model"}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/v1/chat/completions",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        UserApiKeyCache(),
+        ProxyLogging(UserApiKeyCache()),
+    )
+    metadata = get_passthrough_router_request_metadata(UserAPIKeyAuth(api_key="qa-key"), request)
+    assert metadata["tags"] == ["usecase:a"]
+    assert await read_request_body(request) == {"model": "qa-model"}

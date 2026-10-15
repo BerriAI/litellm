@@ -11281,13 +11281,25 @@ async def test_authoritative_group_grants_propagate_policy_outages(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
-@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"]])
+@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
 async def test_body_tag_rejection_preserves_baggage_mapping_without_exempting_client_tags(route, client_tags):
     from litellm.proxy.auth.auth_checks import _reject_clientside_metadata_tags_check
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a")]})
-    data = {} if client_tags is None else {"metadata": {"tags": client_tags}}
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"baggage", b"entrypoint=a"),
+                *(([(b"x-litellm-tags", b"usecase:a")]) if client_tags == "header" else []),
+            ],
+        }
+    )
+    data = (
+        {}
+        if client_tags is None or client_tags == "header"
+        else {"metadata": client_tags if isinstance(client_tags, str) else {"tags": client_tags}}
+    )
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(data, route)
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
@@ -11297,6 +11309,7 @@ async def test_body_tag_rejection_preserves_baggage_mapping_without_exempting_cl
         MagicMock(),
         MagicMock(),
     )
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(request, data, UserAPIKeyAuth(api_key="qa-key"))
     if client_tags is None:
         _reject_clientside_metadata_tags_check({"reject_clientside_metadata_tags": True}, data, route, request)
         slot = "metadata" if "chat/completions" in route else "litellm_metadata"

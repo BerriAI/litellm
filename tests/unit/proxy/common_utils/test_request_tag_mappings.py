@@ -5,9 +5,9 @@ from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from litellm.proxy._types import ConfigGeneralSettings
-from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import populate_request_with_path_params, read_request_body
 from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
 
@@ -109,7 +109,11 @@ async def test_budgeted_mapper_requires_a_database():
     "route,slot",
     [("/chat/completions", "metadata"), ("/v1/messages", "litellm_metadata"), ("/v1/responses", "litellm_metadata")],
 )
-async def test_mapping_survives_cached_body_read_when_client_omits_metadata(route, slot):
+@pytest.mark.parametrize("query", [b"api-version=qa-version", b"key=qa-virtual-key"])
+async def test_mapping_survives_cached_body_read_without_leaking_auth_query_fields(route, slot, query):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import ProxyConfig
+
     async def receive():
         return {"type": "http.request", "body": b'{"model":"qa-model"}'}
 
@@ -118,11 +122,14 @@ async def test_mapping_survives_cached_body_read_when_client_omits_metadata(rout
             "type": "http",
             "method": "POST",
             "path": route,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": query,
             "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
         },
         receive,
     )
-    data = await read_request_body(request)
+    data = populate_request_with_path_params(await read_request_body(request), request)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(data, route)
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
@@ -133,4 +140,16 @@ async def test_mapping_survives_cached_body_read_when_client_omits_metadata(rout
         MagicMock(),
     )
     downstream = await read_request_body(request)
-    assert downstream[slot]["tags"] == ["usecase:a"]
+    assert downstream == {"model": "qa-model"}
+    enriched = await add_litellm_data_to_request(
+        data=downstream,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert enriched[slot]["tags"] == ["usecase:a"]
+    assert "key" not in enriched
+    assert "api-version" not in enriched
+    assert "key" not in enriched["proxy_server_request"]["body"]
+    assert "api-version" not in enriched["proxy_server_request"]["body"]

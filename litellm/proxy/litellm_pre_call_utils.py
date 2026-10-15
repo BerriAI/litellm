@@ -2030,7 +2030,6 @@ class LiteLLMProxyRequestSetup:
     ) -> None:
         """Resolve configured baggage tags before the existing tag-budget gate."""
         from litellm.proxy.auth.auth_checks import get_tag_objects_batch
-        from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
         from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
         from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
@@ -2057,12 +2056,18 @@ class LiteLLMProxyRequestSetup:
                 raise HTTPException(400, f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
         if mapped:
             client_metadata: Final[object] = request_data.get("metadata")
-            client_has_tags: Final = isinstance(client_metadata, dict) and "tags" in client_metadata
+            normalized_client_metadata: Final[Mapping[str, object]] = (
+                _normalized_metadata_object("metadata", client_metadata)
+                if client_metadata is not None
+                else MappingProxyType({})
+            )
+            client_has_tags: Final = "tags" in normalized_client_metadata or any(
+                member.strip() for member in request.headers.get("x-litellm-tags", "").split(",")
+            )
             mapped_tags: Final = tuple(tag for tag, _ in mapped)
             request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
             request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
             LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
-            safe_set_request_parsed_body(request=request, parsed_body=dict(request_data))
 
     @staticmethod
     def apply_authenticated_baggage_tags(

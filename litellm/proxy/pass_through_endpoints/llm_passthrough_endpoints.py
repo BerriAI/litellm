@@ -214,7 +214,9 @@ async def _json_request_body(request: Request) -> Mapping[str, object]:
     return await request.json()
 
 
-def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+def get_passthrough_router_request_metadata(
+    user_api_key_dict: UserAPIKeyAuth, request: Request | None = None
+) -> Mapping[str, object]:
     """
     Build the request metadata carrying key-level spend attribution and the
     pre-call budget reservation for a router-model passthrough request.
@@ -235,13 +237,17 @@ def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request_data: Final = {"litellm_metadata": {}}
+    request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
+        "litellm_metadata": {}
+    }
     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name="litellm_metadata",
     )
-    return request_data["litellm_metadata"]
+    if request is not None:
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+    return TypeAdapter(Mapping[str, object]).validate_python(request_data["litellm_metadata"])
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -541,7 +547,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
-                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
             ),
         )
 
@@ -2154,7 +2160,7 @@ async def _relay_router_model(
             params=None,
             headers=None,
             cookies=None,
-            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)

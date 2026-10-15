@@ -2020,7 +2020,12 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
             tags_to_add=tags_to_add,
         )
 
-    return metadata
+    restored_metadata: Final = TypeAdapter(dict[str, object]).validate_python(metadata)
+    request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
+        "metadata": restored_metadata
+    }
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+    return restored_metadata
 
 
 class _PassThroughRequestEnvelope(TypedDict, total=False):

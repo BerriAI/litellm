@@ -10268,3 +10268,40 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
+@pytest.mark.asyncio
+async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.utils import ProxyLogging
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model"}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/v1/chat/completions",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"baggage", b"entrypoint=a"),
+                (b"x-litellm-tags", b"existing"),
+            ],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        UserApiKeyCache(),
+        ProxyLogging(UserApiKeyCache()),
+    )
+    metadata = _update_metadata_with_tags_in_header(request, {})
+    assert metadata["tags"] == ["existing", "usecase:a"]
+    assert await read_request_body(request) == {"model": "qa-model"}
