@@ -31,6 +31,8 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
+from litellm.integrations.otel.model.metadata import caller_session_id
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -920,7 +922,10 @@ def _get_session_id_for_spend_log(
     batch_trace_session_id: str | None = None,
 ) -> str | None:
     """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the caller session the logging payload records, then trace ids."""
+    batch sessions outrank everything, then the conversation id the caller sent, then trace ids.
+
+    A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
+    it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
@@ -929,9 +934,9 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
+    if litellm.request_correlation_in_logs and (caller_session := caller_session_id(kwargs, TraceControls())):
+        return caller_session
     match standard_logging_payload:
-        case {"session_id": str(caller_session_id)} if caller_session_id:
-            return caller_session_id
         case {"trace_id": trace_id} if trace_id is not None:
             return str(trace_id)
         case _:

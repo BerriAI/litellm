@@ -3306,6 +3306,21 @@ def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain
     assert data["litellm_trace_id"] == "foo"
 
 
+@pytest.mark.parametrize(("correlation_in_logs", "expected_session_id"), [(True, "convo-1"), (False, "req-trace-1")])
+def test_x_litellm_trace_id_keeps_the_body_session_only_with_correlation_logging(
+    monkeypatch: pytest.MonkeyPatch, correlation_in_logs: bool, expected_session_id: str
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", correlation_in_logs)
+    metadata: Final[dict[str, str]] = {}
+    data: Final[dict[str, object]] = {"metadata": metadata, "litellm_session_id": "convo-1"}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-trace-id": "req-trace-1"}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == expected_session_id
+    assert metadata["session_id"] == expected_session_id
+    assert data["litellm_trace_id"] == "req-trace-1"
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
     """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-session-id": "bar"}

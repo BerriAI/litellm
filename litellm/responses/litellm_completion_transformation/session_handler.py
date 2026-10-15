@@ -281,10 +281,12 @@ class ResponsesSessionHandler:
 
         SQL query
 
-        SELECT session_id, api_key FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id AND api_key = api_key
+        SELECT session_id, api_key, "user", team_id FROM spend_logs WHERE request_id = previous_response_id, then
+        SELECT * FROM spend_logs with that session_id and the same owner
 
-        Only rows written under the same API key as the referenced response are returned: the session id can be
-        caller supplied, so matching on it alone would let a caller replay another key's history.
+        Only rows with the referenced response's owner are returned: the same user and team, and for a key with
+        neither, the same key. The session id can be caller supplied, so matching on it alone would mix owners, while
+        an owner's rotated or second key keeps its history, as response id security lets it continue the response.
 
         A just-finished turn gets a short second chance: the worker that served it may
         still be writing its spend log when the follow-up arrives, and an empty result
@@ -316,9 +318,13 @@ class ResponsesSessionHandler:
                 SELECT 1
                 FROM matching_session
                 WHERE matching_session.session_id = logs.session_id
-                  AND matching_session.api_key = logs.api_key
                   AND matching_session."user" IS NOT DISTINCT FROM logs."user"
                   AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
+                  AND (
+                      COALESCE(matching_session."user", '') <> ''
+                      OR COALESCE(matching_session.team_id, '') <> ''
+                      OR matching_session.api_key = logs.api_key
+                  )
             )
             ORDER BY "endTime" ASC;
         """

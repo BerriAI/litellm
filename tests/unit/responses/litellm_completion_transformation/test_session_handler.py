@@ -850,3 +850,18 @@ async def test_session_lookup_keeps_jwt_users_and_teams_apart_when_they_share_an
     assert await _history_request_ids(sqlite_db, "bob-1") == ["bob-1"]
     assert await _history_request_ids(sqlite_db, "service-a-1") == ["service-a-1"]
     assert await _history_request_ids(sqlite_db, "service-b-1") == ["service-b-1"]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_keys_apart():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("alice-old-key", "hashed-old", "shared-session", "2026-01-01T00:00:01", "alice", "team-a"),
+            ("ownerless-1", "hashed-other", "shared-session", "2026-01-01T00:00:02", "", ""),
+            ("alice-new-key", "hashed-new", "shared-session", "2026-01-01T00:00:03", "alice", "team-a"),
+            ("ownerless-2", "hashed-another", "shared-session", "2026-01-01T00:00:04", "", ""),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
+    assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]

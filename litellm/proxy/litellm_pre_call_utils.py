@@ -1616,6 +1616,7 @@ class LiteLLMProxyRequestSetup:
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
 
         metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
+        request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
         spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
@@ -1633,9 +1634,16 @@ class LiteLLMProxyRequestSetup:
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
         if chain_id:
+            chain_session_id: Final = (
+                body_session_id
+                if litellm.request_correlation_in_logs
+                and isinstance(body_session_id := request_body.get("litellm_session_id"), str)
+                and body_session_id
+                else chain_id
+            )
             metadata_from_headers["trace_id"] = chain_id
-            metadata_from_headers["session_id"] = chain_id
-            data["litellm_session_id"] = chain_id
+            metadata_from_headers["session_id"] = chain_session_id
+            data["litellm_session_id"] = chain_session_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug("Extracted chain_id from header (trace-id/session-id): %s", chain_id)
         else:
@@ -1682,11 +1690,7 @@ class LiteLLMProxyRequestSetup:
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
-                caller_session_id: Final = _caller_trace_field(
-                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
-                    _metadata_variable_name,
-                    "session_id",
-                )
+                caller_session_id: Final = _caller_trace_field(request_body, _metadata_variable_name, "session_id")
                 if session_id_from_baggage and (
                     caller_session_id is None or caller_session_id == session_id_from_baggage
                 ):
