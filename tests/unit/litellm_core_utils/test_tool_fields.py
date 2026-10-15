@@ -1,5 +1,5 @@
 import datetime
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
@@ -56,6 +56,40 @@ async def test_malformed_tools_fall_back_to_a_deployment_that_drops_them(tools: 
     response: Final = await router.acompletion(**_proxy_request("primary", tools=tools))
 
     assert response.choices[0].message.content == "served by backup"
+
+
+@pytest.mark.asyncio
+async def test_fallback_on_unsupported_params_false_keeps_the_400() -> None:
+    router: Final = Router(
+        model_list=[_deployment("primary"), _deployment("backup", additional_drop_params=["tools"])],
+        fallbacks=[{"primary": ["backup"]}],
+        fallback_on_unsupported_params=False,
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.acompletion(**_proxy_request("primary", tools=5))
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_request_cools_down_no_deployment() -> None:
+    cools_on_any_400: Final = {"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}, "cooldown_time": 120}
+    router: Final = Router(
+        model_list=[
+            {**_deployment("primary"), "model_info": {"id": "primary", **cools_on_any_400}},
+            {**_deployment("backup"), "model_info": {"id": "backup", **cools_on_any_400}},
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.acompletion(**_proxy_request("primary", tools=5))
+
+    primary: Final = await router.acompletion(**_proxy_request("primary"))
+    backup: Final = await router.acompletion(**_proxy_request("backup"))
+    assert (primary.choices[0].message.content, backup.choices[0].message.content) == (
+        "served by primary",
+        "served by backup",
+    )
 
 
 @pytest.mark.parametrize("tools", _MALFORMED_TOOLS)
@@ -120,5 +154,34 @@ async def test_an_sdk_call_keeps_the_tools_it_passed() -> None:
     }
 
     sent: Final = await async_pre_call_deployment_hook(dict(request), "acompletion")
+
+    assert sent["tools"] is tools
+
+
+@pytest.mark.parametrize("schema", ["", [], False, 0, {}, '{"type": "object"}'])
+@pytest.mark.parametrize(
+    "tool",
+    [
+        lambda schema: {"type": "function", "function": {"name": "get_weather", "parameters": schema}},
+        lambda schema: {"type": "function", "name": "get_weather", "parameters": schema},
+        lambda schema: {"name": "get_weather", "input_schema": schema},
+    ],
+    ids=["chat", "responses", "messages"],
+)
+@pytest.mark.asyncio
+async def test_empty_and_json_string_schemas_reach_the_deployment(
+    tool: Callable[[object], Mapping[str, object]], schema: object
+) -> None:
+    tools: Final = [tool(schema)]
+
+    sent: Final = await async_pre_call_deployment_hook(dict(_proxy_request("keeps", tools=tools)), "acompletion")
+
+    assert sent["tools"] is tools
+
+
+@pytest.mark.parametrize("tools", [(_GOOD_TOOL,), [{"type": "web_search", "function": None}]], ids=["tuple", "null"])
+@pytest.mark.asyncio
+async def test_tools_core_accepts_reach_the_deployment(tools: object) -> None:
+    sent: Final = await async_pre_call_deployment_hook(dict(_proxy_request("keeps", tools=tools)), "acompletion")
 
     assert sent["tools"] is tools

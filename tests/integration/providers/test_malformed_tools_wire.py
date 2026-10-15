@@ -1107,9 +1107,10 @@ def test_a_mixed_group_answers_malformed_tools_by_the_drop_params_of_the_deploym
         tuple(_JSON_OBJECT.validate_json(body) for body in sent if marker in body) for marker in markers
     )
     assert sorted(set(statuses)) == [200, 400], statuses
-    assert all(
-        (status, len(bodies)) in ((200, 1), (400, 0)) for status, bodies in zip(statuses, deliveries)
-    ), (statuses, deliveries)
+    assert all((status, len(bodies)) in ((200, 1), (400, 0)) for status, bodies in zip(statuses, deliveries)), (
+        statuses,
+        deliveries,
+    )
     assert all(all("tools" not in body for body in bodies) for bodies in deliveries), deliveries
 
 
@@ -2572,3 +2573,142 @@ def test_a_user_config_model_named_like_a_proxy_group_drops_tools_its_own_list_n
         user_config=user_config,
     )
     _assert_forwarded(client_side.rig, _CHECKED["chat"], response, marker, ())
+
+
+_GUARDED_NAMES: Final = ("chat", "messages", "responses", "generate_content")
+_EACH_GUARDED: Final = pytest.mark.parametrize(
+    "checked", tuple(_CHECKED[name] for name in _GUARDED_NAMES), ids=_GUARDED_NAMES
+)
+_GUARDRAIL_VENDOR_PATH: Final = "/beta/litellm_basic_guardrail_api"
+
+
+@dataclass(frozen=True, slots=True)
+class _Guarded:
+    rig: _Rig
+    vendor: Wire
+    models: Mapping[str, str]
+
+
+def _guarded_config(path: Path, wire: str, vendor: str, models: Mapping[str, str]) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "model_list": [
+                    {"model_name": name, "litellm_params": _PROVIDERS[provider](wire)}
+                    for provider, name in models.items()
+                ],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                },
+                "guardrails": [
+                    {
+                        "guardrail_name": "malformed-tools-vendor",
+                        "litellm_params": {
+                            "guardrail": "generic_guardrail_api",
+                            "mode": "pre_call",
+                            "default_on": True,
+                            "api_base": vendor,
+                            "api_key": "synthetic-guardrail-key",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    return path
+
+
+def _guardrail_verdict(request: Request) -> Reply:
+    assert request.target == _GUARDRAIL_VENDOR_PATH, request.target
+    return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+
+@pytest.fixture(scope="module")
+def guarded(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Guarded]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-guarded")
+    suffix: Final = uuid.uuid4().hex[:12]
+    models: Final = MappingProxyType(
+        {provider: f"malformed-tools-guarded-{provider}-{suffix}" for provider in _PROVIDERS}
+    )
+    with wire_server(_guardrail_verdict) as vendor:
+        config: Final = _guarded_config(directory / "guarded.yaml", rig.wire.url, vendor.url, models)
+        with owned_proxy_process(rig.gateway, directory, {}, config=config, workers=2) as proxy:
+            yield _Guarded(replace(rig, gateway=proxy.gateway), vendor, models)
+
+
+def _vendor_payloads(guarded: _Guarded, marker: str) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        _JSON_OBJECT.validate_json(request.body)
+        for request in guarded.vendor.drain()
+        if marker in request.body.decode()
+    )
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_EACH_GUARDED
+def test_a_pre_call_guardrail_passes_well_formed_tools_through_to_the_provider(
+    guarded: _Guarded, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    response: Final = checked.send(guarded.rig, guarded.models[checked.provider], marker, {"tools": [checked.tool]})
+    _assert_forwarded(guarded.rig, checked, response, marker, ("get_weather",))
+    payloads: Final = _vendor_payloads(guarded, marker)
+    assert len(payloads) == 1, payloads
+    assert all(payload.get("tools") is None or isinstance(payload["tools"], list) for payload in payloads), payloads
+
+
+_PROVIDER_WIRES: Final[Mapping[str, tuple[_Family, Callable[[bool], str]]]] = MappingProxyType(
+    {
+        "openai": (CHAT, lambda stream: "/v1/chat/completions"),
+        "openai_responses": (RESPONSES, lambda stream: "/v1/responses"),
+        "anthropic": (MESSAGES, lambda stream: "/v1/messages"),
+        "gemini": (GENERATE, lambda stream: ":streamGenerateContent" if stream else ":generateContent"),
+    }
+)
+_NATIVE_PROVIDERS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "chat": ("openai",),
+        "messages": ("anthropic",),
+        "responses": ("openai", "openai_responses"),
+        "generate_content": ("gemini",),
+    }
+)
+_ROUTED_ELSEWHERE: Final[Mapping[tuple[str, str], str]] = MappingProxyType({("messages", "openai"): "openai_responses"})
+_BRIDGES: Final = tuple(
+    (family, provider)
+    for family, provider in product(_FAMILIES, _PROVIDER_WIRES)
+    if provider not in _NATIVE_PROVIDERS[family.name]
+)
+
+
+@pytest.fixture(scope="module")
+def bridge_groups(rig: _Rig) -> Iterator[Mapping[str, str]]:
+    with rig.gateway.scenario() as scenario:
+        responses_group: Final = scenario.model(
+            model=f"openai/responses/{_OPENAI_BACKEND}", api_base=f"{rig.wire.url}/v1", api_key=_PROVIDER_KEY
+        )
+        wait_for_worker_readiness(rig.gateway, responses_group, 1, _PROXY_WORKERS)
+        yield MappingProxyType(
+            {
+                "openai": rig.openai,
+                "openai_responses": responses_group,
+                "anthropic": rig.anthropic,
+                "gemini": rig.gemini,
+            }
+        )
+
+
+@_STREAMS
+@pytest.mark.parametrize(
+    ("family", "provider"), _BRIDGES, ids=tuple(f"{family.name}_to_{provider}" for family, provider in _BRIDGES)
+)
+def test_well_formed_tools_cross_the_bridge_to_another_provider(
+    rig: _Rig, bridge_groups: Mapping[str, str], family: _Family, provider: str, stream: bool
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(rig, family, marker, stream, model=bridge_groups[provider], tools=[family.tool])
+    assert response.status_code == 200, response.text
+    assert _answer(_tag(marker)) in response.text, response.text
+    named_as, target = _PROVIDER_WIRES[_ROUTED_ELSEWHERE.get((family.name, provider), provider)]
+    assert _tool_names(named_as, _one_delivery(rig, marker, target(stream))) == ("get_weather",)

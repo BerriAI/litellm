@@ -473,6 +473,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    MalformedRequestFieldError,
     ModelNotMappedError,
     NotFoundError,
     OpenAIError,
@@ -1493,6 +1494,22 @@ def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
 
+def _deployment_provider(kwargs: Mapping[str, object]) -> str:
+    model: Final = kwargs.get("model")
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    api_base: Final = kwargs.get("api_base")
+    if not isinstance(model, str):
+        return ""
+    try:
+        return litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+        )[1]
+    except BadRequestError:
+        return ""
+
+
 async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
@@ -1507,10 +1524,10 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
     route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
     resolved: Final = resolve_deployment_tool_fields(kwargs, route)
     if isinstance(resolved, MalformedField):
-        raise BadRequestError(
+        raise MalformedRequestFieldError(
             message=resolved.message,
             model=kwargs.get("model"),
-            llm_provider="",
+            llm_provider=_deployment_provider(kwargs),
             body={"type": "invalid_request_error", "param": resolved.field},
         )
     modified_kwargs = dict(resolved)

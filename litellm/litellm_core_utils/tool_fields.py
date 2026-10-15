@@ -1,9 +1,9 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import Final
+from typing import Annotated, Final, TypeAlias
 
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -21,18 +21,33 @@ ROUTES_WITH_TOOLS: Final = frozenset(
     }
 )
 _TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
-_TOOLS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+_TOOLS: Final = TypeAdapter(list[object])
 _FIELD_LIST: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final = TypeAdapter(Json[dict[str, object]])
+
+
+def _schema_as_read(value: object) -> object:
+    if not value:
+        return None
+    if not isinstance(value, str):
+        return value
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return value
+
+
+_Schema: TypeAlias = Annotated[dict[str, object] | None, BeforeValidator(_schema_as_read)]
 
 
 class _ToolFunction(TypedDict, total=False):
-    parameters: ReadOnly[dict[str, object] | None]
+    parameters: ReadOnly[_Schema]
 
 
 class _ToolEntry(TypedDict, total=False):
-    function: ReadOnly[_ToolFunction]
-    parameters: ReadOnly[dict[str, object] | None]
-    input_schema: ReadOnly[dict[str, object] | None]
+    function: ReadOnly[_ToolFunction | None]
+    parameters: ReadOnly[_Schema]
+    input_schema: ReadOnly[_Schema]
     vector_store_ids: ReadOnly[list[str] | None]
 
 
