@@ -7843,15 +7843,26 @@ def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
 @pytest.mark.parametrize(
     "template",
     [
-        pytest.param({"roles": {"user": None}}, id="null-role-entry"),
         pytest.param({"roles": {"user": "[INST]"}}, id="string-role-entry"),
         pytest.param({"roles": {"user": ["[INST]"]}}, id="list-role-entry"),
         pytest.param({"roles": ["user"]}, id="list-roles"),
-        pytest.param({"roles": "user"}, id="string-roles"),
+        pytest.param({"roles": '{"user": {"pre_message": "[INST]"}}'}, id="json-string-roles"),
     ],
 )
-def test_role_entry_that_is_not_a_mapping_renders_that_role_unwrapped(template, monkeypatch):
-    assert _render_ollama(template, monkeypatch) == TEMPLATE_BARE_MESSAGES
+def test_roles_that_are_not_a_mapping_render_unwrapped_with_a_warning(template, monkeypatch, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        rendered = _render_ollama(template, monkeypatch)
+
+    assert rendered == TEMPLATE_BARE_MESSAGES
+    assert "not a mapping" in caplog.text
+
+
+def test_null_role_entry_renders_that_role_unwrapped_without_a_warning(monkeypatch, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        rendered = _render_ollama({"roles": {"user": None}}, monkeypatch)
+
+    assert rendered == TEMPLATE_BARE_MESSAGES
+    assert "not a mapping" not in caplog.text
 
 
 @pytest.mark.parametrize(

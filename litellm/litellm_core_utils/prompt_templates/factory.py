@@ -5509,7 +5509,14 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 # Custom prompt template
 def _mapping_or_none(value: object) -> object:
-    return value if issubclass(type(value), Mapping) else None
+    if value is None or issubclass(type(value), Mapping):
+        return value
+    verbose_logger.warning(
+        "Ignoring a custom prompt template roles value of type %s because it is not a mapping, "
+        "so those messages render without role markers",
+        type(value).__name__,
+    )
+    return None
 
 
 class CustomPromptRole(BaseModel):
