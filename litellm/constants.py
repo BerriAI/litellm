@@ -1663,6 +1663,9 @@ INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
 PYTHON_GC_THRESHOLD: Final = os.getenv("PYTHON_GC_THRESHOLD")
+# Move objects created during proxy startup into the permanent GC generation so
+# full collections stop walking them (shorter stop-the-world pauses)
+LITELLM_GC_FREEZE_AFTER_STARTUP: Final = os.getenv("LITELLM_GC_FREEZE_AFTER_STARTUP", "false").lower() == "true"
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES: Final = [
