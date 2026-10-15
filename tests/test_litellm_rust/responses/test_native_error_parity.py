@@ -62,6 +62,11 @@ CASES: Final = (
     ),
     FailureCase("server_error", {"input": "hi"}, _upstream(500, {"message": "boom", "type": "server_error"})),
     FailureCase(
+        "azure_rate_limited",
+        {"model": "azure/my-deployment", "input": "hi"},
+        _upstream(429, {"message": "Rate limit reached", "type": "requests", "code": "429"}),
+    ),
+    FailureCase(
         "invalid_tool_parameters",
         {"input": "hi", "tools": [{**WEATHER_TOOL, "parameters": "{"}]},
         falls_back=True,
@@ -77,7 +82,15 @@ async def _failure(case: FailureCase, server: RecordingServer, probe: FallbackPr
         fallbacks_before: Final = 0 if probe is None else probe.calls
         call: Final = PYTHON_ARESPONSES if probe is None else PUBLIC_ARESPONSES
         with pytest.raises(openai.APIError) as raised:
-            await call(model=MODEL, api_key="sk-test", api_base=server.base_url, callbacks=[recorder], **case.kwargs)
+            await call(
+                **{
+                    "model": MODEL,
+                    "api_key": "sk-test",
+                    "api_base": server.base_url,
+                    "callbacks": [recorder],
+                    **case.kwargs,
+                }
+            )
         await drain_logging()
         failures: Final = await recorder.wait_for_async("async_log_failure_event")
     standard: Final = _LOGGED.validate_python(_LOGGED.validate_python(failures[0].kwargs)["standard_logging_object"])

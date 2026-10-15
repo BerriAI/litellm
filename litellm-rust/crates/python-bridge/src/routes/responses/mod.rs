@@ -40,14 +40,18 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
     let provider = argument("custom_llm_provider")?
         .map(|value| value.extract::<String>())
         .transpose()?;
-    if provider
-        .as_deref()
-        .is_some_and(|provider| provider != "openai")
-        || model
-            .strip_prefix("openai/")
-            .unwrap_or(&model)
-            .contains('/')
-    {
+    let native_provider = match litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider(
+        &model,
+        provider.as_deref(),
+    ) {
+        None => !model.contains('/'),
+        Some(resolved) => match resolved.custom_llm_provider {
+            "openai" => !resolved.model.contains('/'),
+            "azure" => true,
+            _ => false,
+        },
+    };
+    if !native_provider {
         return Err(RustBridgeDeclined::new_err(
             "native HTTP responses provider",
         ));
