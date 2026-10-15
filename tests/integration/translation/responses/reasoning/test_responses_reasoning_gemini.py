@@ -395,7 +395,6 @@ def test_a_streamed_turn_keeps_thinking_and_billing_reasoning_without_thought_te
     )
     assert [object_value(item)["type"] for item in list_value(completed["output"])] == ["message", "function_call"]
     assert object_value(completed["usage"])["output_tokens_details"] == {
-        "audio_tokens": None,
         "reasoning_tokens": 472,
         "text_tokens": 63,
     }
