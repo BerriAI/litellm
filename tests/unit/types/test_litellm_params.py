@@ -48,6 +48,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     ProviderSpecificHeader,
+    ProviderSpecificModelInfo,
     StandardCallbackDynamicParams,
     agentic_loop_internal_litellm_params,
     all_litellm_params,
@@ -316,6 +317,18 @@ def test_owned_name_is_kept_out_of_provider_params(name: str, classifier_name: s
 
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
     assert result[PROVIDER_KNOB] is provider_value
+
+
+@pytest.mark.parametrize("classifier_name", CLASSIFIERS)
+@pytest.mark.parametrize("name", tuple(ProviderSpecificModelInfo.__annotations__))
+def test_model_capability_flag_set_on_a_deployment_is_kept_out_of_provider_params(
+    name: str, classifier_name: str
+) -> None:
+    provider_value: Final = object()
+
+    result: Final = CLASSIFIERS[classifier_name](MappingProxyType({name: True, PROVIDER_KNOB: provider_value}))
+
+    assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
 
 
 def test_a_name_no_object_declares_reaches_the_provider() -> None:

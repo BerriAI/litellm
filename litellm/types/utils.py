@@ -4130,9 +4130,11 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
     *CustomPricingLiteLLMParams.model_fields,
 ]
 
+MODEL_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo.__annotations__)
+
 
 def is_litellm_owned_kwarg(name: str) -> bool:
-    return name in all_litellm_params or name.startswith(INTERNAL_KWARG_PREFIX)
+    return name in all_litellm_params or name in MODEL_CAPABILITY_FIELDS or name.startswith(INTERNAL_KWARG_PREFIX)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
