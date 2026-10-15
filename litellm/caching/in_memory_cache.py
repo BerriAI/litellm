@@ -10,11 +10,10 @@ Has 4 methods:
 
 import heapq
 import json
-import math
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -27,16 +26,6 @@ from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 from .base_cache import BaseCache
 
 DEFAULT_MAX_SIZE_IN_MEMORY: Final = 200
-
-
-def _seconds(requested: str | float) -> float | None:
-    try:
-        seconds: Final = float(requested)
-    except OverflowError:
-        return -math.inf if isinstance(requested, int) and requested < 0 else math.inf
-    except (TypeError, ValueError):
-        return None
-    return None if math.isnan(seconds) else seconds
 
 
 class InMemoryCache(BaseCache):
@@ -61,7 +50,6 @@ class InMemoryCache(BaseCache):
         self.cache_dict: dict = {}
         self.ttl_dict: dict[str, float] = {}
         self.expiration_heap: list[tuple[float, str]] = []
-        self._filed_expiry: dict[str, float] = {}
         self._increment_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._clock = clock if clock is not None else lambda: time.time()
@@ -118,29 +106,6 @@ class InMemoryCache(BaseCache):
         """
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
-        self._filed_expiry.pop(key, None)
-
-    def _prune_heap_roots(self, current_time: float) -> None:
-        while self.expiration_heap:
-            expiration_time, key = self.expiration_heap[0]
-            if expiration_time == self.ttl_dict.get(key) and expiration_time > current_time:
-                break
-            heapq.heappop(self.expiration_heap)
-            self._settle_popped_record(expiration_time, key)
-
-    def _settle_popped_record(self, expiration_time: float, key: str) -> None:
-        live_expiry: Final = self.ttl_dict.get(key)
-        if live_expiry == expiration_time:
-            self._remove_key(key)
-            self._filed_expiry.pop(key, None)
-            return
-        if self._filed_expiry.get(key) != expiration_time:
-            return
-        if live_expiry is None:
-            self._filed_expiry.pop(key, None)
-            return
-        self._filed_expiry[key] = live_expiry
-        heapq.heappush(self.expiration_heap, (live_expiry, key))
 
     def evict_cache(self):
         """
@@ -156,18 +121,32 @@ class InMemoryCache(BaseCache):
 
         """
         current_time: Final = self._clock()
-        self._prune_heap_roots(current_time)
+
+        # Step 1: Remove expired or outdated items
+        while self.expiration_heap:
+            expiration_time, key = self.expiration_heap[0]
+
+            # Case 1: Heap entry is outdated
+            if expiration_time != self.ttl_dict.get(key):
+                heapq.heappop(self.expiration_heap)
+            # Case 2: Entry is valid but expired
+            elif expiration_time <= current_time:
+                heapq.heappop(self.expiration_heap)
+                self._remove_key(key)
+            else:
+                # Case 3: Entry is valid and not expired
+                break
 
         if len(self.expiration_heap) > 2 * self.max_size_in_memory:
-            self.expiration_heap = [
-                entry for entry in self.expiration_heap if self._filed_expiry.get(entry[1]) == entry[0]
-            ]
+            self.expiration_heap = [entry for entry in self.expiration_heap if self.ttl_dict.get(entry[1]) == entry[0]]
             heapq.heapify(self.expiration_heap)
 
         # Step 2: Evict if cache is still full
         while self.expiration_heap and len(self.cache_dict) >= self.max_size_in_memory:
             expiration_time, key = heapq.heappop(self.expiration_heap)
-            self._settle_popped_record(expiration_time, key)
+            # Skip if key was removed or updated
+            if self.ttl_dict.get(key) == expiration_time:
+                self._remove_key(key)
 
         if not self.expiration_heap:
             untracked_keys: Final = self._cache_keys()
@@ -199,37 +178,21 @@ class InMemoryCache(BaseCache):
             # Always prune expired/outdated heap roots before inserting.
             # This keeps expiration_heap bounded even when the live cache stays
             # below max_size_in_memory and keys are reinserted after TTL expiry.
-            if key in self.cache_dict:
-                self._prune_heap_roots(self._clock())
-            else:
-                self.evict_cache()
+            self.evict_cache()
             if not self.check_value_size(value):
                 return
 
-            if self.allow_ttl_override(key):
-                ttl: Final = self._ttl_seconds(kwargs["ttl"]) if "ttl" in kwargs else self.default_ttl
-                expiry: Final = self._clock() + ttl
-                self.ttl_dict[key] = expiry
-                self._filed_expiry[key] = expiry
-                heapq.heappush(self.expiration_heap, (expiry, key))
             self.cache_dict[key] = value
-
-    def _ttl_seconds(self, requested: str | float | None) -> float:
-        seconds: Final = None if requested is None else _seconds(requested)
-        return self.default_ttl if seconds is None else seconds
+            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+                if "ttl" in kwargs and kwargs["ttl"] is not None:
+                    self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
+                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
+                else:
+                    self.ttl_dict[key] = self._clock() + self.default_ttl
+                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
-
-    def refresh_ttl(self, key: str, ttl: float) -> bool:
-        with self._write_lock:
-            now: Final = self._clock()
-            self._prune_heap_roots(now)
-            seconds: Final = _seconds(ttl)
-            if seconds is None or key not in self.cache_dict or self._is_key_expired(key):
-                return False
-            self.ttl_dict[key] = now + seconds
-            return True
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         for cache_key, cache_value in cache_list:
@@ -301,7 +264,7 @@ class InMemoryCache(BaseCache):
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
-        self, increment_list: Sequence["RedisPipelineIncrementOperation"], **kwargs
+        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
     ) -> list[float] | None:
         results: Final = []
         for increment in increment_list:
@@ -314,7 +277,6 @@ class InMemoryCache(BaseCache):
             self.cache_dict.clear()
             self.ttl_dict.clear()
             self.expiration_heap.clear()
-            self._filed_expiry.clear()
 
     async def disconnect(self):
         pass

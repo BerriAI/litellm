@@ -7432,36 +7432,6 @@ class TestSessionAffinity:
         assert past_ttl.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
-        """Regression: a pinned turn must refresh the TTL, not just the first write --
-        otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
-        clock: Final = MagicMock(return_value=1_000.0)
-        mock_router_instance.cache = DualCache(in_memory_cache=InMemoryCache(clock=clock))
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                **basic_config,
-                "session_affinity": True,
-                "session_affinity_ttl_seconds": 90,
-            },
-        )
-        pinned: Final = await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.REASONING_MESSAGE
-        )
-        clock.return_value = 1_060.0
-        hit: Final = await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
-        )
-        clock.return_value = 1_120.0
-        past_the_first_expiry: Final = await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
-        )
-        assert pinned.model == "o1-preview"
-        assert hit.model == "o1-preview"
-        assert past_the_first_expiry.model == "o1-preview"
-
-    @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
         """A session_id is client-supplied and unauthenticated; two different callers
         (API keys) reusing the same session_id must not poison each other's pin."""

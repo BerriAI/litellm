@@ -1094,17 +1094,16 @@ async def test_dual_cache_async_get_cache_redis_first_treats_a_redis_miss_as_a_m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redis_cache", [None, _UnreachableRedis()], ids=["no_redis", "redis_unreachable"])
-async def test_dual_cache_async_get_cache_redis_first_restarts_the_local_ttl_when_redis_cannot_serve(
+async def test_dual_cache_async_get_cache_redis_first_keeps_the_local_deadline_when_redis_cannot_serve(
     redis_cache: RedisCache | None,
 ):
-    """With no Redis to answer, this process's copy is the pin, so each read restarts its TTL the way
-    a Redis hit restarts it in Redis, and an active session keeps its pin."""
     clock = MagicMock(return_value=1_000.0)
     cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
-    await cache.in_memory_cache.async_set_cache("pin", "local", ttl=30)
-    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+    await cache.in_memory_cache.async_set_cache("pin", "local", ttl=300)
     clock.return_value = 1_200.0
     assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+    clock.return_value = 1_301.0
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
 
 
 @pytest.mark.asyncio
@@ -1157,17 +1156,16 @@ class _RedisThatGoesDown(_RecordingRedis):
 async def test_dual_cache_async_get_cache_redis_first_keeps_a_copy_of_the_hit_for_the_outage_fallback():
     """A replica that only ever read the pin from Redis must still hold it once Redis goes down, and
     the copy carries the caller's TTL so it never outlives the pin it mirrors."""
-    redis = _RedisThatGoesDown({"pin": "from-redis", "other": "from-redis"})
+    redis = _RedisThatGoesDown({"pin": "from-redis"})
     clock = MagicMock(return_value=1_000.0)
     cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     assert await cache.async_get_cache_redis_first("pin", ttl=300) == "from-redis"
-    assert await cache.async_get_cache_redis_first("other", ttl=300) == "from-redis"
 
     redis.down = True
     clock.return_value = 1_299.0
     assert await cache.async_get_cache_redis_first("pin", ttl=300) == "from-redis"
     clock.return_value = 1_301.0
-    assert await cache.async_get_cache_redis_first("other", ttl=300) is None
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
 
 
 @pytest.mark.asyncio

@@ -144,7 +144,6 @@ def _config(
     router: str,
     redis: tuple[str, int] | None,
     settings: Mapping[str, JsonValue] = PLAIN_SETTINGS,
-    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Path:
     shared: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     judge, simple, complex_tier = wires
@@ -172,7 +171,6 @@ def _config(
                         "classification_mode": "user_turn",
                         "return_raw_model_name": True,
                         "session_affinity_ttl_seconds": PIN_TTL_SECONDS,
-                        **router_extras,
                         "tiers": {
                             "SIMPLE": SIMPLE_MODEL,
                             "MEDIUM": SIMPLE_MODEL,
@@ -835,53 +833,6 @@ def test_a_response_cache_hit_does_not_resurrect_a_pin_deleted_in_redis(rig: Rig
     assert _pin(rig.cache, rig.pin_prefix + session) == _pinned(COMPLEX_MODEL, "COMPLEX")
 
 
-def _cached_chat(gateway: Gateway, token: str, ttl: JsonValue) -> Outcome:
-    body: Final = {
-        "model": SIMPLE_MODEL,
-        "messages": [{"role": "user", "content": f"hello {token}"}],
-        "cache": {"use-cache": True, "ttl": ttl},
-    }
-    with httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as client:
-        response: Final = client.post(
-            f"{_origin(gateway)}/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {gateway.key}"}
-        )
-    assert response.status_code == 200, response.text
-    payload: Final = JSON_OBJECT.validate_json(response.content)
-    return Outcome(string_value(payload["id"]), string_value(payload["model"]))
-
-
-REQUEST_TTLS: Final[tuple[tuple[str, JsonValue], ...]] = (
-    ("nan", "nan"),
-    ("unparseable", "not-a-number"),
-    ("infinite", "inf"),
-    ("finite", "600"),
-    ("list", [60]),
-    ("empty", ""),
-    ("5kb", "x" * 5120),
-    ("null", None),
-    ("integer", 60),
-    ("float-overflowing-integer", 10**400),
-)
-
-
-@pytest.mark.parametrize("ttl", tuple(ttl for _, ttl in REQUEST_TTLS), ids=tuple(name for name, _ in REQUEST_TTLS))
-def test_a_request_ttl_that_is_not_a_finite_number_still_serves_the_repeat_from_the_cache(
-    rig: Rig, ttl: JsonValue, record_property: Recorder
-) -> None:
-    first, _ = _workers(rig.owned)
-    token: Final = _token()
-    later: Final = _token()
-    _drain_all((rig.judge, rig.simple, rig.complex_tier))
-    with _only(rig.owned, first):
-        repeated: Final = tuple(_cached_chat(rig.owned.gateway, token, ttl) for _ in range(2))
-        afterwards: Final = tuple(_cached_chat(rig.owned.gateway, later, str(PIN_TTL_SECONDS)) for _ in range(2))
-    posts: Final = _posts(rig.simple)
-    record_property("response_ids", " ".join(outcome.identity for outcome in (*repeated, *afterwards)))
-    assert sum(token.encode() in request.body for request in posts) == 1, len(posts)
-    assert sum(later.encode() in request.body for request in posts) == 1, len(posts)
-    assert {outcome.model for outcome in (*repeated, *afterwards)} == {SIMPLE_MODEL}, (repeated, afterwards)
-
-
 @contextmanager
 def _own_rig(
     directory: Path,
@@ -890,7 +841,6 @@ def _own_rig(
     healthcheck: WorkerHealthcheck,
     overrides: dict[str, str],
     judging: Callable[[Request], Reply] = _judge,
-    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Iterator[tuple[OwnedProxy, Wire, Wire, Wire, str]]:
     with (
         gateway_from_environment() as lane,
@@ -899,9 +849,7 @@ def _own_rig(
         wire_server(_tier(COMPLEX_MODEL)) as complex_tier,
     ):
         router: Final = "own-" + uuid.uuid4().hex[:8]
-        config: Final = _config(
-            directory, (judge.url, simple.url, complex_tier.url), router, redis, PLAIN_SETTINGS, router_extras
-        )
+        config: Final = _config(directory, (judge.url, simple.url, complex_tier.url), router, redis, PLAIN_SETTINGS)
         with owned_proxy_process(
             lane, directory, overrides, config=config, workers=workers, healthcheck=healthcheck
         ) as owned:
@@ -978,23 +926,6 @@ def test_without_redis_the_pin_lives_in_worker_memory(tmp_path: Path, record_pro
             ("complex", 0),
         ), steps
         assert steps[3].outcome.model == steps[2].outcome.model != steps[0].outcome.model, steps
-        _record(record_property, *steps)
-
-
-@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
-def test_a_session_ttl_past_float_range_keeps_the_pin_in_worker_memory(tmp_path: Path, record_property: Recorder) -> None:
-    with _own_rig(
-        tmp_path, None, 1, WorkerHealthcheck.STRICT, {}, router_extras={"session_affinity_ttl_seconds": 10**400}
-    ) as (owned, judge, simple, complex_tier, router):
-        wires: Final = (judge, simple, complex_tier)
-        session: Final = _session()
-        script: Final[Script] = (("simple", _token()), ("continue", _token()), ("continue", _token()))
-        steps: Final = tuple(_own_step(owned, wires, router, session, script[: index + 1], None) for index in range(3))
-        assert tuple((step.tier, step.judge_posts) for step in steps) == (
-            ("simple", 1),
-            ("simple", 0),
-            ("simple", 0),
-        ), steps
         _record(record_property, *steps)
 
 
