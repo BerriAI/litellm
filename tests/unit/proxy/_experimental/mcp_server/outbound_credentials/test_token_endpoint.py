@@ -16,7 +16,7 @@ import jwt
 import litellm
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
@@ -61,6 +61,20 @@ _EC_PRIVATE_PEM = (
 )
 _PUBLIC_PEM = (
     _RSA_KEY.public_key()
+    .public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    .decode()
+)
+_ED25519_KEY = ed25519.Ed25519PrivateKey.generate()
+_ED25519_PRIVATE_PEM = _ED25519_KEY.private_bytes(
+    serialization.Encoding.PEM,
+    serialization.PrivateFormat.PKCS8,
+    serialization.NoEncryption(),
+).decode()
+_ED25519_PUBLIC_PEM = (
+    _ED25519_KEY.public_key()
     .public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -140,6 +154,38 @@ async def test_fetch_private_key_jwt_client_assertion():
 
 
 @pytest.mark.asyncio
+async def test_fetch_signs_eddsa_client_assertion_for_ed25519_key():
+    """The widened read-side signing_alg admits legacy EdDSA so a stored Ed25519 key keeps
+    working outside FIPS mode; the minted assertion is a real EdDSA token signed by that key."""
+    client = _client(_resp())
+    with patch(_PATCH_TARGET, return_value=client):
+        await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            PrivateKeyJwtAuth(
+                private_key=SecretStr(_ED25519_PRIVATE_PEM),
+                key_id="ed-kid",
+                signing_alg="EdDSA",
+            ),
+        )
+
+    data = _posted_data(client)
+    assert data["client_assertion_type"] == CLIENT_ASSERTION_TYPE
+    header = jwt.get_unverified_header(data["client_assertion"])
+    assert header["alg"] == "EdDSA"
+    assert header["kid"] == "ed-kid"
+    decoded = jwt.decode(
+        data["client_assertion"],
+        _ED25519_PUBLIC_PEM,
+        algorithms=["EdDSA"],
+        audience=_ENDPOINT,
+    )
+    assert decoded["iss"] == _CLIENT_ID
+    assert decoded["sub"] == _CLIENT_ID
+
+
+@pytest.mark.asyncio
 async def test_fetch_http_error_maps_to_upstream_unavailable_with_status():
     error_resp = MagicMock()
     error_resp.status_code = 403
@@ -195,8 +241,9 @@ async def test_fetch_network_error_maps_to_upstream_unavailable(raised):
     [
         PrivateKeyJwtAuth(private_key=SecretStr("not-a-pem-key"), signing_alg="RS256"),
         PrivateKeyJwtAuth(private_key=SecretStr(_EC_PRIVATE_PEM), signing_alg="RS256"),
+        PrivateKeyJwtAuth(private_key=SecretStr(_ED25519_PRIVATE_PEM), signing_alg="RS256"),
     ],
-    ids=["garbage-key", "key-alg-mismatch"],
+    ids=["garbage-key", "key-alg-mismatch", "ed25519-key-rs256-alg"],
 )
 async def test_fetch_unsignable_client_assertion_is_misconfigured_not_a_crash(auth):
     client = AsyncMock()

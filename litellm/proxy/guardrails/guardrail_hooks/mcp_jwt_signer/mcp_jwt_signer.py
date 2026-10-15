@@ -74,6 +74,7 @@ import os
 import re
 import time
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import httpx
@@ -90,10 +91,10 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
+from litellm.proxy.auth.jwt_algorithms import allowed_jwt_algorithms, jwks_keys_for
+from litellm.proxy.common_utils.fips import is_fips_mode
 from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
@@ -132,6 +133,17 @@ _MCP_JWT_CALL_TYPES: Final = frozenset({"call_mcp_tool", "list_mcp_tools"})
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
 _jwks_cache: Final[dict[str, tuple[Sequence[Mapping[str, object]], float]]] = {}
 _JWKS_CACHE_TTL: Final = 3600  # 1 hour
+
+
+@lru_cache(maxsize=1)
+def _log_eddsa_deprecation() -> None:
+    """The branch-standard once-per-process EdDSA deprecation notice (handle_jwt emits the
+    same text at its entrance); this guardrail accepts EdDSA keys only outside FIPS mode."""
+    verbose_proxy_logger.warning(
+        "JWT Auth: accepted a token signed with EdDSA, which is deprecated and not FIPS 140-3 approved; "
+        "it is rejected when LITELLM_FIPS_MODE=true. Move the IdP signing key to RS256, PS256 or ES256; "
+        "EdDSA support will be removed in the next major release"
+    )
 
 
 def get_mcp_jwt_signer() -> Optional["MCPJWTSigner"]:
@@ -454,7 +466,10 @@ class MCPJWTSigner(CustomGuardrail):
         unverified_header: Final = jwt.get_unverified_header(raw_token)
         kid: Final = unverified_header.get("kid")
 
-        approved_keys: Final = jwks_keys_for(jwks_keys, APPROVED_JWT_ALGORITHMS)
+        # Mirror the main JWT entrance (handle_jwt): outside FIPS mode the legacy EdDSA keys
+        # stay usable so an OKP/Ed25519 IdP keeps verifying; inside FIPS only approved
+        # algorithms pass and the clear error below fires.
+        approved_keys: Final = jwks_keys_for(jwks_keys, allowed_jwt_algorithms(is_fips_mode()))
         if not approved_keys:
             raise jwt.exceptions.PyJWKSetError(f"No JWKS key at {jwks_uri!r} uses an approved signing algorithm")
 
@@ -480,6 +495,10 @@ class MCPJWTSigner(CustomGuardrail):
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
         # it infers from the key type (RSAPublicKey → RS256).
         alg: Final = getattr(signing_jwk, "algorithm_name", None) or "RS256"
+        if alg == "EdDSA":
+            # Only reachable outside FIPS mode (inside it the filter above drops EdDSA keys);
+            # same once-per-process deprecation notice the main JWT entrance emits.
+            _log_eddsa_deprecation()
 
         decode_options: Final[Options] = {"verify_exp": True}
         decode_kwargs: Final[_JWTDecodeKwargs] = {

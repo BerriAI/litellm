@@ -201,6 +201,7 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.common_utils.fips import is_fips_mode
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap_at_startup,
@@ -228,7 +229,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
 from litellm.types.proxy.auth.jwt_algorithms import (
     APPROVED_JWT_ALGORITHMS,
     LEGACY_JWT_ALGORITHMS,
-    ApprovedJwtAlgorithm,
+    StoredJwtAlgorithm,
 )
 from litellm.types.utils import CallTypes
 
@@ -439,7 +440,7 @@ class MCPServerConfig(TypedDict, total=False):
     id_jag_resource: str
     client_private_key: str
     client_private_key_id: str
-    client_assertion_signing_alg: ApprovedJwtAlgorithm
+    client_assertion_signing_alg: StoredJwtAlgorithm
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
@@ -1607,26 +1608,38 @@ def warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
             )
 
 
-def _stored_client_assertion_signing_alg(value: object, server_name: str) -> ApprovedJwtAlgorithm:
+def _stored_client_assertion_signing_alg(value: object, server_name: str) -> StoredJwtAlgorithm:
     if value in APPROVED_JWT_ALGORITHMS:
         return value
+    if isinstance(value, str) and value in LEGACY_JWT_ALGORITHMS:
+        # The FIPS flag decides whether legacy crypto may run, mirroring the main JWT entrance
+        # (handle_jwt): outside FIPS the stored EdDSA keeps signing its Ed25519 key (a coerced
+        # RS256 cannot be produced by that key, so coercion bricks the server on upgrade);
+        # inside FIPS nothing non-approved may run, so the RS256 fallback stands and the
+        # exchange fails loudly until the key is rotated.
+        if not is_fips_mode():
+            verbose_logger.warning(
+                "MCP server %s: client_assertion_signing_alg %r is legacy and not FIPS 140-3 approved; "
+                "accepted outside FIPS mode, so the stored Ed25519 key keeps signing; rotate to an approved "
+                "RSA/EC key (see APPROVED_JWT_ALGORITHMS) — EdDSA support ends in the next major release",
+                server_name,
+                value,
+            )
+            return value
+        verbose_logger.warning(
+            "MCP server %s: client_assertion_signing_alg %r is legacy and not approved for signing; the "
+            "stored client_private_key cannot sign the RS256 fallback, so token exchange will fail until "
+            "the key is rotated to RSA or EC (see APPROVED_JWT_ALGORITHMS)",
+            server_name,
+            value,
+        )
+        return "RS256"
     if value is not None:
-        if value in LEGACY_JWT_ALGORITHMS:
-            # An Ed25519 key cannot produce the RS256 fallback, so this server's token exchange
-            # fails until the stored key is rotated; do not imply the fallback "just works".
-            verbose_logger.warning(
-                "MCP server %s: client_assertion_signing_alg %r is legacy and not approved for signing; the "
-                "stored client_private_key cannot sign the RS256 fallback, so token exchange will fail until "
-                "the key is rotated to RSA or EC (see APPROVED_JWT_ALGORITHMS)",
-                server_name,
-                value,
-            )
-        else:
-            verbose_logger.warning(
-                "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
-                server_name,
-                value,
-            )
+        verbose_logger.warning(
+            "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
+            server_name,
+            value,
+        )
     return "RS256"
 
 

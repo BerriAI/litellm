@@ -1334,10 +1334,22 @@ def _oct_idp_key_and_token(now: int):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "key_and_token", (_oct_idp_key_and_token, _okp_idp_key_and_token), ids=("oct-HS256", "OKP-EdDSA")
+    "key_and_token,fips",
+    [
+        (_oct_idp_key_and_token, None),
+        (_okp_idp_key_and_token, "true"),
+    ],
+    ids=("oct-HS256", "OKP-EdDSA-fips-on"),
 )
-async def test_verify_incoming_jwt_rejects_jwks_without_approved_algorithms(key_and_token):
-    """A JWKS whose only keys use non-approved algorithms can never verify the incoming token."""
+async def test_verify_incoming_jwt_rejects_jwks_without_approved_algorithms(monkeypatch, key_and_token, fips):
+    """A JWKS whose only keys use non-approved algorithms can never verify the incoming token.
+
+    HS256 is never allowed; EdDSA is legacy — refused under FIPS mode, accepted (with a
+    deprecation warning) outside it, mirroring the main JWT entrance in handle_jwt."""
+    if fips is None:
+        monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_FIPS_MODE", fips)
     jwks_key, incoming_token = key_and_token(int(time.time()))
     signer = _make_signer(
         access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
@@ -1355,6 +1367,55 @@ async def test_verify_incoming_jwt_rejects_jwks_without_approved_algorithms(key_
         ):
             with pytest.raises(jwt.exceptions.PyJWKSetError, match="approved signing algorithm"):
                 await signer._verify_incoming_jwt(incoming_token)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_okp_eddsa_outside_fips_mode(monkeypatch):
+    """Flag-off legacy grace, mirroring handle_jwt: an IdP whose JWKS only carries OKP/Ed25519
+    keys still verifies its tokens; the approved-only filter must not 401 it outside FIPS."""
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    jwks_key, incoming_token = _okp_idp_key_and_token(int(time.time()))
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+    )
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=[jwks_key],
+        ):
+            payload = await signer._verify_incoming_jwt(incoming_token)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_matches_okp_kid_in_mixed_jwks_outside_fips_mode(monkeypatch):
+    """A mixed JWKS (approved RSA keys plus one OKP/Ed25519 key) resolves the OKP kid outside
+    FIPS mode instead of dropping the key and dying on a misleading kid-mismatch error."""
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    okp_jwk, incoming_token = _okp_idp_key_and_token(int(time.time()))
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+    )
+    jwks = [*signer.get_jwks()["keys"], okp_jwk]
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=jwks,
+        ):
+            payload = await signer._verify_incoming_jwt(incoming_token)
+    assert payload["sub"] == "idp-user"
 
 
 @pytest.mark.asyncio

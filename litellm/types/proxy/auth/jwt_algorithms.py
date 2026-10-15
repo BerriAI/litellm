@@ -16,4 +16,10 @@ APPROVED_JWT_ALGORITHMS: Final[tuple[ApprovedJwtAlgorithm, ...]] = (
     "ES512",
 )
 
-LEGACY_JWT_ALGORITHMS: Final = ("EdDSA",)
+LegacyJwtAlgorithm: TypeAlias = Literal["EdDSA"]
+
+LEGACY_JWT_ALGORITHMS: Final[tuple[LegacyJwtAlgorithm, ...]] = ("EdDSA",)
+
+StoredJwtAlgorithm: TypeAlias = ApprovedJwtAlgorithm | LegacyJwtAlgorithm
+"""A value read back from stored/declared config: approved, or legacy EdDSA carried under
+read-side grace outside FIPS mode (write-side validation stays approved-only)."""

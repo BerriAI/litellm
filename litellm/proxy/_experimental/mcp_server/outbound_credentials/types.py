@@ -46,7 +46,7 @@ from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
-from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
+from litellm.types.proxy.auth.jwt_algorithms import StoredJwtAlgorithm
 
 
 class AuthResolution(str, Enum):
@@ -328,7 +328,9 @@ class PrivateKeyJwtAuth(LiteLLMBaseModel):
     source: Literal["private_key_jwt"] = "private_key_jwt"
     private_key: SecretStr
     key_id: str | None = None
-    signing_alg: ApprovedJwtAlgorithm = "RS256"
+    # Read-side surface: carries a stored legacy EdDSA value under FIPS-gated grace; the
+    # write-side request validators stay approved-only.
+    signing_alg: StoredJwtAlgorithm = "RS256"
 
 
 class ClientSecretAuth(LiteLLMBaseModel):

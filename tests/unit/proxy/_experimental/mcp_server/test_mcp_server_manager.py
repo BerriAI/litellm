@@ -17829,9 +17829,11 @@ def test_stored_client_assertion_signing_alg_falls_back_to_rs256_for_non_approve
     assert "client_assertion_signing_alg" in caplog.text and "HS256" in caplog.text and "srv" in caplog.text
 
 
-def test_stored_client_assertion_signing_alg_warns_eddsa_key_cannot_sign_fallback(caplog):
-    """A stored EdDSA server kept booting pre-allowlist; the fallback warning must say its
-    Ed25519 key cannot produce the RS256 fallback, so exchanges fail until the key is rotated."""
+def test_stored_client_assertion_signing_alg_warns_eddsa_key_cannot_sign_fallback(monkeypatch, caplog):
+    """FIPS on: a stored EdDSA server keeps today's behavior — coerced to the RS256 fallback with
+    the rotate-your-key warning, since its Ed25519 key cannot produce RS256, so the exchange fails
+    loudly instead of silently running a non-approved algorithm."""
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _stored_client_assertion_signing_alg,
     )
@@ -17841,6 +17843,22 @@ def test_stored_client_assertion_signing_alg_warns_eddsa_key_cannot_sign_fallbac
     assert "EdDSA" in caplog.text and "srv" in caplog.text
     assert "cannot sign" in caplog.text and "token exchange will fail" in caplog.text
     assert "rotated" in caplog.text
+
+
+def test_stored_client_assertion_signing_alg_keeps_eddsa_outside_fips_mode(monkeypatch, caplog):
+    """FIPS off: a stored EdDSA value passes through verbatim (read-side grace, mirroring
+    handle_jwt's legacy-accepted-with-deprecation rule), so the server's Ed25519 key keeps
+    signing instead of bricking on upgrade against an unsignable RS256 fallback."""
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _stored_client_assertion_signing_alg,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert _stored_client_assertion_signing_alg("EdDSA", "srv") == "EdDSA"
+    assert "EdDSA" in caplog.text and "srv" in caplog.text
+    assert "legacy" in caplog.text.lower()
+    assert "rotate" in caplog.text.lower()
 
 
 def test_stored_client_assertion_signing_alg_passes_through_approved(caplog):
@@ -17855,6 +17873,9 @@ def test_stored_client_assertion_signing_alg_passes_through_approved(caplog):
 
 
 def test_mcp_server_model_rejects_non_approved_client_assertion_signing_alg():
+    """The runtime (read-side) model still refuses non-legacy garbage; the legacy EdDSA value is
+    admitted read-side (widened via LEGACY_JWT_ALGORITHMS) while the write-side request
+    validators in litellm.proxy._types stay strict and 422 it (see test__types.py)."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc:
@@ -17862,9 +17883,17 @@ def test_mcp_server_model_rejects_non_approved_client_assertion_signing_alg():
             server_id="srv",
             name="srv",
             transport="http",
-            client_assertion_signing_alg="EdDSA",
+            client_assertion_signing_alg="HS256",
         )
     assert "client_assertion_signing_alg" in str(exc.value)
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        client_assertion_signing_alg="EdDSA",
+    )
+    assert server.client_assertion_signing_alg == "EdDSA"
 
 
 @pytest.mark.asyncio
