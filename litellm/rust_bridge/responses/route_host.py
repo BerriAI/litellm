@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # narrows caller json the checker cannot see into
@@ -7,6 +8,7 @@ from typing import Final, cast  # noqa: TID251  # narrows caller json the checke
 import litellm
 from litellm import get_llm_provider
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.databricks.responses.transformation import DatabricksResponsesAPIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
@@ -27,12 +29,15 @@ _CONFIGS: Final[Mapping[str, OpenAIResponsesAPIConfig]] = MappingProxyType(
         "xai": XAIResponsesAPIConfig(),
         "hosted_vllm": HostedVLLMResponsesAPIConfig(),
         "fireworks_ai": FireworksAIResponsesAPIConfig(),
+        "databricks": DatabricksResponsesAPIConfig(),
     }
 )
 _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:
+    if provider == "databricks":
+        return None, None
     provider_key: Final = {"openai": litellm.openai_key, "azure": litellm.azure_key}.get(provider)
     return litellm.api_key or provider_key, litellm.api_base
 
@@ -88,6 +93,8 @@ def decline_reason(request: Mapping[str, object]) -> str | None:
 def _provider_decline_reason(provider: str, model: str, request: Mapping[str, object]) -> str | None:
     if provider == "azure":
         return _azure_decline_reason(model, request)
+    if provider == "databricks":
+        return _databricks_decline_reason(model, request)
     if provider not in ("xai", "hosted_vllm", "fireworks_ai"):
         return None
     provider_key, provider_base = provider_connection(
@@ -104,6 +111,23 @@ def _provider_decline_reason(provider: str, model: str, request: Mapping[str, ob
         return "native Fireworks Responses needs an api key"
     if provider == "fireworks_ai" and get_fireworks_session_id({"metadata": request.get("litellm_metadata")}):
         return "native Fireworks Responses does not implement session affinity"
+    return None
+
+
+def _databricks_decline_reason(model: str, request: Mapping[str, object]) -> str | None:
+    if "gpt" not in model.lower():
+        return "Databricks serves Responses only on GPT endpoints"
+    api_base: Final = (
+        optional_str(request.get("api_base"))
+        or optional_str(request.get("base_url"))
+        or os.getenv("DATABRICKS_API_BASE")
+    )
+    if not api_base:
+        return "native Databricks Responses does not implement Databricks SDK auth"
+    if os.getenv("DATABRICKS_CLIENT_ID") and os.getenv("DATABRICKS_CLIENT_SECRET"):
+        return "native Databricks Responses does not implement OAuth M2M"
+    if not (optional_str(request.get("api_key")) or os.getenv("DATABRICKS_API_KEY")):
+        return "native Databricks Responses does not implement Databricks SDK auth"
     return None
 
 

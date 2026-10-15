@@ -5,6 +5,7 @@ use litellm_host::interceptors::{ProviderIdentity, RequestContext};
 use litellm_llms::{
     azure::responses::transformation::AZURE_RESPONSES_CONFIG,
     base_llm::responses::transformation::BaseResponsesApiConfig,
+    databricks::responses::transformation::DATABRICKS_RESPONSES_CONFIG,
     fireworks_ai::responses::transformation::FIREWORKS_AI_RESPONSES_CONFIG,
     hosted_vllm::responses::transformation::HOSTED_VLLM_RESPONSES_CONFIG,
     openai::responses::transformation::OpenAiResponsesApiConfig,
@@ -99,6 +100,7 @@ pub(super) fn resolve_provider(
             Ok(LlmProviders::Openrouter) => (&OPENROUTER_RESPONSES_CONFIG, resolved.into()),
             Ok(LlmProviders::Azure) => (&AZURE_RESPONSES_CONFIG, resolved.into()),
             Ok(LlmProviders::Xai) => (&XAI_RESPONSES_CONFIG, resolved.into()),
+            Ok(LlmProviders::Databricks) => (&DATABRICKS_RESPONSES_CONFIG, resolved.into()),
             Ok(LlmProviders::FireworksAi) => (&FIREWORKS_AI_RESPONSES_CONFIG, resolved.into()),
             Ok(LlmProviders::HostedVllm) => (&HOSTED_VLLM_RESPONSES_CONFIG, resolved.into()),
             _ => return Err(Error::Unsupported("native HTTP responses provider")),
@@ -150,6 +152,12 @@ mod tests {
     #[case::openrouter_native_id_implicit("openrouter/auto", None, "openrouter", "auto")]
     #[case::azure_prefix("azure/my-deployment", None, "azure", "my-deployment")]
     #[case::azure_explicit("my-deployment", Some("azure"), "azure", "my-deployment")]
+    #[case::databricks_prefix(
+        "databricks/databricks-gpt-5-nano",
+        None,
+        "databricks",
+        "databricks-gpt-5-nano"
+    )]
     #[case::fireworks_prefix(
         "fireworks_ai/accounts/fireworks/models/qwen3",
         None,
