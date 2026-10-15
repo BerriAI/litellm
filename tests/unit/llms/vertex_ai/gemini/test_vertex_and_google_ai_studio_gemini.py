@@ -9686,62 +9686,58 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
     assert chunk.usage.cache_creation_input_tokens == 1280
 
 
-@pytest.fixture
-def gemini_thought_summaries_off():
-    original = litellm.gemini_include_thoughts_default
-    litellm.gemini_include_thoughts_default = False
-    try:
-        yield
-    finally:
-        litellm.gemini_include_thoughts_default = original
+THOUGHT_SUMMARY_REQUESTS: Final = (
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "minimal"}, id="budget-minimal"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "low"}, id="budget-low"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "medium"}, id="budget-medium"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "high"}, id="budget-high"),
+    pytest.param("gemini-3.6-flash", {"reasoning_effort": "minimal"}, id="level-minimal"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "minimal"}, id="level-minimal-mapped-to-low"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "low"}, id="level-low"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "medium"}, id="level-medium"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "high"}, id="level-high"),
+    pytest.param("gemini-2.5-flash", {"thinking": {"type": "enabled", "budget_tokens": 2048}}, id="budget-thinking"),
+    pytest.param("gemini-3.8-flash", {"thinking": {"type": "enabled", "budget_tokens": 2048}}, id="level-thinking"),
+)
 
 
-@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
-def test_thinking_budget_includes_thoughts_by_default(reasoning_effort):
-    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
+async def _sent_thinking_config(model: str, thinking_params: dict[str, object]) -> dict[str, object]:
+    captured: Final[dict[str, dict]] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    await litellm.acompletion(
+        model=f"gemini/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-gemini-key",
+        client=client,
+        **thinking_params,
     )
-    assert config["includeThoughts"] is True
+    return captured["body"]["generationConfig"]["thinkingConfig"]
 
 
-@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
-def test_thinking_budget_can_drop_thought_summaries_while_still_thinking(
-    reasoning_effort, gemini_thought_summaries_off
-):
-    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
-    )
-    assert config["includeThoughts"] is False
-    assert config["thinkingBudget"] > 0
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "thinking_params"), THOUGHT_SUMMARY_REQUESTS)
+async def test_gemini_thought_summaries_off_keeps_thinking_config_otherwise_unchanged(
+    model: str,
+    thinking_params: dict[str, object],
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summaries_on: Final = await _sent_thinking_config(model, thinking_params)
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+    summaries_off: Final = await _sent_thinking_config(model, thinking_params)
 
-
-@pytest.mark.parametrize("reasoning_effort", ["minimal", "low", "medium", "high"])
-def test_thinking_level_can_drop_thought_summaries_while_still_thinking(
-    reasoning_effort, gemini_thought_summaries_off
-):
-    config = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-        reasoning_effort=reasoning_effort, model="gemini-3-pro-preview"
-    )
-    assert config["includeThoughts"] is False
-    assert config["thinkingLevel"] in ("minimal", "low", "medium", "high")
-
-
-@pytest.mark.parametrize("reasoning_effort", ["disable", "none"])
-def test_disabling_thinking_still_disables_thought_summaries(reasoning_effort):
-    budget_config = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-        reasoning_effort=reasoning_effort, model="gemini-2.5-pro"
-    )
-    level_config = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-        reasoning_effort=reasoning_effort, model="gemini-3-pro-preview"
-    )
-    assert budget_config["includeThoughts"] is False
-    assert level_config["includeThoughts"] is False
-
-
-def test_thinking_param_can_drop_thought_summaries(gemini_thought_summaries_off):
-    config = VertexGeminiConfig._map_thinking_param(
-        thinking_param={"type": "enabled", "budget_tokens": 2048},
-        model="gemini-2.5-pro",
-    )
-    assert config["includeThoughts"] is False
-    assert config["thinkingBudget"] == 2048
+    assert summaries_on["includeThoughts"] is True
+    assert summaries_off == {**summaries_on, "includeThoughts": False}
