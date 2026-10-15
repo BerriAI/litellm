@@ -1710,6 +1710,12 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.laya.decisions.transformation import (
+        LayaDecisionsConfig as LayaDecisionsConfig,
+    )
+    from .llms.bespoke.decisions.transformation import (
+        BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
@@ -2281,6 +2287,7 @@ if TYPE_CHECKING:
     get_response_string: Callable[..., str]
     supports_function_calling: Callable[..., bool]
     supports_web_search: Callable[..., bool]
+    supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]

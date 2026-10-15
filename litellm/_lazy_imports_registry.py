@@ -31,6 +31,7 @@ UTILS_NAMES: Final = (
     "create_tokenizer",
     "supports_function_calling",
     "supports_web_search",
+    "supports_tool_search",
     "supports_url_context",
     "supports_response_schema",
     "supports_parallel_function_calling",
@@ -166,6 +167,8 @@ LLM_CONFIG_NAMES: Final = (
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
+    "LayaDecisionsConfig",
+    "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
     "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
@@ -475,6 +478,7 @@ _UTILS_IMPORT_MAP: Final = {
     "create_tokenizer": (".utils", "create_tokenizer"),
     "supports_function_calling": (".utils", "supports_function_calling"),
     "supports_web_search": (".utils", "supports_web_search"),
+    "supports_tool_search": (".utils", "supports_tool_search"),
     "supports_url_context": (".utils", "supports_url_context"),
     "supports_response_schema": (".utils", "supports_response_schema"),
     "supports_parallel_function_calling": (
@@ -736,6 +740,8 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.hosted_vllm.decisions.transformation",
         "HostedVLLMDecisionsConfig",
     ),
+    "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
+    "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (

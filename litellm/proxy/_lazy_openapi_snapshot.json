@@ -648,6 +648,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -686,6 +700,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -812,6 +843,14 @@
               "title": "Access Model Names",
               "type": "array"
             },
+            "access_skill_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Skill Names",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -866,6 +905,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             },
             "updated_at": {
               "format": "date-time",
@@ -957,6 +1013,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -995,6 +1065,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",
@@ -7644,7 +7731,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -10600,6 +10687,49 @@
                       "title": "Audio",
                       "type": "array"
                     },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -11447,6 +11577,49 @@
                       "maxItems": 4,
                       "title": "Audio",
                       "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
@@ -24195,6 +24368,60 @@
           "title": "OutputTokensDetails",
           "type": "object"
         },
+        "OutputToolSearchCall": {
+          "additionalProperties": true,
+          "properties": {
+            "arguments": {
+              "title": "Arguments"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_search_call",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "arguments",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchCall",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -26561,6 +26788,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OutputToolSearchCall"
                       }
                     ]
                   },
@@ -33920,6 +34150,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -36680,6 +36932,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -40063,6 +40337,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -44104,6 +44400,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -46261,6 +46579,10 @@
             },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "defer_loading": {
+              "title": "Defer Loading",
+              "type": "boolean"
             },
             "eager_input_streaming": {
               "title": "Eager Input Streaming",
@@ -54063,6 +54385,17 @@
                 }
               ],
               "title": "Api Key"
+            },
+            "input_cost_per_query": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Cost Per Query"
             },
             "max_retries": {
               "anyOf": [

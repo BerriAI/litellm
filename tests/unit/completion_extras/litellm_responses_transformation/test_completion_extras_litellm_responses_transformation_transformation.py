@@ -832,6 +832,168 @@ def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
     assert converted == [flat_tool]
 
 
+@pytest.mark.parametrize(
+    ("tool", "expected_defer_loading"),
+    [
+        ({"type": "function", "function": {"name": "lookup"}, "defer_loading": True}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": False}, False),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": None}, True),
+    ],
+    ids=["tool-level", "function-level", "tool-level-wins", "null-tool-level-falls-back"],
+)
+def test_convert_tools_to_responses_format_keeps_defer_loading(tool, expected_defer_loading):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    converted = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [{"type": "tool_search"}, tool]
+    )
+
+    assert converted == [
+        {"type": "tool_search"},
+        {
+            "type": "function",
+            "name": "lookup",
+            "parameters": None,
+            "strict": None,
+            "description": None,
+            "defer_loading": expected_defer_loading,
+        },
+    ]
+
+
+_TOOL_SEARCH: Final = {"type": "tool_search"}
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "with_tool_search", "expected_defer_loading"),
+    [(True, False, None), (True, True, True), (False, True, True)],
+    ids=["drop-params-no-search", "drop-params-with-search", "no-drop-params-with-search"],
+)
+def test_transform_request_forwards_defer_loading_only_beside_tool_search(
+    deferred_tool, drop_params, with_tool_search, expected_defer_loading
+):
+    tools: Final = [_TOOL_SEARCH, deferred_tool] if with_tool_search else [deferred_tool]
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": tools},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert lookup_tool.get("defer_loading") == expected_defer_loading
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+    ],
+    ids=["tool-level", "function-level"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop-params", "drop-params"])
+@pytest.mark.parametrize(
+    "tool_search_tool",
+    [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
+    ids=["client-only", "hosted-and-client"],
+)
+def test_transform_request_drops_defer_loading_beside_client_tool_search(
+    deferred_tool, drop_params, tool_search_tool
+):
+    tool_search_tools: Final = (
+        [tool_search_tool]
+        if tool_search_tool.get("execution") == "client"
+        else [tool_search_tool, {"type": "tool_search", "execution": "client"}]
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": [*tool_search_tools, deferred_tool]},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+        {"type": "function", "name": "lookup", "defer_loading": True},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_deferred_tool_without_tool_search(deferred_tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"tool_search.*drop_params"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([deferred_tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": False},
+        {"type": "function", "name": "lookup", "defer_loading": False},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_omits_false_defer_loading_without_tool_search(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([tool])
+
+    assert "defer_loading" not in converted[0]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": "yes"}},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["tool-level", "function-level", "flat"],
+)
+def test_convert_tools_to_responses_format_rejects_non_bool_defer_loading_without_drop_params(tool):
+    with pytest.raises(litellm.UnsupportedParamsError, match="defer_loading must be a boolean"):
+        LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([_TOOL_SEARCH, tool])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": "true"},
+        {"type": "function", "name": "lookup", "defer_loading": "true"},
+    ],
+    ids=["nested", "flat"],
+)
+def test_convert_tools_to_responses_format_drops_non_bool_defer_loading_under_drop_params(tool):
+    converted: Final = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format(
+        [_TOOL_SEARCH, tool], drop_params=True
+    )
+
+    lookup_tool: Final = next(item for item in converted if item.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -5267,3 +5429,94 @@ def test_convert_response_output_numbers_two_function_calls_zero_and_one() -> No
     tool_calls: Final = choices[0].message.tool_calls
     assert tool_calls is not None
     assert [(call.index, call.function.name) for call in tool_calls] == [(0, "get_weather"), (1, "get_time")]
+
+
+def _final_answer_message(item_id: str, text: str) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_convert_response_output_structured_output_keeps_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    """gpt-5.4-mini on /responses with a strict json_schema and a 'say what you will do first'
+    system prompt returned two final_answer items, each the whole document (captured 2026-10-14)."""
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (_final_answer_message("msg_1", '{"city":"Paris"}'), _final_answer_message("msg_2", '{"city":"Paris"}')),
+        structured_output=structured_output,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == expected_content
+    if structured_output:
+        assert json.loads(expected_content) == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}}, True),
+        ({"response_format": {"type": "json_object"}}, True),
+        ({"response_format": {"type": "text"}}, False),
+        ({}, False),
+    ],
+)
+def test_is_structured_output_request(optional_params: dict[str, object], expected: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        is_structured_output_request,
+    )
+
+    assert is_structured_output_request(optional_params) is expected
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_stream_structured_output_drops_text_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, structured_output=structured_output
+    )
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.completed"},
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert content == expected_content
+    assert chunks[-1].choices[0].finish_reason == "stop"

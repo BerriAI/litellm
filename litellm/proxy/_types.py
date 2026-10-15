@@ -2792,6 +2792,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_requester_ip_address_logging: bool | None = Field(
+        None,
+        description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
+    )
     spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
         None,
         description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
@@ -4260,6 +4264,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     models: tuple[str, ...]
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
+    skill_names: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4274,6 +4279,7 @@ class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
     may_raise_max_budget: bool = False
+    proxy_controlled_metadata_keys: tuple[str, ...] = ()
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
@@ -4297,6 +4303,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
+    # Listed group ids with no row; skill grants are suspended while this is non-empty.
+    unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
