@@ -1,6 +1,8 @@
 """Unit tests for the shared LLM-judge primitives: verdict parsing, router resolution, dispatch."""
 
 import json
+import time
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +27,39 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 def test_parse_json_verdict_tolerates_fences_and_prose(raw, expected):
     assert parse_json_verdict(raw)["preference"] == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ('```json   {"preference": "A"}   ```', "A"),
+        ('```\n\n  {"preference": "B"}  \n\n```', "B"),
+        ('```json{"preference": "tie"}```', "tie"),
+    ],
+)
+def test_parse_json_verdict_still_trims_padding_inside_the_fence(raw, expected):
+    """Whitespace between the fence and the JSON is dropped, however it is spelled."""
+    assert parse_json_verdict(raw)["preference"] == expected
+
+
+def test_parse_json_verdict_is_not_quadratic_in_an_unclosed_fence():
+    """A judge reply that opens a fence and never closes it must not burn the event loop.
+
+    The judge is fed the end user's own text, so the reply it produces is steerable by
+    that user. The fence regex used to put a `\\s*` on each side of its capture; under
+    DOTALL those overlap the capture, and a failing match walks cubic-many ways to split
+    the whitespace run between them -- 4KB of padding took over a minute of CPU, on the
+    loop, inside an async guardrail hook. The budget below is ~500x the fixed cost and
+    ~1/14th the unfixed one, so it separates the two without depending on runner speed.
+    """
+    reply: Final = "```" + " " * 4000 + "no closing fence"
+
+    start: Final = time.perf_counter()
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        parse_json_verdict(reply)
+    elapsed: Final = time.perf_counter() - start
+
+    assert elapsed < 5.0, f"parsing a 4KB unclosed fence took {elapsed:.1f}s"
 
 
 def test_parse_json_verdict_rejects_non_object():

@@ -15,7 +15,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponse
 
-JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+# No `\s*` around the capture: under DOTALL a dot matches a space too, so each
+# `\s*` overlaps the `.*?` beside it, and a reply that opens a fence without closing
+# one can be split between them in cubic-many ways -- a failing match walks all of
+# them. The only caller strips the capture, which is what those `\s*` were doing.
+JSON_FENCE_RE: Final = re.compile(r"```(?:json)?(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 def default_router_provider() -> Router | None:
