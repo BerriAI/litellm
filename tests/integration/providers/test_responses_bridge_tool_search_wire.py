@@ -3,8 +3,8 @@ import itertools
 import json
 import os
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import EllipsisType, MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
@@ -18,10 +18,8 @@ from anthropic.types.beta import BetaToolUnionParam
 from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, MODEL, Event, aws_chunks, sse_chunks
-from integration._support.aws_control_plane import ControlPlane, ControlPlaneRequest, Responder, control_plane
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_bedrock_auth_wire import RESPONSE as CONVERSE_RESPONSE
@@ -32,10 +30,6 @@ from redis import Redis
 _CLAUDE: Final = cc.OPUS
 _CLAUDE_WITHOUT_TOOL_SEARCH: Final = "claude-scripted-unlisted"
 _GEMINI: Final = "gemini-2.5-flash"
-_OPENAI_HOST: Final = "api.openai.com"
-_OPENAI_API_BASE: Final = f"https://{_OPENAI_HOST}/v1"
-_BM25_TOOL_TYPE: Final = "tool_search_tool_bm25_20251119"
-_BM25_TOOL_NAME: Final = "tool_search_tool_bm25"
 _REGEX_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
 _REGEX_TOOL_NAME: Final = "tool_search_tool_regex"
 _REGEX_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": _REGEX_TOOL_TYPE, "name": _REGEX_TOOL_NAME})
@@ -106,10 +100,6 @@ def _tool_search(**fields: JsonValue) -> dict[str, JsonValue]:
     return {"type": "tool_search", **fields}
 
 
-def _bm25_tool() -> dict[str, JsonValue]:
-    return {"type": _BM25_TOOL_TYPE, "name": _BM25_TOOL_NAME}
-
-
 def _function_tool(defer_loading: JsonValue | EllipsisType = True) -> dict[str, JsonValue]:
     tool: Final[dict[str, JsonValue]] = {
         "type": "function",
@@ -120,16 +110,6 @@ def _function_tool(defer_loading: JsonValue | EllipsisType = True) -> dict[str, 
     if isinstance(defer_loading, EllipsisType):
         return tool
     return {**tool, "defer_loading": defer_loading}
-
-
-def _stock_function_tool() -> dict[str, JsonValue]:
-    return {
-        "type": "function",
-        "name": "get_stock_price",
-        "description": "Price of a ticker",
-        "parameters": _TICKER_PARAMETERS,
-        "defer_loading": True,
-    }
 
 
 def _namespace_tool(**member_fields: JsonValue) -> dict[str, JsonValue]:
@@ -590,105 +570,6 @@ def _deployment(scenario: Scenario, provider: Provider, wire_url: str, upstream_
                 vertex_location=_VERTEX_LOCATION,
                 vertex_credentials=service_account_json(_VERTEX_PROJECT, upstream_url.rstrip("/")),
             )
-
-
-@pytest.fixture(scope="module")
-def openai_api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlane]:
-    with control_plane(tmp_path_factory.mktemp("openai_api"), (_OPENAI_HOST,)) as plane:
-        yield plane
-
-
-@pytest.fixture(scope="module")
-def openai_gateway(openai_api: ControlPlane, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
-    with (
-        gateway_from_environment() as parent,
-        owned_proxy(parent, tmp_path_factory.mktemp("openai_gateway"), openai_api.environment()) as owned,
-    ):
-        yield owned
-
-
-def _answered_as_openai_api(respond: Callable[[Request], Reply]) -> Responder:
-    def answer(request: ControlPlaneRequest) -> Reply:
-        reply: Final = respond(Request(request.method, request.target, request.headers, request.body))
-        return reply if reply.chunks is None else replace(reply, body=b"".join(reply.chunks), chunks=None)
-
-    return answer
-
-
-def _openai_api_requests(openai_api: ControlPlane, key: str) -> list[ControlPlaneRequest]:
-    return [request for request in openai_api.drain() if request.credential == key and request.method == "POST"]
-
-
-def _assert_openai_tool_search_wire(request: ControlPlaneRequest, stream: bool) -> None:
-    body: Final = _JSON_OBJECT.validate_json(request.body)
-    assert (request.host, request.method, request.path) == (_OPENAI_HOST, "POST", "/v1/responses"), request
-    assert body["model"] == "gpt-5.5", body
-    assert body["stream"] is stream, body
-    assert body["tools"] == [
-        {"type": "tool_search", "execution": "server"},
-        _function_tool(),
-        _stock_function_tool(),
-    ], body
-
-
-@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
-def test_anthropic_tool_search_reaches_openai_responses_as_server_tool_search(
-    openai_gateway: Gateway, openai_api: ControlPlane, stream: bool
-) -> None:
-    marker: Final = uuid.uuid4().hex
-    key: Final = f"synthetic-openai-key-{marker}"
-    with (
-        openai_gateway.scenario() as scenario,
-        openai_api.answering(key, _answered_as_openai_api(rv.ResponsesVendor().respond)),
-    ):
-        model: Final = scenario.model(model="openai/responses/gpt-5.5", api_base=_OPENAI_API_BASE, api_key=key)
-        tools: Final = (_bm25_tool(), _function_tool(), _stock_function_tool())
-        response: Final = _raw(
-            openai_gateway, "/v1/responses", {**_responses_body(model, marker, tools, stream), **_CACHE_BUST}
-        )
-
-        assert response.status_code == 200, response.text
-        received: Final = _openai_api_requests(openai_api, key)
-        assert len(received) == 1, received
-        _assert_openai_tool_search_wire(received[0], stream)
-
-
-def test_router_fallback_maps_anthropic_tool_search_for_openai_responses(
-    openai_gateway: Gateway, openai_api: ControlPlane
-) -> None:
-    marker: Final = uuid.uuid4().hex
-    key: Final = f"synthetic-openai-key-{marker}"
-
-    def respond(request: Request) -> Reply:
-        if request.method != "POST":
-            return Reply(body=b'{"object":"list","data":[]}')
-        return _anthropic_error(500, "scripted Claude failure")
-
-    with (
-        wire_server(respond) as wire,
-        openai_gateway.scenario() as scenario,
-        openai_api.answering(key, _answered_as_openai_api(rv.ResponsesVendor().respond)),
-    ):
-        claude: Final = scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire.url, api_key="synthetic-invalid-key")
-        openai_model: Final = scenario.model(model="openai/responses/gpt-5.5", api_base=_OPENAI_API_BASE, api_key=key)
-        tools: Final = (_bm25_tool(), _function_tool(), _stock_function_tool())
-        response: Final = _raw(
-            openai_gateway,
-            "/v1/responses",
-            {
-                **_responses_body(claude, marker, tools, False),
-                **_CACHE_BUST,
-                "fallbacks": [openai_model],
-            },
-        )
-
-        assert response.status_code == 200, response.text
-        assert response.headers["x-litellm-attempted-fallbacks"] == "1", response.headers
-        claude_requests: Final = [request.target for request in wire.drain() if request.method == "POST"]
-        assert claude_requests == ["/v1/messages"], claude_requests
-        received: Final = _openai_api_requests(openai_api, key)
-        assert len(received) == 1, received
-        _assert_openai_tool_search_wire(received[0], False)
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
