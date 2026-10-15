@@ -24,10 +24,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.proxy.auth.user_api_key_auth import Span as _Span
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth as _UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    Span = Any
+    Span = _Span
     Router = _Router
     UserAPIKeyAuth = _UserAPIKeyAuth
 else:

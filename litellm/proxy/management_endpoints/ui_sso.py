@@ -19,10 +19,9 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from html import escape
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     NoReturn,
@@ -63,6 +62,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -112,7 +112,7 @@ from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO, LiteLLMGoogleSSO, create_generic_sso_provider
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
 )
@@ -193,6 +193,19 @@ class _UserMetadataRow(Protocol):
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
+class _GenericSSOProvider(Protocol):
+    def __enter__(self) -> object: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    async def get_login_redirect(self, *, state: str | None = None) -> RedirectResponse: ...
+
+
 def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
     return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
         "TableActions[_UserMetadataRow]", repo.table
@@ -219,6 +232,7 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 
 
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _TeamRowGrants(LiteLLMBaseModel):
@@ -265,10 +279,6 @@ class _ServicePrincipalPage(Protocol):
 
     @overload
     def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
-
-
-def _as_object(value: object) -> object:
-    return value
 
 
 def _hash_cli_sso_secret(secret: str) -> str:
@@ -1559,7 +1569,6 @@ async def get_generic_sso_response(
 ]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
-    from fastapi_sso.sso.generic import create_provider
 
     received_response: dict | None = None
     sso_assertion: SSOIdentityAssertion | None = None
@@ -1614,7 +1623,7 @@ async def get_generic_sso_response(
             team_mappings=team_mappings,
         )
 
-    SSOProvider: Final = create_provider(
+    SSOProvider: Final = create_generic_sso_provider(
         name="oidc",
         discovery_document=discovery,
         response_convertor=response_convertor,
@@ -3071,8 +3080,6 @@ class SSOAuthenticationHandler:
         """
         # Google SSO Auth
         if google_client_id is not None:
-            from fastapi_sso.sso.google import GoogleSSO
-
             google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
             if google_client_secret is None:
                 raise ProxyException(
@@ -3081,7 +3088,7 @@ class SSOAuthenticationHandler:
                     param="GOOGLE_CLIENT_SECRET",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            google_sso: Final = GoogleSSO(
+            google_sso: Final = LiteLLMGoogleSSO(
                 client_id=google_client_id,
                 client_secret=google_client_secret,
                 redirect_uri=redirect_url,
@@ -3185,7 +3192,7 @@ class SSOAuthenticationHandler:
     @staticmethod
     @with_service_target(SSO_SESSIONS_TARGET)
     async def get_generic_sso_redirect_response(
-        generic_sso: Any,
+        generic_sso: _GenericSSOProvider,
         state: str | None = None,
         generic_authorization_endpoint: str | None = None,
         request: Request | None = None,
@@ -3214,13 +3221,9 @@ class SSOAuthenticationHandler:
             )
 
             # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
-            pkce_params: Final = {}
-            state_only_params: Final = {}
-            for key, value in redirect_params.items():
-                if key in ("code_challenge", "code_challenge_method"):
-                    pkce_params[key] = value
-                else:
-                    state_only_params[key] = value
+            pkce_keys: Final = ("code_challenge", "code_challenge_method")
+            pkce_params: Final = {key: value for key, value in redirect_params.items() if key in pkce_keys}
+            state_only_params: Final = {key: value for key, value in redirect_params.items() if key not in pkce_keys}
 
             # Get the redirect response from fastapi-sso with only state param
             redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)
@@ -3278,7 +3281,7 @@ class SSOAuthenticationHandler:
                 # concurrent SSO sessions — one PKCE, one plain — cannot
                 # overwrite each other's state cookie.
                 state_value: Final = redirect_params.get("state")
-                if state_value and redirect_response is not None:
+                if state_value:
                     # Production-safe default: require HTTPS for the
                     # CSRF-protection cookie unless we can prove the
                     # incoming request is HTTP (local dev).  Without
@@ -3913,18 +3916,19 @@ class SSOAuthenticationHandler:
 
             cache_key: Final = f"pkce_verifier:{state}"
             if redis_usage_cache is not None:
-                cached_data = await redis_usage_cache.async_get_cache(key=cache_key)
+                cached_data = _DECODED_JSON.validate_python(await redis_usage_cache.async_get_cache(key=cache_key))
             else:
-                cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
+                cached_data = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
 
             code_verifier = None
             # Track why code_verifier is absent for accurate strict-mode diagnostics.
             _empty_value_in_dict = False  # dict format correct but value is empty/null
 
             if cached_data:
+                cached_mapping: Final = as_str_mapping(cached_data)
                 # Extract code_verifier from dict (stored as dict for JSON serialization)
-                if isinstance(cached_data, dict) and "code_verifier" in cached_data:
-                    code_verifier = cached_data["code_verifier"]
+                if isinstance(cached_mapping, dict) and "code_verifier" in cached_mapping:
+                    code_verifier = cached_mapping["code_verifier"]
                     if not code_verifier:
                         # Dict format is correct but value is empty or null.  This is
                         # a distinct case from an unrecognized format — the entry exists
@@ -4107,7 +4111,7 @@ class SSOAuthenticationHandler:
         access_token string. Raises ProxyException on any validation failure.
         """
         try:
-            token_response_raw: Final[object] = _as_object(response.json())
+            token_response_raw: Final = _DECODED_JSON.validate_python(response.json())
         except Exception as json_err:
             verbose_proxy_logger.error(
                 "Failed to parse token response as JSON: %s. Body: %s",
@@ -4796,7 +4800,6 @@ class GoogleSSOHandler:
         Args:
             return_raw_sso_response: If True, return the raw SSO response
         """
-        from fastapi_sso.sso.google import GoogleSSO
 
         google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
         if google_client_secret is None:
@@ -4806,7 +4809,7 @@ class GoogleSSOHandler:
                 param="GOOGLE_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        google_sso: Final = GoogleSSO(
+        google_sso: Final = LiteLLMGoogleSSO(
             client_id=google_client_id,
             redirect_uri=redirect_url,
             client_secret=google_client_secret,

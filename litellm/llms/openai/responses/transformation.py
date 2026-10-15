@@ -715,11 +715,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     if item.get("type") == "reasoning":
                         verbose_logger.debug("Handling reasoning item: %s", item)
                         # Type assertion since we know it's a dict at this point
-                        dict_item = cast(dict[str, Any], item)
+                        dict_item = cast(dict[str, object], item)
                         filtered_item = self._handle_reasoning_item(dict_item)
                     else:
                         # For other dict items, just pass through
-                        filtered_item = cast(dict[str, Any], item)
+                        filtered_item = cast(dict[str, object], item)
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
@@ -727,7 +727,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
         """
         Handle reasoning items specifically to filter out status=None using OpenAI's model.
         Issue: https://github.com/BerriAI/litellm/issues/13484
