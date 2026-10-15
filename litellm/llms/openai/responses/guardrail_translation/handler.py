@@ -54,6 +54,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     effective_skip_system_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
@@ -705,11 +706,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             data.get("input"), data.get("instructions"), structured_messages, merged
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
         and custom, tools[].server_label for mcp)."""
         names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        for tool in list_field(data, "tools"):
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):

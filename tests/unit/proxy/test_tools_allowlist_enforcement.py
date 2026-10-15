@@ -145,6 +145,21 @@ class TestExtractRequestToolNames:
         data = {"tools": [{"type": "function", "function": {"name": "x"}}]}
         assert extract_request_tool_names("/v1/embeddings", data) == []
 
+    @pytest.mark.parametrize(
+        ("route", "data"),
+        [
+            ("/v1/chat/completions", {"tools": 5}),
+            ("/v1/chat/completions", {"functions": 5}),
+            ("/v1/responses", {"tools": 5}),
+            ("/v1/messages", {"tools": 5}),
+            ("/generate_content", {"tools": 5}),
+            ("/generate_content", {"tools": [{"functionDeclarations": 5}]}),
+        ],
+        ids=["chat_tools", "chat_functions", "responses", "messages", "generate_content", "function_declarations"],
+    )
+    def test_malformed_tool_lists_yield_no_names(self, route, data):
+        assert extract_request_tool_names(route, data) == []
+
 
 class TestCheckToolsAllowlist:
     """Test allowlist enforcement in auth (no DB in hot path)."""

@@ -36,6 +36,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     openai_tool_name,
@@ -255,15 +256,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return "no scannable content after message scoping"
         return None if images else "no scannable content"
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
         names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        for tool in list_field(data, "tools"):
             if isinstance(tool, dict) and tool.get("type") == "function":
                 fn = tool.get("function")
                 if isinstance(fn, dict) and fn.get("name"):
                     names.append(str(fn["name"]))
-        for fn in data.get("functions") or []:
+        for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
         return names

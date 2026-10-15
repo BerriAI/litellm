@@ -96,22 +96,34 @@ def _drops_params(data: Mapping[str, object]) -> bool:
     return requested if isinstance(requested, bool) else litellm.drop_params is True
 
 
-def _token_count_request(fields: Mapping[str, object], drop_params: bool) -> TokenCountRequest | ProxyException:
+def _validate_token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ValidationError:
     try:
         return TokenCountRequest.model_validate(fields)
     except ValidationError as e:
-        errors: Final = e.errors(include_url=False)
-        invalid_fields: Final = frozenset(str(error["loc"][0]) for error in errors)
-        if drop_params and invalid_fields <= _DROPPABLE_TOKEN_COUNT_FIELDS:
-            return _token_count_request(
-                {name: value for name, value in fields.items() if name not in invalid_fields}, drop_params=False
-            )
-        return ProxyException(
-            message="; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors),
-            type="invalid_request_error",
-            param=str(errors[0]["loc"][0]),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        return e
+
+
+def _invalid_request_error(e: ValidationError) -> ProxyException:
+    errors: Final = e.errors(include_url=False)
+    return ProxyException(
+        message="; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors),
+        type="invalid_request_error",
+        param=str(errors[0]["loc"][0]),
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _token_count_request(fields: Mapping[str, object], drop_params: bool) -> TokenCountRequest | ProxyException:
+    validated: Final = _validate_token_count_request(fields)
+    if not isinstance(validated, ValidationError):
+        return validated
+    invalid_fields: Final = frozenset(str(error["loc"][0]) for error in validated.errors(include_url=False))
+    if not (drop_params and invalid_fields <= _DROPPABLE_TOKEN_COUNT_FIELDS):
+        return _invalid_request_error(validated)
+    without_invalid: Final = _validate_token_count_request(
+        {name: value for name, value in fields.items() if name not in invalid_fields}
+    )
+    return _invalid_request_error(without_invalid) if isinstance(without_invalid, ValidationError) else without_invalid
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:

@@ -44,6 +44,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
@@ -921,10 +922,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             images=(),
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract every tool name in an Anthropic messages request: tools[].name, plus
         tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
+        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(
