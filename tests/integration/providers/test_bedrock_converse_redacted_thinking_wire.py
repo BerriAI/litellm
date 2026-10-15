@@ -219,7 +219,8 @@ def test_claude_redacted_thinking_round_trips_back_to_converse_as_redacted_conte
         )
         question: Final[dict[str, JsonValue]] = {"role": "user", "content": QUESTION}
         first: Final = send(gateway, {"model": model, "messages": [question], "thinking": THINKING, "max_tokens": 2048})
-        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": NATIVE_REDACTED},)
+        streamed_position: Final[dict[str, JsonValue]] = {"index": 0} if stream else {}
+        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": NATIVE_REDACTED, **streamed_position},)
 
         second: Final = send(
             gateway,
