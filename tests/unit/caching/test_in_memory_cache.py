@@ -280,7 +280,20 @@ def test_in_memory_cache_survives_threads_rewriting_keys_in_a_full_cache() -> No
         )
 
     assert [future.exception() for future in futures] == [None] * thread_count
-    assert len(cache.cache_dict) <= cache.max_size_in_memory
+    keys: Final = (*(f"hot_{i}" for i in range(5)), *(f"cold_{i}" for i in range(40)))
+    assert sum(cache.get_cache(key) is not None for key in keys) <= cache.max_size_in_memory
+
+
+def test_in_memory_cache_stays_bounded_when_entries_have_no_usable_expiry() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=10)
+    for i in range(30):
+        cache.set_cache(key=f"nan_{i}", value="response", ttl="NaN")
+    cache.set_cache(key="fresh", value="response", ttl=60)
+
+    keys: Final = (*(f"nan_{i}" for i in range(30)), "fresh")
+    retained: Final = tuple(key for key in keys if cache.get_cache(key) is not None)
+    assert len(retained) <= cache.max_size_in_memory
+    assert cache.get_cache("fresh") == "response"
 
 
 def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():

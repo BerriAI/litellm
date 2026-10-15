@@ -97,6 +97,9 @@ class InMemoryCache(BaseCache):
         """
         return key in self.ttl_dict and self._clock() > self.ttl_dict[key]
 
+    def _cache_keys(self) -> tuple[str, ...]:
+        return tuple(self.cache_dict)  # pyright: ignore[reportUnknownVariableType]  # cache_dict is untyped legacy state
+
     def _remove_key(self, key: str) -> None:
         """
         Remove a key from both cache_dict and ttl_dict
@@ -145,6 +148,12 @@ class InMemoryCache(BaseCache):
             if self.ttl_dict.get(key) == expiration_time:
                 self._remove_key(key)
 
+        if not self.expiration_heap:
+            untracked_keys: Final = self._cache_keys()
+            overflow: Final = len(untracked_keys) - self.max_size_in_memory + 1
+            for untracked_key in untracked_keys[: max(overflow, 0)]:
+                self._remove_key(untracked_key)
+
         # de-reference the removed item
         # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
         # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
@@ -155,7 +164,7 @@ class InMemoryCache(BaseCache):
         Check if ttl is set for a key
         """
         ttl_time: Final = self.ttl_dict.get(key)
-        if ttl_time is None or float(ttl_time) < self._clock():  # if ttl is not set, allow override
+        if ttl_time is None or ttl_time < self._clock():  # if ttl is not set, allow override
             return True
         else:
             return False
