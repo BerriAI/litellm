@@ -26,6 +26,7 @@ import gc
 import gzip
 import io
 import json
+import sys
 import tempfile
 import time
 import tracemalloc
@@ -258,6 +259,18 @@ class TestGetObjectNameLazyParse:
         object_name = cfg.get_object_name(("batch.jsonl", raw, "application/jsonl"), purpose="batch")
         assert "gemini-2.5-flash" in object_name
 
+    @pytest.mark.parametrize(
+        "first_row", [b'{"custom_id": "r-0", "body": null}', b'{"custom_id": "r-0", "body": "hi"}']
+    )
+    def test_non_object_body_on_line_1_is_reported_as_a_400_naming_the_line(self, first_row: bytes):
+        cfg: Final = VertexAIFilesConfig()
+        file_data: Final = ("batch.jsonl", first_row + b"\n", "application/jsonl")
+        cfg.get_object_name(file_data, purpose="batch")
+        with pytest.raises(VertexAIError) as exc_info:
+            list(_OpenAIToVertexBatchUploadStream(file_data, cfg._map_openai_to_vertex_params).iter_bytes())
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message.startswith("Batch input file line 1 could not be converted")
+
 
 class TestStreamingLaziness:
     def test_upload_stream_transforms_rows_only_as_they_are_pulled(self) -> None:
@@ -374,6 +387,15 @@ class TestPathSourcedStreaming:
 
 
 _LINE_2_NOT_CONVERTED: Final = "Batch input file line 2 could not be converted to a Vertex AI request"
+
+
+def _as_utf8_bytes(text: str) -> bytes:
+    return text.encode("utf-8")
+
+
+def _as_str(text: str) -> str:
+    return text
+
 
 _GCS_OBJECT_JSON = {
     "id": "test-bucket/litellm-vertex-files/x/123",
@@ -529,8 +551,28 @@ class TestUploadStreamBody:
             (b"[1, 2]", "Batch input file line 2 is not a JSON object"),
             (b'"text"', "Batch input file line 2 is not a JSON object"),
             (b"42", "Batch input file line 2 is not a JSON object"),
-            (b'{"custom_id": "r2", "body": "hi"}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
-            (b'{"custom_id": "r2", "body": [1]}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
+            (
+                b'{"custom_id": "r2", "body": "hi"}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": [1]}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": null}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": ""}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (b'{"custom_id": "r2"}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
+            (b"[" * 1_000_000, "Batch input file line 2 could not be parsed"),
+            (
+                b'{"n": ' + b"9" * (sys.get_int_max_str_digits() + 1) + b"}",
+                "Batch input file line 2 could not be parsed",
+            ),
             (b'{"custom_id": "r2", "body": {"a": "\xff"}}', "Batch input file line 2 is not valid UTF-8"),
             (
                 b'{"custom_id": "r2", "url": "/v1/embeddings", "body": {"model": "gemini-embedding-001"}}',
@@ -562,10 +604,11 @@ class TestUploadStreamBody:
         assert exc_info.value.status_code == 400
         assert expected_message in exc_info.value.message
 
-    def test_invalid_json_error_names_the_column(self):
-        bad_row = '{"custom_id": "r1",}'
+    @pytest.mark.parametrize("encode", [_as_utf8_bytes, _as_str])
+    @pytest.mark.parametrize("bad_row", ['{"custom_id": "r1",}', "   {bad", '\t\t{"a": tru}'])
+    def test_invalid_json_error_names_the_column(self, bad_row: str, encode: Callable[[str], bytes | str]):
         stream = _OpenAIToVertexBatchUploadStream(
-            openai_file_content=bad_row.encode("utf-8") + b"\n",
+            openai_file_content=encode(bad_row + "\n"),
             map_openai_to_vertex_params=lambda body: body,
         )
         with pytest.raises(VertexAIError) as exc_info:
@@ -574,22 +617,14 @@ class TestUploadStreamBody:
             json.loads(bad_row)
         assert exc_info.value.message.endswith(f"{parsed.value.msg} at column {parsed.value.colno}")
 
-    @pytest.mark.parametrize("encode", [lambda text: ("\ufeff" + text).encode("utf-8"), lambda text: "\ufeff" + text])
+    @pytest.mark.parametrize("encode", [_as_utf8_bytes, _as_str])
     def test_stream_uploads_a_file_that_starts_with_a_byte_order_mark(self, encode: Callable[[str], bytes | str]):
         row: Final = json.dumps(
             {"custom_id": "r1", "body": {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}]}}
         )
-        with_bom: Final = _OpenAIToVertexBatchUploadStream(encode(row + "\n"), lambda body: body)
+        with_bom: Final = _OpenAIToVertexBatchUploadStream(encode("\ufeff" + row + "\n"), lambda body: body)
         without_bom: Final = _OpenAIToVertexBatchUploadStream((row + "\n").encode("utf-8"), lambda body: body)
         assert b"".join(with_bom.iter_bytes()) == b"".join(without_bom.iter_bytes())
-
-    @pytest.mark.parametrize("falsy_body", [b"null", b'""', b"[]", b"0"])
-    def test_stream_keeps_uploading_rows_whose_body_is_empty(self, falsy_body: bytes):
-        stream = _OpenAIToVertexBatchUploadStream(
-            openai_file_content=b'{"custom_id": "r1", "body": ' + falsy_body + b"}\n",
-            map_openai_to_vertex_params=lambda body: body,
-        )
-        assert len(b"".join(stream.iter_bytes()).splitlines()) == 1
 
     def test_get_object_name_rejects_malformed_batch_jsonl(self):
         with pytest.raises(VertexAIError) as exc_info:
