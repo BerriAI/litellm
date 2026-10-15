@@ -235,6 +235,37 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_add_litellm_data_to_request_keeps_requester_ip_address_for_guardrails_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    settings = {"use_x_forwarded_for": True, "disable_requester_ip_address_logging": disabled}
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "x-forwarded-for": "203.0.113.9"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=settings,
+    )
+
+    assert updated_data["metadata"]["requester_ip_address"] == "203.0.113.9"
+
+
+@pytest.mark.asyncio
 async def test_key_otel_service_name_outranks_team_metadata_merge():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
