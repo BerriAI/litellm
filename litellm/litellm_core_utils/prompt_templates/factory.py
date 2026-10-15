@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import litellm
 import litellm.types
@@ -5487,12 +5487,7 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
 
     if custom_prompt_details is not None:
-        return custom_prompt(
-            role_dict=custom_prompt_details["roles"],
-            initial_prompt_value=custom_prompt_details.get("initial_prompt_value", ""),
-            final_prompt_value=custom_prompt_details.get("final_prompt_value", ""),
-            messages=response_schema_as_message,
-        )
+        return render_custom_prompt_template(template=custom_prompt_details, messages=response_schema_as_message)
     else:
         return default_response_schema_prompt(response_schema=response_schema)
 
@@ -5511,8 +5506,26 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 
 # Custom prompt template
+class CustomPromptTemplate(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, hide_input_in_errors=True)
+
+    roles: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
+    initial_prompt_value: str = ""
+    final_prompt_value: str = ""
+
+
+def render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
+    validated: Final = CustomPromptTemplate.model_validate(template)
+    return custom_prompt(
+        role_dict=validated.roles,
+        initial_prompt_value=validated.initial_prompt_value,
+        final_prompt_value=validated.final_prompt_value,
+        messages=list(messages),
+    )
+
+
 def custom_prompt(
-    role_dict: dict,
+    role_dict: Mapping[str, Mapping[str, str]],
     messages: list,
     initial_prompt_value: str = "",
     final_prompt_value: str = "",

@@ -4,8 +4,8 @@ from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -42,12 +42,7 @@ def completion(
     if model in litellm.custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = litellm.custom_prompt_dict[model]
-        prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"],
-            initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-            final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-            messages=messages,
-        )
+        prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
     else:
         prompt = prompt_factory(model=model, messages=messages)
 

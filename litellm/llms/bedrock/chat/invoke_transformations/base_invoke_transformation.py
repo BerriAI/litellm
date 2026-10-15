@@ -14,9 +14,9 @@ from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
-    custom_prompt,
     deepseek_r1_pt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
@@ -605,12 +605,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
-            )
+            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
             return prompt, None
         ## ELSE
         if (

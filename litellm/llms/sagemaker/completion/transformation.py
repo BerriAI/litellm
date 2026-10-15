@@ -13,8 +13,8 @@ from httpx._models import Headers, Response
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -120,21 +120,11 @@ class SagemakerConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
-            )
+            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
         elif hf_model_name in custom_prompt_dict:
             # check if the base huggingface model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[hf_model_name]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
-            )
+            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
         else:
             if hf_model_name is None:
                 if "llama-2" in model.lower():  # llama-2 model
