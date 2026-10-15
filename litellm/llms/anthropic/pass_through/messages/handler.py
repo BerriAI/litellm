@@ -19,20 +19,18 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.common_utils import (
     strip_provider_specific_fields_from_anthropic_messages,
 )
-from litellm.llms.base_llm.anthropic_messages.transformation import (
-    BaseAnthropicMessagesConfig,
-)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.native.route_plan import NativeChat, NativeResponses, native_messages_config, plan_messages_route
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import CallTypes
+from litellm.utils import client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
@@ -48,53 +46,8 @@ from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
-# Providers that are routed directly to the OpenAI Responses API instead of
-# going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
-
-
-def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
-    from litellm.responses.bridge_check import responses_api_bridge_check
-
-    model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider=custom_llm_provider)
-    return model_info.get("mode") == "responses"
-
-
-def _responses_mode_is_lost_by_prefix_strip(
-    requested_model: str, resolved_model: str, custom_llm_provider: str
-) -> bool:
-    """Whether a Responses-only deployment stops looking like one once its provider prefix is stripped.
-
-    ``litellm.completion`` re-derives the Responses bridge from the stripped id alone, so a
-    deployment id such as ``perplexity/perplexity/sonar`` (mode ``responses``) is shadowed by the
-    chat entry ``perplexity/sonar`` and would otherwise be sent to chat/completions.
-    """
-    if requested_model == resolved_model:
-        return False
-    return _bridges_to_responses_api(requested_model, custom_llm_provider) and not _bridges_to_responses_api(
-        resolved_model, custom_llm_provider
-    )
-
-
-def _should_route_to_responses_api(
-    custom_llm_provider: str | None,
-    requested_model: str | None = None,
-    resolved_model: str | None = None,
-) -> bool:
-    """Return True when the request should use the Responses API path.
-
-    Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
-    opt out and route OpenAI/Azure requests through chat/completions instead.
-    """
-    if litellm.use_chat_completions_url_for_anthropic_messages:
-        return False
-    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
-        return True
-    if custom_llm_provider is None or requested_model is None or resolved_model is None:
-        return False
-    return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
 
 
 async def _with_native_safeguard_results(
@@ -114,47 +67,10 @@ async def _with_native_safeguard_results(
     return SafeguardedAnthropicSSEStream(response, evaluator)
 
 
-def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
-    """Whether the deployment opted into forwarding /v1/messages untranslated.
-
-    The opt-in is ``model_info.supported_endpoints`` containing ``"/v1/messages"``,
-    declared per deployment in config.yaml and plumbed here as ``kwargs["model_info"]``
-    by the router.
-    """
-    if not isinstance(model_info, dict):
-        return False
-    supported_endpoints: Final = model_info.get("supported_endpoints")
-    return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
-
-
-def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
-    return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
-
-
-def _native_messages_config(
-    model: str, custom_llm_provider: str | None, model_info: object
-) -> BaseAnthropicMessagesConfig | None:
-    provider_config: Final = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
-        else None
-    )
-    if provider_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
-        return provider_config
-    from litellm.llms.openai_like.messages.transformation import (
-        OpenAILikeAnthropicMessagesConfig,
-    )
-
-    return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
-
-
 def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
     safeguards: Final = kwargs.get("safeguards")
-    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
+    if native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
         return native_route_classifies(model, safeguards)
     return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
 
@@ -600,40 +516,42 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-    anthropic_messages_provider_config: Final = _native_messages_config(
-        model, custom_llm_provider, kwargs.get("model_info")
+    route: Final = plan_messages_route(
+        requested_model=original_model,
+        resolved_model=model,
+        custom_llm_provider=custom_llm_provider,
+        model_info=kwargs.get("model_info"),
+        compaction_requested=kwargs.get("compaction") is not None,
+        force_chat_completions=bool(litellm.use_chat_completions_url_for_anthropic_messages),
     )
-    if anthropic_messages_provider_config is None:
-        # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if kwargs.get("compaction") is None and _should_route_to_responses_api(
-            custom_llm_provider, original_model, model
-        ):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=original_model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
-                    "str | None", system
-                ),
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=cast(  # cast-ok: dict tools already fit the handler's union
-                    "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
-                ),
-                top_k=top_k,
-                top_p=top_p,
-                _is_async=is_async,
-                api_key=api_key,
-                api_base=api_base,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
+    if isinstance(route, NativeResponses):
+        return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=original_model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=cast(  # cast-ok: dict tools already fit the handler's union
+                "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
+            ),
+            top_k=top_k,
+            top_p=top_p,
+            _is_async=is_async,
+            api_key=api_key,
+            api_base=api_base,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
 
+    if isinstance(route, NativeChat):
         # The in-gateway context_management polyfill runs inside
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
@@ -662,6 +580,7 @@ def anthropic_messages_handler(
             **kwargs,
         )
 
+    anthropic_messages_provider_config: Final = route.config
     if custom_llm_provider is None:
         raise ValueError(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"

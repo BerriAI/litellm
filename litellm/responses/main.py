@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.native.route_plan import NativeChat, plan_responses_route
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -434,13 +435,6 @@ async def aresponses_api_with_mcp(
     return response
 
 
-def _bridges_to_chat_completions(
-    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
-) -> bool:
-    """Whether the request reaches its provider as a chat completion, not a Responses call."""
-    return responses_api_provider_config is None or use_chat_completions_api is True
-
-
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
@@ -473,7 +467,7 @@ def _encrypted_task_support_failure(
 ) -> _ResponsesCompatibilityFailure | None:
     if (
         responses_api_provider_config is None
-        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or isinstance(plan_responses_route(responses_api_provider_config, use_chat_completions_api), NativeChat)
         or not responses_api_provider_config.supports_encrypted_agent_messages()
     ):
         return "encrypted_task_unsupported"
@@ -547,7 +541,7 @@ def _will_bridge_to_chat_completions(
     model_info: object,
     api_base: str | None,
 ) -> bool:
-    """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
+    """``plan_responses_route`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
     asks rather than restating its condition, with the model name the dispatch hands the
@@ -560,14 +554,17 @@ def _will_bridge_to_chat_completions(
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
-    return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
-            custom_llm_provider,
-            model_info,
-            api_base,
+    return isinstance(
+        plan_responses_route(
+            _resolve_responses_api_provider_config(
+                _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+                custom_llm_provider,
+                model_info,
+                api_base,
+            ),
+            use_chat_completions_api or normalized_model[1],
         ),
-        use_chat_completions_api or normalized_model[1],
+        NativeChat,
     )
 
 
@@ -1482,7 +1479,7 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
-        if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
+        if isinstance(plan_responses_route(responses_api_provider_config, use_chat_completions_api), NativeChat):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,

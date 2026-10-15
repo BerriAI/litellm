@@ -44,7 +44,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-) -> tuple[dict, str]:
+) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
