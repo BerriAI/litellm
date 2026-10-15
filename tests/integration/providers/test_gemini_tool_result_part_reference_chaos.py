@@ -3,7 +3,7 @@ import json
 import re
 import threading
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
@@ -185,12 +185,16 @@ def _function_response(request: Request) -> Mapping[str, JsonValue]:
     return found
 
 
+def _items_gemini_walks(items: list[JsonValue]) -> Iterator[JsonValue]:
+    return (item for item in items if not isinstance(item, list))
+
+
 def _references(node: JsonValue) -> Sequence[str]:
     if isinstance(node, dict):
         own: Final = (node["$ref"],) if isinstance(node.get("$ref"), str) and node["$ref"] else ()
         return (*own, *(ref for child in node.values() for ref in _references(child)))
     if isinstance(node, list):
-        return tuple(ref for child in node for ref in _references(child))
+        return tuple(ref for child in _items_gemini_walks(node) for ref in _references(child))
     return ()
 
 

@@ -83,7 +83,7 @@ def _children(node: JsonValue) -> Sequence[JsonValue]:
     if isinstance(node, dict):
         return tuple(node.values())
     if isinstance(node, list):
-        return node
+        return tuple(child for child in node if not isinstance(child, list))
     return ()
 
 
@@ -597,20 +597,27 @@ async def test_a_tool_result_holding_a_string_ref_reaches_gemini_as_its_raw_text
         }
 
 
+_LIST_OF_LISTS_TEXT: Final = '{"rows":[[{"$ref":"#/users/1"},"alice"]]}'
+
+
 @pytest.mark.parametrize(
     ("provider", "endpoint"),
     tuple(pytest.param(p, e, id=f"{p}-{e}") for p, e in itertools.product(_PROVIDERS, _ENDPOINTS)),
 )
-def test_a_tool_result_without_a_ref_still_reaches_gemini_structured(
-    gateway: Gateway, provider: Provider, endpoint: Endpoint
+@pytest.mark.parametrize(
+    "text",
+    (pytest.param(_PLAIN_TEXT, id="no-ref"), pytest.param(_LIST_OF_LISTS_TEXT, id="ref-under-a-list-of-lists")),
+)
+def test_a_tool_result_without_a_part_reference_still_reaches_gemini_structured(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, text: str
 ) -> None:
     response_id: Final = f"gemini-reply-{uuid.uuid4().hex}"
     with wire_server(_vendor((response_id,), False)) as wire, gateway.scenario() as scenario:
         model: Final = _register(gateway, scenario, provider, wire)
-        observed: Final = _httpx(gateway, endpoint, model, False, _PLAIN_TEXT)
+        observed: Final = _httpx(gateway, endpoint, model, False, text)
         assert observed.answer == _ANSWER, observed
         _assert_caller_id(endpoint, False, observed.response_id, response_id)
-        assert _only_request(wire, provider, False) == _expected_body(endpoint, json.loads(_PLAIN_TEXT))
+        assert _only_request(wire, provider, False) == _expected_body(endpoint, json.loads(text))
         assert _spend_row(observed.response_id, response_id)["status"] == "success"
 
 
@@ -1062,7 +1069,11 @@ def _escaped(key: str, index: int) -> str:
         pytest.param(json.dumps({"text": json.dumps({"$ref": "#/a"})}), id="ref-inside-a-json-string"),
         pytest.param('{"price":"\\u0024 5"}', id="escaped-dollar-in-a-value"),
         pytest.param("{}", id="empty-object"),
-        pytest.param('{"rows":[[{"$ref":"#/users/1"},"alice"]]}', id="ref-under-a-list-of-lists"),
+        pytest.param(_LIST_OF_LISTS_TEXT, id="ref-under-a-list-of-lists"),
+        pytest.param('{"rows":[[{"cell":{"$ref":"#/users/1"}}]]}', id="ref-in-an-object-under-a-list-of-lists"),
+        pytest.param('{"rows":[[{"cell":[{"$ref":"#/users/1"}]}]]}', id="ref-in-a-list-under-a-list-of-lists"),
+        pytest.param('{"grid":[[[{"$ref":"#/users/1"}]]]}', id="ref-under-three-lists"),
+        pytest.param('{"a":[{"b":[[{"$ref":"#/users/1"}]]}]}', id="list-of-lists-under-an-object-in-a-list"),
     ),
 )
 def test_edge_tool_results_gemini_accepts_stay_structured(gateway: Gateway, text: str) -> None:
@@ -1087,6 +1098,11 @@ def _deep(levels: int, leaf: JsonValue) -> str:
         pytest.param('{"$ref":"#/$defs/Config","$defs":{"Config":{"type":"object"}}}', id="ref-on-the-root"),
         pytest.param(_deep(200, {"$ref": "#/deep"}), id="ref-200-levels-deep"),
         pytest.param('{"items":[{"a":1},{"b":[{"$ref":"#/b"}]}]}', id="ref-inside-a-list"),
+        pytest.param('{"rows":[{"$ref":"#/users/1"},"alice"]}', id="ref-in-a-one-level-list"),
+        pytest.param(
+            '{"rows":[[{"$ref":"#/users/1"}]],"owner":{"$ref":"#/users/2"}}',
+            id="list-of-lists-ref-beside-a-reachable-ref",
+        ),
     ),
 )
 def test_edge_tool_results_with_a_string_ref_reach_gemini_as_raw_text(gateway: Gateway, text: str) -> None:
@@ -1129,6 +1145,21 @@ def _node_heavy(with_reference: bool) -> str:
     return '{"items":[' + "{}," * count + tail + "]}"
 
 
+def _list_heavy(with_reference: bool) -> str:
+    count: Final = _BODY_BYTES // 3
+    tail: Final = '{"$ref":"#/a"}' if with_reference else '{"tail":"#/a"}'
+    return '{"items":[' + "[]," * count + tail + "]}"
+
+
+def _send_large_chat(gateway: Gateway, model: str, tool_text: str) -> httpx.Response:
+    return gateway.client.post(
+        "/v1/chat/completions",
+        json={"model": model, "messages": _chat_messages((tool_text,)), **_extra("chat")},
+        headers={"Authorization": f"Bearer {gateway.key}"},
+        timeout=120,
+    )
+
+
 def _timed_liveliness(gateway: Gateway) -> tuple[float, int]:
     started: Final = time.perf_counter()
     probe: Final = gateway.client.get("/health/liveliness")
@@ -1136,7 +1167,14 @@ def _timed_liveliness(gateway: Gateway) -> tuple[float, int]:
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("build", (pytest.param(_escape_heavy, id="escapes"), pytest.param(_node_heavy, id="nodes")))
+@pytest.mark.parametrize(
+    "build",
+    (
+        pytest.param(_escape_heavy, id="escapes"),
+        pytest.param(_node_heavy, id="nodes"),
+        pytest.param(_list_heavy, id="lists"),
+    ),
+)
 def test_the_worst_case_ref_scan_stays_within_ten_times_a_same_size_control(
     gateway: Gateway, build: Callable[[bool], str], record_property: Callable[[str, object], None]
 ) -> None:
@@ -1151,10 +1189,10 @@ def test_the_worst_case_ref_scan_stays_within_ten_times_a_same_size_control(
 
     with wire_server(_vendor(response_ids, False)) as wire, gateway.scenario() as scenario:
         model: Final = _register(gateway, scenario, "gemini", wire)
-        control: Final = timed(lambda: _send_chat(gateway, model, (build(False),)))
+        control: Final = timed(lambda: _send_large_chat(gateway, model, build(False)))
         poller: Final = threading.Thread(target=poll)
         poller.start()
-        worst: Final = timed(lambda: _send_chat(gateway, model, (worst_text,)))
+        worst: Final = timed(lambda: _send_large_chat(gateway, model, worst_text))
         stop.set()
         poller.join()
         liveliness: Final = tuple(samples.get_nowait() for _ in range(samples.qsize()))
