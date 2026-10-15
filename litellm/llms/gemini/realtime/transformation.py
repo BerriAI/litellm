@@ -475,16 +475,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _declared_rate_from_ga_shape(session_payload: Mapping[str, object]) -> object:
-        audio: Final = session_payload.get("audio")
-        if not isinstance(audio, dict):
-            return None
-        audio_input: Final = audio.get("input")
-        if not isinstance(audio_input, dict):
-            return None
-        audio_format: Final = audio_input.get("format")
-        if not isinstance(audio_format, dict):
-            return None
-        return audio_format.get("rate")
+        match session_payload.get("audio"):
+            case dict({"input": dict({"format": dict({"rate": object() as rate})})}):
+                return rate
+            case _:
+                return None
 
     @staticmethod
     def _declared_rate_from_beta_shape(session_payload: Mapping[str, object]) -> object:
