@@ -672,6 +672,24 @@
         "interactions": true
       }
     },
+    "coralbricks": {
+      "display_name": "CoralBricks (`coralbricks`)",
+      "url": "https://docs.litellm.ai/docs/providers/coralbricks",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "cortecs": {
       "display_name": "Cortecs (`cortecs`)",
       "url": "https://docs.litellm.ai/docs/providers/cortecs",
@@ -759,7 +777,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "qwencloud": {
@@ -777,7 +796,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "qwen_ai_platform": {
@@ -795,7 +815,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "databricks": {
@@ -1078,7 +1099,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "systemone": true
       }
     },
     "firecrawl": {
@@ -2349,6 +2371,24 @@
         "search": true
       }
     },
+    "scaledown": {
+      "display_name": "ScaleDown (`scaledown`)",
+      "url": "https://docs.litellm.ai/docs/providers/scaledown",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
@@ -2418,6 +2458,24 @@
         "batches": false,
         "rerank": false,
         "a2a": false
+      }
+    },
+    "inferenceapis": {
+      "display_name": "Inference APIs (`inferenceapis`)",
+      "url": "https://docs.litellm.ai/docs/providers/inferenceapis",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "snowflake": {
@@ -2869,6 +2927,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "microsoft_365_copilot": {
+      "display_name": "Microsoft 365 Copilot (`microsoft_365_copilot`)",
+      "url": "https://docs.litellm.ai/docs/providers/microsoft_365_copilot",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "langflow": {

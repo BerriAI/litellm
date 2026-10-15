@@ -8,7 +8,10 @@ import litellm
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
+    DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -27,11 +30,16 @@ from litellm.types.decisions import (
     DecisionsIRState,
     DecisionsIRUsage,
     DecisionsJSON,
+    OpenAIBoxAnswer,
+    OpenAIBoxQuestion,
     OpenAIChoiceAnswer,
     OpenAIChoiceProbability,
     OpenAIChoiceQuestion,
     OpenAIDecisionAnswer,
     OpenAIDecisionInput,
+    OpenAIDecisionInputImage,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionInputText,
     OpenAIDecisionInputTokensDetails,
     OpenAIDecisionOutputTokensDetails,
     OpenAIDecisionQuestion,
@@ -81,6 +89,8 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
                     DecisionsIRScoreLevel(label=level.label, description=level.description) for level in question.levels
                 ),
             )
+        case OpenAIBoxQuestion():
+            return DecisionsIRBoxQuestion(name=question.name, instructions=question.instructions)
         case _:
             assert_never(question)
 
@@ -88,6 +98,8 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=_ir_input(request.input),
+        audio=request.audio,
+        videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
         safety_identifier=request.safety_identifier,
     )
@@ -139,12 +151,33 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                     for level in question.levels
                 ],
             }
+        case DecisionsIRBoxQuestion():
+            return {
+                "type": "box",
+                **_text_field("name", question.name),
+                "instructions": decisions_text(question.instructions),
+            }
         case _:
             assert_never(question)
 
 
+def _image_url(image: DecisionsImage) -> str:
+    return image if isinstance(image, str) else f"data:{image.content_type};base64,{image.base64}"
+
+
+def _state_message(state: DecisionsIRState) -> OpenAIDecisionInputMessage:
+    return OpenAIDecisionInputMessage(
+        content=(
+            *(OpenAIDecisionInputImage(type="input_image", image_url=_image_url(image)) for image in state.images),
+            OpenAIDecisionInputText(type="input_text", text=decisions_text(state.state)),
+        )
+    )
+
+
 def _openai_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | Sequence[Mapping[str, object]]:
     match decision_input:
+        case DecisionsIRState() if decision_input.images:
+            return [_state_message(decision_input).model_dump(mode="json", exclude_none=True)]
         case DecisionsIRState():
             return decisions_text(decision_input.state)
         case DecisionsIRMessages():
@@ -164,6 +197,8 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
 
 
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if request.audio or request.videos:
+        return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
     if any(_has_one_option(question) for question in request.questions):
         return _SINGLE_OPTION
     return {
@@ -204,6 +239,8 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
                     for item in answer.probabilities
                 ),
             )
+        case DecisionsIRBoxQuestion(), OpenAIBoxAnswer():
+            return DecisionsIRBoxAnswer(box=answer.box, confidence=answer.confidence)
         case _:
             return DecisionsIRRefusal()
 
@@ -264,6 +301,8 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
             return _openai_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), DecisionsIRScoreAnswer():
             return _openai_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), DecisionsIRBoxAnswer():
+            return OpenAIBoxAnswer(name=question.name, box=answer.box, confidence=answer.confidence)
         case _:
             return OpenAIRefusalAnswer(name=question.name)
 
@@ -292,6 +331,8 @@ def ir_to_openai_response(
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
+    supports_safety_identifier = True
+    supports_images = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
@@ -307,6 +348,12 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
 
     def transform_decisions_request(
         self,

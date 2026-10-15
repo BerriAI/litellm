@@ -17,7 +17,7 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -34,11 +34,11 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -49,7 +49,6 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
-    AnthropicThinkingParam,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
@@ -169,9 +168,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request: The request dictionary to modify in-place
             model: The model name to check if it supports ttl
         """
-        is_claude_4_5 = False
+        supports_ttl = False
         if model:
-            is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
+            supports_ttl = self._supports_prompt_cache_ttl(model)
 
         def _sanitize_cache_control(cache_control: dict) -> None:
             if not isinstance(cache_control, dict):
@@ -181,7 +180,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             # Remove ttl for models that don't support it
             if "ttl" in cache_control:
                 ttl: Final = cache_control["ttl"]
-                if is_claude_4_5 and ttl in ["5m", "1h"]:
+                if supports_ttl and ttl in ["5m", "1h"]:
                     return
                 cache_control.pop("ttl", None)
 
@@ -349,18 +348,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not isinstance(output_config, dict):
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
-        thinking: Final = anthropic_messages_request.get("thinking")
-        display: Final = thinking.get("display") if isinstance(thinking, dict) else None
+        thinking: Final = validated_object_mapping(anthropic_messages_request.get("thinking"))
+        carried: Final = {key: value for key, value in (thinking or {}).items() if key not in ("type", "budget_tokens")}
         anthropic_messages_request["output_config"] = output_config
-        if display is None:
-            adaptive_thinking: Final[AnthropicThinkingParam] = {"type": "adaptive"}
-            anthropic_messages_request["thinking"] = adaptive_thinking
-        else:
-            adaptive_thinking_with_display: Final[AnthropicThinkingParam] = {
-                "type": "adaptive",
-                "display": display,
-            }
-            anthropic_messages_request["thinking"] = adaptive_thinking_with_display
+        anthropic_messages_request["thinking"] = {**carried, "type": "adaptive"}
         verbose_logger.debug(
             "Bedrock clear_thinking_20251015: injected adaptive thinking with effort=%s for model=%s",
             output_config.get("effort"),
@@ -386,19 +377,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         ]
         return any(pattern in model_lower for pattern in opus_4_5_patterns)
 
-    def _is_claude_4_5_on_bedrock(self, model: str) -> bool:
-        """
-        Check if the model is Claude 4.5 on Bedrock.
-
-        Claude Sonnet 4.5, Haiku 4.5, and Opus 4.5 support 1-hour prompt caching.
-
-        Args:
-            model: The model name
-
-        Returns:
-            True if the model is Claude 4.5
-        """
-        return is_claude_4_5_on_bedrock(model)
+    def _supports_prompt_cache_ttl(self, model: str) -> bool:
+        """Whether Bedrock accepts a ``ttl`` on prompt ``cache_control`` for ``model``."""
+        return supports_bedrock_prompt_cache_ttl(model)
 
     def _supports_tool_search_on_bedrock(self, model: str) -> bool:
         """
@@ -701,8 +682,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            anthropic_messages_request["thinking"] = thinking_with_display
+            anthropic_messages_request["thinking"] = {**translated_thinking, "display": "updates"}
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###

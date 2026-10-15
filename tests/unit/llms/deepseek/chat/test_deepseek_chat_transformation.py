@@ -79,6 +79,53 @@ def _assert_deepseek_request(request: httpx.Request, messages: list[dict[str, st
     assert actual_data["stream"] is stream
 
 
+@pytest.mark.usefixtures("_deepseek_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_cost_deepseek_reports_prompt_cache_usage(respx_mock: respx.MockRouter) -> None:
+    messages: Final = [{"role": "user", "content": "A cached prompt"}]
+    route: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-deepseek-cache",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "deepseek-chat",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Answer"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "prompt_cache_hit_tokens": 4,
+                    "prompt_cache_miss_tokens": 6,
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="deepseek/deepseek-chat",
+        messages=messages,
+        api_key=DEEPSEEK_API_KEY,
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {"model": "deepseek-chat", "messages": messages}
+    assert response.usage.prompt_cache_hit_tokens == 4
+    assert response.usage.prompt_cache_miss_tokens == 6
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.prompt_tokens_details.cached_tokens == 4
+    assert response.usage._cache_read_input_tokens == 4
+
+
 def _function_tool(name: str) -> dict:
     return {
         "type": "function",
@@ -842,4 +889,21 @@ def test_deepseek_fill_reasoning_content_guard_in_transform_request():
     )
     assert "reasoning_content" not in result["messages"][1], (
         "reasoning_content should not be injected for non-reasoning models"
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/deepseek",
+        "https://gateway.example.com/deepseek/",
+        "https://gateway.example.com/deepseek/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        DeepSeekChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="deepseek-chat", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/deepseek/chat/completions"
     )

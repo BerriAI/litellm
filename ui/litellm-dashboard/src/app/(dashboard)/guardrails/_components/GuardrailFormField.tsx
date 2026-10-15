@@ -2,9 +2,16 @@
 
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useId } from "react";
-import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
+import {
+  useController,
+  useWatch,
+  type Control,
+  type ControllerRenderProps,
+  type RegisterOptions,
+} from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getLoggingOnlyScopeOptions,
@@ -22,6 +29,7 @@ export interface GuardrailCriterion {
 export interface GuardrailFormValues extends Record<string, unknown> {
   criteria?: GuardrailCriterion[];
   logging_only_scope_choice?: LoggingOnlyScopeChoice;
+  logging_only_continue_on_input_failure?: boolean;
 }
 export type GuardrailFormControl = Control<GuardrailFormValues>;
 export type GuardrailFieldRules = Pick<RegisterOptions<GuardrailFormValues, string>, "validate">;
@@ -172,20 +180,44 @@ export const LoggingOnlyScopeField: React.FC<{
   mode: unknown;
   directionalScopeSupported: boolean;
 }> = ({ control, mode, directionalScopeSupported }) => {
+  const scopeChoice = useWatch({ control, name: "logging_only_scope_choice" });
+  const continueDisabled = scopeChoice === "input" || scopeChoice === "output";
   if (!modeIncludesLoggingOnly(mode)) return null;
 
   return (
-    <GuardrailField
-      control={control}
-      name="logging_only_scope_choice"
-      label={labelWithHint(
-        "Logging only scope",
-        "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
-      )}
-    >
-      {(fieldControl) => (
-        <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
-      )}
-    </GuardrailField>
+    <>
+      <GuardrailField
+        control={control}
+        name="logging_only_scope_choice"
+        label={labelWithHint(
+          "Logging only scope",
+          "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
+        )}
+      >
+        {(fieldControl) => (
+          <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
+        )}
+      </GuardrailField>
+      <GuardrailField
+        control={control}
+        name="logging_only_continue_on_input_failure"
+        label={labelWithHint(
+          "Continue observing the response after a flagged request",
+          "When on, a flagged or failing request scan is logged and the response is still scanned, so both verdicts land.",
+        )}
+      >
+        {(fieldControl) => (
+          <Switch
+            id={fieldControl.id}
+            checked={!continueDisabled && fieldControl.value === true}
+            disabled={continueDisabled}
+            onCheckedChange={fieldControl.onChange}
+            aria-invalid={fieldControl["aria-invalid"]}
+            aria-describedby={fieldControl["aria-describedby"]}
+            aria-label="Continue observing the response after a flagged request"
+          />
+        )}
+      </GuardrailField>
+    </>
   );
 };

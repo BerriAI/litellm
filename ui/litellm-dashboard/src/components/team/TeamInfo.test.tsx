@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
+import type { Member } from "@/components/networking";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
 import TeamInfoView, {
@@ -15,7 +16,7 @@ import TeamInfoView, {
   type TeamData,
 } from "./TeamInfo";
 
-const authState = vi.hoisted(() => ({ userRole: "Admin" }));
+const authState = vi.hoisted(() => ({ userRole: "Admin", isViewOnly: false }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({
@@ -24,6 +25,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
     userId: "user-1",
     userEmail: "user@example.com",
     userRole: authState.userRole,
+    isViewOnly: authState.isViewOnly,
     premiumUser: false,
     disabledPersonalKeyCreation: null,
     showSSOBanner: false,
@@ -132,11 +134,29 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
 }));
 
 vi.mock("@/components/team/TeamMemberTab", () => ({
-  default: vi.fn(({ setIsAddMemberModalVisible }) => (
-    <div>
-      <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
-    </div>
-  )),
+  default: vi.fn(
+    ({
+      setIsAddMemberModalVisible,
+      setSelectedEditMember,
+      setIsEditMemberModalVisible,
+    }: {
+      setIsAddMemberModalVisible: (visible: boolean) => void;
+      setSelectedEditMember: (member: Member) => void;
+      setIsEditMemberModalVisible: (visible: boolean) => void;
+    }) => (
+      <div>
+        <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
+        <button
+          onClick={() => {
+            setSelectedEditMember({ user_email: "edit@test.com", user_id: "edit-user", role: "user" });
+            setIsEditMemberModalVisible(true);
+          }}
+        >
+          Edit Member
+        </button>
+      </div>
+    ),
+  ),
 }));
 
 vi.mock("@/components/common_components/user_search_modal", () => ({
@@ -361,6 +381,7 @@ describe("TeamInfoView", () => {
   afterEach(() => {
     vi.clearAllMocks();
     authState.userRole = "Admin";
+    authState.isViewOnly = false;
   });
 
   describe("display and rendering", () => {
@@ -1072,6 +1093,31 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(networking.teamMemberAddCall).toHaveBeenCalled();
       });
+    });
+
+    it("invalidates the member budget query after a successful member update", async () => {
+      const user = userEvent.setup({ delay: null });
+      const teamData = createMockTeamData();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamData);
+      testQueryClient.clear();
+      const invalidateQueriesSpy = vi.spyOn(testQueryClient, "invalidateQueries");
+
+      try {
+        renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+        await user.click(await screen.findByRole("tab", { name: "Members" }));
+        await user.click(await screen.findByRole("button", { name: "Edit Member" }));
+        await user.click(await screen.findByRole("button", { name: "Submit" }));
+
+        await waitFor(() => expect(networking.teamMemberUpdateCall).toHaveBeenCalled());
+        await waitFor(() =>
+          expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+            queryKey: ["teams", "memberBudget", defaultProps.teamId],
+          }),
+        );
+      } finally {
+        invalidateQueriesSpy.mockRestore();
+      }
     });
 
     it("should display soft budget in settings view when present", async () => {
@@ -1979,13 +2025,14 @@ describe("TeamInfoView", () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
 
-    it("prefills the RPM limit and budget a team admin may edit with the team's stored values", async () => {
+    it("prefills the RPM limit and budgets a team admin may edit with the team's stored values", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           rpm_limit: 50,
           max_budget: 20,
-          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget"] },
+          soft_budget: 15,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget", "soft_budget"] },
         }),
       );
 
@@ -1996,6 +2043,112 @@ describe("TeamInfoView", () => {
 
       expect(await screen.findByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
       expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
+      expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    });
+
+    it("saves a team admin's metadata edit with the proxy's own keys carried over", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(useTeamMetadataSchema).mockReturnValue({
+        data: [{ key: "cost_center", label: "Cost Center" }],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: { cost_center: "eng", priority: "high" },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: ["metadata"],
+            proxy_controlled_metadata_keys: ["priority"],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      const costCenter = await screen.findByLabelText("Cost Center");
+      expect(costCenter).toHaveValue("eng");
+      expect(screen.queryByDisplayValue("priority")).not.toBeInTheDocument();
+
+      await user.clear(costCenter);
+      await user.type(costCenter, "sales");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toMatchObject({
+        metadata: { cost_center: "sales", priority: "high" },
+      });
+    });
+
+    it("saves other fields when a declared metadata field is also a proxy setting", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(useTeamMetadataSchema).mockReturnValue({
+        data: [
+          { key: "cost_center", label: "Cost Center" },
+          { key: "priority", label: "Priority" },
+        ],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 1000,
+          metadata: { cost_center: "eng", priority: "high" },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: ["metadata", "tpm_limit"],
+            proxy_controlled_metadata_keys: ["priority"],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      expect(screen.queryByLabelText("Priority")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+
+      const tpm = screen.getByLabelText("Tokens per minute Limit (TPM)");
+      await user.clear(tpm);
+      await user.type(tpm, "2000");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+      const sent = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(sent).toMatchObject({ tpm_limit: 2000 });
+      expect(sent).not.toHaveProperty("metadata");
+    });
+
+    it("prefills the member defaults a team admin may edit from the team's member budget", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          team_member_budget_table: { max_budget: 10, budget_duration: "30d", tpm_limit: 100, rpm_limit: 5 },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: [
+              "team_member_budget",
+              "team_member_budget_duration",
+              "team_member_tpm_limit",
+              "team_member_rpm_limit",
+            ],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Member Default Budget (USD)")).toHaveValue(10);
+      expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("monthly");
+      expect(screen.getByLabelText("Member Default TPM Limit")).toHaveValue(100);
+      expect(screen.getByLabelText("Member Default RPM Limit")).toHaveValue(5);
       expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
     });
 
@@ -2226,9 +2379,11 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    authState.userRole = "Admin";
+    authState.isViewOnly = false;
   });
 
-  const storedTeam = () =>
+  const storedTeam = (requireTraceId = false) =>
     createMockTeamData({
       models: ["gpt-4"],
       max_budget: 100,
@@ -2238,13 +2393,17 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
       default_team_member_models: ["gpt-4"],
       object_permission: { search_tools: ["tool-a"], vector_stores: ["vs-1"] },
+      metadata: requireTraceId ? { require_trace_id: true } : {},
     });
 
-  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(storedTeam());
+  const openEditor = async (
+    user: ReturnType<typeof userEvent.setup>,
+    options: { requireTraceId?: boolean; isProxyAdmin?: boolean } = {},
+  ) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(storedTeam(options.requireTraceId === true));
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
-    renderWithProviders(<TeamInfoView {...props} />);
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={options.isProxyAdmin ?? true} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.click(await screen.findByRole("button", { name: /edit settings/i }));
@@ -2298,6 +2457,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     const payload = await save(user);
 
+    expect(payload.metadata).not.toHaveProperty("require_trace_id");
     expect(payload).toStrictEqual({
       ...alwaysSent,
       team_member_budget_duration: undefined,
@@ -2307,6 +2467,27 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...alwaysSent,
       object_permission: mcpPermissions,
     });
+  });
+
+  it("sends require_trace_id when a proxy admin enables it", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    fireEvent.click(screen.getByRole("switch", { name: /Require Trace ID/i }));
+    const payload = await save(user);
+
+    expect(payload.metadata).toMatchObject({ require_trace_id: true });
+  });
+
+  it("hides the switch from non-admins and preserves the stored value on an unrelated save", async () => {
+    const user = userEvent.setup({ delay: null });
+    authState.userRole = "Internal User";
+    await openEditor(user, { requireTraceId: true, isProxyAdmin: false });
+
+    expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
+    const payload = await save(user);
+
+    expect(payload.metadata).toMatchObject({ require_trace_id: true });
   });
 
   const openEditorWithAgents = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -3191,6 +3372,7 @@ describe("TeamInfoView - disable_global_guardrails switch gating", () => {
     await openEditForm();
 
     expect(screen.queryByRole("switch", { name: /Disable all global guardrails/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
   });
 
   it("shows the Disable all global guardrails switch to a proxy admin", async () => {
@@ -3198,5 +3380,31 @@ describe("TeamInfoView - disable_global_guardrails switch gating", () => {
     await openEditForm();
 
     expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /Require Trace ID/i })).toBeInTheDocument();
+  });
+
+  it("shows the stored trace requirement to a non-admin on the team overview", async () => {
+    authState.userRole = "Internal User";
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { require_trace_id: true } }));
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+
+    expect(await screen.findByText("Require Trace ID: Enabled")).toBeInTheDocument();
+  });
+
+  it("keeps the Require Trace ID value read-only for a proxy admin viewer", async () => {
+    authState.isViewOnly = true;
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { require_trace_id: true } }));
+    renderWithProviders(<TeamInfoView {...props} />);
+
+    expect(await screen.findByText("Require Trace ID: Enabled")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a disabled trace requirement to a non-admin on the team overview", async () => {
+    authState.userRole = "Internal User";
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: {} }));
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+
+    expect(await screen.findByText("Require Trace ID: Disabled")).toBeInTheDocument();
   });
 });

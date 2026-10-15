@@ -3972,6 +3972,61 @@ async def test_async_success_handler_prevents_reprocessing_for_pass_through_endp
     )
 
 
+class _StreamSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_contents: list[str | None] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_contents.append(response_obj.choices[0].message.content)
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_logs_a_completed_stream_only_once():
+    recorder: Final = _StreamSuccessRecorder()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="stream-once",
+        function_id="stream-once",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "stream-once", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello again"}, "finish_reason": "stop"}],
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.logged_contents == ["Hello there"]
+    assert logging_obj.model_call_details["async_complete_streaming_response"].choices[0].message.content == (
+        "Hello there"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """
@@ -4494,6 +4549,103 @@ def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
     assert cost is not None and cost > 0
     slo = logging_obj.model_call_details.get("standard_logging_object") or {}
     assert slo.get("response_cost", 0) > 0
+
+
+@pytest.mark.parametrize("reported_cost", [0.0, 0.37])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_provider_reported_cost_reaches_metadata_and_spend(reported_cost: float, cache_hit: bool) -> None:
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model="native-test",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost",
+        function_id="reported-cost",
+    )
+    logging_obj.update_from_kwargs(kwargs={}, optional_params={})
+    logging_obj._provider_reported_cost = reported_cost
+    logging_obj.model_call_details.update({"cache_hit": cache_hit, "litellm_params": {}})
+    response: Final = ModelResponse(
+        id="reported-cost",
+        model="native-test",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+    )
+    expected: Final = 0.0 if cache_hit else reported_cost
+    assert logging_obj.response_cost_calculator(response) == expected
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == expected
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == expected
+
+
+@pytest.mark.parametrize("pricing_policy", ["reported", "custom", "base"])
+@pytest.mark.parametrize("reported_cost", [None, 0.0, 0.37])
+@pytest.mark.parametrize("additional_cost", [0.0, 0.12])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_reported_cost_respects_configured_pricing_and_additional_charges(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_policy: Literal["reported", "custom", "base"],
+    reported_cost: float | None,
+    additional_cost: float,
+    cache_hit: bool,
+) -> None:
+    pricing_model: Final = "anthropic/reported-cost-pricing-test"
+    input_rate: Final = 0.002
+    output_rate: Final = 0.004
+    prompt_tokens: Final = 10
+    completion_tokens: Final = 5
+    monkeypatch.setitem(
+        litellm.model_cost,
+        pricing_model,
+        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate, "litellm_provider": "anthropic"},
+    )
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model=pricing_model,
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost-pricing",
+        function_id="reported-cost-pricing",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={},
+        optional_params={"provider_reported_cost": 0.0, "_provider_reported_cost": 0.0},
+        litellm_params={
+            **({"base_model": pricing_model} if pricing_policy == "base" else {}),
+            "metadata": {
+                "model_info": {
+                    "id": pricing_model,
+                    **(
+                        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate}
+                        if pricing_policy == "custom"
+                        else {}
+                    ),
+                }
+            }
+        }
+    )
+    logging_obj.model_call_details.update(
+        {"additional_response_cost": additional_cost, "cache_hit": cache_hit}
+    )
+    logging_obj._provider_reported_cost = reported_cost
+    response: Final = ModelResponse(
+        model=pricing_model,
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+    base_cost: Final = (
+        prompt_tokens * input_rate + completion_tokens * output_rate
+        if pricing_policy != "reported" or reported_cost is None
+        else reported_cost
+    )
+    expected: Final = 0.0 if cache_hit else base_cost + additional_cost
+    assert logging_obj.response_cost_calculator(response) == pytest.approx(expected)
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(expected)
 
 
 def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
@@ -5766,6 +5918,58 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
     assert result.service_tier == "flex"
 
 
+def test_handle_anthropic_messages_response_logging_bills_the_bridged_chat_completion_not_the_served_body():
+    """A chat deployment answers /v1/messages through the chat bridge. The Anthropic body served to the
+    caller has no reasoning token field, so the spend row must come from the recorded chat completion."""
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+    chat_completion = ModelResponse(
+        id="chatcmpl-upstream",
+        model="gpt-5.6",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+        usage=Usage(
+            prompt_tokens=1240,
+            completion_tokens=4040,
+            total_tokens=5280,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+        ),
+    )
+    served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+    assert served is not None
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_bridged_model_response(chat_completion)
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(result=dict(served))
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == served["id"], "the spend log row keeps the id the caller was served"
+    assert logged.usage.completion_tokens == 4040  # type: ignore[attr-defined]
+    assert logged.usage.completion_tokens_details.reasoning_tokens == 3480  # type: ignore[attr-defined]
+
+
+def test_handle_anthropic_messages_response_logging_reparses_the_served_body_without_a_bridged_completion():
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "answer"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_native"
+    assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
@@ -6918,6 +7122,21 @@ class TestNonInferenceCallTypesAreNotBilled:
 
         assert payload is not None
         assert payload["total_tokens"] == 6000
+
+    @pytest.mark.parametrize(
+        "litellm_metadata",
+        [
+            {"_managed_background_response": True},
+            {"internal_call_origin": "background_response_status_poll"},
+        ],
+        ids=["managed_read", "status_poll"],
+    )
+    def test_managed_read_of_a_background_response_is_free(self, litellm_metadata):
+        """The proxy's cost poll bills a background response it tracks once, so a read the managed files
+        hook marks, or the poll's own status check, must not bill the same tokens again."""
+        logging_obj = self._logging_obj("aget_responses", litellm_metadata=litellm_metadata)
+        cost = logging_obj.response_cost_calculator(result=self._retrieved_response(background=True))
+        assert cost == 0.0
 
     def test_reading_a_foreground_response_is_still_free(self):
         """Guards the test above against a blanket exemption: an explicit background=false read was
@@ -10384,7 +10603,7 @@ def test_truncate_standard_logging_payload():
     1. the payload passed in is never modified, since every callback of the request shares it
     2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
-    from tests.local_testing.create_mock_standard_logging_payload import (
+    from tests.unit.create_mock_standard_logging_payload import (
         create_standard_logging_payload_with_long_content,
     )
 

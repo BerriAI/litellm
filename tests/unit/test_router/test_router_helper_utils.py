@@ -1071,6 +1071,7 @@ def _shared_redis_stub(store: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")
@@ -2525,6 +2526,21 @@ def test_resolve_model_name_from_model_id():
     result = router.resolve_model_name_from_model_id("8d0eaa7e6c6f54a425dfd0062cb6b0dc")
     assert result == "bedrock-batch-model"
 
+
+@pytest.mark.parametrize(
+    ("model_id", "custom_llm_provider", "expected"),
+    [
+        ("sora-2", "openai", "sora-2"),
+        ("fal-ai/veo3", "fal_ai", None),
+        ("veo-3.0-generate-001", "gemini", None),
+        ("sora-2", None, None),
+    ],
+)
+def test_resolve_model_name_from_model_id_keeps_a_wildcard_name_only_for_the_ids_provider(
+    model_id, custom_llm_provider, expected
+):
+    router = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}}])
+    assert router.resolve_model_name_from_model_id(model_id, custom_llm_provider) == expected
 
 def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""

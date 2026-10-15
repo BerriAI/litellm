@@ -13,6 +13,8 @@ export type DailyActivityKeySearchResponse = components["schemas"]["DailyActivit
 export type DailyActivityKeyPageResponse = components["schemas"]["DailyActivityKeyPageResponse"];
 export type ModelTopKeysResponse = components["schemas"]["ModelTopKeysResponse"];
 export type CacheLeakageKeysResponse = components["schemas"]["CacheLeakageKeysResponse"];
+export type UserActivityRow = components["schemas"]["UserActivityRow"];
+export type DailyActivityUserPageResponse = components["schemas"]["DailyActivityUserPageResponse"];
 
 export interface DailyActivityRequest {
   accessToken: string;
@@ -32,6 +34,7 @@ export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   total_pages: 1,
   total_spend: 0,
   total_flat_cost: 0,
+  total_ptu_hours: 0,
   total_api_requests: 0,
   total_successful_requests: 0,
   total_failed_requests: 0,
