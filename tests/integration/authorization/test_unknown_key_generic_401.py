@@ -11,7 +11,9 @@ import anthropic
 import httpx
 import openai
 import pytest
+import websockets
 from pydantic import BaseModel, ConfigDict, JsonValue
+from websockets.exceptions import InvalidStatus
 
 from tests.integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
@@ -323,6 +325,29 @@ def test_the_mcp_endpoint_keeps_its_own_401_for_an_unknown_key(gateway: Gateway,
                 "message": "Authenticate with the gateway to use the MCP endpoint.",
             }
         }
+
+
+async def _realtime_refusal(candidate: Gateway, key: str) -> InvalidStatus:
+    url: Final = str(candidate.client.base_url).rstrip("/").replace("http://", "ws://")
+    with pytest.raises(InvalidStatus) as refusal:
+        async with websockets.connect(
+            f"{url}/v1/realtime?model={MODEL}", additional_headers={"Authorization": f"Bearer {key}"}
+        ):
+            pass
+    return refusal.value
+
+
+async def test_the_realtime_upgrade_refuses_an_unknown_key_on_both_proxies_without_echoing_it(
+    gateway: Gateway, peer: Gateway, provider: SharedProvider
+) -> None:
+    key: Final = _unknown_key()
+    refusals: Final = await asyncio.gather(*(_realtime_refusal(candidate, key) for candidate in (gateway, peer)))
+    assert [refusal.response.status_code for refusal in refusals] == [403, 403]
+    seen: Final = " ".join(
+        f"{refusal.response.reason_phrase} {refusal.response.headers} {refusal.response.body!r}" for refusal in refusals
+    )
+    assert [secret for secret in (key, f"sk-...{key[-4:]}", _digest(key)) if secret in seen] == []
+    assert provider.received() == ()
 
 
 async def _send_async(client: httpx.AsyncClient, route: _Route, key: str) -> httpx.Response:
