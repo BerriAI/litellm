@@ -46,3 +46,5 @@ general_settings:
 `require_budgeted_tag` accepts only tags that already have a maximum budget. Unknown or unbudgeted tags return HTTP 400, and a disconnected database returns HTTP 503. Existing tag-budget checks enforce the mapped tags before the provider call; spending and budgets use the same request metadata. A required mapping does not apply to ordinary admin settings requests.
 
 Baggage is supplied by the client. These mappings classify requests; they do not establish caller identity or permission.
+
+Mappings apply to HTTP inference requests. While any mappings are configured, WebSocket inference is disabled, including Responses WebSocket, Realtime, and live sessions. Use the HTTP API for mapped spend tracking and tag budgets.

@@ -872,16 +872,25 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
         raise Exception(f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}")
 
 
-def _reject_clientside_metadata_tags_check(general_settings: dict, request_body: dict, route: str) -> None:
+def _reject_clientside_metadata_tags_check(
+    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
 
-    if (
-        RouteChecks.is_llm_api_route(route=route)
-        and "metadata" in request_body
-        and isinstance(request_body["metadata"], dict)
-        and "tags" in request_body["metadata"]
-    ):
+    original_client_tags: Final = (
+        getattr(request.state, "litellm_baggage_client_metadata_tags", None) if request is not None else None
+    )
+    has_client_tags: Final = (
+        original_client_tags
+        if isinstance(original_client_tags, bool)
+        else (
+            "metadata" in request_body
+            and isinstance(request_body["metadata"], dict)
+            and "tags" in request_body["metadata"]
+        )
+    )
+    if RouteChecks.is_llm_api_route(route=route) and has_client_tags:
         raise ProxyException(
             message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
             type=ProxyErrorTypes.bad_request_error,
@@ -1332,7 +1341,7 @@ async def common_checks(
     )
 
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
-    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route, request)
 
     # If this is a free model, skip all budget checks
     if not skip_all_budget_checks:

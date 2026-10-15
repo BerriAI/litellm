@@ -10199,3 +10199,47 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
     assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/v1/rerank"])
+async def test_raw_body_inference_keeps_authenticated_baggage_tags_for_spend(route):
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model","metadata":{"tags":["existing"]}}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    admitted = await read_request_body(request)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        admitted,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+        MagicMock(),
+    )
+    reparsed = json.loads(await request.body())
+    enriched = await add_litellm_data_to_request(
+        data=reparsed,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert "usecase:a" in enriched["metadata"]["tags"]
+    assert "existing" in enriched["metadata"]["tags"]
+    assert "usecase:a" not in enriched["metadata"]["inherited_tags"]
+    assert enriched["metadata"]["tags"].count("usecase:a") == 1

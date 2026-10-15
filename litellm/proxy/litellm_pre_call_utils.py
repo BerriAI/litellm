@@ -2056,14 +2056,31 @@ class LiteLLMProxyRequestSetup:
             if unbudgeted_tag is not None:
                 raise HTTPException(400, f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
         if mapped:
-            metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
-            metadata: Final = _normalized_metadata_slot(request_data, metadata_key)
-            existing: Final = metadata.get("tags")
-            existing_tags: Final = (
-                TypeAdapter(tuple[str, ...]).validate_python(existing) if isinstance(existing, list) else ()
-            )
-            metadata["tags"] = list(dict.fromkeys((*existing_tags, *(tag for tag, _ in mapped))))
+            client_metadata: Final[object] = request_data.get("metadata")
+            client_has_tags: Final = isinstance(client_metadata, dict) and "tags" in client_metadata
+            mapped_tags: Final = tuple(tag for tag, _ in mapped)
+            request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
+            request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
+            LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
             safe_set_request_parsed_body(request=request, parsed_body=dict(request_data))
+
+    @staticmethod
+    def apply_authenticated_baggage_tags(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: restore authenticated tags in downstream metadata
+        metadata_key: str | None = None,
+    ) -> None:
+        raw_tags: Final[object] = getattr(request.state, "litellm_baggage_mapped_tags", None)
+        if not isinstance(raw_tags, tuple) or not raw_tags:
+            return
+        tags: Final = TypeAdapter(tuple[str, ...]).validate_python(raw_tags)
+        slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
+        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        existing: Final = metadata.get("tags")
+        existing_tags: Final = (
+            TypeAdapter(tuple[str, ...]).validate_python(existing) if isinstance(existing, list) else ()
+        )
+        metadata["tags"] = list(dict.fromkeys((*existing_tags, *tags)))
 
     @staticmethod
     def apply_key_tags_pre_auth(
@@ -2322,6 +2339,9 @@ async def add_litellm_data_to_request(
         )
     )
 
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+        request=request, request_data=data, metadata_key=_metadata_variable_name
+    )
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
         data=data,

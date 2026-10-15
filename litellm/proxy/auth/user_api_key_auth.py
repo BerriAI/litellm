@@ -1240,6 +1240,13 @@ async def user_api_key_auth_websocket_for_model(
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
+        from pydantic import TypeAdapter
+
+        from litellm.proxy import proxy_server
+
+        mapper_settings: Final = TypeAdapter(dict[str, object]).validate_python(proxy_server.general_settings)
+        if mapper_settings.get("request_tag_mappings"):
+            raise HTTPException(403, "Baggage tag mappings require HTTP inference, WebSocket inference is disabled")
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
         if not close_on_auth_error:

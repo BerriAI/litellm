@@ -51,7 +51,7 @@ describe("RequestTagMappingsEditor", () => {
     const changed = vi.fn();
     render(<Editor initial={[exact]} changed={changed} />);
     await userEvent.click(screen.getByRole("combobox", { name: "Mapping 1 mode" }));
-    await userEvent.click(screen.getByRole("option", { name: "Any value" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Any value" }));
     expect(screen.queryByLabelText("Mapping 1 match value")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveValue("usecase:");
     expect(changed).toHaveBeenLastCalledWith([
