@@ -61550,61 +61550,6 @@ export interface operations {
             };
         };
     };
-    get_deployment_warnings_health_deployment_warnings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeploymentWarningsResponse"];
-                };
-            };
-        };
-    };
-    update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                warning_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeploymentWarningIgnoreUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeploymentWarningIgnoreResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     health_drain_health_drain_get: {
         parameters: {
             query?: never;
@@ -66246,24 +66191,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
-            };
-        };
-    };
-    websocket_live_sessions_websocket_endpoint_get_3: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
