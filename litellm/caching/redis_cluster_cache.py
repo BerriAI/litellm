@@ -141,8 +141,8 @@ class RedisClusterCache(RedisCache):
 
     async def disconnect(self):
         try:
-            if self.redis_async_redis_cluster_client is not None:
-                await self.redis_async_redis_cluster_client.aclose()
+            if self.redis_async_client is not None:
+                await self.redis_async_client.aclose()
         finally:
             await super().disconnect()
 

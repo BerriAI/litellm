@@ -144,7 +144,7 @@ async def test_disconnect_closes_cluster_client_without_raising(mock_redis_clust
             nonlocal closed
             closed = True
 
-    cache.redis_async_redis_cluster_client = _ClusterClient()
+    cache.redis_async_client = _ClusterClient()
     cache.redis_client = MagicMock()
 
     await cache.disconnect()
@@ -159,7 +159,7 @@ async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mo
         startup_nodes=[{"host": "localhost", "port": 6379}],
         password="hello",
     )
-    cache.redis_async_redis_cluster_client = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("aclose failed")))
+    cache.redis_async_client = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("aclose failed")))
     cache.redis_client = MagicMock()
 
     with pytest.raises(RuntimeError, match="aclose failed"):
@@ -180,7 +180,7 @@ async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_clust
     )
     cache.redis_client = MagicMock()
 
-    assert cache.redis_async_redis_cluster_client is None
+    assert cache.redis_async_client is None
     assert cache.async_redis_conn_pool is None
 
     await cache.disconnect()
