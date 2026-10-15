@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -27,6 +28,10 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 # Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
 # hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
+
+_FORM_FALLBACK_FIELDS: Final[frozenset[str]] = frozenset(
+    {"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"}
+)
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
@@ -159,6 +164,35 @@ def coerce_numeric_form_fields(
     }
 
 
+_FORM_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_FORM_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_FORM_STRING_ADAPTER: Final = TypeAdapter(str)
+
+
+def _list_form_value(value: object) -> object:
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        return _FORM_LIST_ADAPTER.validate_json(value)
+    except ValidationError:
+        pass
+    try:
+        return [_FORM_OBJECT_ADAPTER.validate_json(value)]
+    except ValidationError:
+        pass
+    try:
+        return [_FORM_STRING_ADAPTER.validate_json(value)]
+    except ValidationError:
+        return [value]
+
+
+def decode_json_list_form_fields(
+    parsed_body: Mapping[str, object],
+    list_fields: Collection[str],
+) -> Mapping[str, object]:
+    return {name: _list_form_value(value) if name in list_fields else value for name, value in parsed_body.items()}
+
+
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
@@ -236,7 +270,7 @@ async def read_request_body(request: Request | None) -> dict:
                     param="request_body",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            parsed_body = dict(form_data)
+            parsed_body = dict(decode_json_list_form_fields(form_data, _FORM_FALLBACK_FIELDS))
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:

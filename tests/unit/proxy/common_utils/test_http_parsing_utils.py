@@ -2,7 +2,8 @@ import asyncio, gzip, importlib, os
 import io
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Final, Literal, get_type_hints
+from types import SimpleNamespace
+from typing import Final, Literal, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -23,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     safe_get_request_query_params,
     safe_set_request_parsed_body,
     coerce_numeric_form_fields,
+    decode_json_list_form_fields,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
@@ -273,6 +275,53 @@ async def test_form_data_with_json_metadata():
 
     # Verify form() was called
     mock_request.form.assert_called_once()
+
+
+def _multipart_request(fields: Mapping[str, str]) -> MagicMock:
+    return MagicMock(
+        form=AsyncMock(return_value=FormData(fields)),
+        headers={"content-type": "multipart/form-data"},
+        scope={},
+        state=SimpleNamespace(_cached_headers=None),
+    )
+
+
+async def _read_multipart_body(fields: Mapping[str, str]) -> dict[str, object]:
+    return cast(dict[str, object], await read_request_body(_multipart_request(fields)))
+
+
+@pytest.mark.asyncio
+async def test_form_fallback_fields_are_decoded_into_lists():
+    result = await _read_multipart_body(
+        {
+            "model": "primary",
+            "fallbacks": '["backup"]',
+            "context_window_fallbacks": '[{"primary": ["big"]}]',
+            "content_policy_fallbacks": "safe",
+        }
+    )
+
+    assert result["fallbacks"] == ["backup"]
+    assert result["context_window_fallbacks"] == [{"primary": ["big"]}]
+    assert result["content_policy_fallbacks"] == ["safe"]
+
+
+@pytest.mark.asyncio
+async def test_form_fallback_with_client_endpoint_is_visible_to_the_request_body_safety_check():
+    from litellm.proxy.auth.auth_utils import is_request_body_safe, request_fallback_model_names
+
+    attacker_fallbacks = '[{"primary": [{"model": "primary", "api_base": "https://attacker.example/v1"}]}]'
+    body = await _read_multipart_body({"model": "primary", "fallbacks": attacker_fallbacks})
+
+    assert request_fallback_model_names(body) == ("primary",)
+    with pytest.raises(ValueError, match="api_base"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="primary",
+            route="/v1/images/edits",
+        )
 
 
 @pytest.mark.asyncio
@@ -1276,6 +1325,45 @@ class TestCoerceNumericFormFields:
         assert result == {"n": 3, "temperature": None, "image": buffer}
 
 
+class TestDecodeJsonListFormFields:
+    list_fields = frozenset({"fallbacks", "context_window_fallbacks"})
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ('["backup", "other"]', ["backup", "other"]),
+            ('[{"primary": ["backup"]}]', [{"primary": ["backup"]}]),
+            ('{"primary": ["backup"]}', [{"primary": ["backup"]}]),
+            ("backup", ["backup"]),
+            ('"backup"', ["backup"]),
+            ('["backup"', ['["backup"']),
+            ("null", ["null"]),
+            ("5", ["5"]),
+        ],
+    )
+    def test_value_is_always_a_list_never_walked_one_character_at_a_time(self, raw: str, expected: list[object]):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": raw},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": expected}
+
+    def test_empty_string_is_left_alone(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": ""},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": ""}
+
+    def test_other_fields_and_non_string_values_pass_through(self):
+        buffer = io.BytesIO(b"png")
+        parsed_body = {
+            "prompt": '["not", "a", "fallback"]',
+            "image": buffer,
+            "fallbacks": ["already", "a", "list"],
+            "context_window_fallbacks": None,
+        }
+        assert decode_json_list_form_fields(parsed_body=parsed_body, list_fields=self.list_fields) == parsed_body
+
+
 @pytest.mark.parametrize(
     "kind,settings,cli,path,body,expected",
     [
@@ -1379,6 +1467,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1431,6 +1520,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1450,6 +1540,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -1473,6 +1564,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
     return Request_http_parsing(
         {
@@ -1484,11 +1576,13 @@ def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
         receive,
     )
 
+
 def _request_with_body(body: bytes) -> Request_http_parsing:
     async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
     return _request(receive)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1496,11 +1590,13 @@ async def test_read_request_body_valid_json():
     result = await read_request_body(_request_with_body(b'{"key": "value"}'))
     assert result == {"key": "value"}
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_empty_body():
     result = await read_request_body(_request_with_body(b""))
     assert result == {}
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1508,12 +1604,14 @@ async def test_read_request_body_invalid_json():
     with pytest.raises(ProxyException):
         await read_request_body(_request_with_body(b'{"key": value}'))
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_large_payload():
     large_payload = '{"key":' + '"a"' * 10**6 + "}"
     with pytest.raises(ProxyException):
         await read_request_body(_request_with_body(large_payload.encode()))
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
