@@ -15,6 +15,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -931,6 +932,13 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 
+def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
+    beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
+    if isinstance(beside_trace_header, str) and beside_trace_header:
+        return beside_trace_header
+    return caller_session_id(kwargs, TraceControls())
+
+
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
@@ -939,7 +947,8 @@ def _get_session_id_for_spend_log(
     batch_trace_session_id: str | None = None,
 ) -> str | None:
     """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the conversation id the caller sent, then trace ids.
+    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
+    displaced from the request's session), then trace ids.
 
     A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
     it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole."""
@@ -951,7 +960,7 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
-    if litellm.request_correlation_in_logs and (caller_session := caller_session_id(kwargs, TraceControls())):
+    if litellm.request_correlation_in_logs and (caller_session := _caller_session_for_spend_log(kwargs, metadata)):
         return caller_session
     match standard_logging_payload:
         case {"trace_id": trace_id} if trace_id is not None:

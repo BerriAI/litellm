@@ -27,6 +27,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -191,6 +192,13 @@ def _caller_body_session_id(data: Mapping[str, object], metadata_variable_name: 
     if isinstance(top_level, str) and top_level:
         return top_level
     return _caller_trace_field(data, metadata_variable_name, "session_id")
+
+
+def _caller_session_beside_trace_header(
+    normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
+) -> str | None:
+    session_headers: Final = {key: value for key, value in normalized_headers.items() if key != "x-litellm-trace-id"}
+    return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -1634,7 +1642,9 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
-        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+        normalized_headers: Final = MappingProxyType(
+            {k.lower(): v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)}
+        )
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
         chain_id: Final = get_chain_id_from_headers(dict(headers))
@@ -1643,16 +1653,17 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
+        spend_log_session_id: Final = (
+            _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
+            if litellm.request_correlation_in_logs
+            and chain_id is not None
+            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            else None
+        )
         if chain_id:
-            body_session_id: Final = (
-                _caller_body_session_id(request_body, _metadata_variable_name)
-                if litellm.request_correlation_in_logs and chain_id == normalized_headers.get("x-litellm-trace-id")
-                else None
-            )
-            chain_session_id: Final = body_session_id or chain_id
             metadata_from_headers["trace_id"] = chain_id
-            metadata_from_headers["session_id"] = chain_session_id
-            data["litellm_session_id"] = chain_session_id
+            metadata_from_headers["session_id"] = chain_id
+            data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug("Extracted chain_id from header (trace-id/session-id): %s", chain_id)
         else:
@@ -1707,7 +1718,11 @@ class LiteLLMProxyRequestSetup:
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
-            data[_metadata_variable_name].update(metadata_from_headers)
+            data[_metadata_variable_name].update(
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
+                if spend_log_session_id
+                else metadata_from_headers
+            )
         return data
 
     @staticmethod

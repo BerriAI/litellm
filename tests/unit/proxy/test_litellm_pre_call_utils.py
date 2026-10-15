@@ -17,6 +17,7 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
@@ -3308,10 +3309,13 @@ def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain
     assert data["litellm_trace_id"] == "foo"
 
 
-@pytest.mark.parametrize(("correlation_in_logs", "expected_session_id"), [(True, "convo-1"), (False, "req-trace-1")])
+@pytest.mark.parametrize(("correlation_in_logs", "expected_spend_log_session"), [(True, "convo-1"), (False, None)])
 @pytest.mark.parametrize("session_in_metadata", [False, True], ids=["top-level", "metadata"])
-def test_x_litellm_trace_id_keeps_the_body_session_only_with_correlation_logging(
-    monkeypatch: pytest.MonkeyPatch, correlation_in_logs: bool, expected_session_id: str, session_in_metadata: bool
+def test_x_litellm_trace_id_keeps_the_body_session_for_spend_logs_only(
+    monkeypatch: pytest.MonkeyPatch,
+    correlation_in_logs: bool,
+    expected_spend_log_session: str | None,
+    session_in_metadata: bool,
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", correlation_in_logs)
     metadata: Final[dict[str, str]] = {"session_id": "convo-1"} if session_in_metadata else {}
@@ -3321,25 +3325,28 @@ def test_x_litellm_trace_id_keeps_the_body_session_only_with_correlation_logging
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers={"x-litellm-trace-id": "req-trace-1"}, data=data, _metadata_variable_name="metadata"
     )
-    assert data["litellm_session_id"] == expected_session_id
-    assert metadata["session_id"] == expected_session_id
+    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == expected_spend_log_session
+    assert data["litellm_session_id"] == "req-trace-1"
+    assert metadata["session_id"] == "req-trace-1"
     assert data["litellm_trace_id"] == "req-trace-1"
 
 
 @pytest.mark.parametrize(
     "session_header", ["x-litellm-session-id", "x-claude-code-session-id", "x-session-id"]
 )
+@pytest.mark.parametrize("with_trace_header", [False, True], ids=["session-header-only", "beside-trace-header"])
 def test_session_headers_still_beat_the_body_session_with_correlation_logging(
-    monkeypatch: pytest.MonkeyPatch, session_header: str
+    monkeypatch: pytest.MonkeyPatch, session_header: str, with_trace_header: bool
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     metadata: Final[dict[str, str]] = {}
     data: Final[dict[str, object]] = {"metadata": metadata, "litellm_session_id": "convo-1"}
+    trace_header: Final = {"x-litellm-trace-id": "req-trace-1"} if with_trace_header else {}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={session_header: "hdr-session-1"}, data=data, _metadata_variable_name="metadata"
+        headers={**trace_header, session_header: "hdr-session-1"}, data=data, _metadata_variable_name="metadata"
     )
-    assert data["litellm_session_id"] == "hdr-session-1"
-    assert metadata["session_id"] == "hdr-session-1"
+    spend_log_session: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) or data["litellm_session_id"]
+    assert spend_log_session == "hdr-session-1"
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():

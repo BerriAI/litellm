@@ -285,8 +285,9 @@ class ResponsesSessionHandler:
         SELECT * FROM spend_logs with that session_id and the same owner
 
         Only rows with the referenced response's owner are returned: the same user and team, and for a key with
-        neither, the same key. The session id can be caller supplied, so matching on it alone would mix owners, while
-        an owner's rotated or second key keeps its history, as response id security lets it continue the response.
+        neither, the same key. The session id can be caller supplied, so matching on it alone would mix owners. A
+        user's or team's regenerated or second key keeps the history; a key with neither does not, and turns written
+        by another owner (an admin continuing the chain) are not replayed.
 
         A just-finished turn gets a short second chance: the worker that served it may
         still be writing its spend log when the follow-up arrives, and an empty result
