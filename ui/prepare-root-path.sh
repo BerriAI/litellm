@@ -29,7 +29,6 @@ if [ -n "$prefix" ]; then
             shift
             for file do
                 sed -e "s|/litellm-asset-prefix|$prefix|g" \
-                    -e "s|/litellm/\.well-known/litellm-ui-config|$prefix/.well-known/litellm-ui-config|g" \
                     -e "s|/favicon.ico|$prefix/favicon.ico|g" \
                     "$file" > "$file.tmp"
                 case "$file" in

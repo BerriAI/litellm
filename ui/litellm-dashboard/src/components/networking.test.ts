@@ -229,7 +229,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/providers/fields", data: [] },
     ]);
 
@@ -255,7 +255,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/model_hub/info", data: {} },
     ]);
 
@@ -278,7 +278,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/model_hub", data: [] },
     ]);
 
@@ -301,7 +301,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/agent_hub", data: [] },
     ]);
 
@@ -322,7 +322,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/mcp_hub", data: [] },
     ]);
 
@@ -343,7 +343,7 @@ describe("UI config and public endpoints", () => {
     };
 
     const mockFetch = setupMockFetch([
-      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
       { url: "/public/providers/fields", data: [] },
     ]);
 
@@ -365,14 +365,14 @@ describe("UI config and public endpoints", () => {
       proxy_base_url: "https://example.com",
     };
 
-    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+    const mockFetch = setupMockFetch([{ url: "/.well-known/litellm-ui-config", data: uiConfig }]);
 
     const result = await Networking.getUiConfig();
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result).toEqual(uiConfig);
     const configCall = mockFetch.mock.calls.find((call) =>
-      (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
+      (call[0] as string).endsWith("/.well-known/litellm-ui-config"),
     );
     expect(configCall).toBeDefined();
   });
@@ -383,7 +383,7 @@ describe("UI config and public endpoints", () => {
       proxy_base_url: "https://example.com",
     };
 
-    setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+    setupMockFetch([{ url: "/.well-known/litellm-ui-config", data: uiConfig }]);
 
     await Networking.getUiConfig();
 
@@ -397,7 +397,7 @@ describe("UI config and public endpoints", () => {
       proxy_base_url: "https://backend.example.com",
       gateway_base_url: "https://gateway.example.com",
     };
-    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+    const mockFetch = setupMockFetch([{ url: "/.well-known/litellm-ui-config", data: uiConfig }]);
 
     await Networking.getUiConfig();
     expect(await Networking.testModelGroupConnection("token", "chat-model", "chat")).toEqual({ status: "success" });
@@ -415,7 +415,7 @@ describe("UI config and public endpoints", () => {
       server_root_path: "",
       proxy_base_url: "https://backend.example.com",
     };
-    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+    const mockFetch = setupMockFetch([{ url: "/.well-known/litellm-ui-config", data: uiConfig }]);
 
     await Networking.getUiConfig();
     expect(await Networking.testModelGroupConnection("token", "embedding-model", "embedding")).toEqual({
@@ -1038,13 +1038,38 @@ describe("getUiConfig runtime backend discovery", () => {
     return { networking, mockFetch };
   };
 
-  it("loads static runtime configuration from the UI prefix independently of the selected worker", async () => {
+  it.each(["https://backend.example.com", "https://backend.example.com/api-prefix"])(
+    "loads prefixed static configuration independently of the selected worker and API base %s",
+    async (backendBase) => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ backend_url: backendBase }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ ...discoveryConfig(), server_root_path: "/services/llm" }),
+        } as Response);
+      vi.stubGlobal("fetch", mockFetch);
+      const networking = await loadFreshNetworking();
+      const { setServerRootPath } = await import("@/lib/serverRootPath");
+      setServerRootPath("/services/llm");
+      networking.switchToWorkerUrl("https://worker.example.com/worker-mount");
+
+      await networking.getUiConfig();
+
+      expect(mockFetch).toHaveBeenNthCalledWith(1, "/services/llm/ui/litellm-runtime-config.json", {
+        cache: "no-store",
+      });
+      expect(mockFetch.mock.calls[1][0]).toBe(`${backendBase}/litellm/.well-known/litellm-ui-config`);
+    },
+  );
+
+  it("discovers the control plane under the UI prefix when no static backend is configured", async () => {
     const mockFetch = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ backend_url: "https://backend.example.com" }),
-      } as Response)
+      .mockResolvedValueOnce({ ok: false } as Response)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ ...discoveryConfig(), server_root_path: "/services/llm" }),
@@ -1058,7 +1083,7 @@ describe("getUiConfig runtime backend discovery", () => {
     await networking.getUiConfig();
 
     expect(mockFetch).toHaveBeenNthCalledWith(1, "/services/llm/ui/litellm-runtime-config.json", { cache: "no-store" });
-    expect(mockFetch.mock.calls[1][0]).toBe("https://backend.example.com/litellm/.well-known/litellm-ui-config");
+    expect(mockFetch).toHaveBeenNthCalledWith(2, "/services/llm/.well-known/litellm-ui-config");
   });
 
   it("uses a normalized runtime backend URL for discovery and the management fallback", async () => {

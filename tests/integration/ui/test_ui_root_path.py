@@ -54,7 +54,7 @@ class TestUIRootPath(unittest.TestCase):
             self.assertIn("/services/llm/favicon.ico?version=1", (runtime / "index.txt").read_text())
             self.assertEqual(runtime.stat().st_mode & 0o005, 0o005)
             self.assertEqual((runtime / "index.html").stat().st_mode & 0o004, 0o004)
-            self.assertIn("/services/llm/.well-known/litellm-ui-config", (runtime / "app.js").read_text())
+            self.assertEqual((runtime / "app.js").read_bytes(), (source / "app.js").read_bytes())
             self.assertEqual((source / "index.html").read_bytes(), original)
             self.assertEqual((runtime / "font.woff2").read_bytes(), (source / "font.woff2").read_bytes())
             self.assertEqual(self.prepare(directory, "/services/llm/").returncode, 0)

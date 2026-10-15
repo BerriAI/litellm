@@ -587,9 +587,10 @@ export const getUiConfig = async () => {
       })();
   runtimeBackendBaseUrl = runtimeBackendUrl;
   const discoveryBaseUrl = defaultProxyBaseUrl ?? runtimeBackendUrl;
+  const discoveryRoot = resolveApiBase({ serverRootPath }) || "/litellm";
   const url = discoveryBaseUrl
     ? `${discoveryBaseUrl}/litellm/.well-known/litellm-ui-config`
-    : `/litellm/.well-known/litellm-ui-config`;
+    : `${discoveryRoot}/.well-known/litellm-ui-config`;
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
   /**
