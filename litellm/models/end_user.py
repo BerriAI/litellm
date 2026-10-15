@@ -5,26 +5,13 @@ Canonical definition for ``litellm_endusertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from typing import Final, Literal
+from typing import Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
-
-
-class _SpendCoercingProxy:
-    __slots__ = ("_target",)
-
-    def __init__(self, target: object):
-        self._target: Final = target
-
-    def __getattr__(self, item: str) -> object:
-        val = getattr(self._target, item)
-        if item == "spend" and val is None:
-            return 0.0
-        return val
 
 
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
@@ -40,17 +27,9 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None
 
-    @model_validator(mode="before")
+    @field_validator("spend", mode="before")
     @classmethod
-    def set_model_info(cls, values: object) -> object:
-        if isinstance(values, cls):
-            return values
-        if isinstance(values, dict):
-            if values.get("spend") is None:
-                return {**values, "spend": 0.0}
-            return values
-        if getattr(values, "spend", None) is None:
-            return _SpendCoercingProxy(values)
-        return values
+    def default_null_spend_to_zero(cls, spend: object) -> object:
+        return 0.0 if spend is None else spend
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
