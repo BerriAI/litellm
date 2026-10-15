@@ -402,3 +402,61 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
         },
     },
 )
+
+
+CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "bedrock/converse/us.anthropic.claude-fable-5-1",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/model/us.anthropic.claude-fable-5-1/converse",
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
+    expected_provider_request={
+        "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
+        "inferenceConfig": {"maxTokens": 64},
+        "system": [{"text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "metrics": {"latencyMs": 4060},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
+        "stopReason": "end_turn",
+        "usage": {
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+            "inputTokens": 23,
+            "outputTokens": 6,
+            "serverToolUsage": {},
+            "totalTokens": 29,
+        },
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "created": ANY,
+        "model": "bedrock/converse/us.anthropic.claude-fable-5-1",
+        "object": "chat.completion",
+        "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Hello.", "role": "assistant"}}],
+        "usage": {
+            "completion_tokens": 6,
+            "prompt_tokens": 23,
+            "total_tokens": 29,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 6},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 23,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
