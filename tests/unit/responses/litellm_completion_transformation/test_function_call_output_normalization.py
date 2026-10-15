@@ -70,8 +70,17 @@ def test_function_call_output_string_passthrough():
                 {"type": "tool_reference", "tool_name": "get_forecast"},
             ],
         ),
+        (
+            [
+                {"type": "tool_reference"},
+                {"type": "tool_reference", "tool_name": None},
+                {"type": "tool_reference", "tool_name": ""},
+                {"type": "tool_reference", "tool_name": "get_weather"},
+            ],
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+        ),
     ],
-    ids=["reference-only", "interleaved-text-and-references"],
+    ids=["reference-only", "interleaved-text-and-references", "malformed-references-omitted"],
 )
 def test_function_call_output_preserves_tool_references_for_anthropic(
     output: list[Mapping[str, object]], expected_content: list[ToolMessageContentPart]
