@@ -203,7 +203,15 @@ def test_include_guardrail_response_requested_is_false_without_exact_true():
     assert include_guardrail_response_requested({}) is False
 
 
-_ToolRoute = Literal["acompletion", "aresponses", "anthropic_messages", "agenerate_content", "agenerate_content_stream"]
+_ToolRoute = Literal[
+    "acompletion",
+    "aresponses",
+    "acompact_responses",
+    "anthropic_messages",
+    "agenerate_content",
+    "agenerate_content_stream",
+    "acreate_interaction",
+]
 
 class TestProxyBaseLLMRequestProcessing:
     @pytest.mark.asyncio
@@ -540,7 +548,27 @@ class TestProxyBaseLLMRequestProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("route_type", get_args(_ToolRoute))
-    @pytest.mark.parametrize("tools", [5, "", {}, ["get_weather"]], ids=["int", "string", "object", "list_of_strings"])
+    @pytest.mark.parametrize(
+        "tools",
+        [
+            5,
+            "",
+            {},
+            ["get_weather"],
+            [{"type": "function", "function": "get_weather"}],
+            [{"type": "function", "function": {"name": "get_weather", "parameters": "object"}}],
+            [{"name": "get_weather", "input_schema": []}],
+        ],
+        ids=[
+            "int",
+            "string",
+            "object",
+            "list_of_strings",
+            "function_string",
+            "parameters_string",
+            "input_schema_list",
+        ],
+    )
     async def test_common_processing_pre_call_logic_rejects_malformed_tools_with_400(
         self, monkeypatch: pytest.MonkeyPatch, route_type: _ToolRoute, tools: object
     ) -> None:
@@ -595,17 +623,164 @@ class TestProxyBaseLLMRequestProcessing:
         assert not {"tools", "tool_choice", "parallel_tool_calls"} & forwarded.keys()
         assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_type", ["acompletion", "anthropic_messages", "agenerate_content"])
+    async def test_common_processing_pre_call_logic_rejects_a_tool_with_malformed_vector_store_ids(
+        self, monkeypatch: pytest.MonkeyPatch, route_type: _ToolRoute
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "file_search", "vector_store_ids": "vs_1"}],
+            }
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(monkeypatch, processing_obj, route_type=route_type)
+
+        assert exc_info.value.param == "tools"
+        assert exc_info.value.message.startswith("tools.0.vector_store_ids: ")
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_only_the_malformed_tool_entries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        weather_tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {}}}
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    5,
+                    weather_tool,
+                    {"type": "function", "function": "get_time"},
+                    {"type": "file_search", "vector_store_ids": "vs_1"},
+                ],
+                "tool_choice": "required",
+                "drop_params": True,
+            }
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj)
+
+        assert forwarded["tools"] == [weather_tool]
+        assert forwarded["tool_choice"] == "required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("web_search_options", "request_drop_params"),
+        [(5, {}), ("high", {"additional_drop_params": ["tools"]})],
+        ids=["int", "string_with_only_tools_droppable"],
+    )
+    async def test_common_processing_pre_call_logic_rejects_malformed_web_search_options_with_400(
+        self, monkeypatch: pytest.MonkeyPatch, web_search_options: object, request_drop_params: Mapping[str, object]
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "web_search_options": web_search_options,
+                **request_drop_params,
+            }
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(monkeypatch, processing_obj)
+
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert exc_info.value.param == "web_search_options"
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_every_malformed_tool_field_under_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": 5,
+                "web_search_options": 5,
+                "drop_params": True,
+            }
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj)
+
+        assert not {"tools", "web_search_options"} & forwarded.keys()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_named_in_additional_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": 5,
+                "additional_drop_params": ["tools"],
+            }
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj)
+
+        assert "tools" not in forwarded
+
     @staticmethod
-    def _router_with_drop_params(*deployment_drop_params: bool) -> Router:
+    def _router(*deployment_params: Mapping[str, object]) -> Router:
         return Router(
             model_list=[
                 {
                     "model_name": "gpt-5.2",
-                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "drop_params": drop_params},
+                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", **params},
                 }
-                for drop_params in deployment_drop_params
+                for params in deployment_params
             ]
         )
+
+    @classmethod
+    def _router_with_drop_params(cls, *deployment_drop_params: bool) -> Router:
+        return cls._router(*({"drop_params": drop_params} for drop_params in deployment_drop_params))
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_every_deployment_drops_by_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        forwarded: Final = await self._run_pre_call(
+            monkeypatch,
+            processing_obj,
+            llm_router=self._router(
+                {"additional_drop_params": ["tools"]}, {"additional_drop_params": ["tools", "user"]}
+            ),
+        )
+
+        assert "tools" not in forwarded
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_rejects_malformed_tools_one_deployment_keeps_by_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(
+                monkeypatch, processing_obj, llm_router=self._router({"additional_drop_params": ["tools"]}, {})
+            )
+
+        assert exc_info.value.param == "tools"
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_drops_malformed_tools_when_every_deployment_drops_params(

@@ -7632,16 +7632,6 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
     )
 
 
-def _registered_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    registry: Final = litellm.vector_store_registry
-    if registry is None:
-        return ()
-    return (
-        *(registry.get_vector_store_ids_to_run(non_default_params=dict(request_body), tools=None) or ()),
-        *chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
-    )
-
-
 def _require_vector_store_grant(
     object_type: GrantLayer,
     vector_store_ids_to_run: Sequence[str],
@@ -7713,8 +7703,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) when a
-    `tools[].vector_store_ids` field, or with the flag on any `vector_store_ids` field, is not a list of strings.
+    that does not grant a requested store, and with the flag on, ProxyException (400,
+    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -7728,7 +7718,14 @@ async def vector_store_access_check(
     registry_ids: Final = (
         _strict_requested_vector_store_ids(_typed_request_body(request_body))
         if deny_by_default
-        else _registered_requested_vector_store_ids(_typed_request_body(request_body))
+        else (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            if litellm.vector_store_registry is not None
+            else None
+        )
+        or ()
     )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()

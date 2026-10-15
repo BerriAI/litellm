@@ -29,10 +29,10 @@ from litellm.proxy.common_request_processing import (
     create_response,
     first_validation_error,
     log_llm_api_exception,
-    model_group_drops_params,
     proxy_exception_from_http_exception,
-    request_drops_params,
+    request_drop_policy,
     resolve_litellm_call_id,
+    resolve_tool_fields,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -46,6 +46,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.router import Router
 from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
@@ -91,36 +92,33 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
-_DROPPABLE_TOKEN_COUNT_FIELDS: Final = frozenset({"tools"})
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
 
 
-def _validate_token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ValidationError:
+def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
     try:
-        return TokenCountRequest.model_validate(fields)
+        return TokenCountRequest.model_validate({name: fields[name] for name in _TOKEN_COUNT_FIELDS if name in fields})
     except ValidationError as e:
-        return e
+        return ProxyException(
+            message=first_validation_error(e),
+            type="invalid_request_error",
+            param=str(e.errors(include_url=False)[0]["loc"][0]),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
-def _invalid_request_error(e: ValidationError) -> ProxyException:
-    return ProxyException(
-        message=first_validation_error(e),
-        type="invalid_request_error",
-        param=str(e.errors(include_url=False)[0]["loc"][0]),
-        code=status.HTTP_400_BAD_REQUEST,
-    )
+def _token_count_fields(
+    data: Mapping[str, object], user_agent: str, llm_router: Router | None, team_id: str | None
+) -> Mapping[str, object] | ProxyException:
+    from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+    from litellm.proxy.proxy_server import proxy_config
 
-
-def _token_count_request(fields: Mapping[str, object], drop_params: bool) -> TokenCountRequest | ProxyException:
-    validated: Final = _validate_token_count_request(fields)
-    if not isinstance(validated, ValidationError):
-        return validated
-    invalid_fields: Final = frozenset(str(error["loc"][0]) for error in validated.errors(include_url=False))
-    if not (drop_params and invalid_fields <= _DROPPABLE_TOKEN_COUNT_FIELDS):
-        return _invalid_request_error(validated)
-    without_invalid: Final = _validate_token_count_request(
-        {name: value for name, value in fields.items() if name not in invalid_fields}
-    )
-    return _invalid_request_error(without_invalid) if isinstance(without_invalid, ValidationError) else without_invalid
+    fields: Final = {
+        name: data[name] for name in (*_TOKEN_COUNT_FIELDS, "drop_params", "additional_drop_params") if name in data
+    }
+    auto_drop: Final = should_auto_drop_params_for_agentic_cli(user_agent, dict(fields), proxy_config)
+    resolving: Final = {**fields, "drop_params": True} if auto_drop else fields
+    return resolve_tool_fields(resolving, lambda: request_drop_policy(resolving, llm_router, team_id))
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:
@@ -373,11 +371,11 @@ async def count_tokens(
         if not messages:
             raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
 
-        token_request: Final = _token_count_request(
-            {"model": model_name, "messages": messages, "tools": data.get("tools"), "system": data.get("system")},
-            drop_params=request_drops_params(
-                data, model_group_drops_params(llm_router, model_name, user_api_key_dict.team_id)
-            ),
+        token_fields: Final = _token_count_fields(
+            data, request.headers.get("user-agent", ""), llm_router, user_api_key_dict.team_id
+        )
+        token_request: Final = (
+            token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
         )
         if isinstance(token_request, ProxyException):
             return _anthropic_error_json_response(token_request, request)

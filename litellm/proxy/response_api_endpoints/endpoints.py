@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, S
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
+from typing import Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -29,7 +29,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_response,
+    request_drop_policy,
+    resolve_tool_fields,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -37,6 +42,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_set_request_parsed_body,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -45,9 +51,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
-
-if TYPE_CHECKING:
-    from litellm.router import Router
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
@@ -1091,6 +1094,15 @@ def _proxy_token_counter() -> _TokenCounter:
 _token_counter_dep: Final = Depends(_proxy_token_counter)
 
 
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+_llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
@@ -1147,6 +1159,8 @@ def _responses_input_as_token_count_messages(
 async def responses_input_tokens(
     request: Request,
     token_counter: _TokenCounter = _token_counter_dep,
+    llm_router: Router | None = _llm_router_dep,
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1179,6 +1193,15 @@ async def responses_input_tokens(
             code="missing_required_parameter",
         )
 
+    counted_fields: Final = {
+        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+    }
+    token_fields: Final = resolve_tool_fields(
+        counted_fields, lambda: request_drop_policy(counted_fields, llm_router, user_api_key_dict.team_id)
+    )
+    if isinstance(token_fields, ProxyException):
+        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
@@ -1186,7 +1209,7 @@ async def responses_input_tokens(
                 input_value=input_value,
                 instructions=data.get("instructions"),
             ),
-            "tools": data.get("tools"),
+            "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
     except Exception as e:

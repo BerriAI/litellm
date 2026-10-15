@@ -2537,7 +2537,17 @@ class TestResponsesInputTokens:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
+        assert error["param"] == "tools"
+        assert error["message"].startswith("tools: ")
         counter.assert_not_awaited()
+
+    def test_invalid_tools_are_dropped_under_drop_params(self):
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "tools": [5, {"type": "web_search"}], "drop_params": True}
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
 
     def test_provider_error_maps_status_code(self):
         from litellm.proxy._types import ProxyException

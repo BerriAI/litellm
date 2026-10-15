@@ -366,9 +366,9 @@ def test_vector_store_ids_to_run_skips_malformed_tools(tools: object, expected: 
     ["vs_requested", ["vs_requested", 5]],
     ids=["string", "list_with_a_non_string"],
 )
-def test_vector_store_ids_to_run_keeps_store_ids_named_in_a_malformed_field(vector_store_ids: object) -> None:
+def test_vector_store_ids_to_run_ignores_a_malformed_vector_store_ids_field(vector_store_ids: object) -> None:
     tools: Final = [{"type": "file_search", "vector_store_ids": vector_store_ids}]
-    assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == ["vs_requested"]
+    assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == []
 
 
 @pytest.mark.parametrize(

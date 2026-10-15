@@ -4,6 +4,7 @@ import json
 import logging
 import math
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -29,7 +30,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
-from typing_extensions import Never
+from typing_extensions import Never, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
@@ -633,46 +634,156 @@ def serialize_http_exception_detail(
 
 
 _ROUTES_WITH_TOOLS: Final = frozenset(
-    {"acompletion", "aresponses", "anthropic_messages", "agenerate_content", "agenerate_content_stream"}
+    {
+        "acompletion",
+        "aresponses",
+        "acompact_responses",
+        "anthropic_messages",
+        "agenerate_content",
+        "agenerate_content_stream",
+        "acreate_interaction",
+    }
 )
 _TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
-_TOOL_LIST: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
+_TOOLS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+_FIELD_NAMES: Final = TypeAdapter(list[str], config=ConfigDict(strict=True))
 
 
-def model_group_drops_params(llm_router: Router | None, model: object, team_id: str | None) -> bool:
+class _ToolFunction(TypedDict, total=False):
+    parameters: ReadOnly[dict[str, object] | None]
+
+
+class _ToolEntry(TypedDict, total=False):
+    function: ReadOnly[_ToolFunction]
+    parameters: ReadOnly[dict[str, object] | None]
+    input_schema: ReadOnly[dict[str, object] | None]
+    vector_store_ids: ReadOnly[list[str]]
+
+
+_TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
+_WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=ConfigDict(strict=True))
+
+
+@dataclass(frozen=True, slots=True)
+class DropPolicy:
+    drop_params: bool
+    additional_drop_params: frozenset[str]
+
+    def drops(self, field: str) -> bool:
+        return self.drop_params or field in self.additional_drop_params
+
+
+@dataclass(frozen=True, slots=True)
+class _MalformedField:
+    field: str
+    message: str
+    without_field: Mapping[str, object]
+
+
+def _field_names(value: object) -> frozenset[str]:
+    try:
+        return frozenset(_FIELD_NAMES.validate_python(value))
+    except ValidationError:
+        return frozenset()
+
+
+def _deployment_params(
+    llm_router: Router | None, model: object, team_id: str | None
+) -> tuple[Mapping[object, object], ...]:
     if llm_router is None or not isinstance(model, str):
-        return False
-    deployments: Final = llm_router.get_model_list(model_name=model, team_id=team_id) or []
-    return bool(deployments) and all(
-        normalize_drop_params(deployment["litellm_params"].get("drop_params")) is True for deployment in deployments
+        return ()
+    return tuple(
+        _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
+        for deployment in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
     )
 
 
-def request_drops_params(data: Mapping[object, object], model_group_drops: bool = False) -> bool:
-    effective: Final = data.get("drop_params") if "drop_params" in data else model_group_drops
-    return litellm.drop_params is True or normalize_drop_params(effective) is True
+def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, team_id: str | None) -> DropPolicy:
+    deployments: Final = _deployment_params(llm_router, data.get("model"), team_id)
+    group_drops: Final = bool(deployments) and all(
+        normalize_drop_params(params.get("drop_params")) is True for params in deployments
+    )
+    group_field_names: Final = tuple(_field_names(params.get("additional_drop_params")) for params in deployments)
+    group_drop_fields: Final = (
+        group_field_names[0].intersection(*group_field_names[1:]) if group_field_names else frozenset[str]()
+    )
+    requested: Final = data.get("drop_params") if "drop_params" in data else group_drops
+    return DropPolicy(
+        drop_params=litellm.drop_params is True or normalize_drop_params(requested) is True,
+        additional_drop_params=_field_names(data.get("additional_drop_params")) | group_drop_fields,
+    )
 
 
-def first_validation_error(e: ValidationError, prefix: tuple[str, ...] = ()) -> str:
+def first_validation_error(e: ValidationError, prefix: tuple[str | int, ...] = ()) -> str:
     error: Final = e.errors(include_url=False)[0]
     return f"{'.'.join(str(part) for part in (*prefix, *error['loc']))}: {error['msg']}"
 
 
-def malformed_tools_error(data: Mapping[object, object]) -> ProxyException | None:
+def _tool_entry_error(index: int, entry: object) -> str | None:
+    try:
+        _TOOL_ENTRY.validate_python(entry, strict=True)
+    except ValidationError as e:
+        return first_validation_error(e, prefix=("tools", index))
+    return None
+
+
+def _without_tool_fields(data: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in data.items() if name not in _TOOL_FIELDS}
+
+
+def _malformed_tools(data: Mapping[str, object]) -> _MalformedField | None:
     tools: Final = data.get("tools")
     if tools is None:
         return None
     try:
-        _TOOL_LIST.validate_python(tools)
+        entries: Final = _TOOLS.validate_python(tools)
     except ValidationError as e:
-        return ProxyException(
-            message=first_validation_error(e, prefix=("tools",)),
-            type="invalid_request_error",
-            param="tools",
-            code=status.HTTP_400_BAD_REQUEST,
+        return _MalformedField("tools", first_validation_error(e, prefix=("tools",)), _without_tool_fields(data))
+    entry_errors: Final = tuple(_tool_entry_error(index, entry) for index, entry in enumerate(entries))
+    first_error: Final = next((error for error in entry_errors if error is not None), None)
+    if first_error is None:
+        return None
+    kept: Final = [entry for entry, error in zip(entries, entry_errors) if error is None]
+    return _MalformedField("tools", first_error, {**data, "tools": kept} if kept else _without_tool_fields(data))
+
+
+def _malformed_web_search_options(data: Mapping[str, object]) -> _MalformedField | None:
+    try:
+        _WEB_SEARCH_OPTIONS.validate_python(data.get("web_search_options"))
+    except ValidationError as e:
+        return _MalformedField(
+            "web_search_options",
+            first_validation_error(e, prefix=("web_search_options",)),
+            {name: value for name, value in data.items() if name != "web_search_options"},
         )
     return None
+
+
+def _first_malformed_field(data: Mapping[str, object]) -> _MalformedField | None:
+    tools: Final = _malformed_tools(data)
+    return tools if tools is not None else _malformed_web_search_options(data)
+
+
+def _apply_drop_policy(malformed: _MalformedField, policy: DropPolicy) -> Mapping[str, object] | ProxyException:
+    if not policy.drops(malformed.field):
+        return ProxyException(
+            message=malformed.message,
+            type="invalid_request_error",
+            param=malformed.field,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    remaining: Final = _first_malformed_field(malformed.without_field)
+    return malformed.without_field if remaining is None else _apply_drop_policy(remaining, policy)
+
+
+def resolve_tool_fields(
+    data: Mapping[str, object], drop_policy: Callable[[], DropPolicy]
+) -> Mapping[str, object] | ProxyException:
+    malformed: Final = _first_malformed_field(data)
+    if malformed is None:
+        return data
+    return _apply_drop_policy(malformed, drop_policy())
 
 
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
@@ -2345,15 +2456,18 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
-        request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
-        tools_error: Final = malformed_tools_error(request_fields) if route_type in _ROUTES_WITH_TOOLS else None
-        if tools_error is not None and not request_drops_params(
-            request_fields,
-            model_group_drops_params(llm_router, request_fields.get("model"), user_api_key_dict.team_id),
-        ):
-            raise tools_error
-        if tools_error is not None:
-            self.data = {name: value for name, value in self.data.items() if name not in _TOOL_FIELDS}
+        resolved_fields: Final = (
+            resolve_tool_fields(
+                self.data, lambda: request_drop_policy(self.data, llm_router, user_api_key_dict.team_id)
+            )
+            if route_type in _ROUTES_WITH_TOOLS
+            else self.data
+        )
+        if isinstance(resolved_fields, ProxyException):
+            raise resolved_fields
+        if resolved_fields is not self.data:
+            self.data = {name: value for name, value in self.data.items() if name in resolved_fields}
+            self.data.update(resolved_fields)
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set

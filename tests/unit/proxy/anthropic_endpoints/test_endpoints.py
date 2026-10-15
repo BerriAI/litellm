@@ -453,7 +453,11 @@ class TestErrorLogCarriesCallId:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tools", [5, "", ["get_weather"]], ids=["int", "empty_string", "list_of_strings"])
+@pytest.mark.parametrize(
+    "tools",
+    [5, "", ["get_weather"], [{"name": "get_weather", "input_schema": "object"}]],
+    ids=["int", "empty_string", "list_of_strings", "input_schema_string"],
+)
 async def test_count_tokens_answers_400_for_malformed_tools_without_counting(tools: object) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
@@ -476,16 +480,27 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(too
 
 
 @pytest.mark.asyncio
-async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set() -> None:
+@pytest.mark.parametrize(
+    ("dropping", "headers"),
+    [
+        ({"drop_params": True}, {}),
+        ({"additional_drop_params": ["tools"]}, {}),
+        ({}, {"user-agent": "claude-cli/2.1.0 (external, cli)"}),
+    ],
+    ids=["drop_params", "additional_drop_params", "claude_code_user_agent"],
+)
+async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
+    dropping: dict[str, object], headers: dict[str, str]
+) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     request = MagicMock()
-    request.headers = {}
+    request.headers = headers
     counter = AsyncMock(return_value={"total_tokens": 7})
     messages = [{"role": "user", "content": "hi"}]
-    body = {"model": "claude-sonnet", "messages": messages, "tools": 5, "drop_params": True}
+    body = {"model": "claude-sonnet", "messages": messages, "tools": 5, **dropping}
 
     with (
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
