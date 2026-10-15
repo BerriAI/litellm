@@ -900,6 +900,26 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     )
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_event_freezes_gc_before_serving() -> None:
+    """The opt-in gc.freeze (#46517) runs once startup is done and before the first request."""
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "freeze_gc_after_startup") as freeze_gc,
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                freeze_gc.assert_called_once_with()
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
