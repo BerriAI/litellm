@@ -83,6 +83,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
     get_cimd_client_id,
@@ -918,9 +919,9 @@ def _redirect_to_upstream_authorize(
         **({"scope": scope_value} if scope_value else {}),
         **({"resource": upstream_resource} if upstream_resource else {}),
     }
-    parsed_auth_url: Final = urlparse(mcp_server.effective_authorization_url or "")
-    merged_params: Final = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
-    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
+    return RedirectResponse(
+        build_upstream_authorize_url(mcp_server.effective_authorization_url or "", passthrough_params)
+    )
 
 
 def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MCPServer) -> RedirectResponse:
@@ -1151,11 +1152,9 @@ async def authorize_with_server(
     if upstream_resource:
         params["resource"] = upstream_resource
 
-    parsed_auth_url: Final = urlparse(resolved_server.effective_authorization_url)
-    existing_params: Final = dict(parse_qsl(parsed_auth_url.query))
-    existing_params.update(params)
-    final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    response: Final = RedirectResponse(final_url)
+    response: Final = RedirectResponse(
+        build_upstream_authorize_url(resolved_server.effective_authorization_url, params)
+    )
     _set_oauth_state_cookie(response, request, relay_state, encoded_state)
     return response
 
@@ -3113,8 +3112,26 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     return {
         "authorization_servers": [f"{request_base_url}/mcp"],
         "resource": f"{request_base_url}/mcp",
-        "scopes_supported": [],
+        "scopes_supported": _aggregate_header_scopes(request),
     }
+
+
+def _aggregate_header_scopes(request: Request) -> tuple[str, ...]:
+    """Gateway server-scope tokens for the ``x-mcp-servers`` header a client sends with its
+    discovery request, so a client that skips the 401 challenge (Claude Code re-authenticating
+    a server it already knows needs auth) still carries the selection to ``/authorize`` through
+    ``scopes_supported``. Empty when the header is absent or any entry does not resolve."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: PLC0415  # proxy import cycle
+        MCPRequestHandler,
+        gateway_dcr_challenge_scope,
+    )
+
+    header: Final = request.headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+    if not header:
+        return ()
+    names: Final = tuple(dict.fromkeys(entry.strip() for entry in header.split(",") if entry.strip()))
+    scope: Final = gateway_dcr_challenge_scope("/mcp", names, IPAddressUtils.get_mcp_client_ip(request))
+    return tuple(scope.split()) if scope else ()
 
 
 def _build_aggregate_authorization_server_response(
