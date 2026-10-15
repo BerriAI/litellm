@@ -89,8 +89,8 @@ def _common_patches(mock_proxy_logging, mock_response):
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
-        patch(f"{_PT_MOD}._read_request_body", new_callable=AsyncMock, return_value={}),
-        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MOD}.read_request_body", new_callable=AsyncMock, return_value={}),
+        patch(f"{_PT_MOD}.safe_get_request_headers", return_value={}),
     ]
 
     stack = ExitStack()

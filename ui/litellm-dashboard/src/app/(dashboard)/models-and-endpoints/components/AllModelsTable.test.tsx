@@ -157,6 +157,42 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
+  it("renders the credential's display name with its credential name beneath", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={new Map([["openai-prod", "Prod OpenAI"]])}
+        data={[makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } })]}
+      />,
+    );
+    expect(screen.getByText("Prod OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+  });
+
+  it("tells apart a credential whose label is another credential's name", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={
+          new Map([
+            ["openai-prod", "openai-staging"],
+            ["openai-staging", "openai-staging"],
+          ])
+        }
+        data={[
+          makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } }),
+          makeModel({
+            model_name: "gpt-4-staging",
+            model_info: { id: "staging-id", db_model: true } as ModelData["model_info"],
+            litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-staging" },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("openai-staging")).toHaveLength(2);
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+  });
+
   it("shows 'Defined in config' for a config model and the creator for a DB model", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("alice")).toBeInTheDocument();

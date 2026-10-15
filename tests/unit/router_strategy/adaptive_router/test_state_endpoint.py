@@ -109,7 +109,7 @@ async def test_endpoint_returns_404_when_no_adaptive_router(monkeypatch):
     fake_router.adaptive_routers = {}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     with pytest.raises(HTTPException) as exc:
         await proxy_server.get_adaptive_router_state(user_api_key_dict=admin)
     assert exc.value.status_code == 404
@@ -121,7 +121,7 @@ async def test_endpoint_returns_404_when_llm_router_is_none(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     with pytest.raises(HTTPException) as exc:
         await proxy_server.get_adaptive_router_state(user_api_key_dict=admin)
     assert exc.value.status_code == 404
@@ -152,7 +152,7 @@ async def test_endpoint_returns_snapshot_list_for_admin(monkeypatch):
     fake_router.adaptive_routers = {"r1": _entry("r1")}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     result = await proxy_server.get_adaptive_router_state(user_api_key_dict=admin)
     assert list(result.keys()) == ["routers"]
     assert len(result["routers"]) == 1
@@ -174,7 +174,7 @@ async def test_endpoint_returns_one_snapshot_per_router(monkeypatch):
     }
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     result = await proxy_server.get_adaptive_router_state(user_api_key_dict=admin)
     names = sorted(s["router_name"] for s in result["routers"])
     assert names == ["r1", "r2"]

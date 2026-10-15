@@ -44,7 +44,7 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -58,17 +58,17 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: ["openai-tool"]),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
     captured_secret_fields = {}
@@ -119,7 +119,7 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda t: True),
     )
     monkeypatch.setattr(
@@ -129,17 +129,17 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: ["openai-tool"]),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
 
@@ -292,7 +292,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -306,22 +306,22 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(
             lambda **_: [
                 {
@@ -338,12 +338,12 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -499,7 +499,7 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -513,17 +513,17 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
     monkeypatch.setattr(
@@ -638,7 +638,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -652,22 +652,22 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(
             lambda **_: [
                 {
@@ -684,12 +684,12 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -880,7 +880,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -894,22 +894,22 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: tool_calls),
     )
 
@@ -918,12 +918,12 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         mock_execute,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_create_follow_up_messages_for_chat",
+        "create_follow_up_messages_for_chat",
         staticmethod(
             lambda **_: [
                 {"role": "user", "content": "hello"},
@@ -1094,7 +1094,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     user_api_key_auth.api_key = "test_key"
 
     # Call _execute_tool_calls
-    result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    result = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
         user_api_key_auth=user_api_key_auth,
@@ -1182,7 +1182,7 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -1196,22 +1196,22 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: []),
     )
     monkeypatch.setattr(
@@ -1300,7 +1300,7 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_use_litellm_mcp_gateway",
+        "should_use_litellm_mcp_gateway",
         staticmethod(lambda tools: True),
     )
     monkeypatch.setattr(
@@ -1314,22 +1314,22 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         mock_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_transform_mcp_tools_to_openai",
+        "transform_mcp_tools_to_openai",
         staticmethod(lambda *_, **__: openai_tools),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_should_auto_execute_tools",
+        "should_auto_execute_tools",
         staticmethod(lambda **_: True),
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_extract_tool_calls_from_chat_response",
+        "extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: []),
     )
     monkeypatch.setattr(

@@ -7,20 +7,23 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    extract_reasoning_content,
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_utils import (
+    type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
+)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -59,6 +62,10 @@ from ...anthropic.chat.transformation import (
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
+_RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
+    Final[TypeAdapter[dict[str, object] | None]]
+) = TypeAdapter(dict[str, object] | None)
+
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
@@ -66,6 +73,15 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     return message_dict.get("role") == "assistant" and not any(
         message_dict.get(key) for key in ("content", "tool_calls", "function_call")
     )
+
+
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
+        case _:
+            return message
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -191,6 +207,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def get_config(cls, *, model: str | None = None):
         return super().get_config()
 
+    def get_json_schema_from_pydantic_object(
+        self,
+        response_format: (  # mutable-ok: matches BaseConfig override signature
+            type[BaseModel] | dict[str, object] | None
+        ),
+    ) -> dict[str, object] | None:  # mutable-ok: BaseConfig contract returns a dict
+        return _RESPONSE_FORMAT_ADAPTER.validate_python(type_to_response_format_param(response_format=response_format))
+
     def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
@@ -270,6 +294,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "tool_choice",
             "reasoning_effort",
             "thinking",
+            "service_tier",
         ]
 
     @staticmethod
@@ -447,6 +472,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -459,10 +485,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
-            _sanitize_empty_content(cast(dict[str, Any], _message))
+            _sanitize_empty_content(cast(dict[str, object], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(
@@ -488,7 +514,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         """
         content: Final = message.get("content")
         # Create new message with cache_control moved into content block
-        transformed_message: Final = cast(dict[str, Any], message.copy())
+        transformed_message: Final = cast(dict[str, object], message.copy())
         cache_control: Final = transformed_message.pop("cache_control")
         transformed_message["content"] = [
             {
@@ -561,7 +587,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         content_str: Final = DatabricksConfig.extract_content_str(message["content"])
         if block_reasoning_content is not None:
             return block_reasoning_content, content_str
-        return _extract_reasoning_content({**message, "content": content_str})
+        return extract_reasoning_content({**message, "content": content_str})
 
     @staticmethod
     def extract_citations(
@@ -588,14 +614,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 for _tc in tool_calls:
                     _openai_tc = ChatCompletionMessageToolCall(**_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     tool_calls = fixed_tool_calls
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if tool_calls and _should_convert_tool_call_to_json_mode(
+            if tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -681,7 +707,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
+        if "system_fingerprint" in completion_response:
+            model_response.system_fingerprint = (  # rebind-ok: fills the caller's model_response like id above
+                completion_response["system_fingerprint"]
+            )
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
+        served_tier: Final = completion_response.get("service_tier")
+        if isinstance(served_tier, str) and served_tier:
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # no declared field
 
         model_response.choices = self._transform_dbrx_choices(
             choices=completion_response["choices"],
@@ -729,7 +762,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     # 6. Set tool_calls to None
                     from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
                     from litellm.llms.base_llm.base_utils import (
-                        _convert_tool_response_to_message,
+                        convert_tool_response_to_message,
                     )
 
                     # Check if this chunk has a function name
@@ -744,7 +777,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                         or function_name == RESPONSE_FORMAT_TOOL_NAME
                     ):
                         # Convert tool calls to message format
-                        message = _convert_tool_response_to_message(tool_calls)
+                        message = convert_tool_response_to_message(tool_calls)
                         if message is not None:
                             if message.content == "{}":  # empty json
                                 message.content = ""

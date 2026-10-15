@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -126,15 +127,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _message_observation_output(item) -> dict:
+    def _message_observation_output(item: object) -> Mapping[str, object]:
         """Flatten a Responses API ``message`` item into an observation output dict.
 
         A message carries every content part, not just the first, so all
         ``output_text`` parts are joined and ``refusal`` parts are kept under
         their own key. Indexing ``content[0]`` instead dropped everything past
         the first part, lost refusal text entirely, and raised IndexError on an
-        empty content list. Mirrors the OTel v2 path's ``_responses_parts_text``
-        in ``litellm/integrations/otel/model/payloads.py``.
+        empty content list.
         """
         text_parts: Final = tuple(
             part.text

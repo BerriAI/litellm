@@ -31,6 +31,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import step
+
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -74,6 +76,7 @@ def _count_stream_event_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     return count
 
 
+@step("Run Claude Code headless against {models} through the proxy and check every model replies")
 def run_basic_messaging_cell(
     *,
     compat_result,

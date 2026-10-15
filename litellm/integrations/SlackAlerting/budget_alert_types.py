@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Final, Literal
 
-from litellm.proxy._types import CallInfo, Litellm_EntityType
+from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
 
 
 class BaseBudgetAlertType(ABC):

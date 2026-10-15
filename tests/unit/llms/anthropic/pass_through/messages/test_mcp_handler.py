@@ -190,12 +190,12 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
             else __import__(
                 "litellm.responses.mcp.litellm_proxy_mcp_handler", fromlist=["LiteLLM_Proxy_MCP_Handler"]
             ).LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             new=process,
         ),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new=execute,
         ),
         patch("litellm.anthropic_messages", new=AsyncMock(side_effect=responses)),
@@ -272,12 +272,12 @@ async def test_anthropic_messages_with_mcp_hands_execution_the_requests_served_t
         patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             new=process,
         ),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new=execute,
         ),
         patch("litellm.anthropic_messages", new=AsyncMock(side_effect=responses)),
@@ -323,12 +323,12 @@ async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped
         patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             new=AsyncMock(return_value=([], {})),
         ),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new=AsyncMock(return_value=[]),
         ),
         patch("litellm.anthropic_messages", new=anthropic_messages_mock),
@@ -344,3 +344,61 @@ async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped
         "With no tool results there is nothing to send back, so the loop must not call the model again"
     )
     assert result == tool_use_response
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_classifies_only_the_response_the_client_gets():
+    from litellm.llms.anthropic.pass_through.messages import mcp_handler
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.router import Router
+
+    classifier_router = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": '{"verdicts": {"toolu_bash": {"flagged": true, "explanation": "unrequested"}}}',
+                },
+            }
+        ]
+    )
+    responses = [
+        {"stop_reason": "tool_use", "content": [{"type": "tool_use", "id": "toolu_mcp", "name": "t", "input": {}}]},
+        {
+            "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": {"command": "rm -rf /"}}],
+        },
+    ]
+    backend = AsyncMock(side_effect=responses)
+
+    with (
+        patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth=None)),
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            new=AsyncMock(return_value=([], {})),
+        ),
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "execute_tool_calls",
+            new=AsyncMock(side_effect=[[{"tool_call_id": "toolu_mcp", "result": "ok", "name": "t"}], []]),
+        ),
+        patch("litellm.anthropic_messages", new=backend),
+        patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+    ):
+        result = await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model="fireworks_ai/kimi",
+            tools=[MCP_REFERENCE],
+            safeguards=[{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}],
+            litellm_router=classifier_router,
+        )
+
+    assert backend.await_count == 2
+    assert all("safeguards" not in call.kwargs for call in backend.await_args_list)
+    assert result["safeguard_results"][0]["status"]["tool_uses"] == {
+        "toolu_bash": {"type": "evaluated", "outcome": "flagged", "explanation": "unrequested"}
+    }

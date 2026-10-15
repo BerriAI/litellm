@@ -27,6 +27,7 @@ const NonReasoningTierToggle: React.FC<{
 
   return (
     <>
+      <Separator className="my-4" />
       <div className="flex items-center gap-2 mb-2">
         <Switch
           checked={value.enable_non_reasoning_tier === true}
@@ -41,7 +42,6 @@ const NonReasoningTierToggle: React.FC<{
         reasoning about it. Escalation still moves up out of it when a request needs more.
         {!available && " Requires the LLM or Jev classification method"}
       </span>
-      <Separator className="my-4" />
     </>
   );
 };
