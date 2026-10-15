@@ -597,6 +597,81 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
     assert _BYOK_INTERNAL_NAME not in surfaced_names
 
 
+_ACCESS_GROUP_TEAM_ID = "team-with-access-group"
+_ACCESS_GROUP_ID = "ag-group-models"
+
+
+@pytest.fixture
+def access_group_team(monkeypatch, mock_prisma):
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-unused"}}
+            for name in ("model-direct", "model-group", "model-other")
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+
+    def seed_team(models: list[str]) -> None:
+        cache.set_cache(
+            key=f"team_id:{_ACCESS_GROUP_TEAM_ID}",
+            value=LiteLLM_TeamTableCachedObj(
+                team_id=_ACCESS_GROUP_TEAM_ID, models=models, access_group_ids=[_ACCESS_GROUP_ID]
+            ),
+            model_type=LiteLLM_TeamTableCachedObj,
+        )
+
+    cache.set_cache(
+        key=f"access_group_id:{_ACCESS_GROUP_ID}",
+        value=LiteLLM_AccessGroupTable(
+            access_group_id=_ACCESS_GROUP_ID,
+            access_group_name="group-models",
+            access_model_names=["model-group"],
+            assigned_team_ids=[_ACCESS_GROUP_TEAM_ID],
+        ),
+        model_type=LiteLLM_AccessGroupTable,
+    )
+    mock_prisma.db.litellm_usertable.find_unique.return_value = None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    return seed_team
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+@pytest.mark.parametrize(
+    ("key_models", "team_models", "expected_names"),
+    [
+        (["all-team-models"], ["no-default-models"], ["model-group"]),
+        ([], ["model-direct"], ["model-direct", "model-group"]),
+        (["model-direct"], ["model-direct"], ["model-direct"]),
+    ],
+    ids=["team-key-gets-access-group-models", "team-models-plus-access-group", "key-own-list-stays-narrow"],
+)
+def test_model_info_lists_team_access_group_models_the_key_can_call(
+    client, auth_as, access_group_team, path, key_models, team_models, expected_names
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_group_team(team_models)
+    with auth_as(
+        role=LitellmUserRoles.INTERNAL_USER,
+        user_id=None,
+        team_id=_ACCESS_GROUP_TEAM_ID,
+        models=key_models,
+        team_models=team_models,
+    ):
+        response: Final = client.get(path)
+
+    assert response.status_code == 200, response.text
+    assert sorted(model["model_name"] for model in response.json()["data"]) == expected_names
+
+
 # ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------
