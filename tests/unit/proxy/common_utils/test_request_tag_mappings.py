@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from litellm.proxy._types import ConfigGeneralSettings
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
@@ -101,3 +102,35 @@ async def test_budgeted_mapper_requires_a_database():
             request, {}, config, None, MagicMock(), MagicMock()
         )
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,slot",
+    [("/chat/completions", "metadata"), ("/v1/messages", "litellm_metadata"), ("/v1/responses", "litellm_metadata")],
+)
+async def test_mapping_survives_cached_body_read_when_client_omits_metadata(route, slot):
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"qa-model"}'}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    data = await read_request_body(request)
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(data, route)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        data,
+        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        None,
+        MagicMock(),
+        MagicMock(),
+    )
+    downstream = await read_request_body(request)
+    assert downstream[slot]["tags"] == ["usecase:a"]

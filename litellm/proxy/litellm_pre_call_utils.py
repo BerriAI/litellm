@@ -2030,6 +2030,7 @@ class LiteLLMProxyRequestSetup:
     ) -> None:
         """Resolve configured baggage tags before the existing tag-budget gate."""
         from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+        from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
         from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
         from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
@@ -2062,6 +2063,7 @@ class LiteLLMProxyRequestSetup:
                 TypeAdapter(tuple[str, ...]).validate_python(existing) if isinstance(existing, list) else ()
             )
             metadata["tags"] = list(dict.fromkeys((*existing_tags, *(tag for tag, _ in mapped))))
+            safe_set_request_parsed_body(request=request, parsed_body=dict(request_data))
 
     @staticmethod
     def apply_key_tags_pre_auth(
