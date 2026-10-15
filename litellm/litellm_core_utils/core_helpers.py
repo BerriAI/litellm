@@ -244,6 +244,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Gemini / Vertex AI
     "STOP": "stop",
     "MAX_TOKENS": "length",
+    "CONTINUATION": "length",
     "SAFETY": "content_filter",
     "RECITATION": "content_filter",
     "FINISH_REASON_UNSPECIFIED": "stop",
