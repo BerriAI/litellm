@@ -129,7 +129,7 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
-def normalize_native_messages(messages: Sequence[object]) -> list[Any]:
+def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, object]]:
     """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
     return flatten_unencrypted_web_search_results_in_anthropic_messages(
         sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
