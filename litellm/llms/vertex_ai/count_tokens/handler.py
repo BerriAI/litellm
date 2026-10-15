@@ -16,7 +16,7 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
         return {
             "contents": contents,
             **({"systemInstruction": dict(system_instruction)} if system_instruction else {}),
-            **({"tools": tools} if tools else {}),
+            **({"tools": [dict(tool) for tool in tools]} if tools else {}),
         }
 
     async def validate_environment(

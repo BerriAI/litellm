@@ -1344,8 +1344,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
         else:
             from litellm.llms.vertex_ai.count_tokens.context import (
-                VertexGeminiCountContext,
                 VertexGeminiCountContextError,
+                count_context_error_response,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
@@ -1354,19 +1354,8 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
 
             count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
-            match count_context:
-                case VertexGeminiCountContextError(error_message=context_error):
-                    return TokenCountResponse(
-                        total_tokens=0,
-                        request_model=request_model,
-                        model_used=model_to_use,
-                        tokenizer_type="gemini",
-                        error=True,
-                        error_message=context_error,
-                        status_code=400,
-                    )
-                case VertexGeminiCountContext():
-                    pass
+            if isinstance(count_context, VertexGeminiCountContextError):
+                return count_context_error_response(count_context, request_model, model_to_use)
 
             resolved_contents: Final = (
                 contents
@@ -1375,38 +1364,17 @@ class VertexAITokenCounter(BaseTokenCounter):
                     messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
                 )
             )
-            token_count_settings: Final = TypeAdapter(dict[str, object]).validate_python(count_tokens_params_request)
-            vertex_litellm_params: Final = MappingProxyType(
-                {
-                    key: value
-                    for key, value in token_count_settings.items()
-                    if key not in {"api_key", "api_base", "timeout", "model", "contents", "tools", "system_instruction"}
-                }
-            )
-            api_key_value: Final = token_count_settings.get("api_key")
-            api_key: Final = api_key_value if isinstance(api_key_value, str) else None
-            api_base_value: Final = token_count_settings.get("api_base")
-            api_base: Final = api_base_value if isinstance(api_base_value, str) else None
-            timeout_value: Final = token_count_settings.get("timeout")
-            timeout: Final[float | httpx.Timeout | None] = (
-                timeout_value
-                if isinstance(timeout_value, httpx.Timeout)
-                else float(timeout_value)
-                if isinstance(timeout_value, int | float) and not isinstance(timeout_value, bool)
-                else None
-            )
+
+            count_tokens_params: Final = {
+                "model": model_to_use,
+                "contents": resolved_contents,
+                "system_instruction": count_context.system_instruction,
+                "tools": count_context.tools,
+            }
+            count_tokens_params_request.update(count_tokens_params)
             try:
-                gemini_count_tokens_result: Final = TypeAdapter(dict[str, object]).validate_python(
-                    await VertexAITokenCounter().acount_tokens(
-                        contents=list(resolved_contents),
-                        model=model_to_use,
-                        api_key=api_key,
-                        api_base=api_base,
-                        timeout=timeout,
-                        system_instruction=count_context.system_instruction,
-                        tools=[dict(tool) for tool in count_context.tools] if count_context.tools is not None else None,
-                        **vertex_litellm_params,
-                    )
+                result = await VertexAITokenCounter().acount_tokens(
+                    **count_tokens_params_request,
                 )
             except litellm.APIError as error:
                 return TokenCountResponse(
@@ -1419,18 +1387,13 @@ class VertexAITokenCounter(BaseTokenCounter):
                     status_code=error.status_code,
                 )
 
-            if "totalTokens" in gemini_count_tokens_result:
-                total_tokens: Final = gemini_count_tokens_result["totalTokens"]
-                if not isinstance(total_tokens, int) or isinstance(total_tokens, bool):
-                    return None
-                tokenizer_type_value: Final = gemini_count_tokens_result.get("tokenizer_used")
-                tokenizer_type: Final = tokenizer_type_value if isinstance(tokenizer_type_value, str) else "gemini"
+            if "totalTokens" in result:
                 return TokenCountResponse(
-                    total_tokens=total_tokens,
+                    total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
-                    tokenizer_type=tokenizer_type,
-                    original_response=gemini_count_tokens_result,
+                    tokenizer_type=result.get("tokenizer_used", "gemini"),
+                    original_response=result,
                 )
 
         return None

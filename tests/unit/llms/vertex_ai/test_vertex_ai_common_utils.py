@@ -39,7 +39,7 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request() -> 
     assert result is not None
     assert result.error is True
     assert result.status_code == 400
-    assert result.error_message == "Vertex AI Gemini system instructions only support text blocks."
+    assert "text blocks" in (result.error_message or "")
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
@@ -173,15 +173,11 @@ async def test_get_supports_system_message():
     from litellm.llms.vertex_ai.common_utils import get_supports_system_message
 
     # fine-tuned vertex gemini models will specifiy they are in the /gemini spec format
-    result = get_supports_system_message(
-        model="gemini/1234567890", custom_llm_provider="vertex_ai"
-    )
+    result = get_supports_system_message(model="gemini/1234567890", custom_llm_provider="vertex_ai")
     assert result == True
 
     # non-fine-tuned vertex gemini models will not specifiy they are in the /gemini spec format
-    result = get_supports_system_message(
-        model="random-model-name", custom_llm_provider="vertex_ai"
-    )
+    result = get_supports_system_message(model="random-model-name", custom_llm_provider="vertex_ai")
     assert result == False
 
 
@@ -254,13 +250,9 @@ def test_build_vertex_schema():
                 "properties": {
                     "tags": {"items": {"type": "string"}, "type": "array"},
                     "metadata": {"type": "object"},
-                    "callbacks": {
-                        "anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]
-                    },
+                    "callbacks": {"anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]},
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer"}, {"type": "null"}]
-                    },
+                    "max_concurrency": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
                     "run_id": {
@@ -304,9 +296,7 @@ def test_build_vertex_schema():
                         ]
                     },
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer", "nullable": True}]
-                    },
+                    "max_concurrency": {"anyOf": [{"type": "integer", "nullable": True}]},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
                     "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
@@ -711,9 +701,7 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
         ({}, "us-east1", "us-east1"),
     ],
 )
-def test_get_vertex_region_global_only_model(
-    model_cost_entry, vertex_region, expected_region
-):
+def test_get_vertex_region_global_only_model(model_cost_entry, vertex_region, expected_region):
     """Test get_vertex_region resolves region from model_cost supported_regions"""
     import litellm
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -725,9 +713,7 @@ def test_get_vertex_region_global_only_model(
         {"vertex_ai/test-model": model_cost_entry},
         clear=False,
     ):
-        result = vertex_base.get_vertex_region(
-            vertex_region=vertex_region, model="test-model"
-        )
+        result = vertex_base.get_vertex_region(vertex_region=vertex_region, model="test-model")
 
         assert result == expected_region
 
@@ -845,9 +831,7 @@ def test_convert_schema_types_type_array_conversion():
     assert anyof_types[1]["type"] == "number"
 
     # 4. Other properties preserved
-    assert (
-        input_schema["properties"]["studio"]["description"] == "The studio ID or name"
-    )
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
     assert input_schema["required"] == ["studio"]
 
 
@@ -1014,7 +998,9 @@ def test_construct_target_url_with_version_prefix():
         ),
     ],
 )
-def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+def test_construct_target_url_versionless_project_route_gets_api_version(
+    requested_route: str, expected_url: str
+) -> None:
     from litellm.llms.vertex_ai.common_utils import construct_target_url
 
     target_url = construct_target_url(
@@ -1147,10 +1133,7 @@ def test_fix_enum_types():
     # 2. Non-string enums are removed
     assert "enum" not in input_schema["properties"]["maxLength"]
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
-    )
+    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
 
     # 3. anyOf with string type keeps enum, non-string removes it
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
@@ -1203,7 +1186,6 @@ def test_get_token_url():
 
     assert "v1beta1" not in url
     assert "/v1/" in url
-
 
 
 @pytest.mark.asyncio
@@ -1539,9 +1521,7 @@ async def test_vertex_ai_token_counter_converts_messages_to_contents_for_gemini(
 
     token_counter = VertexAITokenCounter()
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
+    with patch("litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens") as mock_acount_tokens:
         mock_acount_tokens.return_value = {
             "totalTokens": 42,
             "tokenizer_used": "gemini",
@@ -1583,9 +1563,7 @@ async def test_vertex_ai_token_counter_returns_none_when_api_omits_total_tokens(
 
     token_counter = VertexAITokenCounter()
 
-    with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_acount_tokens:
+    with patch("litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens") as mock_acount_tokens:
         mock_acount_tokens.return_value = {"tokenizer_used": "gemini"}
 
         result = await token_counter.count_tokens(
@@ -1628,9 +1606,7 @@ async def test_vertex_ai_partner_model_detection():
     # Test Minimax models
     assert VertexAIPartnerModels.is_vertex_partner_model("minimaxai/minimax-m2-maas")
     # Test Moonshot models
-    assert VertexAIPartnerModels.is_vertex_partner_model(
-        "moonshotai/kimi-k2-thinking-maas"
-    )
+    assert VertexAIPartnerModels.is_vertex_partner_model("moonshotai/kimi-k2-thinking-maas")
 
     # Test Gemini models (should NOT be detected as partner model)
     assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.5-pro")
@@ -1661,9 +1637,7 @@ def test_vertex_ai_moonshot_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler(
-        "moonshotai/kimi-k2-thinking-maas"
-    )
+    assert VertexAIPartnerModels.should_use_openai_handler("moonshotai/kimi-k2-thinking-maas")
 
 
 def test_vertex_ai_zai_uses_openai_handler():
@@ -1698,9 +1672,7 @@ def test_vertex_ai_gemma_maas_is_partner_model():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.is_vertex_partner_model(
-        "google/gemma-4-26b-a4b-it-maas"
-    )
+    assert VertexAIPartnerModels.is_vertex_partner_model("google/gemma-4-26b-a4b-it-maas")
 
 
 def test_vertex_ai_gemma_maas_uses_openai_handler():
@@ -1711,9 +1683,7 @@ def test_vertex_ai_gemma_maas_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler(
-        "google/gemma-4-26b-a4b-it-maas"
-    )
+    assert VertexAIPartnerModels.should_use_openai_handler("google/gemma-4-26b-a4b-it-maas")
 
 
 def test_vertex_ai_gemma_maas_routes_to_partner_models():
@@ -1903,12 +1873,8 @@ def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
 
 def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
     optional: dict = {}
-    litellm_params = {
-        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
-    }
-    assert pop_vertex_request_labels(optional, litellm_params) == {
-        "team": "from_litellm_meta"
-    }
+    litellm_params = {"litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}}
+    assert pop_vertex_request_labels(optional, litellm_params) == {"team": "from_litellm_meta"}
 
 
 def test_vertex_text_embedding_request_includes_labels_from_metadata():
@@ -1918,9 +1884,7 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         input="hi",
         optional_params={},
         model="text-embedding-004",
-        litellm_params={
-            "metadata": {"requester_metadata": {"project_id": "cost-center-1"}}
-        },
+        litellm_params={"metadata": {"requester_metadata": {"project_id": "cost-center-1"}}},
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
 

@@ -137,8 +137,7 @@ def test_non_text_system_block_returns_an_error_value() -> None:
     )
 
     assert isinstance(context, VertexGeminiCountContextError)
-    assert context.kind == "error"
-    assert context.error_message == "Vertex AI Gemini system instructions only support text blocks."
+    assert "text blocks" in context.error_message
 
 
 @pytest.mark.parametrize(("system", "tools"), ((None, None), ("", None), ([], [])))

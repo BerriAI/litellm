@@ -196,43 +196,29 @@ def test_count_tokens_without_system_or_tools_sends_contents_only(gateway: Gatew
         assert _json_body(requests[0]) == {"contents": [{"role": "user", "parts": [{"text": _USER}]}]}
 
 
-@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync-sdk", "async-sdk"))
+_SDK_COUNT_ARGS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "messages": [{"role": "user", "content": _USER}],
+        "system": "Follow the system instruction.",
+        "tools": [
+            {
+                "name": "noop",
+                "description": "Return no output",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+)
+
+
 def _sync_sdk_count_tokens(gateway: Gateway, model: str) -> int:
-    return (
-        anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
-        .messages.count_tokens(
-            model=model,
-            messages=[{"role": "user", "content": _USER}],
-            system="Follow the system instruction.",
-            tools=[
-                {
-                    "name": "noop",
-                    "description": "Return no output",
-                    "input_schema": {"type": "object", "properties": {}},
-                }
-            ],
-        )
-        .input_tokens
-    )
+    client: Final = anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+    return client.messages.count_tokens(model=model, **_SDK_COUNT_ARGS).input_tokens  # pyright: ignore[reportArgumentType]  # SDK TypedDicts reject a JsonValue mapping
 
 
 async def _async_sdk_count_tokens(gateway: Gateway, model: str) -> int:
-    return (
-        await anthropic.AsyncAnthropic(
-            base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0
-        ).messages.count_tokens(
-            model=model,
-            messages=[{"role": "user", "content": _USER}],
-            system="Follow the system instruction.",
-            tools=[
-                {
-                    "name": "noop",
-                    "description": "Return no output",
-                    "input_schema": {"type": "object", "properties": {}},
-                }
-            ],
-        )
-    ).input_tokens
+    client: Final = anthropic.AsyncAnthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+    return (await client.messages.count_tokens(model=model, **_SDK_COUNT_ARGS)).input_tokens  # pyright: ignore[reportArgumentType]  # SDK TypedDicts reject a JsonValue mapping
 
 
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync-sdk", "async-sdk"))
@@ -249,7 +235,14 @@ def test_anthropic_sdk_count_tokens_forwards_system_and_tools(gateway: Gateway, 
         requests: Final = _count_requests(wire)
         assert len(requests) == 1
         request_body: Final = _json_body(requests[0])
-        assert "systemInstruction" in request_body and "tools" in request_body
+        assert request_body["systemInstruction"] == {"parts": [{"text": "Follow the system instruction."}]}
+        assert request_body["tools"] == [
+            {
+                "functionDeclarations": [
+                    {"name": "noop", "description": "Return no output", "parameters": {"type": "object"}}
+                ]
+            }
+        ]
 
 
 def test_google_count_tokens_forwards_system_and_tools_to_vertex(gateway: Gateway) -> None:

@@ -1,4 +1,3 @@
-
 from typing import Final
 
 import pytest
@@ -81,77 +80,39 @@ def test_transform_includes_tools():
     assert result["tools"] == tools
 
 
-def test_transform_anthropic_tool_shape():
-    config: Final = OpenAICountTokensConfig()
-
-    result: Final = config.transform_request_to_count_tokens(
-        model="gpt-4o",
-        input="Find a record",
-        tools=[{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}],
-    )
-
-    assert result["tools"] == [
-        {
-            "type": "function",
-            "name": "lookup",
-            "description": "",
-            "parameters": {"type": "object", "properties": {}},
-            "strict": False,
-        }
-    ]
+_SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {}}  # mutable-ok: matches the tools param type
 
 
-def test_transform_anthropic_tool_shape_strict_true():
-    config: Final = OpenAICountTokensConfig()
-
-    result: Final = config.transform_request_to_count_tokens(
-        model="gpt-4o",
-        input="Find a record",
-        tools=[
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    (
+        (
+            {"name": "lookup", "input_schema": _SCHEMA},
+            {"type": "function", "name": "lookup", "description": "", "parameters": _SCHEMA, "strict": False},
+        ),
+        (
+            {"name": "lookup", "input_schema": _SCHEMA, "strict": True},
+            {"type": "function", "name": "lookup", "description": "", "parameters": _SCHEMA, "strict": True},
+        ),
+        (
+            {"type": "custom", "name": "lookup", "description": "Find a record", "input_schema": _SCHEMA},
             {
-                "name": "lookup",
-                "input_schema": {"type": "object", "properties": {}},
-                "strict": True,
-            }
-        ],
-    )
-
-    assert result["tools"] == [
-        {
-            "type": "function",
-            "name": "lookup",
-            "description": "",
-            "parameters": {"type": "object", "properties": {}},
-            "strict": True,
-        }
-    ]
-
-
-def test_transform_custom_tool_shape():
-    config: Final = OpenAICountTokensConfig()
-
-    result: Final = config.transform_request_to_count_tokens(
-        model="gpt-4o",
-        input="Find a record",
-        tools=[
-            {
-                "type": "custom",
+                "type": "function",
                 "name": "lookup",
                 "description": "Find a record",
-                "input_schema": {"type": "object", "properties": {}},
-            }
-        ],
+                "parameters": _SCHEMA,
+                "strict": False,
+            },
+        ),
+    ),
+    ids=("anthropic", "anthropic-strict", "anthropic-custom-type"),
+)
+def test_transform_anthropic_tool_shapes(tool: dict[str, object], expected: dict[str, object]) -> None:
+    result: Final = OpenAICountTokensConfig().transform_request_to_count_tokens(
+        model="gpt-4o", input="Find a record", tools=[tool]
     )
 
-    assert result["tools"] == [
-        {
-            "type": "function",
-            "name": "lookup",
-            "description": "Find a record",
-            "parameters": {"type": "object", "properties": {}},
-            "strict": False,
-        }
-    ]
+    assert result["tools"] == [expected]
 
 
 def test_transform_builtin_tool_passes_through():
@@ -190,9 +151,7 @@ def test_messages_to_responses_input_basic():
         {"role": "user", "content": "How are you?"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 3
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -208,9 +167,7 @@ def test_messages_to_responses_input_with_system():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -224,9 +181,7 @@ def test_messages_to_responses_input_with_developer():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert instructions == "Be concise."
@@ -239,9 +194,7 @@ def test_messages_to_responses_input_with_tool():
         {"role": "tool", "content": "72°F", "tool_call_id": "call_123"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 2
     assert input_items[1] == {
@@ -512,10 +465,7 @@ def test_validate_request_missing_input():
 def test_get_endpoint_default():
     """Test default endpoint URL."""
     config = OpenAICountTokensConfig()
-    assert (
-        config.get_openai_count_tokens_endpoint()
-        == "https://api.openai.com/v1/responses/input_tokens"
-    )
+    assert config.get_openai_count_tokens_endpoint() == "https://api.openai.com/v1/responses/input_tokens"
 
 
 def test_get_endpoint_custom_base():

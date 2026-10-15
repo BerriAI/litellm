@@ -500,42 +500,26 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         from litellm.llms.vertex_ai.count_tokens.context import (
-            VertexGeminiCountContext,
             VertexGeminiCountContextError,
+            count_context_error_response,
             vertex_gemini_count_context,
         )
+
+        count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+        if isinstance(count_context, VertexGeminiCountContextError):
+            return count_context_error_response(count_context, request_model, model_to_use)
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params: Final = {
             "model": model_to_use,
             "contents": contents,
+            "system_instruction": count_context.system_instruction,
+            "tools": count_context.tools,
         }
         count_tokens_params_request.update(count_tokens_params)
-        count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
-        match count_context:
-            case VertexGeminiCountContextError(error_message=context_error):
-                return TokenCountResponse(
-                    total_tokens=0,
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="gemini",
-                    error=True,
-                    error_message=context_error,
-                    status_code=400,
-                )
-            case VertexGeminiCountContext():
-                pass
-
-        google_ai_studio_litellm_params: Final = {
-            key: value
-            for key, value in count_tokens_params_request.items()
-            if key not in {"system_instruction", "tools"}
-        }
         result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **google_ai_studio_litellm_params,
-            system_instruction=count_context.system_instruction,
-            tools=[dict(tool) for tool in count_context.tools] if count_context.tools is not None else None,
+            **count_tokens_params_request,
         )
 
         if result is not None:

@@ -7,6 +7,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
+from litellm.types.utils import TokenCountResponse
 
 
 class _AnthropicFunctionTool(BaseModel):
@@ -43,14 +44,12 @@ class _ResponsesFunctionTool(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class VertexGeminiCountContext:
-    kind: Literal["context"]
     system_instruction: Mapping[str, object] | None
-    tools: tuple[Mapping[str, JsonValue], ...] | None
+    tools: tuple[Mapping[str, object], ...] | None
 
 
 @dataclass(frozen=True, slots=True)
 class VertexGeminiCountContextError:
-    kind: Literal["error"]
     error_message: str
 
 
@@ -60,7 +59,6 @@ _TOOL_MAPPING: Final = TypeAdapter(dict[str, JsonValue])
 _ANTHROPIC_FUNCTION_TOOL: Final = TypeAdapter(_AnthropicFunctionTool)
 _OPENAI_CHAT_FUNCTION_TOOL: Final = TypeAdapter(_OpenAIChatFunctionTool)
 _RESPONSES_FUNCTION_TOOL: Final = TypeAdapter(_ResponsesFunctionTool)
-_MAPPED_TOOLS: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _VERTEX_TOOL_KEYS: Final = MappingProxyType(
     {
         "function_declarations": "functionDeclarations",
@@ -80,10 +78,7 @@ def _system_parts(
     try:
         blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
     except ValidationError:
-        return VertexGeminiCountContextError(
-            kind="error",
-            error_message="Vertex AI Gemini system instructions only support text blocks.",
-        )
+        return VertexGeminiCountContextError(error_message="Gemini system instructions only support text blocks.")
     return tuple({"text": block["text"]} for block in blocks)
 
 
@@ -146,7 +141,7 @@ def _normalize_function_tool(tool: object) -> Mapping[str, object] | None:
     return None
 
 
-def _map_function_tools(tools: object | None) -> tuple[Mapping[str, JsonValue], ...] | None:
+def _map_function_tools(tools: object | None) -> tuple[Mapping[str, object], ...] | None:
     if tools is None:
         return None
     try:
@@ -161,17 +156,13 @@ def _map_function_tools(tools: object | None) -> tuple[Mapping[str, JsonValue], 
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    try:
-        mapped_tools: Final = VertexGeminiConfig().map_function(
-            value=[deepcopy(dict(tool)) for tool in normalized_tools],
-            optional_params={},
-        )
-        validated_tools: Final = _MAPPED_TOOLS.validate_python(mapped_tools)
-    except ValidationError:
-        return None
+    mapped_tools: Final = VertexGeminiConfig().map_function(
+        value=[dict(tool) for tool in normalized_tools],
+        optional_params={},
+    )
     return tuple(
         MappingProxyType({_VERTEX_TOOL_KEYS.get(key, key): value for key, value in tool.items()})
-        for tool in validated_tools
+        for tool in mapped_tools
     )
 
 
@@ -183,7 +174,20 @@ def vertex_gemini_count_context(
     if isinstance(system_parts, VertexGeminiCountContextError):
         return system_parts
     return VertexGeminiCountContext(
-        kind="context",
         system_instruction=MappingProxyType({"parts": system_parts}) if system_parts else None,
         tools=_map_function_tools(tools),
+    )
+
+
+def count_context_error_response(
+    error: VertexGeminiCountContextError, request_model: str, model_used: str
+) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model=request_model,
+        model_used=model_used,
+        tokenizer_type="gemini",
+        error=True,
+        error_message=error.error_message,
+        status_code=400,
     )

@@ -24,7 +24,7 @@ class _GoogleCountTokensTextPart(BaseModel):
 
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True)
     parts: tuple[_GoogleCountTokensTextPart, ...]
 
 
@@ -55,6 +55,14 @@ router: Final = APIRouter(
 )
 
 
+def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
+    if declaration.parameters_json_schema is not None:
+        return declaration.parameters_json_schema
+    if declaration.parameters is not None:
+        return normalize_json_schema_types(declaration.parameters)
+    return {"type": "object", "properties": {}}
+
+
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
@@ -73,13 +81,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         {
             "name": declaration.name,
             **({"description": declaration.description} if declaration.description is not None else {}),
-            "input_schema": (
-                declaration.parameters_json_schema
-                if declaration.parameters_json_schema is not None
-                else normalize_json_schema_types(declaration.parameters)
-                if declaration.parameters is not None
-                else {"type": "object", "properties": {}}
-            ),
+            "input_schema": _input_schema(declaration),
         }
         for declaration in declarations
     ]
