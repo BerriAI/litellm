@@ -46,11 +46,11 @@ from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
-    _anthropic_stream_commits_now,
+    _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
-    _anthropic_stream_fallback_error_for_raised,
+    _stream_fallback_error_for_raised,
     _anthropic_stream_forwards_ping_live,
-    _anthropic_stream_raised_error_status,
+    _stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
@@ -1638,7 +1638,8 @@ def test_arouter_responses_api_bridge():
     )
 
     ## CONFIRM BRIDGE IS CALLED
-    with patch.object(litellm, "responses", return_value=AsyncMock()) as mock_responses:
+    # an empty stream: the Router reads the first chunk before returning, and a stream of mocks never produces one
+    with patch.object(litellm, "responses", return_value=iter([])) as mock_responses:
         result = router.completion(
             model="[IP-approved] o3-pro",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -4020,11 +4021,10 @@ async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_no
         return _stream_for(**kwargs)
 
     with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
-        response: Final = await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
-        )
         with pytest.raises(litellm.InternalServerError, match="provider 500 from openai/primary-model"):
-            [chunk async for chunk in response]
+            await router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
+            )
 
     assert _groups_called(provider_calls) == ["primary"]
 
@@ -15593,10 +15593,10 @@ def test_anthropic_stream_should_decline_fallback_direct_call():
 def test_anthropic_stream_commits_now_direct_call():
     content = _anthropic_messages_content_chunk("hi")
     lifecycle_chunk = _anthropic_messages_message_start_chunk()
-    assert _anthropic_stream_commits_now(content, has_generated_content=False, buffered_chunk_count=0) is True
-    assert _anthropic_stream_commits_now(content, has_generated_content=True, buffered_chunk_count=0) is False
+    assert _stream_commits_now(content, has_generated_content=False, buffered_chunk_count=0) is True
+    assert _stream_commits_now(content, has_generated_content=True, buffered_chunk_count=0) is False
     assert (
-        _anthropic_stream_commits_now(
+        _stream_commits_now(
             lifecycle_chunk,
             has_generated_content=False,
             buffered_chunk_count=MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
@@ -15604,7 +15604,7 @@ def test_anthropic_stream_commits_now_direct_call():
         is True
     )
     assert (
-        _anthropic_stream_commits_now(
+        _stream_commits_now(
             lifecycle_chunk,
             has_generated_content=False,
             buffered_chunk_count=MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS - 1,
@@ -16175,15 +16175,15 @@ def test_anthropic_messages_retry_budget_precedence_direct_call():
         num_retries=3, retry_policy=RetryPolicy(InternalServerErrorRetries=4)
     )
 
-    assert router._anthropic_messages_retry_budget(drop, {"model": "glm"}) == (3, False)
-    assert router._anthropic_messages_retry_budget(drop, routed) == (2, False)
-    assert router._anthropic_messages_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
-    assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+    assert router._stream_retry_budget(drop, {"model": "glm"}) == (3, False)
+    assert router._stream_retry_budget(drop, routed) == (2, False)
+    assert router._stream_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
+    assert policy_router._stream_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
+    assert policy_router._stream_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
+    assert policy_router._stream_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
     committed = {**routed, "litellm_metadata": {**routed["litellm_metadata"], "attempted_retries": 1, "max_retries": 5}}
-    assert router._anthropic_messages_retry_budget(drop, committed) == (5, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, committed) == (5, True)
+    assert router._stream_retry_budget(drop, committed) == (5, False)
+    assert policy_router._stream_retry_budget(reset, committed) == (5, True)
 
 
 def test_anthropic_messages_stream_can_retry_direct_call():
@@ -16837,11 +16837,10 @@ async def test_acompletion_disable_fallbacks_reaches_the_mid_stream_hop():
         return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
 
     with patch("litellm.acompletion", side_effect=primary_stream) as provider_calls:
-        response = await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
-        )
         with pytest.raises(litellm.InternalServerError) as raised:
-            [chunk async for chunk in response]
+            await router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+            )
 
     assert raised.value is primary_error
     assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
@@ -16856,11 +16855,10 @@ def test_completion_disable_fallbacks_reaches_the_mid_stream_hop():
         return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
 
     with patch("litellm.completion", side_effect=primary_stream) as provider_calls:
-        response = router.completion(
-            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
-        )
         with pytest.raises(litellm.InternalServerError) as raised:
-            list(response)
+            router.completion(
+                model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+            )
 
     assert raised.value is primary_error
     assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
@@ -16998,7 +16996,7 @@ async def test_anthropic_messages_raised_provider_error_after_content_propagates
     ids=["int", "digit-str", "response-only", "none"],
 )
 def test_anthropic_stream_raised_error_status_reads_every_status_shape(error, expected_status):
-    assert _anthropic_stream_raised_error_status(error) == expected_status
+    assert _stream_raised_error_status(error) == expected_status
 
 
 @pytest.mark.parametrize(
@@ -17014,7 +17012,7 @@ def test_anthropic_stream_raised_error_status_reads_every_status_shape(error, ex
 def test_anthropic_stream_fallback_error_for_raised_gates_like_a_detected_error_event(
     error, has_generated_content, converts
 ):
-    converted = _anthropic_stream_fallback_error_for_raised(error, "primary", has_generated_content)
+    converted = _stream_fallback_error_for_raised(error, "primary", has_generated_content)
     if not converts:
         assert converted is None
         return
@@ -17803,6 +17801,48 @@ def _router_with_failing_primary(fallback_access_check) -> Router:
     )
 
 
+class _DenyFallbackBudgetCheck:
+    async def __call__(
+        self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router
+    ) -> bool:
+        return False
+
+
+def _router_with_failing_fallback_chain(
+    fallback_targets: tuple[str, ...],
+    *,
+    fallback_access_check: _AllowlistFallbackAccessCheck | None = None,
+    fallback_budget_check: _DenyFallbackBudgetCheck | None = None,
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "k",
+                    "mock_response": Exception("primary is down"),
+                },
+            },
+            *(
+                {
+                    "model_name": target,
+                    "litellm_params": {
+                        "model": f"openai/{target}",
+                        "api_key": "k",
+                        "mock_response": Exception(f"{target} is down"),
+                    },
+                }
+                for target in fallback_targets
+            ),
+        ],
+        fallbacks=[{"primary": list(fallback_targets)}],
+        num_retries=0,
+        fallback_access_check=fallback_access_check,
+        fallback_budget_check=fallback_budget_check,
+    )
+
+
 @pytest.mark.asyncio
 async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_use():
     access_check = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
@@ -17812,6 +17852,59 @@ async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_us
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert access_check.checked_models == ["secret-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_reports_denied_fallback_as_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
+    router: Final = _router_with_failing_primary(access_check)
+    primary_only_router: Final = Router(model_list=router.model_list, fallbacks=[], num_retries=0)
+
+    with pytest.raises(litellm.InternalServerError) as primary_exception:
+        await primary_only_router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(litellm.InternalServerError) as fallback_exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(fallback_exception.value)
+    assert type(fallback_exception.value) is type(primary_exception.value)
+    assert fallback_exception.value.status_code == primary_exception.value.status_code
+    assert message.count("primary is down") == 1
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_separates_denied_and_failed_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset({"allowed-fallback"}))
+    router: Final = _router_with_failing_fallback_chain(
+        ("secret-fallback", "allowed-fallback"),
+        fallback_access_check=access_check,
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to allowed-fallback also failed:" in message
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized" in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_budget_check_reports_skipped_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router: Final = _router_with_failing_fallback_chain(
+        ("paid-fallback",),
+        fallback_budget_check=_DenyFallbackBudgetCheck(),
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to paid-fallback was skipped because the caller is over budget for it." in message
+    assert "also failed" not in message
 
 
 @pytest.mark.asyncio
@@ -26135,3 +26228,98 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+class _FirstPullStream:
+    """A stream whose first pull yields `first`, raises it, or ends (first=None)."""
+
+    def __init__(self, first: object) -> None:
+        self._first = first
+
+    def _pull(self, stop: type[Exception]) -> object:
+        if self._first is None:
+            raise stop
+        if isinstance(self._first, Exception):
+            raise self._first
+        return self._first
+
+    def __next__(self) -> object:
+        return self._pull(StopIteration)
+
+    async def __anext__(self) -> object:
+        return self._pull(StopAsyncIteration)
+
+
+def _first_chunk_cases():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _FirstChunk
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="hi"))])
+    provider_error = litellm.InternalServerError(message="primary died at stream start", llm_provider="openai", model="m")
+    wrapped = MidStreamFallbackError(
+        message=str(provider_error),
+        model="m",
+        llm_provider="openai",
+        original_exception=provider_error,
+        is_pre_first_chunk=True,
+    )
+    return [
+        pytest.param(chunk, _FirstChunk(chunk=chunk), None, id="first-chunk"),
+        pytest.param(None, _FirstChunk(chunk=None), None, id="empty-stream"),
+        pytest.param(wrapped, None, provider_error, id="pre-content-failure"),
+    ]
+
+
+@pytest.mark.parametrize("first, expected, raised", _first_chunk_cases())
+def test_read_first_chunk_direct_call(first, expected, raised):
+    from litellm.router import _read_first_chunk
+
+    if raised is None:
+        assert _read_first_chunk(_FirstPullStream(first)) == expected
+        return
+    with pytest.raises(type(raised)) as caught:
+        _read_first_chunk(_FirstPullStream(first))
+    assert caught.value is raised
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first, expected, raised", _first_chunk_cases())
+async def test_aread_first_chunk_direct_call(first, expected, raised):
+    from litellm.router import _aread_first_chunk
+
+    if raised is None:
+        assert await _aread_first_chunk(_FirstPullStream(first)) == expected
+        return
+    with pytest.raises(type(raised)) as caught:
+        await _aread_first_chunk(_FirstPullStream(first))
+    assert caught.value is raised
+
+
+def _chunks_with_first_cases():
+    from litellm.router import _FirstChunk
+
+    return [
+        pytest.param(None, ["a", "b"], ["a", "b"], id="nothing-read-stream-as-is"),
+        pytest.param(_FirstChunk(chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
+        pytest.param(_FirstChunk(chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
+    ]
+
+
+@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
+def test_chunks_with_first_direct_call(taken, rest, expected):
+    from litellm.router import _chunks_with_first
+
+    assert list(_chunks_with_first(iter(rest), taken)) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
+async def test_achunks_with_first_direct_call(taken, rest, expected):
+    from litellm.router import _achunks_with_first
+
+    async def stream():
+        for item in rest:
+            yield item
+
+    assert [item async for item in _achunks_with_first(stream(), taken)] == expected

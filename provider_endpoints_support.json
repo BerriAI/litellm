@@ -777,7 +777,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "qwencloud": {
@@ -795,7 +796,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "qwen_ai_platform": {
@@ -813,7 +815,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "databricks": {

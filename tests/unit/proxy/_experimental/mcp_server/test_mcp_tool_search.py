@@ -37,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     coerce_top_k,
     get_virtual_tool_definitions,
     handle_mcp_tool_search,
+    rank_mcp_tools,
     search_mcp_tools,
     search_tools,
 )
@@ -193,6 +194,19 @@ class RecordingEmbedder:
         return tuple(FAKE_VECTORS[text] for text in texts)
 
 
+class OversizedRecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple((1.0, 0.0) if "weather" in text.lower() else (0.0, 1.0) for text in texts)
+
+
 def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
     return SemanticToolRanker(embed=embedder or RecordingEmbedder(), embedding_model="emb", index=SemanticTextIndex())
 
@@ -203,6 +217,26 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
 
 
 class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
+        tools: Final = _make_tools(
+            [
+                ("get_weather", "Get the current weather forecast for a city"),
+                ("send_email", "Send an email to a recipient"),
+                ("list_files", "List files in a directory"),
+                ("huge_tool", "OVERSIZED description"),
+            ]
+        )
+        embedder = OversizedRecordingEmbedder()
+        ranker = SemanticToolRanker(embed=embedder, embedding_model="emb", index=SemanticTextIndex())
+
+        hits: Final = await rank_mcp_tools("weather", tools, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+
+        assert not isinstance(hits, EmbeddingFailed)
+        names: Final = [hit.tool.name for hit in hits]
+        assert names[0] == "get_weather"
+        assert "huge_tool" not in names
+
     @pytest.mark.asyncio
     async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
         keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
@@ -1406,7 +1440,7 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
             os.sched_setaffinity(0, {min(original_affinity)})
         for _ in range(2):
             results: Final = await asyncio.gather(
-                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=90.0) for _ in range(8))
             )
             assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
     finally:

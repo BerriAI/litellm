@@ -75,6 +75,15 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
+        case _:
+            return message
+
+
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
@@ -463,6 +472,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -475,10 +485,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
-            _sanitize_empty_content(cast(dict[str, Any], _message))
+            _sanitize_empty_content(cast(dict[str, object], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(
@@ -504,7 +514,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         """
         content: Final = message.get("content")
         # Create new message with cache_control moved into content block
-        transformed_message: Final = cast(dict[str, Any], message.copy())
+        transformed_message: Final = cast(dict[str, object], message.copy())
         cache_control: Final = transformed_message.pop("cache_control")
         transformed_message["content"] = [
             {
@@ -697,6 +707,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
+        if "system_fingerprint" in completion_response:
+            model_response.system_fingerprint = (  # rebind-ok: fills the caller's model_response like id above
+                completion_response["system_fingerprint"]
+            )
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
         served_tier: Final = completion_response.get("service_tier")
         if isinstance(served_tier, str) and served_tier:
