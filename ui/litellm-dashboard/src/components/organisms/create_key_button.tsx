@@ -294,6 +294,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
   const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
   const memberOwnerOptions = teamMemberOwnerOptions(selectedCreateKeyTeam, userID);
+  const createKeyOwner = form.watch("user_id");
+  useEffect(() => {
+    form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+    form.setValue("mcp_tool_permissions", {});
+  }, [createKeyOwner, form]);
   const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const handleCancel = () => {
     setIsModalVisible(false);
@@ -527,6 +532,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
     // Clear MCP server selection when team changes (available servers may differ)
     form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+    form.setValue("mcp_tool_permissions", {});
   }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
 
   // Apply deferred model prefill once the available model list arrives.
@@ -1615,6 +1621,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 value={control.value as McpSelectorValue | undefined}
                                 accessToken={accessToken}
                                 teamId={selectedCreateKeyTeam?.team_id ?? null}
+                                userId={typeof createKeyOwner === "string" ? createKeyOwner : null}
                                 placeholder="Select MCP servers or access groups (optional)"
                                 allowNoMcpServers
                               />

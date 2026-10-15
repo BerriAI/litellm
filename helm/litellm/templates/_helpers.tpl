@@ -475,6 +475,27 @@ harmless no-op for the Job and authoritative for the app pods.
   {{- end }}
 {{- end }}
 {{- end }}
+{{- $sslCertReqs := $root.Values.redis.sslCertReqs }}
+{{- if and $sslCertReqs (not (has $sslCertReqs (list "none" "optional" "required"))) }}
+{{- fail (printf "redis.sslCertReqs must be one of none, optional, required (got %q)" $sslCertReqs) }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.ssl $sslCertReqs $root.Values.redis.sslCaCerts) }}
+{{- fail "redis.ssl, redis.sslCertReqs and redis.sslCaCerts cannot be combined with redis.passwordSecret.urlKey, use a rediss:// URL with ssl_cert_reqs / ssl_ca_certs query parameters instead" }}
+{{- end }}
+{{- if or $root.Values.redis.host $hostKey }}
+{{- if $root.Values.redis.ssl }}
+- name: REDIS_SSL
+  value: "true"
+{{- end }}
+{{- if $sslCertReqs }}
+- name: REDIS_SSL_CERT_REQS
+  value: {{ $sslCertReqs | quote }}
+{{- end }}
+{{- if $root.Values.redis.sslCaCerts }}
+- name: REDIS_SSL_CA_CERTS
+  value: {{ $root.Values.redis.sslCaCerts | quote }}
+{{- end }}
+{{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
 {{- end }}
