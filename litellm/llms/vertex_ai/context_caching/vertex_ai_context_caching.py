@@ -44,8 +44,14 @@ class _CachedContentListBody(TypedDict):
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentUsageMetadata(TypedDict):
+    totalTokenCount: ReadOnly[NotRequired[int | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
+    usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
 
 class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
@@ -54,6 +60,11 @@ class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
 
 class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
+    tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
+    logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -439,6 +450,7 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
@@ -592,6 +604,7 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,

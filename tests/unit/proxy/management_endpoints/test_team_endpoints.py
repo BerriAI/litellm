@@ -44,6 +44,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
@@ -108,6 +109,10 @@ def _team_admin_may_edit(*fields: str):
         patch(  # test-quality-ok: the registry is a module constant update_team reads directly; no seam to inject
             "litellm.proxy.management_endpoints.team_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
             frozenset(fields) - (SUPPORTED_TEAM_ADMIN_PERMISSIONS - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS),
+        ),
+        patch(  # test-quality-ok: the block list is a module constant update_team reads directly; no seam to inject
+            "litellm.proxy.management_endpoints.team_endpoints.PROXY_CONTROLLED_TEAM_METADATA_KEYS",
+            PROXY_CONTROLLED_TEAM_METADATA_KEYS - frozenset(fields),
         ),
         patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": list(fields)}),  # test-quality-ok: update_team reads general_settings as a proxy_server module global
     ):
@@ -2382,6 +2387,152 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
         )
         assert update_call_kwargs.get("include", {}).get("object_permission") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_alias", "expected_keys"),
+    [
+        ("team-alias", ("team_id:team-refresh", "team_alias:team-alias")),
+        (None, ("team_id:team-refresh",)),
+    ],
+)
+async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
+    monkeypatch, team_alias: str | None, expected_keys: tuple[str, ...]
+) -> None:
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    published: Final = MagicMock()
+
+    async def record_cache_team_object(**_kwargs: object) -> None:
+        return None
+
+    async def record_publish(cache_key: str) -> None:
+        published(cache_key)
+
+    monkeypatch.setattr(team_endpoints, "cache_team_object", record_cache_team_object)
+    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+
+    await team_endpoints.refresh_cached_team(
+        team_row=LiteLLM_TeamTable(team_id="team-refresh", team_alias=team_alias),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert tuple(call.args[0] for call in published.call_args_list) == expected_keys
+
+
+@pytest.mark.asyncio
+async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatch) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.caching.redis_batch import request_redis_batch_scope
+    from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    events: Final = MagicMock()
+
+    class RecordingPipeline:
+        def __init__(self, calls: MagicMock) -> None:
+            self.calls: Final = MagicMock()
+            self.events: Final = calls
+
+        async def __aenter__(self) -> "RecordingPipeline":
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        def set(self, key: str, _value: str, ex: timedelta | None = None) -> None:
+            self.calls("SET", key)
+
+        def delete(self, *keys: str) -> None:
+            for key in keys:
+                self.calls("DEL", key)
+
+        async def execute(self, raise_on_error: bool = True) -> list[object]:
+            assert raise_on_error is False
+            for command in self.calls.call_args_list:
+                self.events(*command.args)
+            return [True for _ in self.calls.call_args_list]
+
+    class RecordingRedisClient:
+        def __init__(self, calls: MagicMock) -> None:
+            self.events: Final = calls
+
+        def pipeline(self, transaction: bool = True) -> RecordingPipeline:
+            assert transaction is False
+            return RecordingPipeline(self.events)
+
+    class RecordingRedisCache(RedisCache):
+        def __init__(self) -> None:
+            self.redis_kwargs: Final[dict[str, object]] = {}
+            self.namespace: Final[str | None] = None
+            self.client: Final = RecordingRedisClient(events)
+            self._circuit_breaker: Final = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+            self.service_logger_obj: Final = SimpleNamespace(
+                async_service_success_hook=AsyncMock(), async_service_failure_hook=AsyncMock()
+            )
+            self.default_ttl: Final[int | None] = None
+
+        def init_async_client(
+            self,
+        ) -> RecordingRedisClient:  # pyright: ignore[reportIncompatibleMethodOverride]  # in-memory Redis client
+            return self.client
+
+    async def record_publish(cache_key: str) -> None:
+        events("PUBLISH", cache_key)
+
+    redis_cache: Final = RecordingRedisCache()
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = None
+    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+
+    with request_redis_batch_scope():
+        await team_endpoints.refresh_cached_team(
+            team_row=LiteLLM_TeamTable(team_id="team-order", team_alias=None),
+            user_api_key_cache=cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert [(call.args[0], call.args[1]) for call in events.call_args_list] == [
+        ("SET", "team_id:team-order"),
+        ("PUBLISH", "team_id:team-order"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team_id: Final = "team-read-cache-miss"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id=team_id, models=["model-a"])
+    )
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    publish: Final = AsyncMock()
+    monkeypatch.setattr(auth_checks, "publish_auth_cache_invalidation", publish)
+
+    team: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert team.team_id == team_id
+    assert await cache.async_get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj) is not None
+    publish.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -11240,6 +11391,7 @@ class TestResolveTeamAccessGroupResources:
         row1.access_model_names = ["gpt-4", "claude-3"]
         row1.access_mcp_server_ids = ["mcp-1"]
         row1.access_agent_ids = []
+        row1.access_skill_names = ["private-plugin", "shared-plugin"]
 
         row2 = MagicMock()
         row2.access_group_id = "ag-2"
@@ -11247,6 +11399,7 @@ class TestResolveTeamAccessGroupResources:
         row2.access_model_names = ["claude-3", "gemini"]
         row2.access_mcp_server_ids = []
         row2.access_agent_ids = ["agent-1"]
+        row2.access_skill_names = ["shared-plugin"]
 
         fake_prisma = MagicMock()
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
@@ -11267,13 +11420,43 @@ class TestResolveTeamAccessGroupResources:
         ]
         assert resolved.access_group_mcp_server_ids == ["mcp-1"]
         assert resolved.access_group_agent_ids == ["agent-1"]
+        assert resolved.access_group_skill_names == ()
+        assert resolved.unresolved_access_group_ids == ("ag-missing",)
         assert [
-            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids)
+            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids, d.skill_names)
             for d in (resolved.access_group_details or [])
         ] == [
-            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), ()),
-            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",)),
+            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), (), ("private-plugin", "shared-plugin")),
+            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",), ("shared-plugin",)),
         ]
+
+    @pytest.mark.asyncio
+    async def test_skill_names_resolve_when_every_listed_group_exists(self):
+        """The flat skill list is the effective grant: names from every group when all rows
+        exist, nothing while any listed id has no row, since the skill check then clamps
+        the team's keys to public plugins."""
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        row = MagicMock()
+        row.access_group_id = "ag-1"
+        row.access_group_name = "skills-group"
+        row.access_model_names = []
+        row.access_mcp_server_ids = []
+        row.access_agent_ids = []
+        row.access_skill_names = ["private-plugin"]
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            resolved = await _resolve_team_access_group_resources(
+                TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=["ag-1"])
+            )
+
+        assert resolved.access_group_skill_names == ("private-plugin",)
+        assert resolved.unresolved_access_group_ids == ()
 
     @pytest.mark.asyncio
     async def test_no_access_groups_leaves_details_unset(self):
@@ -14894,7 +15077,7 @@ async def test_update_team_batch_enqueued_token_limit_raised_rejected_for_team_a
 
     with contextlib.ExitStack() as stack:
         _wire_update_team(stack, {_TEAM_BATCH_LIMIT: 100000})
-        stack.enter_context(_team_admin_may_edit("metadata"))
+        stack.enter_context(_team_admin_may_edit("metadata", _TEAM_BATCH_LIMIT))
         with pytest.raises(ProxyException) as exc:
             await update_team(
                 data=UpdateTeamRequest(team_id="test_team_id", metadata={_TEAM_BATCH_LIMIT: 10**12}),
@@ -16805,6 +16988,117 @@ async def test_update_team_team_admin_echoing_unpermitted_fields_unchanged_is_al
 
 
 @pytest.mark.asyncio
+async def test_update_team_team_admin_cannot_clear_a_declared_metadata_key():
+    import contextlib
+
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(parse_team_metadata_schema([{"key": "cost_center", "label": "Cost Center"}]))
+    try:
+        with contextlib.ExitStack() as stack:
+            prisma = _wire_update_team(stack, {"cost_center": "eng", "region": "eu"})
+            stack.enter_context(_team_admin_may_edit("metadata"))
+            with pytest.raises(ProxyException) as exc:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"region": "us"}),
+                    http_request=_update_request_stub(),
+                    user_api_key_dict=_TEAM_ADMIN_CALLER,
+                )
+    finally:
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert str(exc.value.code) == "403"
+    assert "'cost_center'" in str(exc.value.message)
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_key():
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"priority": "high", "region": "eu"})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={"priority": "low", "region": "eu"}),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "'priority'" in str(exc.value.message)
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
+    import contextlib
+
+    recorded: Final[list[object]] = []
+    TEAM_METADATA_VALIDATOR_REGISTRY.set(
+        _recording_validator(recorded, valid=False, error_message="cost center rejected, contact FinOps")
+    )
+    try:
+        with contextlib.ExitStack() as stack:
+            prisma = _wire_update_team(stack, {"cost_center": "eng"})
+            prisma.db.litellm_teamtable.find_unique.return_value.team_alias = "test_team"
+            stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+            stack.enter_context(_team_admin_may_edit("metadata"))
+            with pytest.raises(ProxyException) as exc:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"cost_center": "BAD"}),
+                    http_request=_update_request_stub(),
+                    user_api_key_dict=_TEAM_ADMIN_CALLER,
+                )
+    finally:
+        TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
+
+    assert str(exc.value.code) == "400"
+    assert "cost center rejected" in str(exc.value.message)
+    assert len(recorded) == 1
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_resending_stored_member_defaults_is_not_an_edit(
+    disable_audit_logging_for_mocked_team,
+):
+    import contextlib
+    from litellm.models.budget import LiteLLM_BudgetTable
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"team_member_budget_id": "member-budget-1"})
+        prisma.db.litellm_budgettable.find_unique = AsyncMock(
+            return_value=LiteLLM_BudgetTable(
+                budget_id="member-budget-1", max_budget=10.0, budget_duration="30d", tpm_limit=100, rpm_limit=5
+            )
+        )
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": ["tpm_limit"]})  # test-quality-ok: update_team reads general_settings as a proxy_server module global
+        )
+        result = await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                team_member_budget=10.0,
+                team_member_budget_duration="30d",
+                team_member_tpm_limit=100,
+                team_member_rpm_limit=5,
+                tpm_limit=6,
+            ),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert result["data"].team_id == "test_team_id"
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 6
+    assert not prisma.db.litellm_budgettable.update.called
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enables_it(
     disable_audit_logging_for_mocked_team,
 ):
@@ -17282,28 +17576,48 @@ _MEMBER_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_i
             _ROSTER_ADMIN_CALLER,
             False,
             ("tpm_limit",),
-            {"kind": "team_admin", "editable_fields": ["tpm_limit"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["tpm_limit"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-field-enabled",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("max_budget",),
-            {"kind": "team_admin", "editable_fields": ["max_budget"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["max_budget"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-keep-or-lower-budget",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("max_budget", "raise_max_budget"),
-            {"kind": "team_admin", "editable_fields": ["max_budget"], "may_raise_max_budget": True},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["max_budget"],
+                "may_raise_max_budget": True,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-may-raise-budget",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("tpm_limit", "raise_max_budget"),
-            {"kind": "team_admin", "editable_fields": ["tpm_limit"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["tpm_limit"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-raise-without-max-budget-is-inert",
         ),
         pytest.param(_MEMBER_CALLER, False, ("tpm_limit",), {"kind": "none"}, id="plain-member"),
@@ -17340,6 +17654,40 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         )
 
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
+
+
+@pytest.mark.parametrize("enabled_fields,expect_keys", [(("metadata",), True), (("tpm_limit",), False)])
+@pytest.mark.asyncio
+async def test_team_info_lists_proxy_controlled_metadata_keys_only_when_metadata_is_editable(
+    enabled_fields, expect_keys
+):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(team_id="team-1", members_with_roles=[Member(user_id="admin-1", role="admin")])
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(  # test-quality-ok: no seam on team_info
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+        _not_org_admin(),
+        _team_admin_may_edit(*enabled_fields),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request), team_id="team-1", user_api_key_dict=_ROSTER_ADMIN_CALLER
+        )
+
+    access: Final = response["team_info"].caller_edit_access
+    assert access.kind == "team_admin"
+    listed: Final = set(access.proxy_controlled_metadata_keys)
+    assert ({"priority", "guardrails", "callback_settings"} <= listed) is expect_keys
+    assert bool(access.proxy_controlled_metadata_keys) is expect_keys
 
 
 def test_member_budget_patch_maps_temp_budget_fields() -> None:

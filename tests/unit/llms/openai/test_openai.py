@@ -38,6 +38,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm.proxy.utils import model_dump_with_preserved_fields
 
 
 @pytest.mark.parametrize(
@@ -218,6 +219,49 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+@respx.mock
+def test_completion_defaults_missing_message_role_and_preserves_omitted_fields() -> None:
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-missing-role",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4",
+                "choices": [{"index": 0, "message": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-5.4",
+        api_base="https://api.openai.com/v1",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "Hi"}],
+        num_retries=0,
+    )
+
+    assert route.called
+    assert response.choices[0].message.role == "assistant"
+    assert model_dump_with_preserved_fields(response, exclude_unset=True) == {
+        "id": "chatcmpl-missing-role",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "hi", "role": "assistant"},
+                "provider_specific_fields": {},
+            }
+        ],
+        "created": 1,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
 
 
 @pytest.mark.asyncio
@@ -416,6 +460,22 @@ def _openai_sse_chunk(chunk_id: str, model: str, choices: list[JsonValue]) -> by
         "created": 0,
         "model": model,
         "choices": choices,
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+def _openai_sse_usage_chunk(chunk_id: str, model: str, *, prompt_tokens: int, completion_tokens: int) -> bytes:
+    body: Final[dict[str, JsonValue]] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
     }
     return f"data: {json.dumps(body)}\n\n".encode()
 
@@ -640,6 +700,7 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
                 [{"index": 0, "delta": {"content": "crossed the sky."}, "finish_reason": None}],
             ),
             _openai_sse_chunk("chatcmpl-bridge", "gpt-3.5-turbo", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            _openai_sse_usage_chunk("chatcmpl-bridge", "gpt-3.5-turbo", prompt_tokens=12, completion_tokens=6),
             b"data: [DONE]\n\n",
         )
     )
@@ -694,7 +755,7 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
             "candidates": [
                 {"content": {"parts": [], "role": "model"}, "finishReason": "STOP", "index": 0, "safetyRatings": []}
             ],
-            "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
+            "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6, "totalTokenCount": 18},
         },
     )
 

@@ -2,9 +2,12 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
+    with_usage,
+    COST_MAP,
     BinaryResponse,
     CostTrackingTestCase,
     Deployment,
@@ -18,7 +21,9 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
+from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 
 
 # gpt-5.3-codex
@@ -7160,6 +7165,201 @@ OPENAI_DEPLOYMENT_PRICING_OVERRIDE: Final = CostTrackingTestCase(
     ),
 )
 
+_CC_CUSTOM_MODEL_COST_HEADER_FRAMES: Final = sse_frames(
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "scripted response"}, "finish_reason": None}
+        ],
+    },
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    },
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+    },
+    done=True,
+)
+
+_CC_CUSTOM_MODEL_RESPONSES_BODY: Final[dict[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "status": "completed",
+    "created_at": 1700000000,
+    "model": "cc-custom-model",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_$REQUEST_ID",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+        }
+    ],
+    "usage": {
+        "input_tokens": 10,
+        "output_tokens": 253,
+        "total_tokens": 263,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "cc-custom-model",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_STREAM: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=_CC_CUSTOM_MODEL_COST_HEADER_FRAMES,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_MESSAGES: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-messages",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/messages",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body=_CC_CUSTOM_MODEL_RESPONSES_BODY,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_RESPONSES: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "input": "openai-deployment-zero-pricing-ignores-upstream-cost-header",
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body=_CC_CUSTOM_MODEL_RESPONSES_BODY,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_PRICING_IGNORES_UPSTREAM_COST_HEADER: Final = CostTrackingTestCase(
+    name="openai-deployment-pricing-ignores-upstream-cost-header",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.001, output_cost_per_token=0.002),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-pricing-ignores-upstream-cost-header"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$UNIQUE_ID",
+            "object": "chat.completion",
+            "model": "cc-custom-model",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(
+        spend=0.516, input_cost=0.01, output_cost=0.506, prompt_tokens=10, completion_tokens=253, rollups=True
+    ),
+)
+
+GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE: Final = CostTrackingTestCase(
+    name="gpt-5.6-upstream-cost-header-bills-header-value",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "gpt-5.6-upstream-cost-header-bills-header-value"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "gpt-5.6",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(
+        spend=0.000413,
+        input_cost=0.0,
+        output_cost=0.000413,
+        prompt_tokens=10,
+        completion_tokens=253,
+        breakdown_persisted=False,
+    ),
+)
+
 GPT_5_6_UPSTREAM_400_ZERO_SPEND: Final = CostTrackingTestCase(
     name="gpt-5.6-upstream_400_zero_spend",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -7839,7 +8039,18 @@ GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
             "created": 1,
             "model": "gpt-6.1-sol",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello."}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252},
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
         },
     ),
     expected=ExactExpected(
@@ -7847,8 +8058,3115 @@ GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6.1-sol-cache_read",
+        "model": "gpt-6.1-sol",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042876,
+                "model": "gpt-6.1-sol",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer b770f5df16a2",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 23,
+                        "engine_ttft_ms": 484,
+                        "engine_ttlt_ms": 999,
+                        "pre_inference_ms": 151,
+                        "service_tbt_ms": 25,
+                        "service_ttft_ms": 1085,
+                        "service_ttlt_ms": 1610,
+                        "user_visible_ttft_ms": 934,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0063088,
+            input_cost=0.0025088,
+            output_cost=0.0038,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6-luna-cache_read",
+        "model": "gpt-6-luna",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "a880e9da100c summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042880,
+                "model": "gpt-6-luna",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer a880e9da100c",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 7,
+                        "engine_ttft_ms": 110,
+                        "engine_ttlt_ms": 706,
+                        "pre_inference_ms": 254,
+                        "service_tbt_ms": 7,
+                        "service_ttft_ms": 647,
+                        "service_ttlt_ms": 1238,
+                        "user_visible_ttft_ms": 393,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.00037688,
+            input_cost=0.00018688,
+            output_cost=0.00019,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6-astra-cache_read",
+        "model": "gpt-6-astra",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "d45eefac915d summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1792042883,
+                "model": "gpt-6-astra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted answer d45eefac915d",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 25,
+                        "engine_ttft_ms": 697,
+                        "engine_ttlt_ms": 1373,
+                        "pre_inference_ms": 142,
+                        "service_tbt_ms": 26,
+                        "service_ttft_ms": 1289,
+                        "service_ttlt_ms": 1956,
+                        "user_visible_ttft_ms": 1147,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0452256,
+            input_cost=0.0224256,
+            output_cost=0.0228,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+
+_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS: Final = 367
+_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS: Final = 3
+_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].input_cost_per_token_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_SPEND: Final = (
+    _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-6-luna",
+    "input": "The package arrived broken.",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+}
+_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "gpt-6-luna",
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+        "usage": {
+            "input_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+            "input_tokens_details": {"cached_tokens": 256, "cache_write_tokens": 64},
+            "output_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS + _OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+        },
+    },
+)
+
+OPENAI_GPT_6_LUNA_DECISIONS: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-decisions-evaluation-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/decisions",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+    ),
+)
+
+OPENAI_GPT_6_LUNA_SYSTEMONE: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-systemone-evaluation-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/systemone",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "state": "The package arrived broken.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+    ),
+)
+
+
+# Above 272k input tokens OpenAI bills the whole request at the long-context column. For decisions
+# that column is the `_above_272k_tokens_decisions` fields: 2e-07 for input, cached and cache-write
+# tokens alike, output still 0. Mirrors the live 320,162-token call that billed 0.0640324.
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS: Final = 320162
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS: Final = 100000
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS: Final = 10000
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS: Final = 3
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].input_cost_per_token_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_READ_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].cache_read_input_token_cost_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].cache_creation_input_token_cost_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND: Final = (
+    (
+        _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS
+        - _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS
+        - _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS
+    )
+    * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_RATE
+    + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_READ_RATE
+    + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_RATE
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "gpt-6-luna",
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.84}],
+        "usage": {
+            "input_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+            "input_tokens_details": {
+                "cached_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS,
+                "cache_write_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS,
+            },
+            "output_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS
+            + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+        },
+    },
+)
+
+OPENAI_GPT_6_LUNA_DECISIONS_LONG_CONTEXT: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-decisions-above-272k-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/decisions",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+    ),
+)
+
+OPENAI_GPT_6_LUNA_SYSTEMONE_LONG_CONTEXT: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-systemone-above-272k-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/systemone",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "state": "The package arrived broken.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+    ),
+)
+
+
+GPT_6_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="gpt-6-sol-input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "d36c648eb5c2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer d36c648eb5c2",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6-sol-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b807c011e149 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer b807c011e149"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
+    name="gpt-6-sol-service_tier_flex",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "42b013573e14 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "flex",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 42b013573e14",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "flex",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00429, input_cost=0.002024, output_cost=0.002266, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
+    name="gpt-6-sol-service_tier_priority",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "f4ef2ca58612 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "priority",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer f4ef2ca58612",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "fast",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01716, input_cost=0.008096, output_cost=0.009064, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
+    name="gpt-6-sol-responses_native_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1791851574,
+            "status": "completed",
+            "background": False,
+            "billing": {"payer": "developer"},
+            "completed_at": 1791851574,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": 412,
+            "model": "gpt-6-sol",
+            "output": [
+                {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                    ],
+                    "phase": "final_answer",
+                    "role": "assistant",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "prompt_cache_key": None,
+            "prompt_cache_retention": "24h",
+            "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+            "service_tier": "default",
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "auto",
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 0,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "output_tokens": 0,
+                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "total_tokens": 0,
+                },
+                "web_search": {"num_requests": 0},
+            },
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 1840,
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2252,
+            },
+            "user": None,
+            "metadata": {},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_LUNA_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="gpt-6-luna-input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "694ee3f43b69 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-luna",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 694ee3f43b69",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00039, input_cost=0.000184, output_cost=0.000206, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_LUNA_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6-luna-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "f3f11b8d2818 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer f3f11b8d2818"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00039, input_cost=0.000184, output_cost=0.000206, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_LUNA_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
+    name="gpt-6-luna-service_tier_flex",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "dd297fa791f8 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "flex",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-luna",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer dd297fa791f8",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "flex",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.000195, input_cost=0.000092, output_cost=0.000103, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_LUNA_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
+    name="gpt-6-luna-service_tier_priority",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "c6908010aebc summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "priority",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-luna",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer c6908010aebc",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "fast",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00078, input_cost=0.000368, output_cost=0.000412, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_LUNA_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_native_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1791851574,
+            "status": "completed",
+            "background": False,
+            "billing": {"payer": "developer"},
+            "completed_at": 1791851574,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": 412,
+            "model": "gpt-6-luna",
+            "output": [
+                {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                    ],
+                    "phase": "final_answer",
+                    "role": "assistant",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "prompt_cache_key": None,
+            "prompt_cache_retention": "24h",
+            "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+            "service_tier": "default",
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "auto",
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 0,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "output_tokens": 0,
+                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "total_tokens": 0,
+                },
+                "web_search": {"num_requests": 0},
+            },
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 1840,
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2252,
+            },
+            "user": None,
+            "metadata": {},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00039, input_cost=0.000184, output_cost=0.000206, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_ASTRA_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="gpt-6-astra-input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "682dbc7dce00 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-astra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 682dbc7dce00",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_ASTRA_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6-astra-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "867507e67c53 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer 867507e67c53"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_ASTRA_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
+    name="gpt-6-astra-service_tier_flex",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "72512aa3c14a summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "flex",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-astra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 72512aa3c14a",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "flex",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0234, input_cost=0.01104, output_cost=0.01236, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_ASTRA_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
+    name="gpt-6-astra-service_tier_priority",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "53b84772ae29 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "priority",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6-astra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 53b84772ae29",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "fast",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0936, input_cost=0.04416, output_cost=0.04944, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_ASTRA_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
+    name="gpt-6-astra-responses_native_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-astra",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1791851574,
+            "status": "completed",
+            "background": False,
+            "billing": {"payer": "developer"},
+            "completed_at": 1791851574,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": 412,
+            "model": "gpt-6-astra",
+            "output": [
+                {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                    ],
+                    "phase": "final_answer",
+                    "role": "assistant",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "prompt_cache_key": None,
+            "prompt_cache_retention": "24h",
+            "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+            "service_tier": "default",
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "auto",
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 0,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "output_tokens": 0,
+                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "total_tokens": 0,
+                },
+                "web_search": {"num_requests": 0},
+            },
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 1840,
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2252,
+            },
+            "user": None,
+            "metadata": {},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_SOL_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6.1-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "fe2e0078a155 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer fe2e0078a155"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791851658,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_SOL_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-service_tier_flex",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "28201777a291 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "flex",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6.1-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 28201777a291",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "flex",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0039, input_cost=0.00184, output_cost=0.00206, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_SOL_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-service_tier_priority",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "27c98f26478e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "service_tier": "priority",
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791851507,
+            "model": "gpt-6.1-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 27c98f26478e",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "fast",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0156, input_cost=0.00736, output_cost=0.00824, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_SOL_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-responses_native_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-sol",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1791851574,
+            "status": "completed",
+            "background": False,
+            "billing": {"payer": "developer"},
+            "completed_at": 1791851574,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": 412,
+            "model": "gpt-6.1-sol",
+            "output": [
+                {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                    ],
+                    "phase": "final_answer",
+                    "role": "assistant",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "prompt_cache_key": None,
+            "prompt_cache_retention": "24h",
+            "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+            "service_tier": "default",
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "auto",
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 0,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "output_tokens": 0,
+                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "total_tokens": 0,
+                },
+                "web_search": {"num_requests": 0},
+            },
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 1840,
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2252,
+            },
+            "user": None,
+            "metadata": {},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_TOOL_CALL: Final = CostTrackingTestCase(
+    name="gpt-6-sol-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b2ce2f555743 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "reasoning_effort": "none",
+        "allowed_openai_params": ["tool_choice", "reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_$REQUEST_ID",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city":"Berlin","days":7,"units":"metric"}',
+                                },
+                            }
+                        ],
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_SOL_REASONING: Final = CostTrackingTestCase(
+    name="gpt-6-sol-reasoning",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "3646649ee64b summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 3646649ee64b",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1240,
+                "completion_tokens": 4040,
+                "total_tokens": 5280,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 3480,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.047168, input_cost=0.002728, output_cost=0.04444, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+GPT_6_SOL_STREAM_NO_USAGE: Final = CostTrackingTestCase(
+    name="gpt-6-sol-stream_no_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "e026eaee0c4e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "obfuscation": "5A3jk",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer e026eaee0c4e"}, "finish_reason": None}],
+                "obfuscation": "Q2x",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "obfuscation": "v37dpurTBq",
+            },
+        ),
+    ),
+    expected=RecountExpected(recount=RecountRates(input_cost_per_token=2.2e-06, output_cost_per_token=1.1e-05)),
+)
+
+GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
+    name="gpt-6-luna-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "29a8fbc85239 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "reasoning_effort": "none",
+        "allowed_openai_params": ["tool_choice", "reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-luna",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_$REQUEST_ID",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city":"Berlin","days":7,"units":"metric"}',
+                                },
+                            }
+                        ],
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00039, input_cost=0.000184, output_cost=0.000206, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_LUNA_REASONING: Final = CostTrackingTestCase(
+    name="gpt-6-luna-reasoning",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "ae40dff71266 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-luna",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer ae40dff71266",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1240,
+                "completion_tokens": 4040,
+                "total_tokens": 5280,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 3480,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.002144, input_cost=0.000124, output_cost=0.00202, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+GPT_6_LUNA_STREAM_NO_USAGE: Final = CostTrackingTestCase(
+    name="gpt-6-luna-stream_no_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "e8f84b81110b summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "obfuscation": "5A3jk",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer e8f84b81110b"}, "finish_reason": None}],
+                "obfuscation": "Q2x",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-luna",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "obfuscation": "v37dpurTBq",
+            },
+        ),
+    ),
+    expected=RecountExpected(recount=RecountRates(input_cost_per_token=1e-07, output_cost_per_token=5e-07)),
+)
+
+GPT_6_ASTRA_REASONING: Final = CostTrackingTestCase(
+    name="gpt-6-astra-reasoning",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "5ff48be12807 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-astra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 5ff48be12807",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1240,
+                "completion_tokens": 4040,
+                "total_tokens": 5280,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 3480,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.25728, input_cost=0.01488, output_cost=0.2424, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+GPT_6_ASTRA_STREAM_NO_USAGE: Final = CostTrackingTestCase(
+    name="gpt-6-astra-stream_no_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6-astra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "8508ebd1992c summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "obfuscation": "5A3jk",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer 8508ebd1992c"}, "finish_reason": None}],
+                "obfuscation": "Q2x",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6-astra",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "obfuscation": "v37dpurTBq",
+            },
+        ),
+    ),
+    expected=RecountExpected(recount=RecountRates(input_cost_per_token=1.2e-05, output_cost_per_token=6e-05)),
+)
+
+GPT_6_1_SOL_REASONING: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-reasoning",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6450817d8662 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6.1-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 6450817d8662",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1240,
+                "completion_tokens": 4040,
+                "total_tokens": 5280,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 3480,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.04288, input_cost=0.00248, output_cost=0.0404, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+GPT_6_1_SOL_STREAM_NO_USAGE: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-stream_no_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-6.1-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "8b76805f8920 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": "", "refusal": None}, "finish_reason": None}
+                ],
+                "obfuscation": "5A3jk",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {"content": "scripted answer 8b76805f8920"}, "finish_reason": None}],
+                "obfuscation": "Q2x",
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791855376,
+                "model": "gpt-6.1-sol",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "obfuscation": "v37dpurTBq",
+            },
+        ),
+    ),
+    expected=RecountExpected(recount=RecountRates(input_cost_per_token=2e-06, output_cost_per_token=1e-05)),
+)
+
+GPT_6_SOL_UPSTREAM_404_ZERO_SPEND: Final = CostTrackingTestCase(
+    name="gpt-6-sol-upstream_404_zero_spend",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "scripted upstream failure 404"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "error": {
+                "message": "The model `scripted-missing-model` does not exist or you do not have access to it.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "model_not_found",
+            }
+        },
+        status=404,
+    ),
+    expected=FailureExpected(failure=FailureDetails(status=404)),
+)
+
+GPT_6_SOL_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
+    name="gpt-6-sol-input_text_rollups",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "0a5d8710e0d8 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$UNIQUE_ID",
+            "object": "chat.completion",
+            "created": 1791855452,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "scripted answer 0a5d8710e0d8",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2252,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00858,
+        input_cost=0.004048,
+        output_cost=0.004532,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        rollups=True,
+    ),
+)
+
+GPT_6_LUNA_MESSAGES_BRIDGED_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_ASTRA_MESSAGES_BRIDGED_JSON: Final = GPT_6_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_1_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-sol"),
+    }
+)
+
+GPT_6_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-luna"),
+    }
+)
+
+GPT_6_LUNA_CHAT_BRIDGED_JSON: Final = GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-astra"),
+    }
+)
+
+GPT_6_ASTRA_CHAT_BRIDGED_JSON: Final = GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_1_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6.1-sol"),
+    }
+)
+
+GPT_6_1_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.329064, input_cost=1.32, output_cost=0.009064, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.537064, input_cost=0.528, output_cost=0.009064, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.602932, input_cost=0.5984, output_cost=0.004532, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    "gpt-6-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.664532, input_cost=0.66, output_cost=0.004532, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    "gpt-6-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=2.658128, input_cost=2.64, output_cost=0.018128, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.060412, input_cost=0.06, output_cost=0.000412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.024412, input_cost=0.024, output_cost=0.000412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.027406, input_cost=0.0272, output_cost=0.000206, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "gpt-6-luna-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.030206, input_cost=0.03, output_cost=0.000206, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6-luna-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.120824, input_cost=0.12, output_cost=0.000824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=7.24944, input_cost=7.2, output_cost=0.04944, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=2.92944, input_cost=2.88, output_cost=0.04944, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.28872, input_cost=3.264, output_cost=0.02472, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    "gpt-6-astra-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.62472, input_cost=3.6, output_cost=0.02472, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    "gpt-6-astra-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=14.49888, input_cost=14.4, output_cost=0.09888, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.20824, input_cost=1.2, output_cost=0.00824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.44824, input_cost=0.44, output_cost=0.00824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.54812, input_cost=0.544, output_cost=0.00412, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    "gpt-6.1-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.60412, input_cost=0.6, output_cost=0.00412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    "gpt-6.1-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=2.41648, input_cost=2.4, output_cost=0.01648, prompt_tokens=300000, completion_tokens=412),
+)
+
+_GPT_6_CACHE_WRITE_USAGE: Final = {
+    "prompt_tokens": 12928,
+    "completion_tokens": 380,
+    "total_tokens": 13308,
+    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+    "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+
+GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_1_SOL_CACHE_READ,
+    "gpt-6.1-sol-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.0358, input_cost=0.032, output_cost=0.0038, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.00179, input_cost=0.0016, output_cost=0.00019, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_ASTRA_CACHE_READ,
+    "gpt-6-astra-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.2148, input_cost=0.192, output_cost=0.0228, prompt_tokens=12928, completion_tokens=380),
+)
+
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_SOL_CHAT_BRIDGED_JSON,
+    GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_LUNA_CHAT_BRIDGED_JSON,
+    GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_ASTRA_CHAT_BRIDGED_JSON,
+    GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_1_SOL_CHAT_BRIDGED_JSON,
+    GPT_6_SOL_TIERED_INPUT_ABOVE_272K,
+    GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_SOL_TIERED_AT_272K_BOUNDARY,
+    GPT_6_SOL_TIERED_FLEX_ABOVE_272K,
+    GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_LUNA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_LUNA_TIERED_AT_272K_BOUNDARY,
+    GPT_6_LUNA_TIERED_FLEX_ABOVE_272K,
+    GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY,
+    GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY,
+    GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K,
     GPT_5_3_CODEX_INPUT_TEXT,
     GPT_5_3_CODEX_CACHE_READ,
     GPT_5_3_CODEX_REASONING,
@@ -7965,6 +11283,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_RESPONSES_SERVICE_TIER_FLEX,
     GPT_5_6_RESPONSES_SERVICE_TIER_PRIORITY,
     OPENAI_DEPLOYMENT_PRICING_OVERRIDE,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_STREAM,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_MESSAGES,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_RESPONSES,
+    OPENAI_DEPLOYMENT_PRICING_IGNORES_UPSTREAM_COST_HEADER,
+    GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE,
     GPT_5_6_UPSTREAM_400_ZERO_SPEND,
     GPT_5_6_UPSTREAM_401_ZERO_SPEND,
     GPT_5_6_UPSTREAM_500_STREAM_REQUEST_ZERO_SPEND,
@@ -7980,6 +11304,48 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY,
     GPT_5_6_CLIENT_DISCONNECT_MID_STREAM,
     GPT_6_1_SOL_INPUT_TEXT,
+    OPENAI_GPT_6_LUNA_DECISIONS,
+    OPENAI_GPT_6_LUNA_SYSTEMONE,
+    OPENAI_GPT_6_LUNA_DECISIONS_LONG_CONTEXT,
+    OPENAI_GPT_6_LUNA_SYSTEMONE_LONG_CONTEXT,
+    GPT_6_SOL_INPUT_TEXT,
+    GPT_6_SOL_STREAM,
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_LUNA_INPUT_TEXT,
+    GPT_6_LUNA_STREAM,
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_INPUT_TEXT,
+    GPT_6_ASTRA_STREAM,
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    GPT_6_1_SOL_STREAM,
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_SOL_MESSAGES_BRIDGED_JSON,
+    GPT_6_SOL_TOOL_CALL,
+    GPT_6_SOL_REASONING,
+    GPT_6_SOL_STREAM_NO_USAGE,
+    GPT_6_LUNA_TOOL_CALL,
+    GPT_6_LUNA_REASONING,
+    GPT_6_LUNA_STREAM_NO_USAGE,
+    GPT_6_ASTRA_REASONING,
+    GPT_6_ASTRA_STREAM_NO_USAGE,
+    GPT_6_1_SOL_REASONING,
+    GPT_6_1_SOL_STREAM_NO_USAGE,
+    GPT_6_SOL_UPSTREAM_404_ZERO_SPEND,
+    GPT_6_SOL_INPUT_TEXT_ROLLUPS,
+    GPT_6_1_SOL_CACHE_READ,
+    GPT_6_LUNA_CACHE_READ,
+    GPT_6_ASTRA_CACHE_READ,
+    GPT_6_1_SOL_CACHE_WRITE_5M,
+    GPT_6_LUNA_CACHE_WRITE_5M,
+    GPT_6_ASTRA_CACHE_WRITE_5M,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -8004,4 +11370,19 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_5_5_PRO_TOOL_CALL, streamed=GPT_5_5_PRO_STREAM_TOOL_CALL),
     StreamParityTestCase(plain=GPT_5_6_RESPONSE_MODEL_OVERRIDE, streamed=GPT_5_6_STREAM_RESPONSE_MODEL_OVERRIDE),
     StreamParityTestCase(plain=GPT_5_6_TOOL_CALL, streamed=GPT_5_6_STREAM_TOOL_CALL),
+    StreamParityTestCase(plain=GPT_6_SOL_INPUT_TEXT, streamed=GPT_6_SOL_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_INPUT_TEXT, streamed=GPT_6_LUNA_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_SOL_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_SOL_CHAT_BRIDGED_JSON),
 )

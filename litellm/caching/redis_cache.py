@@ -18,7 +18,9 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+import weakref
+from collections import Counter
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -51,11 +53,11 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from prometheus_client import Counter as _PromCounter
-    from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
+
+    from litellm._service_logger import ServiceLogging
 
     pipeline = Pipeline
     cluster_pipeline = ClusterPipeline
@@ -102,8 +104,7 @@ _GENERIC_CALLER_MODULES: Final = frozenset(
         "litellm.caching.redis_batch",
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
-        "litellm.rust_bridge.lifecycle",
-        "litellm.rust_bridge.streams",
+        "litellm.rust_bridge.execution",
         "contextlib",
     }
 )
@@ -245,7 +246,9 @@ class RedisCircuitBreaker:
         recovery_timeout: int,
         enabled: bool = True,
         timeout_min_duration: float = REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
+        service_logger: "ServiceLogging | None" = None,
     ) -> None:
+        self._service_logger = service_logger
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.enabled = enabled
@@ -257,7 +260,12 @@ class RedisCircuitBreaker:
         self._opened_at: float | None = None
         self._state = self.CLOSED
         self._generation = 0
-        _breaker_metrics().record_state_change(None, self._state)
+        _LIVE_BREAKERS.add(self)
+        self._report(transitions_to=None, failure_class=None)
+
+    @property
+    def state(self) -> str:
+        return self._state
 
     @property
     def generation(self) -> int:
@@ -303,7 +311,7 @@ class RedisCircuitBreaker:
             self._timeout_count = 0
             self._timeout_streak_started_at = None
         self._opened_at = now
-        _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
+        self._report(transitions_to=None, failure_class="timeout" if is_timeout else "connectivity")
         if self._should_open(now):
             if self._state != self.OPEN:
                 verbose_logger.warning(
@@ -329,10 +337,13 @@ class RedisCircuitBreaker:
     def _set_state(self, state: str) -> None:
         if state == self._state:
             return
-        _breaker_metrics().record_transition(state)
-        _breaker_metrics().record_state_change(self._state, state)
         self._state = state
         self._generation += 1
+        self._report(transitions_to=state, failure_class=None)
+
+    def _report(self, transitions_to: str | None, failure_class: str | None) -> None:
+        if self._service_logger is not None:
+            self._service_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -405,12 +416,19 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
     py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
     class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
+    ``MaxConnectionsError`` is the async cluster client's pool-exhausted signal (its nodes have
+    no blocking pool, so it is raised instantly instead of after a wait): a busy pool, not a
+    dead Redis, like the standalone pool's chained wait timeout.
     """
     try:
-        from redis.exceptions import TimeoutError as RedisTimeoutError
+        from redis import exceptions as redis_exceptions
     except ImportError:
         return (TimeoutError, asyncio.TimeoutError)
-    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+    max_connections_error: Final = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate it
+    )
+    return (redis_exceptions.TimeoutError, TimeoutError, asyncio.TimeoutError, max_connections_error)
 
 
 _MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
@@ -435,59 +453,6 @@ def is_redis_timeout_failure(exc: BaseException) -> bool:
     return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
-class _BreakerMetrics:
-    """Prometheus metrics for the Redis circuit breaker; no-ops when the client is absent.
-
-    Registered lazily on the default registry (which /metrics serves) via the module-level
-    ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
-    """
-
-    def __init__(self) -> None:
-        self._state_gauge: _PromGauge | None = None
-        self._transitions: _PromCounter | None = None
-        self._failures: _PromCounter | None = None
-        try:
-            from prometheus_client import Counter as PromCounter
-            from prometheus_client import Gauge
-        except ImportError:
-            return
-        self._state_gauge = Gauge(
-            "litellm_redis_circuit_breaker_state",
-            "Number of Redis circuit breakers currently in each state",
-            labelnames=("state",),
-        )
-        self._transitions = PromCounter(
-            "litellm_redis_circuit_breaker_transitions",
-            "Redis circuit breaker state transitions",
-            labelnames=("state",),
-        )
-        self._failures = PromCounter(
-            "litellm_redis_circuit_breaker_failures",
-            "Redis health failures counted by the circuit breaker",
-            labelnames=("failure_class",),
-        )
-
-    def record_state_change(self, old_state: str | None, new_state: str) -> None:
-        if self._state_gauge is None:
-            return
-        if old_state is not None:
-            self._state_gauge.labels(old_state).dec()
-        self._state_gauge.labels(new_state).inc()
-
-    def record_transition(self, state: str) -> None:
-        if self._transitions is not None:
-            self._transitions.labels(state).inc()
-
-    def record_failure(self, failure_class: str) -> None:
-        if self._failures is not None:
-            self._failures.labels(failure_class).inc()
-
-
-@functools.lru_cache(maxsize=1)
-def _breaker_metrics() -> _BreakerMetrics:
-    return _BreakerMetrics()
-
-
 def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
     """Record a Redis failure that the calling method is about to swallow.
 
@@ -501,6 +466,14 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
         return
     breaker.record_failure(is_timeout=is_redis_timeout_failure(exc))
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
+
+
+_LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
+
+
+def redis_breaker_state_counts() -> Mapping[str, int]:
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
+    return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
 
 
 class RedisCircuitBreakerOpenError(Exception):
@@ -642,9 +615,14 @@ def _redis_circuit_breaker_guard(method):
     """
 
     @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(self: "RedisCache", *args, **kwargs):
+        async def guarded() -> object:
+            return await method(self, *args, **kwargs)
+
         return await _run_under_circuit_breaker(
-            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+            self._circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # the guard is RedisCache's own decorator
+            wrapper.__name__,
+            lambda: self._admit_async_call(guarded),  # pyright: ignore[reportPrivateUsage]  # same decorator
         )
 
     return wrapper
@@ -689,12 +667,9 @@ class RedisCache(BaseCache):
             redis_kwargs["socket_timeout"] = socket_timeout
 
         ### HEALTH MONITORING OBJECT ###
-        if kwargs.get("service_logger_obj", None) is not None and isinstance(
-            kwargs["service_logger_obj"], ServiceLogging
-        ):
+        self.service_logger_obj: ServiceLogging = ServiceLogging()
+        if isinstance(kwargs.get("service_logger_obj"), ServiceLogging):
             self.service_logger_obj = kwargs.pop("service_logger_obj")
-        else:
-            self.service_logger_obj = ServiceLogging()
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
@@ -721,6 +696,7 @@ class RedisCache(BaseCache):
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
+            service_logger=self.service_logger_obj,
         )
 
         self._setup_health_pings()
@@ -729,6 +705,9 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+
+    def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
+        return call()
 
     def _setup_health_pings(self):
         """Setup async and sync health pings for Redis."""
@@ -1110,7 +1089,9 @@ class RedisCache(BaseCache):
                     litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
                 return await executor(keys=keys, args=args, client=client)
 
-            return await _run_under_circuit_breaker(self._circuit_breaker, "run_script", execute)
+            return await _run_under_circuit_breaker(
+                self._circuit_breaker, "run_script", lambda: self._admit_async_call(execute)
+            )
 
         return run_script
 

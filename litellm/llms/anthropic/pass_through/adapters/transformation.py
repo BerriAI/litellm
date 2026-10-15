@@ -11,6 +11,7 @@ import litellm
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 
@@ -206,6 +207,7 @@ from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
@@ -312,6 +314,7 @@ class AnthropicAdapter:
         polyfill_result: PolyfillResult | None = None,
         is_async: bool = True,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        safeguards_evaluator: "SafeguardsEvaluator | None" = None,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -339,6 +342,7 @@ class AnthropicAdapter:
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
             litellm_logging_obj=litellm_logging_obj,
+            safeguards_evaluator=safeguards_evaluator,
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
@@ -806,7 +810,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "eager_input_streaming",
         ]
 
-        for idx, tool in enumerate(tools):
+        for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
@@ -1347,7 +1351,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: list[Choices],
         tool_name_mapping: dict[str, str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         new_content: Final[list[dict[str, Any]]] = []
         for choice, compaction_blocks in (
             (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))

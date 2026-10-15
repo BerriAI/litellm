@@ -1,7 +1,10 @@
 import asyncio
 import json
+import random
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -231,6 +234,98 @@ def test_in_memory_cache_heap_size_staus_bounded():
 
     # Expiration heap should only have 1 entry
     assert len(in_memory_cache.expiration_heap) == 1
+
+
+def test_in_memory_cache_heap_stays_bounded_when_a_live_key_is_rewritten_with_a_new_ttl() -> None:
+    in_memory_cache = InMemoryCache(max_size_in_memory=10)
+    in_memory_cache.set_cache(key="expires_first", value="pin", ttl=300)
+
+    for i in range(1_000):
+        in_memory_cache.delete_cache("hot_key")
+        in_memory_cache.set_cache(key="hot_key", value=f"value_{i}", ttl=3600)
+
+    assert in_memory_cache.get_cache("hot_key") == "value_999"
+    assert len(in_memory_cache.expiration_heap) <= 2 * in_memory_cache.max_size_in_memory + 1
+
+
+def test_in_memory_cache_heap_stays_bounded_when_deleted_keys_sit_behind_a_live_neighbour() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=10, clock=clock)
+    cache.set_cache("anchor", "v", ttl=300)
+
+    for i in range(1_000):
+        cache.set_cache(f"session_{i}", "v", ttl=3600)
+        cache.delete_cache(f"session_{i}")
+
+    assert cache.get_cache("anchor") == "v"
+    assert len(cache.expiration_heap) <= 2 * cache.max_size_in_memory + 1
+
+
+def test_in_memory_cache_a_refreshed_key_keeps_its_expiry_record_when_the_heap_compacts() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=4, clock=clock)
+    cache.set_cache("anchor", "a", ttl=5)
+    cache.set_cache("refreshed", "r", ttl=10)
+    clock.return_value = 1.0
+    assert cache.refresh_ttl("refreshed", 100) is True
+    for _ in range(8):
+        cache.delete_cache("churned")
+        cache.set_cache("churned", "c", ttl=1000)
+    cache.set_cache("live", "l", ttl=1000)
+
+    clock.return_value = 102.0
+    cache.set_cache("new", "n", ttl=1000)
+    cache.set_cache("newer", "n2", ttl=1000)
+
+    assert [cache.get_cache(key) for key in ("churned", "live", "new", "newer")] == ["c", "l", "n", "n2"]
+
+
+@pytest.fixture
+def fine_grained_thread_switching() -> Iterator[None]:
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    yield
+    sys.setswitchinterval(previous_interval)
+
+
+def _keys_until(deadline: float, rng: random.Random) -> Iterator[str]:
+    while time.monotonic() < deadline:
+        yield f"hot_{rng.randrange(5)}" if rng.random() < 0.7 else f"cold_{rng.randrange(40)}"
+
+
+def _rewrite_keys_until(cache: InMemoryCache, deadline: float, seed: int) -> None:
+    rng: Final = random.Random(seed)
+    for key in _keys_until(deadline, rng):
+        cache.delete_cache(key)
+        cache.set_cache(key, "pin", ttl=rng.choice((300, 3600)))
+
+
+@pytest.mark.usefixtures("fine_grained_thread_switching")
+def test_in_memory_cache_survives_threads_rewriting_keys_in_a_full_cache() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=5)
+    deadline: Final = time.monotonic() + 0.5
+    thread_count: Final = 8
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        futures: Final = tuple(
+            executor.submit(_rewrite_keys_until, cache, deadline, seed) for seed in range(thread_count)
+        )
+
+    assert [future.exception() for future in futures] == [None] * thread_count
+    keys: Final = (*(f"hot_{i}" for i in range(5)), *(f"cold_{i}" for i in range(40)))
+    assert sum(cache.get_cache(key) is not None for key in keys) <= cache.max_size_in_memory
+
+
+def test_in_memory_cache_stays_bounded_when_entries_have_no_usable_expiry() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=10)
+    for i in range(30):
+        cache.set_cache(key=f"nan_{i}", value="response", ttl="NaN")
+    cache.set_cache(key="fresh", value="response", ttl=60)
+
+    keys: Final = (*(f"nan_{i}" for i in range(30)), "fresh")
+    retained: Final = tuple(key for key in keys if cache.get_cache(key) is not None)
+    assert len(retained) <= cache.max_size_in_memory
+    assert cache.get_cache("fresh") == "response"
 
 
 def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
