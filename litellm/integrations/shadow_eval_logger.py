@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -45,6 +45,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalD
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from litellm.proxy.db.shadow_eval_funnel import ShadowEvalFunnelStage
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
@@ -69,6 +71,44 @@ _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
+_MAX_CONSECUTIVE_FAILURES: Final = 5
+
+_UPDATE_FAILURE_STATE_SQL: Final = """
+UPDATE "LiteLLM_ShadowEvalJob"
+SET failure_counts =
+    (CASE WHEN $4::boolean THEN failure_counts || jsonb_build_object($3::text, 0) ELSE failure_counts END)
+    || jsonb_build_object($2::text, CASE WHEN $5::boolean THEN COALESCE((failure_counts ->> $2::text)::int, 0) + 1 ELSE 0 END),
+    failure_reason = CASE
+        WHEN $5::boolean AND COALESCE((failure_counts ->> $2::text)::int, 0) + 1 >= $6::int THEN $7::text
+        ELSE failure_reason END,
+    stopped_at = CASE
+        WHEN $5::boolean AND COALESCE((failure_counts ->> $2::text)::int, 0) + 1 >= $6::int THEN (NOW() AT TIME ZONE 'utc')
+        ELSE stopped_at END
+WHERE id = $1 AND stopped_at IS NULL
+"""
+
+
+class _AdmissionTable(Protocol):
+    async def find_first(self, *, where: Mapping[str, object]) -> object | None: ...
+
+
+class _AttemptTable(Protocol):
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+
+class _FailureTransaction(Protocol):
+    @property
+    def litellm_shadowevalattempt(self) -> _AttemptTable: ...
+
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
+class _FailureDatabase(Protocol):
+    @property
+    def litellm_shadowevaljob(self) -> _AdmissionTable: ...
+
+    def tx(self) -> "AbstractAsyncContextManager[_FailureTransaction]": ...
+
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -1084,6 +1124,24 @@ class ShadowEvalLogger(CustomLogger):
                 self._record_funnel(job.id, "withheld")
                 return
         for arm_router in job.arm_router_names:
+            try:
+                from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
+
+                if (
+                    await cast(  # cast-ok: generated writer client boundary
+                        _FailureDatabase, writer_wrapper(prisma.db)
+                    ).litellm_shadowevaljob.find_first(
+                        where={"id": job.id, "stopped_at": None, "ends_at": {"gt": datetime.now(timezone.utc)}}
+                    )
+                    is None
+                ):
+                    self._record_funnel(job.id, "withheld")
+                    return
+            except Exception as e:  # noqa: BLE001  # an unverifiable stop state must not spend
+                verbose_logger.debug("shadow_eval: admission read failed for %s: %s", job.id, e)
+                self._record_funnel(job.id, "withheld")
+                return
+
             await self._run_shadow_arm(
                 prisma=prisma,
                 job=job,
@@ -1242,25 +1300,42 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevalattempt.create(
-                data={
-                    "job_id": job.id,
-                    "request_id": request_id,
-                    "router_name": router_name,
-                    "outcome": outcome,
-                    "tier": control_tier if job.direction == "reverse" else (shadow.tier if shadow else None),
-                    "real_model": real_model or None,
-                    "shadow_model": shadow.model if shadow else None,
-                    "confidence": confidence,
-                    "judge_cost": judge_cost,
-                    "shadow_cost": shadow_cost,
-                    "shadow_classifier_cost": shadow_classifier_cost,
-                    "real_cost": real_cost,
-                    "real_classifier_cost": real_classifier_cost,
-                    "real_cache_hit": real_cache_hit,
-                    "error": error[:_MAX_ERROR_CHARS] if error else None,
-                }
-            )
+            async with cast(_FailureDatabase, prisma.db).tx() as tx:  # cast-ok: generated writer boundary
+                await tx.litellm_shadowevalattempt.create(
+                    data={
+                        "job_id": job.id,
+                        "request_id": request_id,
+                        "router_name": router_name,
+                        "outcome": outcome,
+                        "tier": control_tier if job.direction == "reverse" else (shadow.tier if shadow else None),
+                        "real_model": real_model or None,
+                        "shadow_model": shadow.model if shadow else None,
+                        "confidence": confidence,
+                        "judge_cost": judge_cost,
+                        "shadow_cost": shadow_cost,
+                        "shadow_classifier_cost": shadow_classifier_cost,
+                        "real_cost": real_cost,
+                        "real_classifier_cost": real_classifier_cost,
+                        "real_cache_hit": real_cache_hit,
+                        "error": error[:_MAX_ERROR_CHARS] if error else None,
+                    }
+                )
+                arm_key: Final = f"shadow:{router_name}"
+                component: Final = "judge" if shadow is not None else arm_key
+                reason: Final = (
+                    f"Stopped after {_MAX_CONSECUTIVE_FAILURES} consecutive {component} failures; "
+                    "repair the model configuration or provider availability, then start a new evaluation"
+                )
+                await tx.execute_raw(
+                    _UPDATE_FAILURE_STATE_SQL,
+                    job.id,
+                    component,
+                    arm_key,
+                    shadow is not None,
+                    outcome == "error",
+                    _MAX_CONSECUTIVE_FAILURES,
+                    reason,
+                )
         except Exception as e:  # noqa: BLE001  # a lost row degrades sample size, nothing can disagree with it
             verbose_logger.debug("shadow_eval: attempt write failed for %s: %s", request_id, e)
 
