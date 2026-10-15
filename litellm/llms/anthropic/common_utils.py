@@ -1196,9 +1196,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         wif_minted: bool = False,
         context_1m_requested: bool = False,
     ) -> dict:
-        betas: Final[set[str]] = set()
-        if context_1m_requested:
-            betas.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value)
+        betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -1255,6 +1253,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.update(user_anthropic_beta_headers)
 
         all_betas: Final = betas.union(
+            (ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value,) if context_1m_requested else (),
             (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )

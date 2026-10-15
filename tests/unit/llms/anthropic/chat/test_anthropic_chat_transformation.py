@@ -9572,14 +9572,17 @@ def test_transform_request_treats_context_1m_model_as_its_base_model(optional_pa
             headers={},
         )
 
-    assert transform("claude-sonnet-4-6[1m]") == transform("claude-sonnet-4-6")
+    assert transform("claude-sonnet-5-5[1m]") == transform("claude-sonnet-5-5")
 
 
 @pytest.mark.parametrize(
     "model,expected_betas",
     [
-        ("anthropic/claude-sonnet-4-6[1m]", {"context-1m-2025-08-07", "interleaved-thinking-2025-05-14"}),
-        ("anthropic/claude-sonnet-4-6", {"interleaved-thinking-2025-05-14"}),
+        (
+            "anthropic/claude-sonnet-5-5[1m]",
+            {ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value, "interleaved-thinking-2025-05-14"},
+        ),
+        ("anthropic/claude-sonnet-5-5", {"interleaved-thinking-2025-05-14"}),
     ],
 )
 async def test_acompletion_context_1m_suffix_sends_base_model_with_beta(
@@ -9597,7 +9600,7 @@ async def test_acompletion_context_1m_suffix_sends_base_model_with_beta(
             "id": "msg_context_1m",
             "type": "message",
             "role": "assistant",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5-5",
             "content": [{"type": "text", "text": "hi"}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 1, "output_tokens": 1},
@@ -9612,5 +9615,5 @@ async def test_acompletion_context_1m_suffix_sends_base_model_with_beta(
     )
 
     request: Final = route.calls.last.request
-    assert json.loads(request.content)["model"] == "claude-sonnet-4-6"
+    assert json.loads(request.content)["model"] == "claude-sonnet-5-5"
     assert {beta.strip() for beta in request.headers["anthropic-beta"].split(",")} == expected_betas
