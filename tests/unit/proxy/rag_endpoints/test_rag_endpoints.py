@@ -1065,9 +1065,9 @@ def test_rag_query_forwards_managed_store_credentials_to_search(client_internal_
 
 @pytest.mark.parametrize(
     "blocked_key",
-    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+    ["api_base", "embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
 )
-def test_rag_query_rejects_caller_embedding_selection_params(client_internal_user, blocked_key):
+def test_rag_query_rejects_caller_vector_store_selection_params(client_internal_user, blocked_key):
     """
     Regression: a caller must not pick the embedding model or credential used at
     search time. Those resolve through the Router with the proxy's credentials,

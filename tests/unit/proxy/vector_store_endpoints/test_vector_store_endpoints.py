@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3035,9 +3036,9 @@ class TestAzureAIAnalyzeNamedIndexClassification:
 
 @pytest.mark.parametrize(
     "blocked_key",
-    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+    ["api_base", "embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
 )
-def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_key):
+def test_vector_store_search_rejects_caller_vector_store_selection_params(blocked_key):
     """
     Regression: the search request body must not pick the embedding model or
     credential used to embed the query. Those resolve through the Router with
@@ -3063,6 +3064,51 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+@pytest.mark.parametrize("prefix", ["/v1", ""])
+@pytest.mark.parametrize("registered_base", [None, "https://registered.qdrant.example"])
+def test_qdrant_search_cannot_redirect_server_credentials(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, registered_base: str | None
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "qdrant-documents",
+                "litellm_params": {
+                    "vector_store_id": "documents",
+                    "custom_llm_provider": "qdrant",
+                    "litellm_embedding_model": "query-embeddings",
+                    **({"api_base": registered_base} if registered_base else {}),
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    monkeypatch.setenv("QDRANT_API_BASE", "https://environment.qdrant.example")
+    monkeypatch.setenv("QDRANT_API_KEY", "server-owned-qdrant-key")
+    auth: Final = UserAPIKeyAuth(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: auth)
+    client: Final = TestClient(app)
+    response: Final = client.post(
+        f"{prefix}/vector_stores/documents/search",
+        json={"query": "hello", "api_base": "https://attacker.example"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "detail": {
+            "error": "'api_base' cannot be set in the search request body. "
+            "Endpoint and embedding configuration come from the vector store's server-side registration."
+        }
+    }
 
 
 class TestConfigOwnedVectorStores:

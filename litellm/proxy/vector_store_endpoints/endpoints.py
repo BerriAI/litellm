@@ -27,8 +27,9 @@ from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
 
-BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
+BLOCKED_VECTOR_STORE_SELECTION_PARAMS: Final = frozenset(
     {
+        "api_base",
         "embedding_model",
         "litellm_embedding_model",
         "litellm_embedding_config",
@@ -37,14 +38,14 @@ BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
 )
 
 
-def reject_caller_embedding_selection_params(payload: Mapping[str, object], source: str) -> None:
-    blocked: Final = sorted(BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS & payload.keys())
+def reject_caller_vector_store_selection_params(payload: Mapping[str, object], source: str) -> None:
+    blocked: Final = sorted(BLOCKED_VECTOR_STORE_SELECTION_PARAMS & payload.keys())
     if blocked:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": f"'{blocked[0]}' cannot be set in {source}. "
-                "Embedding configuration comes from the vector store's server-side registration."
+                "Endpoint and embedding configuration come from the vector store's server-side registration."
             },
         )
 
@@ -133,7 +134,7 @@ async def vector_store_search(
     )
 
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
-    reject_caller_embedding_selection_params(payload=data, source="the search request body")
+    reject_caller_vector_store_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 
     # Check for legacy vector store registry (non-managed vector stores)
