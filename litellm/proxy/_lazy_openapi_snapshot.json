@@ -9656,8 +9656,15 @@
               "$ref": "#/components/schemas/DecisionsBox"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "type": {
               "const": "box",
@@ -9838,8 +9845,15 @@
               "$ref": "#/components/schemas/DecisionsBox"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10781,47 +10795,46 @@
                     "assets": {
                       "anyOf": [
                         {
-                          "additionalProperties": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "data_base64": {
-                                "description": "Base64-encoded image bytes, no data: prefix",
-                                "minLength": 1,
-                                "title": "Data Base64",
-                                "type": "string"
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
                               },
-                              "format": {
-                                "description": "The image's format, in lowercase",
-                                "enum": [
-                                  "png",
-                                  "jpg",
-                                  "jpeg"
-                                ],
-                                "title": "Format",
-                                "type": "string"
-                              },
-                              "type": {
-                                "anyOf": [
-                                  {
-                                    "const": "image",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ],
-                                "title": "Type"
-                              }
-                            },
-                            "required": [
-                              "format",
-                              "data_base64"
-                            ],
-                            "title": "DecisionsAsset",
-                            "type": "object"
-                          },
-                          "propertyNames": {
-                            "minLength": 1
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
                           },
                           "type": "object"
                         },
@@ -11792,47 +11805,46 @@
                     "assets": {
                       "anyOf": [
                         {
-                          "additionalProperties": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "data_base64": {
-                                "description": "Base64-encoded image bytes, no data: prefix",
-                                "minLength": 1,
-                                "title": "Data Base64",
-                                "type": "string"
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
                               },
-                              "format": {
-                                "description": "The image's format, in lowercase",
-                                "enum": [
-                                  "png",
-                                  "jpg",
-                                  "jpeg"
-                                ],
-                                "title": "Format",
-                                "type": "string"
-                              },
-                              "type": {
-                                "anyOf": [
-                                  {
-                                    "const": "image",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ],
-                                "title": "Type"
-                              }
-                            },
-                            "required": [
-                              "format",
-                              "data_base64"
-                            ],
-                            "title": "DecisionsAsset",
-                            "type": "object"
-                          },
-                          "propertyNames": {
-                            "minLength": 1
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
                           },
                           "type": "object"
                         },

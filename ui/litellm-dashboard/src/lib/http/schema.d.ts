@@ -27550,7 +27550,7 @@ export interface components {
         BoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
             /** Confidence */
-            confidence: number;
+            confidence: number | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -39371,7 +39371,7 @@ export interface components {
         OpenAIBoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
             /** Confidence */
-            confidence: number;
+            confidence: number | null;
             /** Name */
             name: string | null;
             /**

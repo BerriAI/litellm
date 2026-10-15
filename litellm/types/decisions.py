@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
+from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -11,6 +11,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
 MAX_DECISION_QUESTIONS: Final = 128
+MAX_ASSET_REFERENCE_BYTES: Final = 1024
 
 
 class NoulQuestion(LiteLLMPydanticObjectBase):
@@ -92,12 +93,21 @@ DecisionsImage: TypeAlias = (
 class DecisionsAsset(LiteLLMPydanticObjectBase):
     type: Literal["image"] | None = None
     format: Annotated[Literal["png", "jpg", "jpeg"], Field(description="The image's format, in lowercase")]
-    data_base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes, no data: prefix")]
+    data_base64: Annotated[
+        str, Field(pattern=r"^[A-Za-z0-9+/]+={0,2}$", description="Base64-encoded image bytes, no data: prefix")
+    ]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-DecisionsAssets: TypeAlias = Mapping[Annotated[str, Field(min_length=1)], DecisionsAsset]
+def _fits_reference_limit(reference: str) -> str:
+    if len(reference.encode()) > MAX_ASSET_REFERENCE_BYTES:
+        raise ValueError(f"an asset reference can be at most {MAX_ASSET_REFERENCE_BYTES} bytes of UTF-8")
+    return reference
+
+
+DecisionsAssetReference: TypeAlias = Annotated[str, Field(pattern=r"\S"), AfterValidator(_fits_reference_limit)]
+DecisionsAssets: TypeAlias = Mapping[DecisionsAssetReference, DecisionsAsset]
 
 
 class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
@@ -226,7 +236,7 @@ class DecisionsBox(LiteLLMPydanticObjectBase):
 class BoxAnswer(LiteLLMPydanticObjectBase):
     type: Literal["box"]
     box: DecisionsBox
-    confidence: float
+    confidence: float | None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -453,7 +463,7 @@ class OpenAIBoxAnswer(LiteLLMPydanticObjectBase):
     type: Literal["box"] = "box"
     name: str | None
     box: DecisionsBox
-    confidence: float
+    confidence: float | None
 
     model_config = ConfigDict(frozen=True)
 
@@ -606,7 +616,7 @@ class DecisionsIRScoreAnswer:
 @dataclass(frozen=True, slots=True)
 class DecisionsIRBoxAnswer:
     box: DecisionsBox
-    confidence: float
+    confidence: float | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
