@@ -136,6 +136,7 @@ from litellm.llms.anthropic.common_utils import (
     split_anthropic_tool_use_id_signature,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
+
 from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
 )
@@ -347,6 +348,13 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
+def _base_tool_use_id(raw_id: object) -> str:
+    """Strip an embedded thought signature from a tool_use / tool_result id."""
+    if isinstance(raw_id, str):
+        return split_anthropic_tool_use_id_signature(raw_id)[0]
+    return ""
+
+
 _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
@@ -365,21 +373,21 @@ class LiteLLMAnthropicMessagesAdapter:
         the id verbatim). Do not URL-decode here — that encoding is only used
         on Anthropic ``tool_use.id`` values.
         """
-        fields: Final = _optional_attr(tool_call, "provider_specific_fields")
+        fields: Final[object] = _optional_attr(tool_call, "provider_specific_fields")
         if fields:
-            signature: Final = _thought_signature(fields)
+            signature: Final[str | None] = _thought_signature(fields)
             if signature:
                 return signature
 
-        function_fields: Final = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
+        function_fields: Final[object] = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
         if function_fields:
-            function_signature: Final = _thought_signature(function_fields)
+            function_signature: Final[str | None] = _thought_signature(function_fields)
             if function_signature:
                 return function_signature
 
-        raw_id: Final = _optional_attr(tool_call, "id")
+        raw_id: Final[object] = _optional_attr(tool_call, "id")
         if isinstance(raw_id, str) and THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-            parts: Final = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+            parts: Final[list[str]] = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
             if len(parts) == 2 and parts[1]:
                 return parts[1]
 
@@ -394,12 +402,14 @@ class LiteLLMAnthropicMessagesAdapter:
         (URL-safe encoded so the id stays inside Anthropic's charset). Clients
         that drop unknown fields, such as Claude Code, only echo ``id``.
         """
-        provider_specific_fields: Final = _as_string_mapping(content.get("provider_specific_fields", {}))
+        provider_specific_fields: Final[Mapping[str, object] | None] = _as_string_mapping(
+            content.get("provider_specific_fields", {})
+        )
         if provider_specific_fields:
-            signature: Final = provider_specific_fields.get("signature")
+            signature: Final[object] = provider_specific_fields.get("signature")
             if isinstance(signature, str) and signature:
                 return signature
-        raw_id: Final = content.get("id")
+        raw_id: Final[object] = content.get("id")
         if isinstance(raw_id, str):
             _, embedded = split_anthropic_tool_use_id_signature(raw_id)
             if embedded:
@@ -551,15 +561,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            raw_tool_result_id = content.get("tool_use_id", "")
-                            tool_result_id = (
-                                split_anthropic_tool_use_id_signature(raw_tool_result_id)[0]
-                                if isinstance(raw_tool_result_id, str)
-                                else raw_tool_result_id
-                            )
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
-                                tool_call_id=tool_result_id,
+                                tool_call_id=_base_tool_use_id(content.get("tool_use_id", "")),
                                 content=self._tool_result_content(content.get("content")),
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
@@ -615,14 +619,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                     provider_specific_fields["thought_signature"] = signature
                                     function_chunk["provider_specific_fields"] = provider_specific_fields
 
-                                raw_tool_use_id = content.get("id", "")
-                                tool_call_id = (
-                                    split_anthropic_tool_use_id_signature(raw_tool_use_id)[0]
-                                    if isinstance(raw_tool_use_id, str)
-                                    else raw_tool_use_id
-                                )
                                 tool_call = ChatCompletionAssistantToolCall(
-                                    id=tool_call_id,
+                                    id=_base_tool_use_id(content.get("id", "")),
                                     type="function",
                                     function=function_chunk,
                                 )
@@ -1675,10 +1673,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
             ):
-                delta_tool_call = choice.delta.tool_calls[0]
-                raw_id = delta_tool_call.id or str(uuid.uuid4())
-                tool_name = delta_tool_call.function.name or ""
-                thought_sig = self._extract_signature_from_tool_call(delta_tool_call)
+                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
+                # Keep `.function` on the same narrowed expression as the guard
+                # (`choice.delta.tool_calls[0].function is not None`) so
+                # reportOptionalMemberAccess stays flat.
+                tool_name = choice.delta.tool_calls[0].function.name or ""
+                thought_sig = self._extract_signature_from_tool_call(choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
                     "id": format_anthropic_tool_use_id_with_signature(raw_id, thought_sig),
