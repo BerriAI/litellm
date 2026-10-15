@@ -4708,6 +4708,7 @@ class TestIsRequestBodySafeBlocksXaiOauthTokenFile:
             {"model": "grok-4", "extra_body": {"xai_oauth_token_file": "auth-bob.json"}},
             {"model": "grok-4", "metadata": {"xai_oauth_token_file": "auth-bob.json"}},
             {"model": "grok-4", "fallbacks": [{"model": "grok-4", "xai_oauth_token_file": "auth-bob.json"}]},
+            {"model": "grok-4", "litellm_params": {"xai_oauth_token_file": "auth-bob.json"}},
         ],
     )
     def test_rejected_even_under_proxy_wide_opt_in(self, request_body):
@@ -4718,6 +4719,12 @@ class TestIsRequestBodySafeBlocksXaiOauthTokenFile:
                 llm_router=None,
                 model="grok-4",
             )
+
+    def test_rejected_in_stored_fallback_targets_and_health_check_params(self):
+        from litellm.proxy.auth.auth_utils import reject_server_owned_wif_params
+
+        with pytest.raises(ValueError, match="xai_oauth_token_file"):
+            reject_server_owned_wif_params({"model": "xai/grok-4", "xai_oauth_token_file": "auth-bob.json"})
 
     def test_rejected_even_when_deployment_lists_it_as_clientside_configurable(self):
         from litellm import Router
