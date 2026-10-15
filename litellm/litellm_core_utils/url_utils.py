@@ -23,7 +23,7 @@ import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -130,11 +130,14 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
 
 
 def join_api_base(api_base: str, route: str) -> str:
+    return f"{api_base.rstrip('/')}/{route.lstrip('/')}"
+
+
+def ensure_api_route(api_base: str, route: str) -> str:
     base: Final = api_base.rstrip("/")
-    path: Final = route.lstrip("/")
-    if base.endswith(f"/{path}"):
+    if urlsplit(base).path.endswith(f"/{route.lstrip('/')}"):
         return base
-    return f"{base}/{path}"
+    return join_api_base(base, route)
 
 
 def _is_blocked_ip(addr: str) -> bool:

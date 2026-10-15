@@ -108,7 +108,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -216,6 +216,7 @@ from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
+from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
@@ -1573,12 +1574,8 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
             )
         api_key = AzureFoundryModelInfo.get_api_key(api_key)
 
-        # Ensure the URL ends with /v1/messages for Anthropic
         if api_base:
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/messages"):
-                anthropic_root: Final = api_base.split("/anthropic", 1)[0]
-                api_base = join_api_base(join_api_base(anthropic_root, "anthropic"), "v1/messages")
+            api_base = azure_anthropic_messages_url(api_base)
 
         response = azure_anthropic_chat_completions.completion(
             model=model,
@@ -2799,7 +2796,7 @@ def _complete_anthropic_text(
     # Check if we should disable automatic URL suffix appending
     disable_url_suffix: Final = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
     if api_base is not None and not disable_url_suffix:
-        api_base = join_api_base(api_base, "v1/complete")
+        api_base = ensure_api_route(api_base, "v1/complete")
     elif disable_url_suffix:
         verbose_logger.debug("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix")
 
@@ -2855,7 +2852,7 @@ def _complete_anthropic(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     # Check if we should disable automatic URL suffix appending
     disable_url_suffix: Final = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
     if api_base is not None and not disable_url_suffix:
-        api_base = join_api_base(api_base, "v1/messages")
+        api_base = ensure_api_route(api_base, "v1/messages")
     elif disable_url_suffix:
         verbose_logger.debug("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix")
 
@@ -4007,7 +4004,7 @@ def _complete_text_completion_inception(
     api_base = passed_api_base or get_secret_str("INCEPTION_API_BASE") or "https://api.inceptionlabs.ai/v1"
     # FIM is served at `/v1/fim/completions`; the OpenAI client appends
     # `/completions`, so point it at the `/v1/fim` base.
-    api_base = join_api_base(api_base, "fim")
+    api_base = ensure_api_route(api_base, "fim")
 
     # Don't forward the server-managed Inception key to a caller-supplied
     # api_base; only resolve it for the default/server base, or when the

@@ -33,7 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
     inline_remote_media,
 )
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
@@ -374,7 +374,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         )
         if proxy_endpoint_url.rstrip("/").endswith("/openai/v1"):
             return join_api_base(proxy_endpoint_url, "chat/completions")
-        return join_api_base(proxy_endpoint_url, "openai/v1/chat/completions")
+        return ensure_api_route(proxy_endpoint_url, "openai/v1/chat/completions")
 
     def _params_with_region_from_path(
         self, optional_params: dict, model: str | None

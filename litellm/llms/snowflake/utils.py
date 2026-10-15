@@ -1,7 +1,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -66,7 +66,7 @@ class SnowflakeBaseConfig:
                 raise ValueError("Invalid account_id format")
             api_base = f"https://{account_id}.snowflakecomputing.com/api/v2"
 
-        return join_api_base(api_base, "api/v2")
+        return ensure_api_route(api_base, "api/v2")
 
     def validate_environment(
         self,

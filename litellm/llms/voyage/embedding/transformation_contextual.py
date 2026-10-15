@@ -10,7 +10,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
@@ -59,7 +59,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return join_api_base(api_base or get_default_base_url(api_key), "contextualizedembeddings")
+        return ensure_api_route(api_base or get_default_base_url(api_key), "contextualizedembeddings")
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]

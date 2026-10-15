@@ -13,7 +13,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -62,7 +62,7 @@ class InfinityRerankConfig(CohereRerankConfig):
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity rerank")
-        return join_api_base(api_base, "rerank")
+        return ensure_api_route(api_base, "rerank")
 
     def validate_environment(
         self,

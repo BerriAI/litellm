@@ -11,7 +11,7 @@ from typing import Literal, overload
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 
@@ -79,4 +79,4 @@ class HerokuChatConfig(OpenAIGPTConfig):
                 "No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable."
             )
 
-        return join_api_base(resolved_base, "v1/chat/completions")
+        return ensure_api_route(resolved_base, "v1/chat/completions")

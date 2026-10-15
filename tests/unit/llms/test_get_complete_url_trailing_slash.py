@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from _pytest.mark.structures import ParameterSet
@@ -18,12 +18,12 @@ from litellm.llms.openai_like.dynamic_config import create_config_class, create_
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 
 API_BASE_WITH_TRAILING_SLASH: Final = "https://gw.example.com/p/"
+API_BASE_WITHOUT_TRAILING_SLASH: Final = API_BASE_WITH_TRAILING_SLASH.rstrip("/")
 LLMS_ROOT: Final = Path(litellm.__file__).parent / "llms"
 PACKAGE_ROOT: Final = LLMS_ROOT.parent.parent
 
 ARGUMENTS_BY_NAME: Final[Mapping[str, object]] = MappingProxyType(
     {
-        "api_base": API_BASE_WITH_TRAILING_SLASH,
         "api_key": "sk-test",
         "model": "test-model",
         "optional_params": {},
@@ -55,6 +55,7 @@ async def _resolve_access_token() -> str:
 class BuilderInputs:
     constructor: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     call: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    api_base_option: str | None = None
 
 
 INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
@@ -64,13 +65,11 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
             call={"litellm_params": {"api_version": "2025-04-01-preview"}}
         ),
         "bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig": BuilderInputs(
-            call={
-                "model": "agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test-runtime",
-                "optional_params": {"aws_bedrock_runtime_endpoint": API_BASE_WITH_TRAILING_SLASH},
-            }
+            call={"model": "agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test-runtime"},
+            api_base_option="aws_bedrock_runtime_endpoint",
         ),
         "bedrock.chat.invoke_agent.transformation.AmazonInvokeAgentConfig": BuilderInputs(
-            call={"model": "agent/AGENT_ID/ALIAS_ID"}
+            call={"model": "agent/AGENT_ID/ALIAS_ID", "optional_params": {"sessionID": "session-id"}}
         ),
         "black_forest_labs.image_edit.transformation.BlackForestLabsImageEditConfig": BuilderInputs(
             call={"model": "flux-kontext-pro"}
@@ -117,6 +116,37 @@ UNCALLABLE_BUILDERS: Final[Mapping[str, str]] = MappingProxyType(
         "sap.embed.transformation.GenAIHubEmbeddingConfig": "url-comes-from-a-live-SAP-deployment-lookup",
         "triton.completion.transformation.TritonConfig": "api_base-must-be-the-full-generate-or-infer-url",
         "vertex_ai.rerank.transformation.VertexAIRerankConfig": "ignores-api_base-and-needs-Vertex-credentials",
+    }
+)
+
+
+API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        builder_id: "sends-the-configured-api_base-as-the-request-url"
+        for builder_id in (
+            "base_llm.audio_transcription.transformation.BaseAudioTranscriptionConfig",
+            "base_llm.chat.transformation.BaseConfig",
+            "base_llm.completion.transformation.BaseTextCompletionConfig",
+            "base_llm.embedding.transformation.BaseEmbeddingConfig",
+            "base_llm.image_generation.transformation.BaseImageGenerationConfig",
+            "base_llm.image_variations.transformation.BaseImageVariationConfig",
+            "base_llm.vector_store.transformation.BaseDirectVectorStoreConfig",
+            "bedrock.realtime.transformation.BedrockRealtimeConfig",
+            "bedrock.search.transformation.AgentCoreSearchConfig",
+            "brave.search.transformation.BraveSearchConfig",
+            "cohere.chat.v2_transformation.CohereV2ChatConfig",
+            "cohere.embed.transformation.CohereEmbeddingConfig",
+            "dashscope.image_generation.transformation.DashScopeImageGenerationConfig",
+            "dataforseo.search.transformation.DataForSEOSearchConfig",
+            "datarobot.chat.transformation.DataRobotConfig",
+            "duckduckgo.search.transformation.DuckDuckGoSearchConfig",
+            "google_pse.search.transformation.GooglePSESearchConfig",
+            "searchapi.search.transformation.SearchAPIConfig",
+            "tinyfish.search.transformation.TinyfishSearchConfig",
+            "vertex_ai.text_to_speech.transformation.VertexAITextToSpeechConfig",
+            "vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation."
+            "VertexAIPartnerModelsAnthropicMessagesConfig",
+        )
     }
 )
 
@@ -168,24 +198,43 @@ def _instantiable(cls: type) -> type:
     return type(cls.__name__, (cls,), dict.fromkeys(abstract_methods, _unimplemented))
 
 
-def _call_arguments(builder: object, inputs: BuilderInputs) -> dict[str, object]:
+def _call_arguments(builder: object, inputs: BuilderInputs, api_base: str) -> dict[str, object]:
     parameters: Final = inspect.signature(getattr(builder, "get_complete_url")).parameters.values()
     named: Final = tuple(p for p in parameters if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD))
-    values: Final = {**ARGUMENTS_BY_NAME, **inputs.call}
+    api_base_options: Final = (
+        {} if inputs.api_base_option is None else {"optional_params": {inputs.api_base_option: api_base}}
+    )
+    values: Final = {**ARGUMENTS_BY_NAME, "api_base": api_base, **inputs.call, **api_base_options}
     missing: Final = tuple(p.name for p in named if p.default is p.empty and p.name not in values)
     assert not missing, f"add a value for {missing} to ARGUMENTS_BY_NAME or INPUTS_BY_BUILDER"
     return {p.name: copy.deepcopy(values[p.name]) for p in named if p.name in values}
 
 
-def _built_url(cls: type) -> str:
+def _built_url(cls: type, api_base: str) -> str:
     inputs: Final = INPUTS_BY_BUILDER.get(_builder_id(cls), BuilderInputs())
     builder: Final = _instantiable(cls)(**inputs.constructor)
-    result: Final = getattr(builder, "get_complete_url")(**_call_arguments(builder, inputs))
+    result: Final = getattr(builder, "get_complete_url")(**_call_arguments(builder, inputs, api_base))
     return str(result[0] if isinstance(result, tuple) else result)
+
+
+def _without_one_trailing_path_slash(url: str) -> str:
+    parts: Final = urlsplit(url)
+    return urlunsplit(parts._replace(path=parts.path.removesuffix("/")))
 
 
 @pytest.mark.parametrize("builder_class", [_builder_param(cls) for cls in _all_builders()])
 def test_get_complete_url_keeps_one_slash_after_a_trailing_slash_api_base(builder_class: type) -> None:
-    url: Final = _built_url(builder_class)
+    url: Final = _built_url(builder_class, API_BASE_WITH_TRAILING_SLASH)
 
     assert "//" not in urlsplit(url).path, url
+
+
+@pytest.mark.parametrize("builder_class", [_builder_param(cls) for cls in _all_builders()])
+def test_get_complete_url_sends_the_same_url_with_or_without_a_trailing_slash(builder_class: type) -> None:
+    with_slash: Final = _built_url(builder_class, API_BASE_WITH_TRAILING_SLASH)
+    without_slash: Final = _built_url(builder_class, API_BASE_WITHOUT_TRAILING_SLASH)
+
+    if _builder_id(builder_class) in API_BASE_IS_THE_FULL_URL:
+        assert _without_one_trailing_path_slash(with_slash) == _without_one_trailing_path_slash(without_slash)
+    else:
+        assert with_slash == without_slash

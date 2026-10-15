@@ -7,7 +7,7 @@ import httpx
 from httpx import Headers, Response
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -107,7 +107,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> str:
         """Get the complete URL for batch creation request."""
         api_base = self.anthropic_model_info.resolve_api_base(api_base)
-        return join_api_base(api_base, "v1/messages/batches")
+        return ensure_api_route(api_base, "v1/messages/batches")
 
     def transform_create_batch_request(
         self,

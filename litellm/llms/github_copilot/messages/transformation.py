@@ -1,7 +1,7 @@
 from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -142,4 +142,4 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             or self.authenticator.get_api_base()
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
-        return join_api_base(resolved, "v1/messages")
+        return ensure_api_route(resolved, "v1/messages")

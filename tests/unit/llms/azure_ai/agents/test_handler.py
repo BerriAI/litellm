@@ -22,10 +22,10 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-def _assistants_api(thread_id: str, answer: str) -> respx.MockRouter:
-    thread_path: Final = f"/api/projects/litellm-test/threads/{thread_id}"
+def _assistants_api(thread_id: str, answer: str, project_path: str = "/api/projects/litellm-test") -> respx.MockRouter:
+    thread_path: Final = f"{project_path}/threads/{thread_id}"
     router: Final = respx.mock(assert_all_called=False)
-    router.post(path="/api/projects/litellm-test/threads").respond(
+    router.post(path=f"{project_path}/threads").respond(
         200, json={"id": thread_id, "object": "thread", "created_at": 1767225600, "metadata": {}}
     )
     router.post(path=f"{thread_path}/messages").respond(
@@ -114,6 +114,23 @@ async def test_acompletion_creates_thread_posts_message_runs_and_returns_the_rep
     ]
     assert response.choices[0].message.content == "25 * 4 = 100"
     assert response._hidden_params["thread_id"] == "thread_new"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_creates_the_thread_under_a_project_named_threads() -> None:
+    router: Final = _assistants_api("thread_new", "hello", project_path="/api/projects/threads")
+
+    with router:
+        await litellm.acompletion(
+            model=f"azure_ai/agents/{AGENT_ID}",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://agents-test.services.ai.azure.com/api/projects/threads",
+            api_key="azure-ad-token",
+            stream=False,
+        )
+        recorded: Final = _recorded(router)
+
+    assert recorded[0][:2] == ("POST", f"/api/projects/threads/threads?api-version={API_VERSION}")
 
 
 @pytest.mark.asyncio

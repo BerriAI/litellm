@@ -35,7 +35,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -270,7 +270,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Default: https://openrouter.ai/api/v1/chat/completions
         """
         if api_base:
-            return join_api_base(api_base, "chat/completions")
+            return ensure_api_route(api_base, "chat/completions")
 
         return "https://openrouter.ai/api/v1/chat/completions"
 

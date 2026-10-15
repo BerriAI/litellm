@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -504,7 +504,7 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        return join_api_base(api_base or "http://localhost:11434", "api/generate")
+        return ensure_api_route(api_base or "http://localhost:11434", "api/generate")
 
     def get_model_response_iterator(
         self,

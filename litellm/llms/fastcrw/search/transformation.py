@@ -15,7 +15,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -84,7 +84,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        return join_api_base(api_base or get_secret_str("CRW_API_BASE") or self.FASTCRW_API_BASE, "search")
+        return ensure_api_route(api_base or get_secret_str("CRW_API_BASE") or self.FASTCRW_API_BASE, "search")
 
     def transform_search_request(
         self,

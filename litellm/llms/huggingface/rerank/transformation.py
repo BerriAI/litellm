@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -70,7 +70,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
         """
-        return join_api_base(self.get_api_base(model=model, api_base=api_base), "rerank")
+        return ensure_api_route(self.get_api_base(model=model, api_base=api_base), "rerank")
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [

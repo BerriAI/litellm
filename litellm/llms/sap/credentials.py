@@ -15,7 +15,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
@@ -110,7 +110,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
     CredentialsValue(
         "base_url",
         ("serviceurls", "AI_API_URL"),
-        transform_fn=lambda url: join_api_base(url, "v2"),
+        transform_fn=lambda url: ensure_api_route(url, "v2"),
     ),
     CredentialsValue(
         "cert_url",

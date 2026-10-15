@@ -52,7 +52,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
@@ -189,7 +189,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: dict,
     ) -> str:
         base_url: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-        return join_api_base(base_url, "chat/completions")
+        return ensure_api_route(base_url, "chat/completions")
 
     def transform_image_edit_request(
         self,

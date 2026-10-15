@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.apiserpent.search.defaults import (
     DEEP_SEARCH_PATH,
     NUM_MAX,
@@ -82,7 +82,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         handler re-invokes this method with the already-resolved URL as api_base.
         """
         path: Final = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
-        base: Final = join_api_base(api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE, path)
+        base: Final = ensure_api_route(api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE, path)
 
         if data and isinstance(data, dict) and APISERPENT_PARAMS_KEY in data:
             query_string: Final = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)

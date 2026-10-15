@@ -193,6 +193,17 @@ class TestAzureAnthropicMessagesConfig:
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
 
+    def test_get_complete_url_adds_the_anthropic_path_for_a_host_named_anthropic(self):
+        url = AzureAnthropicMessagesConfig().get_complete_url(
+            api_base="https://anthropic-res.services.ai.azure.com",
+            api_key="test-api-key",
+            model="claude-sonnet-4-5",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages"
+
     def test_get_complete_url_raises_error_when_api_base_missing(self):
         """Test get_complete_url raises error when api_base is None"""
         config = AzureAnthropicMessagesConfig()

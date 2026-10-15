@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -82,7 +82,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             if api_base is None:
                 raise ValueError("api_base is required for hosted_vllm embeddings")
 
-        return join_api_base(api_base, "embeddings")
+        return ensure_api_route(api_base, "embeddings")
 
     def transform_embedding_request(
         self,

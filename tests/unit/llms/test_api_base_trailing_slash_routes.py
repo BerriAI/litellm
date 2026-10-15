@@ -113,6 +113,15 @@ ROUTES: Final[Mapping[str, Callable[[str], object]]] = MappingProxyType(
         "openai-eval-run-cancel": lambda api_base: cancel_run(
             eval_id="eval-1", run_id="run-1", api_base=api_base, api_key=FAKE_KEY
         ),
+        "edenai-model-list": lambda api_base: litellm.get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="edenai", api_key=FAKE_KEY, api_base=api_base
+        ),
+        "gemini-rag-ingest": lambda api_base: litellm.ingest(
+            ingest_options={
+                "vector_store": {"custom_llm_provider": "gemini", "api_base": api_base, "api_key": FAKE_KEY}
+            },
+            file_data=("notes.txt", b"hello", "text/plain"),
+        ),
     }
 )
 

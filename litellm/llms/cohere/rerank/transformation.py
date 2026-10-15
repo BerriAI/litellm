@@ -6,7 +6,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -32,7 +32,7 @@ class CohereRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base:
-            return join_api_base(api_base, "v1/rerank")
+            return ensure_api_route(api_base, "v1/rerank")
         return "https://api.cohere.ai/v1/rerank"
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
