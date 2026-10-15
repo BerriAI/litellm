@@ -41,6 +41,7 @@ class Feature(str, Enum):
     STREAMING = "streaming"
     PROMPT_MANAGEMENT = "prompt_management"
     TEXT_FORMAT = "text_format"
+    CHAT_COMPLETIONS_BRIDGE = "chat_completions_bridge"
     RETRIES_FALLBACKS = "retries_fallbacks"
     DEPLOYMENT_RESPONSE_ID = "deployment_response_id"
     ENCODED_ITEM_IDS = "encoded_item_ids"
@@ -109,6 +110,7 @@ RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.STREAMING,
     Feature.PROMPT_MANAGEMENT,
     Feature.TEXT_FORMAT,
+    Feature.CHAT_COMPLETIONS_BRIDGE,
     Feature.RETRIES_FALLBACKS,
     Feature.DEPLOYMENT_RESPONSE_ID,
     Feature.ENCODED_ITEM_IDS,

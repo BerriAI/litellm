@@ -65,6 +65,17 @@ def text_format(request: NativeCall) -> bool:
     return _present(request, "text_format")
 
 
+def chat_completions_bridge(request: NativeCall) -> bool:
+    from litellm.responses.main import (
+        _normalize_openai_chat_completions_responses_model,  # pyright: ignore[reportPrivateUsage]  # the handler's own bridge prefix check
+    )
+
+    return (
+        bool(request.resolved.get("use_chat_completions_api"))
+        or _normalize_openai_chat_completions_responses_model(str(request.resolved["model"]))[1]
+    )
+
+
 def retries_fallbacks(request: NativeCall) -> bool:
     return any(_present(request, name) for name in ("num_retries", "max_retries", "fallbacks"))
 

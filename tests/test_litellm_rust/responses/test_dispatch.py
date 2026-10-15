@@ -260,6 +260,8 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.STREAMING, {"stream": True}, {}),
         (Feature.PROMPT_MANAGEMENT, {"prompt_id": "welcome"}, {}),
         (Feature.TEXT_FORMAT, {"text_format": dict}, {}),
+        (Feature.CHAT_COMPLETIONS_BRIDGE, {"use_chat_completions_api": True}, {}),
+        (Feature.CHAT_COMPLETIONS_BRIDGE, {"model": "openai/chat_completions/gpt-5"}, {}),
         (Feature.RETRIES_FALLBACKS, {"num_retries": 2}, {}),
         (Feature.DEPLOYMENT_RESPONSE_ID, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, {}),
         (Feature.ENCODED_ITEM_IDS, {"input": [{"type": "reasoning", "id": ENCODED_ID, "summary": []}]}, {}),

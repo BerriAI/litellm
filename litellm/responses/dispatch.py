@@ -80,6 +80,7 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.STREAMING: detectors.streaming,
         Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
         Feature.TEXT_FORMAT: detectors.text_format,
+        Feature.CHAT_COMPLETIONS_BRIDGE: detectors.chat_completions_bridge,
         Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
         Feature.DEPLOYMENT_RESPONSE_ID: detectors.deployment_response_id,
         Feature.ENCODED_ITEM_IDS: detectors.encoded_item_ids,
