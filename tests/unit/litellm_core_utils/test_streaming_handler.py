@@ -932,6 +932,44 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("merge_reasoning", [True, False], ids=["merged_into_content", "kept_as_reasoning"])
+async def test_mid_stream_break_after_reasoning_disqualifies_continuation(logging_obj: Logging, merge_reasoning: bool):
+    import httpx
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    class _ReasoningThenCut:
+        def __init__(self) -> None:
+            self.chunks = iter(
+                (
+                    ModelResponseStream(choices=[{"index": 0, "delta": {"reasoning_content": "Let me think"}}]),
+                    ModelResponseStream(choices=[{"index": 0, "delta": {"content": "The answer"}}]),
+                )
+            )
+
+        def __aiter__(self) -> "_ReasoningThenCut":
+            return self
+
+        async def __anext__(self) -> ModelResponseStream:
+            next_chunk: Final = next(self.chunks, None)
+            if next_chunk is None:
+                raise httpx.ReadTimeout("connection dropped")
+            return next_chunk
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=_ReasoningThenCut(), model="deepseek-reasoner", logging_obj=logging_obj
+    )
+    response.merge_reasoning_content_in_choices = merge_reasoning
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for _ in response:
+            pass
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert excinfo.value.emitted_disqualifying_content is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "outer_delta,inner_flag,expected",
     [

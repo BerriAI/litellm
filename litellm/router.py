@@ -303,6 +303,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1319,7 +1320,7 @@ class Router:
         self.fallback_on_unsupported_params = fallback_on_unsupported_params
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
-        self.enable_mid_stream_fallback_continuation = enable_mid_stream_fallback_continuation
+        self.enable_mid_stream_fallback_continuation = self._is_flag_enabled(enable_mid_stream_fallback_continuation)
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         self.background_health_check_model_groups: frozenset[str] | None = (
             frozenset(background_health_check_model_groups)
@@ -3120,11 +3121,7 @@ class Router:
 
         usage: Final = cast(Usage | None, getattr(fallback_item, "usage", None))
         usage_objects: Final = [usage] if usage is not None else []
-        if (
-            complete_response_object_usage is not None
-            and hasattr(complete_response_object_usage, "usage")
-            and complete_response_object_usage.usage is not None
-        ):
+        if complete_response_object_usage is not None:
             usage_objects.append(complete_response_object_usage)
         combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects=usage_objects)
         setattr(fallback_item, "usage", combined_usage)
@@ -3509,6 +3506,8 @@ class Router:
             return False
         if not e.generated_content or e.emitted_disqualifying_content:
             return False
+        if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
+            return False
         choice_count: Final = request_kwargs.get("n")
         if isinstance(choice_count, int) and choice_count > 1:
             return False
@@ -3542,11 +3541,14 @@ class Router:
         messages: Sequence[Mapping[str, object]],
         generated_content: str,
     ) -> Sequence[Mapping[str, object]] | None:
-        """Append the partial output as an assistant prefill, or extend a trailing assistant turn in place so the
-        request never ends in two assistant messages. None when that turn's content has a shape this cannot extend."""
+        """Append the partial output as an assistant prefill, or extend a trailing `prefix: True` assistant turn in
+        place so the request never ends in two assistant messages. None when the request ends in a plain assistant
+        turn, or in a prefill turn whose content has a shape this cannot extend."""
         last: Final = messages[-1] if messages else None
         if last is None or last.get("role") != "assistant":
             return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
+        if last.get("prefix") is not True:
+            return None
         from litellm.router_utils.pre_call_checks.continuation_prefill_check import without_prefill_echo
 
         new_text: Final = without_prefill_echo(last, generated_content)
@@ -13146,8 +13148,12 @@ class Router:
             self._routing_groups_input = routing_groups_input
         verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
 
+    @staticmethod
+    def _is_flag_enabled(value: object) -> bool:
+        return value is True or (isinstance(value, str) and str_to_bool(value) is True)
+
     def _set_mid_stream_fallback_continuation(self, enabled: object) -> None:
-        self.enable_mid_stream_fallback_continuation = enabled is True
+        self.enable_mid_stream_fallback_continuation = self._is_flag_enabled(enabled)
         if self.enable_mid_stream_fallback_continuation:
             self._register_continuation_prefill_check()
 

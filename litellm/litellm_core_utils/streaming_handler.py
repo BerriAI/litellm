@@ -1123,6 +1123,7 @@ class CustomStreamWrapper:
         if self.merge_reasoning_content_in_choices is True:
             reasoning_content: Final = getattr(model_response.choices[0].delta, "reasoning_content", None)
             if reasoning_content:
+                self._emitted_disqualifying_content = True
                 if self.sent_first_thinking_block is False:
                     # Ensure content is not None before concatenation
                     if model_response.choices[0].delta.content is None:

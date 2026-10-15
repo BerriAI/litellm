@@ -114,6 +114,10 @@ ignored_function_names = [
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_register_continuation_prefill_check",  # Tested through the continuation tests in test_router.py
+    "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
+    "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
+    "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
 ]
 
 

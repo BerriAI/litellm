@@ -3160,7 +3160,8 @@ async def test_acompletion_streaming_iterator_continuation_stays_in_the_primary_
 
 
 @pytest.mark.asyncio
-async def test_update_settings_turns_on_mid_stream_continuation(monkeypatch):
+@pytest.mark.parametrize("enabled", [True, "true", " True "])
+async def test_update_settings_turns_on_mid_stream_continuation(monkeypatch, enabled):
     from unittest.mock import AsyncMock, patch
 
     from litellm.exceptions import MidStreamFallbackError
@@ -3178,7 +3179,7 @@ async def test_update_settings_turns_on_mid_stream_continuation(monkeypatch):
         ],
         fallbacks=[{"gpt-4": ["backup"]}],
     )
-    router.update_settings(enable_mid_stream_fallback_continuation=True)
+    router.update_settings(enable_mid_stream_fallback_continuation=enabled)
 
     error = MidStreamFallbackError(
         message="Connection lost", model="gpt-4", llm_provider="openai", generated_content="Hello",
@@ -3248,7 +3249,45 @@ async def test_acompletion_streaming_iterator_declines_ineligible_after_content(
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streaming_iterator_flag_off_declines_after_content():
+async def test_acompletion_streaming_iterator_raises_content_filter_instead_of_continuing():
+    """A content filter that stops a stream mid-answer reaches the client as ContentPolicyViolationError,
+    never as a continuation that lets a backup finish the filtered answer."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "azure/gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    content_filter = litellm.ContentPolicyViolationError(message="filtered", model="gpt-4", llm_provider="azure")
+    error = MidStreamFallbackError(
+        message="filtered", model="gpt-4", llm_provider="azure", generated_content="Step one is to obtain the",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False, original_exception=content_filter,
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=AsyncMock()) as mock_fallback:
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error),
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            async for _ in result:
+                pass
+
+    mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag_kwargs", [{}, {"enable_mid_stream_fallback_continuation": "false"}], ids=["default", "string_false"]
+)
+async def test_acompletion_streaming_iterator_flag_off_declines_after_content(flag_kwargs):
     """Regression guard for the opt-in default: with the flag off, a post-content
     break re-raises and never falls back, exactly as before this feature."""
     from unittest.mock import AsyncMock, patch
@@ -3261,6 +3300,7 @@ async def test_acompletion_streaming_iterator_flag_off_declines_after_content():
             {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
         ],
         fallbacks=[{"gpt-4": ["backup"]}],
+        **flag_kwargs,
     )
     error = MidStreamFallbackError(
         message="boom", model="gpt-4", llm_provider="openai", generated_content="Hello",
@@ -3311,13 +3351,45 @@ def test_build_completion_continuation_input_does_not_double_an_echoed_prefill(p
     assert built[-1] == {"role": "assistant", "content": expected_content, "prefix": True}
 
 
-def test_build_completion_continuation_input_folds_into_trailing_plain_assistant_turn():
-    """A request that already ends in an assistant message takes the partial as its prefill
-    instead of gaining a second assistant turn, which prefill providers reject."""
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Sure, "}]
-    built = litellm.Router._build_completion_continuation_input(messages, "here it is")
-    assert [m["role"] for m in built] == ["user", "assistant"]
-    assert built[-1] == {"role": "assistant", "content": "Sure, here it is", "prefix": True}
+@pytest.mark.parametrize(
+    "assistant_content", ["Earlier answer.", [{"type": "text", "text": "Earlier answer."}]], ids=["string", "blocks"]
+)
+def test_build_completion_continuation_input_declines_a_trailing_plain_assistant_turn(assistant_content):
+    """The caller's own assistant turn is history, not a prefill, so the partial is never fused into it."""
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": assistant_content}]
+    assert litellm.Router._build_completion_continuation_input(messages, "The capital of France is") is None
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_declines_when_request_ends_in_plain_assistant_turn():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    error = MidStreamFallbackError(
+        message="boom", model="gpt-4", llm_provider="openai", generated_content="Hello",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=AsyncMock()) as mock_fallback:
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error),
+            messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Earlier answer."}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in result:
+                pass
+
+    mock_fallback.assert_not_awaited()
 
 
 def test_build_completion_continuation_input_keeps_structured_assistant_content():
@@ -3326,7 +3398,10 @@ def test_build_completion_continuation_input_keeps_structured_assistant_content(
     lands as a new text block only after a non-text block, and a content shape that cannot be extended declines."""
     from litellm.router import _extend_trailing_text_block
 
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [{"type": "text", "text": "Sure, "}]}]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Sure, "}], "prefix": True},
+    ]
     built = litellm.Router._build_completion_continuation_input(messages, "here it is")
     assert built is not None
     assert [m["role"] for m in built] == ["user", "assistant"]
@@ -3334,7 +3409,10 @@ def test_build_completion_continuation_input_keeps_structured_assistant_content(
     image_block = {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}
     assert _extend_trailing_text_block([image_block], "here it is") == [image_block, {"type": "text", "text": "here it is"}]
     assert _extend_trailing_text_block([], "here it is") == [{"type": "text", "text": "here it is"}]
-    assert litellm.Router._build_completion_continuation_input([{"role": "assistant", "content": 42}], "x") is None
+    assert (
+        litellm.Router._build_completion_continuation_input([{"role": "assistant", "content": 42, "prefix": True}], "x")
+        is None
+    )
 
 
 def test_continuation_output_ceilings_reduces_by_emitted_tokens():
@@ -9152,6 +9230,11 @@ def test_combine_fallback_usage():
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+    Router._combine_fallback_usage(chunk, Usage(prompt_tokens=0, completion_tokens=4, total_tokens=4))
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 9
+    assert chunk.usage.total_tokens == 19
 
 
 @pytest.mark.asyncio
