@@ -464,3 +464,40 @@ async def test_gcs_media_type_lookup_uses_the_deployment_vertex_project() -> Non
     assert contents[0]["parts"][0] == {
         "file_data": {"mime_type": "image/png", "file_uri": "gs://bucket/image-without-extension"}
     }
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+) -> None:
+    snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
+    messages: Final = (
+        {"role": "user", "content": "What is new?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "news"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://docs.litellm.ai/release_notes",
+                            "title": "Release notes",
+                            "encrypted_content": "",
+                            "snippet": snippet,
+                        }
+                    ],
+                },
+            ],
+        },
+        {"role": "user", "content": "Thanks."},
+    )
+
+    view: Final = inference_request_view(messages, None, "anthropic")
+    contents: Final = asyncio.run(
+        gemini_count_contents(view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {})
+    )
+
+    assert snippet in str(contents)
