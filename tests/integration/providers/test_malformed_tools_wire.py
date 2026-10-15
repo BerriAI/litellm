@@ -7,8 +7,10 @@ import os
 import re
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
-from itertools import chain
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from itertools import chain, product
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -30,6 +32,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, openai_error, responses_reply
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
@@ -48,6 +51,7 @@ _OTHER_STORE: Final = "vs_malformed_tools_other_store"
 _CLAUDE_CODE_AGENT: Final = "claude-cli/2.1.0 (external, cli)"
 _CODEX_AGENT: Final = "codex_cli_rs/0.50.0 (Linux 6.8; x86_64) xterm-256color"
 _REJECT_MARK: Final = "upstream-401"
+_DOWN: Final = "/down/"
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -56,6 +60,8 @@ _SPEND_ROWS: Final = (
 )
 _NOT_A_LIST: Final = "tools: Input should be a valid list"
 _NOT_AN_OBJECT: Final = "tools.0: Input should be a valid dictionary"
+_SECOND_NOT_AN_OBJECT: Final = "tools.1: Input should be a valid dictionary"
+_OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
 _TOOL_FIELDS: Final = ("tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config")
 _WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
@@ -111,10 +117,18 @@ def _rejected_by_provider(path: str) -> Reply:
     return openai_error(401)
 
 
+def _unavailable(path: str) -> Reply:
+    if "/v1/messages" in path:
+        return Reply(status=503, body=error_body(503, "scripted outage"))
+    return openai_error(503)
+
+
 def _respond(request: Request) -> Reply:
     text: Final = request.body.decode()
     tag: Final = _tag(text)
     path: Final = request.target.split("?")[0]
+    if path.startswith(_DOWN):
+        return _unavailable(path)
     if _REJECT_MARK in text:
         return _rejected_by_provider(path)
     stream: Final = bool(text) and _JSON_OBJECT.validate_json(request.body).get("stream") is True
@@ -154,26 +168,27 @@ class _Rig:
     field_group: str
 
 
+def _deployment_ids(scenario: Scenario, name: str, deployments: tuple[dict[str, JsonValue], ...]) -> tuple[str, ...]:
+    created: Final = tuple(
+        scenario.gateway.post("/model/new", {"model_name": name, "litellm_params": params, "model_info": {}})
+        for params in deployments
+    )
+    identities: Final = tuple(string_value(object_value(deployment["model_info"])["id"]) for deployment in created)
+    for identity in identities:
+        scenario.cleanups.callback(scenario.delete_model, identity)
+    return identities
+
+
 def _same_name_deployments(scenario: Scenario, api_base: str, variants: tuple[Mapping[str, JsonValue], ...]) -> str:
     name: Final = f"integration-mixed-{uuid.uuid4().hex}"
-    created: Final = tuple(
-        scenario.gateway.post(
-            "/model/new",
-            {
-                "model_name": name,
-                "litellm_params": {
-                    "model": f"openai/{_OPENAI_BACKEND}",
-                    "api_key": _PROVIDER_KEY,
-                    "api_base": api_base,
-                    **variant,
-                },
-                "model_info": {},
-            },
-        )
-        for variant in variants
+    _deployment_ids(
+        scenario,
+        name,
+        tuple(
+            {"model": f"openai/{_OPENAI_BACKEND}", "api_key": _PROVIDER_KEY, "api_base": api_base, **variant}
+            for variant in variants
+        ),
     )
-    for deployment in created:
-        scenario.cleanups.callback(scenario.delete_model, string_value(object_value(deployment["model_info"])["id"]))
     return name
 
 
@@ -1100,7 +1115,7 @@ def test_a_request_additional_drop_params_list_replaces_the_deployment_list(rig:
         tools=[CHAT.tool, 5],
         additional_drop_params=["web_search_options"],
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1121,7 +1136,7 @@ def test_an_agentic_cli_with_explicit_drop_params_false_rejects(rig: _Rig) -> No
     response: Final = _send(
         rig, MESSAGES, marker, False, user_agent=_CLAUDE_CODE_AGENT, tools=[MESSAGES.tool, 5], drop_params=False
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1222,7 +1237,7 @@ def test_each_family_rejects_malformed_tools_when_a_request_list_replaces_the_de
         tools=[family.tool, 5],
         additional_drop_params=["web_search_options"],
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1280,7 +1295,7 @@ def test_a_request_additional_drop_params_that_is_no_list_of_names_still_replace
     response: Final = _send(
         rig, CHAT, marker, False, model=rig.field_group, tools=[CHAT.tool, 5], additional_drop_params=value
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1317,7 +1332,7 @@ def test_duplicate_additional_drop_params_keys_use_the_last_one(rig: _Rig, first
     )
     assert response.status_code == status, response.text
     if status == 400:
-        _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+        _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
         assert _delivered(rig, marker) == ()
         return
     _assert_answered(CHAT, response, marker)
@@ -1348,7 +1363,7 @@ def test_count_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_d
             "model": field_groups.anthropic,
         },
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1380,7 +1395,7 @@ def test_responses_input_tokens_rejects_malformed_tools_when_a_request_list_repl
             "additional_drop_params": ["web_search_options"],
         },
     )
-    _assert_rejected(response, "tools.1: Input should be a valid dictionary")
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
     assert _delivered(rig, marker) == ()
 
 
@@ -1493,3 +1508,968 @@ def test_a_rate_limited_image_edit_logs_one_failure_row_as_an_image_edit(rig: _R
     assert _delivered(rig, marker) == ()
     row: Final = _logged_once(call_id)
     assert (row["call_type"], row["status"]) == ("aimage_edit", "failure"), row
+
+
+_Sender = Callable[[_Rig, str, str, Mapping[str, JsonValue]], httpx.Response]
+
+
+@dataclass(frozen=True, slots=True)
+class _Checked:
+    provider: str
+    tool: dict[str, JsonValue]
+    named_as: _Family
+    send: _Sender
+    target: str
+    answered: Callable[[httpx.Response, str], None]
+    kept_by_a_tools_list: tuple[str, ...]
+    bad_entry: dict[str, JsonValue]
+
+
+def _family_sender(family: _Family) -> _Sender:
+    return lambda rig, model, marker, fields: _send(rig, family, marker, False, model=model, **fields)
+
+
+def _family_answered(family: _Family) -> Callable[[httpx.Response, str], None]:
+    return lambda response, marker: _assert_answered(family, response, marker)
+
+
+def _count_tokens(rig: _Rig, model: str, marker: str, fields: Mapping[str, JsonValue]) -> httpx.Response:
+    return rig.gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {"model": model, "messages": [{"role": "user", "content": marker}], **fields},
+    )
+
+
+def _input_tokens(rig: _Rig, model: str, marker: str, fields: Mapping[str, JsonValue]) -> httpx.Response:
+    return rig.gateway.request("POST", "/v1/responses/input_tokens", {"model": model, "input": marker, **fields})
+
+
+def _counted(expected: Mapping[str, JsonValue]) -> Callable[[httpx.Response, str], None]:
+    def check(response: httpx.Response, marker: str) -> None:
+        assert response.status_code == 200, response.text
+        assert _JSON_OBJECT.validate_json(response.content) == expected, (marker, response.text)
+
+    return check
+
+
+_CHAT_BAD_ENTRY: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": "bad"},
+}
+_MESSAGES_BAD_ENTRY: Final[dict[str, JsonValue]] = {"name": "get_weather", "input_schema": [1]}
+_RESPONSES_BAD_ENTRY: Final[dict[str, JsonValue]] = {"type": "function", "name": "get_weather", "parameters": 5}
+_CHECKED: Final[Mapping[str, _Checked]] = MappingProxyType(
+    {
+        "chat": _Checked(
+            provider="openai",
+            tool=CHAT.tool,
+            named_as=CHAT,
+            send=_family_sender(CHAT),
+            target="/v1/chat/completions",
+            answered=_family_answered(CHAT),
+            kept_by_a_tools_list=(),
+            bad_entry=_CHAT_BAD_ENTRY,
+        ),
+        "messages": _Checked(
+            provider="anthropic",
+            tool=MESSAGES.tool,
+            named_as=MESSAGES,
+            send=_family_sender(MESSAGES),
+            target="/v1/messages",
+            answered=_family_answered(MESSAGES),
+            kept_by_a_tools_list=(),
+            bad_entry=_MESSAGES_BAD_ENTRY,
+        ),
+        "responses": _Checked(
+            provider="openai",
+            tool=RESPONSES.tool,
+            named_as=RESPONSES,
+            send=_family_sender(RESPONSES),
+            target="/v1/responses",
+            answered=_family_answered(RESPONSES),
+            kept_by_a_tools_list=(),
+            bad_entry=_RESPONSES_BAD_ENTRY,
+        ),
+        "generate_content": _Checked(
+            provider="gemini",
+            tool=GENERATE.tool,
+            named_as=GENERATE,
+            send=_family_sender(GENERATE),
+            target=":generateContent",
+            answered=_family_answered(GENERATE),
+            kept_by_a_tools_list=("get_weather",),
+            bad_entry={"parameters": 5},
+        ),
+        "count_tokens": _Checked(
+            provider="anthropic",
+            tool=MESSAGES.tool,
+            named_as=MESSAGES,
+            send=_count_tokens,
+            target="/v1/messages/count_tokens",
+            answered=_counted({"input_tokens": _COUNT}),
+            kept_by_a_tools_list=("get_weather",),
+            bad_entry=_MESSAGES_BAD_ENTRY,
+        ),
+        "input_tokens": _Checked(
+            provider="anthropic",
+            tool=RESPONSES.tool,
+            named_as=MESSAGES,
+            send=_input_tokens,
+            target="/v1/messages/count_tokens",
+            answered=_counted({"object": "response.input_tokens", "input_tokens": _COUNT}),
+            kept_by_a_tools_list=("get_weather",),
+            bad_entry=_RESPONSES_BAD_ENTRY,
+        ),
+    }
+)
+_EACH_CHECKED: Final = pytest.mark.parametrize("checked", _CHECKED.values(), ids=_CHECKED.keys())
+_CHAT_AND_COUNT: Final = pytest.mark.parametrize(
+    "checked", (_CHECKED["chat"], _CHECKED["count_tokens"]), ids=("chat", "count_tokens")
+)
+_ENTRY_SHAPES: Final = pytest.mark.parametrize(
+    "bad_entry",
+    [lambda checked: 5, lambda checked: checked.bad_entry],
+    ids=["int_entry", "dict_entry"],
+)
+_BadEntry = Callable[[_Checked], JsonValue]
+
+
+def _assert_forwarded(
+    rig: _Rig, checked: _Checked, response: httpx.Response, marker: str, names: tuple[str, ...]
+) -> None:
+    checked.answered(response, marker)
+    assert _tool_names(checked.named_as, _one_delivery(rig, marker, checked.target)) == names
+
+
+def _assert_held_back(rig: _Rig, response: httpx.Response, marker: str) -> None:
+    _assert_rejected(response, _SECOND_NOT_AN_OBJECT)
+    assert _delivered(rig, marker) == ()
+
+
+_PROVIDERS: Final[Mapping[str, Callable[[str], dict[str, JsonValue]]]] = MappingProxyType(
+    {
+        "openai": lambda wire: {
+            "model": f"openai/{_OPENAI_BACKEND}",
+            "api_base": f"{wire}/v1",
+            "api_key": _PROVIDER_KEY,
+        },
+        "anthropic": lambda wire: {"model": f"anthropic/{_CLAUDE_BACKEND}", "api_base": wire, "api_key": _PROVIDER_KEY},
+        "gemini": lambda wire: {"model": f"gemini/{_GEMINI_BACKEND}", "api_base": wire, "api_key": _PROVIDER_KEY},
+    }
+)
+_DROP_VARIANTS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        "plain": {},
+        "lists_web_search": {"additional_drop_params": ["web_search_options"]},
+        "lists_tools": {"additional_drop_params": ["tools"]},
+        "keeps": {"drop_params": False},
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Owned:
+    rig: _Rig
+    suffix: str
+
+
+def _owned_name(suffix: str, variant: str, provider: str) -> str:
+    return f"malformed-tools-{variant}-{provider}-{suffix}"
+
+
+def _owned_id(suffix: str, variant: str, provider: str) -> str:
+    return f"{_owned_name(suffix, variant, provider)}-id"
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedSetup:
+    router_settings: Callable[[str], dict[str, JsonValue]]
+    general: Mapping[str, JsonValue] = MappingProxyType({})
+    extra_models: Callable[[str, str], tuple[dict[str, JsonValue], ...]] = lambda wire, suffix: ()
+
+
+def _router_defaults(defaults: dict[str, JsonValue]) -> _OwnedSetup:
+    return _OwnedSetup(router_settings=lambda suffix: {"default_litellm_params": defaults})
+
+
+def _owned_config(path: Path, wire: str, suffix: str, setup: _OwnedSetup) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "model_list": [
+                    *(
+                        {
+                            "model_name": _owned_name(suffix, variant, provider),
+                            "litellm_params": {**deployment(wire), **extra},
+                            "model_info": {"id": _owned_id(suffix, variant, provider)},
+                        }
+                        for (variant, extra), (provider, deployment) in product(
+                            _DROP_VARIANTS.items(), _PROVIDERS.items()
+                        )
+                    ),
+                    *setup.extra_models(wire, suffix),
+                ],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    **setup.general,
+                },
+                "router_settings": setup.router_settings(suffix),
+            }
+        )
+    )
+    return path
+
+
+@contextmanager
+def _owned_proxy(rig: _Rig, directory: Path, setup: _OwnedSetup) -> Iterator[_Owned]:
+    suffix: Final = uuid.uuid4().hex[:12]
+    config: Final = _owned_config(directory / "owned.yaml", rig.wire.url, suffix, setup)
+    with owned_proxy_process(rig.gateway, directory, {}, config=config, workers=2) as proxy:
+        yield _Owned(replace(rig, gateway=proxy.gateway), suffix)
+
+
+@pytest.fixture(scope="module")
+def tools_default(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Owned]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-tools-default")
+    with _owned_proxy(rig, directory, _router_defaults({"additional_drop_params": ["tools"]})) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def drop_default(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Owned]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-drop-default")
+    with _owned_proxy(rig, directory, _router_defaults({"drop_params": True, "additional_drop_params": None})) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def client_side(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Owned]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-client-side")
+    setup: Final = replace(
+        _router_defaults({"additional_drop_params": "tools"}),
+        general=MappingProxyType({"allow_client_side_credentials": True}),
+    )
+    with _owned_proxy(rig, directory, setup) as owned:
+        yield owned
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+@_EACH_CHECKED
+def test_a_router_default_list_naming_tools_answers_malformed_tools(
+    tools_default: _Owned, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(tools_default.suffix, "plain", checked.provider)
+    response: Final = checked.send(tools_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(tools_default.rig, checked, response, marker, checked.kept_by_a_tools_list)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_EACH_CHECKED
+def test_a_request_list_replaces_a_router_default_list(tools_default: _Owned, checked: _Checked) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(tools_default.suffix, "plain", checked.provider)
+    response: Final = checked.send(
+        tools_default.rig,
+        model,
+        marker,
+        {"tools": [checked.tool, 5], "additional_drop_params": ["web_search_options"]},
+    )
+    _assert_held_back(tools_default.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+@_EACH_CHECKED
+def test_a_router_default_list_replaces_a_deployment_list(
+    tools_default: _Owned, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(tools_default.suffix, "lists_web_search", checked.provider)
+    response: Final = checked.send(tools_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(tools_default.rig, checked, response, marker, checked.kept_by_a_tools_list)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+def test_a_router_default_list_replaces_the_list_of_a_deployment_named_by_id(
+    tools_default: _Owned, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["chat"]
+    model: Final = _owned_id(tools_default.suffix, "lists_web_search", checked.provider)
+    response: Final = checked.send(tools_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(tools_default.rig, checked, response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize("value", [None, [], 5], ids=["null", "empty_list", "int"])
+def test_a_request_list_naming_nothing_replaces_a_router_default_list(tools_default: _Owned, value: JsonValue) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(tools_default.suffix, "plain", "openai")
+    response: Final = _send(
+        tools_default.rig, CHAT, marker, False, model=model, tools=[CHAT.tool, 5], additional_drop_params=value
+    )
+    _assert_held_back(tools_default.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_router_default_list_naming_tools_drops_well_formed_tools(tools_default: _Owned) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(tools_default.suffix, "plain", "openai")
+    response: Final = _send(tools_default.rig, CHAT, marker, False, model=model, tools=[CHAT.tool])
+    _assert_forwarded(tools_default.rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+@_EACH_CHECKED
+def test_a_router_default_drop_params_keeps_the_good_entries(
+    drop_default: _Owned, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(drop_default.suffix, "plain", checked.provider)
+    response: Final = checked.send(drop_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(drop_default.rig, checked, response, marker, ("get_weather",))
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize("drop", [False, None], ids=["false", "null"])
+def test_a_request_drop_params_replaces_a_router_default_drop_params(drop_default: _Owned, drop: JsonValue) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(drop_default.suffix, "plain", "openai")
+    response: Final = _send(drop_default.rig, CHAT, marker, False, model=model, tools=[CHAT.tool, 5], drop_params=drop)
+    _assert_held_back(drop_default.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+@_CHAT_AND_COUNT
+def test_a_router_default_drop_params_replaces_a_deployment_drop_params(
+    drop_default: _Owned, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(drop_default.suffix, "keeps", checked.provider)
+    response: Final = checked.send(drop_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(drop_default.rig, checked, response, marker, ("get_weather",))
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_ENTRY_SHAPES
+@_CHAT_AND_COUNT
+def test_a_null_router_default_list_leaves_the_deployment_list_in_force(
+    drop_default: _Owned, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(drop_default.suffix, "lists_tools", checked.provider)
+    response: Final = checked.send(
+        drop_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)], "drop_params": False}
+    )
+    _assert_forwarded(drop_default.rig, checked, response, marker, checked.kept_by_a_tools_list)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_router_default_list_that_is_a_string_still_rejects_a_bad_tool_entry(client_side: _Owned) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(client_side.suffix, "plain", "openai")
+    response: Final = _send(client_side.rig, CHAT, marker, False, model=model, tools=[CHAT.tool, 5])
+    _assert_held_back(client_side.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_router_default_list_that_is_a_string_keeps_well_formed_tools(client_side: _Owned) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(client_side.suffix, "plain", "openai")
+    response: Final = _send(client_side.rig, CHAT, marker, False, model=model, tools=[CHAT.tool])
+    _assert_answered(CHAT, response, marker)
+    assert _one_delivery(client_side.rig, marker, "/v1/chat/completions")["tools"] == [CHAT.tool]
+
+
+_USER_CONFIG_DROPS: Final[Mapping[str, tuple[dict[str, JsonValue], dict[str, JsonValue], tuple[str, ...]]]] = (
+    MappingProxyType(
+        {
+            "deployment_list": ({"additional_drop_params": ["tools"]}, {}, ()),
+            "router_default_list": ({}, {"additional_drop_params": ["tools"]}, ()),
+            "router_default_drop_params": ({}, {"drop_params": True}, ("get_weather", "get_weather")),
+        }
+    )
+)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize(("deployment", "defaults", "kept"), _USER_CONFIG_DROPS.values(), ids=_USER_CONFIG_DROPS.keys())
+def test_a_user_config_router_decides_which_malformed_tools_drop(
+    client_side: _Owned,
+    deployment: dict[str, JsonValue],
+    defaults: dict[str, JsonValue],
+    kept: tuple[str, ...],
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["chat"]
+    name: Final = f"malformed-tools-user-config-{uuid.uuid4().hex}"
+    user_config: Final[dict[str, JsonValue]] = {
+        "model_list": [
+            {"model_name": name, "litellm_params": {**_PROVIDERS["openai"](client_side.rig.wire.url), **deployment}}
+        ],
+        "default_litellm_params": defaults,
+    }
+    response: Final = checked.send(
+        client_side.rig, name, marker, {"tools": [checked.tool, checked.bad_entry], "user_config": user_config}
+    )
+    _assert_forwarded(client_side.rig, checked, response, marker, kept)
+
+
+@dataclass(frozen=True, slots=True)
+class _ById:
+    lists_tools: Mapping[str, str]
+    drops: str
+    mixed: str
+    mixed_drops: str
+    mixed_keeps: str
+    shadowed: str
+
+
+@pytest.fixture(scope="module")
+def by_id(rig: _Rig) -> Iterator[_ById]:
+    openai_deployment: Final = _PROVIDERS["openai"](rig.wire.url)
+    lists_tools: Final[dict[str, JsonValue]] = {"additional_drop_params": ["tools"]}
+    names: Final = MappingProxyType({provider: f"integration-by-id-{uuid.uuid4().hex}" for provider in _PROVIDERS})
+    drops_name: Final = f"integration-by-id-drops-{uuid.uuid4().hex}"
+    mixed: Final = f"integration-by-id-mixed-{uuid.uuid4().hex}"
+    shadow_name: Final = f"integration-by-id-shadow-{uuid.uuid4().hex}"
+    with rig.gateway.scenario() as scenario:
+        listed: Final = MappingProxyType(
+            {
+                provider: _deployment_ids(scenario, names[provider], ({**deployment(rig.wire.url), **lists_tools},))[0]
+                for provider, deployment in _PROVIDERS.items()
+            }
+        )
+        (drops,) = _deployment_ids(scenario, drops_name, ({**openai_deployment, "drop_params": True},))
+        mixed_drops, mixed_keeps = _deployment_ids(
+            scenario, mixed, ({**openai_deployment, **lists_tools}, openai_deployment)
+        )
+        (shadowed,) = _deployment_ids(scenario, shadow_name, ({**openai_deployment, **lists_tools},))
+        _deployment_ids(scenario, shadowed, (openai_deployment,))
+        for group, deployments in (
+            *((name, 1) for name in names.values()),
+            (drops_name, 1),
+            (mixed, 2),
+            (shadow_name, 1),
+            (shadowed, 1),
+        ):
+            wait_for_worker_readiness(rig.gateway, group, deployments, _PROXY_WORKERS)
+        yield _ById(listed, drops, mixed, mixed_drops, mixed_keeps, shadowed)
+
+
+@_ENTRY_SHAPES
+@_EACH_CHECKED
+def test_a_deployment_id_answers_malformed_tools_its_deployment_list_drops(
+    rig: _Rig, by_id: _ById, checked: _Checked, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    response: Final = checked.send(
+        rig, by_id.lists_tools[checked.provider], marker, {"tools": [checked.tool, bad_entry(checked)]}
+    )
+    _assert_forwarded(rig, checked, response, marker, checked.kept_by_a_tools_list)
+
+
+@_EACH_CHECKED
+def test_a_request_list_replaces_the_list_of_a_deployment_named_by_id(
+    rig: _Rig, by_id: _ById, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    response: Final = checked.send(
+        rig,
+        by_id.lists_tools[checked.provider],
+        marker,
+        {"tools": [checked.tool, 5], "additional_drop_params": ["web_search_options"]},
+    )
+    _assert_held_back(rig, response, marker)
+
+
+@_ENTRY_SHAPES
+def test_the_id_of_the_dropping_deployment_in_a_mixed_group_drops_malformed_tools(
+    rig: _Rig, by_id: _ById, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["chat"]
+    response: Final = checked.send(rig, by_id.mixed_drops, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(rig, checked, response, marker, ())
+
+
+@pytest.mark.parametrize(
+    "pick",
+    [lambda ids: ids.mixed_keeps, lambda ids: ids.mixed],
+    ids=["keeping_id", "group_name"],
+)
+def test_the_keeping_id_or_the_name_of_a_mixed_group_rejects_malformed_tools(
+    rig: _Rig, by_id: _ById, pick: Callable[[_ById], str]
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(rig, CHAT, marker, False, model=pick(by_id), tools=[CHAT.tool, 5])
+    _assert_held_back(rig, response, marker)
+
+
+@_ENTRY_SHAPES
+def test_the_id_of_a_drop_params_deployment_keeps_the_good_entries(
+    rig: _Rig, by_id: _ById, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["chat"]
+    response: Final = checked.send(rig, by_id.drops, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(rig, checked, response, marker, ("get_weather",))
+
+
+def test_a_model_name_wins_over_an_equal_deployment_id(rig: _Rig, by_id: _ById) -> None:
+    marker: Final = _marker()
+    response: Final = _send(rig, CHAT, marker, False, model=by_id.shadowed, tools=[CHAT.tool, 5])
+    _assert_held_back(rig, response, marker)
+
+
+def test_a_deployment_id_with_a_tools_list_drops_well_formed_tools(rig: _Rig, by_id: _ById) -> None:
+    marker: Final = _marker()
+    response: Final = _send(rig, CHAT, marker, False, model=by_id.lists_tools["openai"], tools=[CHAT.tool])
+    _assert_forwarded(rig, _CHECKED["chat"], response, marker, ())
+
+
+def _failed_over(request: Request) -> bool:
+    return request.target.startswith(_DOWN)
+
+
+def _assert_failed_over(
+    rig: _Rig, checked: _Checked, response: httpx.Response, marker: str, names: tuple[str, ...]
+) -> None:
+    checked.answered(response, marker)
+    delivered: Final = _delivered(rig, marker)
+    (served,) = tuple(request for request in delivered if not _failed_over(request))
+    assert checked.target in served.target, served.target
+    assert _tool_names(checked.named_as, _JSON_OBJECT.validate_json(served.body)) == names
+
+
+_FALLBACK_CHECKED: Final = pytest.mark.parametrize(
+    "checked",
+    tuple(_CHECKED[name] for name in ("chat", "messages", "responses")),
+    ids=("chat", "messages", "responses"),
+)
+_TOKEN_COUNTS: Final = pytest.mark.parametrize(
+    "checked", (_CHECKED["count_tokens"], _CHECKED["input_tokens"]), ids=("count_tokens", "input_tokens")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Reroute:
+    down: Mapping[str, str]
+    lists_tools: Mapping[str, str]
+    team_key: str
+    team_models: Mapping[str, str]
+
+
+@pytest.fixture(scope="module")
+def reroute(rig: _Rig, field_groups: _FieldGroups) -> Iterator[_Reroute]:
+    lists_tools: Final = MappingProxyType({"openai": rig.field_group, "anthropic": field_groups.anthropic})
+    with rig.gateway.scenario() as scenario:
+        down: Final = MappingProxyType(
+            {provider: scenario.model(**_PROVIDERS[provider](f"{rig.wire.url}/down")) for provider in lists_tools}
+        )
+        public_team: Final = scenario.team()
+        team_models: Final = MappingProxyType(
+            {
+                provider: scenario.model(
+                    **_PROVIDERS[provider](rig.wire.url),
+                    additional_drop_params=["tools"],
+                    model_info={"team_id": public_team},
+                )
+                for provider in lists_tools
+            }
+        )
+        built: Final = _Reroute(
+            down=down,
+            lists_tools=lists_tools,
+            team_key=scenario.key(team_id=public_team),
+            team_models=team_models,
+        )
+        for group in (*down.values(), *team_models.values()):
+            wait_for_worker_readiness(rig.gateway, group, 1, _PROXY_WORKERS)
+        yield built
+
+
+@_FALLBACK_CHECKED
+def test_a_request_fallback_to_a_group_listing_tools_answers_a_bad_tool_entry(
+    rig: _Rig, reroute: _Reroute, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    response: Final = checked.send(
+        rig,
+        reroute.down[checked.provider],
+        marker,
+        {"tools": [checked.tool, checked.bad_entry], "fallbacks": [reroute.lists_tools[checked.provider]]},
+    )
+    _assert_failed_over(rig, checked, response, marker, ())
+
+
+def test_a_generic_request_fallback_to_a_group_listing_tools_answers_a_bad_tool_entry(
+    rig: _Rig, reroute: _Reroute
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["chat"]
+    response: Final = checked.send(
+        rig,
+        reroute.down["openai"],
+        marker,
+        {"tools": [checked.tool, checked.bad_entry], "fallbacks": [{"*": [rig.field_group]}]},
+    )
+    _assert_failed_over(rig, checked, response, marker, ())
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [[], None, lambda rig: [{rig.drop_group: [rig.field_group]}]],
+    ids=["empty_list", "null", "chain_of_another_group"],
+)
+def test_a_request_fallback_that_cannot_apply_still_rejects_a_bad_tool_entry(
+    rig: _Rig, fallbacks: JsonValue | Callable[[_Rig], JsonValue]
+) -> None:
+    marker: Final = _marker()
+    chains: Final = fallbacks(rig) if callable(fallbacks) else fallbacks
+    response: Final = _send(rig, CHAT, marker, False, tools=[CHAT.tool, 5], fallbacks=chains)
+    _assert_held_back(rig, response, marker)
+
+
+def test_a_comma_batch_lets_each_group_decide_on_a_bad_tool_entry(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig, CHAT, marker, False, model=f"{rig.field_group},{rig.openai}", tools=[CHAT.tool, _CHAT_BAD_ENTRY]
+    )
+    assert response.status_code == 200, response.text
+    assert _answer(_tag(marker)) in response.text, response.text
+    delivered: Final = sorted(
+        (_JSON_OBJECT.validate_json(request.body).get("tools") for request in _delivered(rig, marker)), key=bool
+    )
+    assert delivered == [None, [CHAT.tool, _CHAT_BAD_ENTRY]]
+
+
+def test_a_team_public_model_name_answers_a_bad_tool_entry_its_deployment_list_drops(
+    rig: _Rig, reroute: _Reroute
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        CHAT,
+        marker,
+        False,
+        model=reroute.team_models["openai"],
+        key=reroute.team_key,
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+    )
+    _assert_forwarded(rig, _CHECKED["chat"], response, marker, ())
+
+
+def test_count_tokens_by_a_team_public_model_name_rejects_a_bad_tool_entry(rig: _Rig, reroute: _Reroute) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {
+            "model": reroute.team_models["anthropic"],
+            "messages": [{"role": "user", "content": marker}],
+            "tools": [MESSAGES.tool, 5],
+        },
+        key=reroute.team_key,
+    )
+    _assert_held_back(rig, response, marker)
+
+
+def test_a_request_list_drops_malformed_web_search_options_and_forwards_a_bad_tool_entry_on_a_fallback_chain(
+    rig: _Rig,
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        CHAT,
+        marker,
+        False,
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+        web_search_options=5,
+        additional_drop_params=["web_search_options"],
+        fallbacks=[{rig.openai: [rig.field_group]}],
+    )
+    _assert_answered(CHAT, response, marker)
+    sent: Final = _one_delivery(rig, marker, "/v1/chat/completions")
+    assert (sent["tools"], "web_search_options" in sent) == ([CHAT.tool, _CHAT_BAD_ENTRY], False)
+
+
+def test_request_drop_params_on_a_fallback_chain_keeps_the_good_entries(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        CHAT,
+        marker,
+        False,
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+        drop_params=True,
+        fallbacks=[{rig.openai: [rig.field_group]}],
+    )
+    _assert_forwarded(rig, _CHECKED["chat"], response, marker, ("get_weather",))
+
+
+@_ENTRY_SHAPES
+def test_a_request_list_with_a_non_string_entry_drops_tools_it_names_on_messages(
+    rig: _Rig, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["messages"]
+    response: Final = checked.send(
+        rig,
+        rig.anthropic,
+        marker,
+        {"tools": [checked.tool, bad_entry(checked)], "additional_drop_params": ["tools", 5]},
+    )
+    _assert_forwarded(rig, checked, response, marker, ())
+
+
+@_ENTRY_SHAPES
+def test_a_deployment_list_with_a_non_string_entry_drops_tools_it_names_on_messages(
+    rig: _Rig, bad_entry: _BadEntry
+) -> None:
+    marker: Final = _marker()
+    checked: Final = _CHECKED["messages"]
+    with rig.gateway.scenario() as scenario:
+        group: Final = scenario.model(**_PROVIDERS["anthropic"](rig.wire.url), additional_drop_params=["tools", 5])
+        wait_for_worker_readiness(rig.gateway, group, 1, _PROXY_WORKERS)
+        response: Final = checked.send(rig, group, marker, {"tools": [checked.tool, bad_entry(checked)]})
+    _assert_forwarded(rig, checked, response, marker, ())
+
+
+@_TOKEN_COUNTS
+def test_token_counting_with_a_request_list_with_a_non_string_entry_drops_the_bad_entry(
+    rig: _Rig, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    response: Final = checked.send(
+        rig, rig.anthropic, marker, {"tools": [checked.tool, 5], "additional_drop_params": ["tools", 5]}
+    )
+    _assert_forwarded(rig, checked, response, marker, ("get_weather",))
+
+
+def _alias(suffix: str, variant: str) -> str:
+    return f"malformed-tools-alias-{variant}-{suffix}"
+
+
+def _routing_group(suffix: str, provider: str) -> str:
+    return f"malformed-tools-routed-{provider}-{suffix}"
+
+
+def _wildcard(suffix: str) -> str:
+    return f"malformed-tools-wild-{suffix}"
+
+
+def _direct(suffix: str) -> str:
+    return f"malformed-tools-direct-{suffix}"
+
+
+def _down_models(wire: str, suffix: str) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        {"model_name": _owned_name(suffix, "down", provider), "litellm_params": _PROVIDERS[provider](f"{wire}/down")}
+        for provider in ("openai", "anthropic")
+    )
+
+
+def _rerouting_models(wire: str, suffix: str) -> tuple[dict[str, JsonValue], ...]:
+    lists_tools: Final = _owned_name(suffix, "lists_tools", "openai")
+    return (
+        *_down_models(wire, suffix),
+        {
+            "model_name": _owned_name(suffix, "auto", "openai"),
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": lists_tools,
+                "complexity_router_config": {
+                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), lists_tools)
+                },
+            },
+        },
+        {
+            "model_name": _owned_name(suffix, "direct", "openai"),
+            "litellm_params": {
+                **_PROVIDERS["openai"](wire),
+                "model": f"openai/{_direct(suffix)}",
+                "additional_drop_params": ["tools"],
+            },
+        },
+        {
+            "model_name": f"{_wildcard(suffix)}/*",
+            "litellm_params": {**_PROVIDERS["openai"](wire), "model": "openai/*", "additional_drop_params": ["tools"]},
+        },
+    )
+
+
+def _rerouting_settings(suffix: str) -> dict[str, JsonValue]:
+    return {
+        "fallbacks": [
+            {_owned_name(suffix, "down", provider): [_owned_name(suffix, "lists_tools", provider)]}
+            for provider in ("openai", "anthropic")
+        ],
+        "model_group_alias": {
+            _alias(suffix, variant): _owned_name(suffix, variant, "openai") for variant in ("lists_tools", "plain")
+        },
+        "routing_groups": [
+            {
+                "group_name": _routing_group(suffix, provider),
+                "models": [_owned_name(suffix, "lists_tools", provider)],
+                "routing_strategy": "simple-shuffle",
+            }
+            for provider in ("openai", "anthropic")
+        ],
+        "num_retries": 0,
+        "disable_cooldowns": True,
+    }
+
+
+@pytest.fixture(scope="module")
+def rerouting(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Owned]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-rerouting")
+    setup: Final = _OwnedSetup(router_settings=_rerouting_settings, extra_models=_rerouting_models)
+    with _owned_proxy(rig, directory, setup) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def default_fallbacks(rig: _Rig, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Owned]:
+    directory: Final = tmp_path_factory.mktemp("malformed-tools-default-fallbacks")
+    setup: Final = _OwnedSetup(
+        router_settings=lambda suffix: {
+            "default_fallbacks": [_owned_name(suffix, "lists_tools", "openai")],
+            "num_retries": 0,
+            "disable_cooldowns": True,
+        },
+        extra_models=_down_models,
+    )
+    with _owned_proxy(rig, directory, setup) as owned:
+        yield owned
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize("checked", (_CHECKED["chat"], _CHECKED["messages"]), ids=("chat", "messages"))
+def test_a_router_fallback_to_a_group_listing_tools_answers_a_bad_tool_entry(
+    rerouting: _Owned, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(rerouting.suffix, "down", checked.provider)
+    response: Final = checked.send(rerouting.rig, model, marker, {"tools": [checked.tool, checked.bad_entry]})
+    _assert_failed_over(rerouting.rig, checked, response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize(
+    ("variant", "fields"),
+    [("plain", {}), ("down", {"fallbacks": []})],
+    ids=["group_outside_the_chain", "chain_cleared_by_the_request"],
+)
+def test_a_router_fallback_that_cannot_apply_still_rejects_a_bad_tool_entry(
+    rerouting: _Owned, variant: str, fields: dict[str, JsonValue]
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(rerouting.suffix, variant, "openai")
+    response: Final = _send(rerouting.rig, CHAT, marker, False, model=model, tools=[CHAT.tool, 5], **fields)
+    _assert_held_back(rerouting.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@_TOKEN_COUNTS
+def test_token_counting_on_a_group_with_a_router_fallback_rejects_a_bad_tool_entry(
+    rerouting: _Owned, checked: _Checked
+) -> None:
+    marker: Final = _marker()
+    model: Final = _owned_name(rerouting.suffix, "down", "anthropic")
+    response: Final = checked.send(rerouting.rig, model, marker, {"tools": [checked.tool, 5]})
+    _assert_held_back(rerouting.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_an_alias_of_a_group_listing_tools_answers_a_bad_tool_entry(rerouting: _Owned) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rerouting.rig,
+        CHAT,
+        marker,
+        False,
+        model=_alias(rerouting.suffix, "lists_tools"),
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+    )
+    _assert_forwarded(rerouting.rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_an_alias_of_a_plain_group_rejects_a_bad_tool_entry(rerouting: _Owned) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rerouting.rig, CHAT, marker, False, model=_alias(rerouting.suffix, "plain"), tools=[CHAT.tool, 5]
+    )
+    _assert_held_back(rerouting.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_routing_group_over_a_group_listing_tools_answers_a_bad_tool_entry(rerouting: _Owned) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rerouting.rig,
+        CHAT,
+        marker,
+        False,
+        model=_routing_group(rerouting.suffix, "openai"),
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+    )
+    _assert_forwarded(rerouting.rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_count_tokens_by_a_routing_group_rejects_a_bad_tool_entry(rerouting: _Owned) -> None:
+    marker: Final = _marker()
+    response: Final = _count_tokens(
+        rerouting.rig, _routing_group(rerouting.suffix, "anthropic"), marker, {"tools": [MESSAGES.tool, 5]}
+    )
+    _assert_held_back(rerouting.rig, response, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize(
+    ("model", "fields"),
+    [
+        (lambda suffix: _owned_name(suffix, "auto", "openai"), {}),
+        (lambda suffix: f"{_wildcard(suffix)}/{_OPENAI_BACKEND}", {}),
+        (lambda suffix: f"openai/{_direct(suffix)}", {}),
+        (lambda suffix: f"openai/{_direct(suffix)}", {"specific_deployment": True}),
+    ],
+    ids=["auto_router", "wildcard_route", "model_string", "specific_deployment"],
+)
+def test_a_model_the_router_resolves_later_answers_a_bad_tool_entry_its_deployment_list_drops(
+    rerouting: _Owned, model: Callable[[str], str], fields: dict[str, JsonValue]
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rerouting.rig,
+        CHAT,
+        marker,
+        False,
+        model=model(rerouting.suffix),
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+        **fields,
+    )
+    _assert_forwarded(rerouting.rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_default_fallbacks_to_a_group_listing_tools_answer_a_bad_tool_entry(default_fallbacks: _Owned) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        default_fallbacks.rig,
+        CHAT,
+        marker,
+        False,
+        model=_owned_name(default_fallbacks.suffix, "down", "openai"),
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+    )
+    _assert_failed_over(default_fallbacks.rig, _CHECKED["chat"], response, marker, ())
