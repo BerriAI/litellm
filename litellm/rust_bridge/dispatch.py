@@ -67,7 +67,7 @@ class PublicDispatch(Generic[RequestT]):
         native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], ResultT],
         rules: Rules | None = None,
     ) -> ResultT:
-        selected_rules: Final = catalog.RULES if rules is None else rules
+        selected_rules: Final = catalog.active_rules() if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)
             return runtime.run(
@@ -100,7 +100,7 @@ class PublicDispatch(Generic[RequestT]):
         native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]],
         rules: Rules | None = None,
     ) -> ResultT:
-        selected_rules: Final = catalog.RULES if rules is None else rules
+        selected_rules: Final = catalog.active_rules() if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)
             return await runtime.arun(

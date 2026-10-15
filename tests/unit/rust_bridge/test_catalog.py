@@ -98,6 +98,20 @@ def test_first_matching_rule_respects_every_constraint(context: RouteContext, ex
     assert catalog.decision(context, rules) is expected
 
 
+def test_scoped_rules_override_and_restore_nested_catalog_rules() -> None:
+    context: Final = RouteContext(Route.RESPONSES)
+    outer_rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED), *catalog.RULES)
+    inner_rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY), *outer_rules)
+
+    assert catalog.decision(context) is Decision.PYTHON
+    with catalog.scoped_rules(outer_rules):
+        assert catalog.decision(context) is Decision.RUST_REQUIRED
+        with catalog.scoped_rules(inner_rules):
+            assert catalog.decision(context) is Decision.PYTHON
+        assert catalog.decision(context) is Decision.RUST_REQUIRED
+    assert catalog.decision(context) is Decision.PYTHON
+
+
 @pytest.mark.parametrize("process", (None, False, True))
 @pytest.mark.parametrize("environment", (None, "0", "1"))
 def test_ocr_has_no_python_path_to_opt_out_to(
