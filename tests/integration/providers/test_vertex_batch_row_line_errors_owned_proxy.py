@@ -185,7 +185,12 @@ def test_guardrail_dropped_and_blank_rows_never_reach_openai(
         assert response.status_code == 200, response.text
         uploads: Final = tuple(request for request in wire.drain() if is_openai_upload(request))
         assert len(uploads) == 1, uploads
-        assert [json.loads(line)["custom_id"] for line in openai_uploaded_lines(uploads[0])] == ["first", "fourth"]
+        sent_model: Final = OPENAI if route == "model" else "gpt-4o-mini"
+        rows: Final = tuple(json.loads(line) for line in openai_uploaded_lines(uploads[0]))
+        assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [
+            ("first", sent_model),
+            ("fourth", sent_model),
+        ]
 
 
 @pytest.mark.parametrize("route", UPLOAD_ROUTES)

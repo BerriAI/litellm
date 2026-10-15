@@ -297,6 +297,35 @@ def test_router_rewrite_sends_openai_only_the_rows(gateway: Gateway, layout: Cal
         ]
 
 
+def test_one_upload_to_openai_then_vertex_sends_openai_only_the_rows_and_names_the_vertex_file_line(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(openai_files_peer) as openai_wire,
+        wire_server(gcs_peer) as gcs_wire,
+        gateway.scenario() as scenario,
+    ):
+        openai_target: Final = scenario.model(
+            model="openai/gpt-4o-mini", api_key="integration-provider-key", api_base=f"{openai_wire.url}/v1"
+        )
+        vertex_target: Final = vertex_model(gateway, scenario, gcs_wire.url)
+        content: Final = jsonl(
+            b"", encoded(chat_row("first", openai_target, "one")), b"", encoded(roleless_row("bad", openai_target))
+        )
+        response: Final = upload(gateway, "target_model_names", f"{openai_target},{vertex_target}", content)
+        assert response.status_code == 400, response.text
+        message: Final = str(error_of(response)["message"])
+        assert message.startswith(unconvertible_line_message(4) + "missing field 'role'"), message
+        uploads: Final = tuple(request for request in openai_wire.drain() if is_openai_upload(request))
+        assert len(uploads) == 1, [request.target for request in uploads]
+        rows: Final = tuple(json.loads(line) for line in openai_uploaded_lines(uploads[0]))
+        assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [
+            ("first", "gpt-4o-mini"),
+            ("bad", "gpt-4o-mini"),
+        ]
+        assert gcs_wire.drain() == ()
+
+
 def _unreachable_anthropic_model(scenario: Scenario) -> str:
     return scenario.model(
         model="anthropic/claude-haiku-4-5",
