@@ -1,6 +1,7 @@
 import datetime
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
@@ -56,3 +57,36 @@ def test_search_bills_search_tool_input_cost_per_query(respx_mock: respx.MockRou
     assert map_priced._hidden_params["response_cost"] == pytest.approx(map_price)
     assert tool_priced._hidden_params["response_cost"] == pytest.approx(configured_price)
     assert respx_mock.calls.last.request.content.find(b"input_cost_per_query") == -1
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed_primarys(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).mock(
+        side_effect=(
+            httpx.Response(500, json={"error": "primary down"}),
+            httpx.Response(200, json={"results": [{"title": "t", "url": "https://example.com"}]}),
+        )
+    )
+    map_price, _ = search_provider_cost_per_query(model="exa_ai/search", custom_llm_provider="exa_ai")
+    primary_price: Final = 0.05
+    assert map_price != primary_price
+    shared_by_every_fallback_attempt: Final = _proxy_style_logging_obj()
+
+    with pytest.raises(litellm.InternalServerError):
+        litellm.search(
+            query="litellm release notes",
+            search_provider="exa_ai",
+            api_key="test-exa-key",
+            input_cost_per_query=primary_price,
+            litellm_logging_obj=shared_by_every_fallback_attempt,
+        )
+    fallback: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        litellm_logging_obj=shared_by_every_fallback_attempt,
+    )
+
+    assert fallback._hidden_params["response_cost"] == pytest.approx(map_price)

@@ -30,8 +30,9 @@ _SEARCH_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _search_pricing_params(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    cost_per_query: Final = kwargs.get("input_cost_per_query")
-    return MappingProxyType({} if cost_per_query is None else {"input_cost_per_query": cost_per_query})
+    """Always carries the key so an unpriced fallback tool clears the price a failed primary left in the
+    shared logging object (`Logging.update_environment_variables` merges litellm_params)."""
+    return MappingProxyType({"input_cost_per_query": kwargs.get("input_cost_per_query")})
 
 
 def _build_search_optional_params(

@@ -57,13 +57,21 @@ _EXPECTED_RESPONSE: Final = _SearchResponse(
 )
 
 
-def _create_exa_tool(gateway: Gateway, scenario: Scenario, name: str, api_base: str) -> None:
+def _create_exa_tool(
+    gateway: Gateway, scenario: Scenario, name: str, api_base: str, input_cost_per_query: float | None = None
+) -> None:
+    pricing: Final = {} if input_cost_per_query is None else {"input_cost_per_query": input_cost_per_query}
     created: Final = gateway.post(
         "/search_tools",
         {
             "search_tool": {
                 "search_tool_name": name,
-                "litellm_params": {"search_provider": "exa_ai", "api_key": _EXA_KEY, "api_base": api_base},
+                "litellm_params": {
+                    "search_provider": "exa_ai",
+                    "api_key": _EXA_KEY,
+                    "api_base": api_base,
+                    **pricing,
+                },
             }
         },
     )
@@ -189,3 +197,28 @@ def test_unknown_search_tool_is_a_client_error_without_any_upstream_call(gateway
             response.text
         )
         assert wire.drain() == ()
+
+
+def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed_primarys(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert "input_cost_per_query" not in json.loads(request.body), request.body
+        if request.target == "/down/search":
+            return Reply(status=500, body=json.dumps({"error": "primary down"}).encode())
+        assert (request.method, request.target) == ("POST", "/exa/search"), request.target
+        return Reply(body=json.dumps(_EXA_RESULTS).encode())
+
+    primary: Final = f"exa-priced-{uuid.uuid4().hex}"
+    backup: Final = f"exa-backup-{uuid.uuid4().hex}"
+    primary_price: Final = 0.05
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        _create_exa_tool(gateway, scenario, primary, f"{wire.url}/down", input_cost_per_query=primary_price)
+        _create_exa_tool(gateway, scenario, backup, f"{wire.url}/exa")
+        direct: Final = gateway.request("POST", f"/v1/search/{backup}", {"query": _QUERY})
+        assert direct.status_code == 200, direct.text
+        backup_price: Final = float(direct.headers["x-litellm-response-cost"])
+        assert backup_price not in (0.0, primary_price), direct.headers
+
+        fallback: Final = gateway.request("POST", f"/v1/search/{primary}", {"query": _QUERY, "fallbacks": [backup]})
+        assert fallback.status_code == 200, fallback.text
+        assert float(fallback.headers["x-litellm-response-cost"]) == pytest.approx(backup_price), fallback.headers
+        assert [request.target for request in wire.drain()] == ["/exa/search", "/down/search", "/exa/search"]
