@@ -80,6 +80,11 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
         setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
 
 
+def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
+    for key, value in fields.items():
+        setattr(response, key, value)
+
+
 def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -826,8 +831,7 @@ class CustomStreamWrapper:
         provider_specific_fields: Final = getattr(original_chunk, "provider_specific_fields", None)
         if provider_specific_fields is not None:
             model_response.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
-                setattr(model_response, k, v)
+            _apply_provider_fields(model_response, provider_specific_fields)
         return model_response
 
     def is_chunk_non_empty(
@@ -1180,8 +1184,7 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in anthropic_response_obj
                 and anthropic_response_obj["provider_specific_fields"] is not None
             ):
-                for key, value in anthropic_response_obj["provider_specific_fields"].items():
-                    setattr(model_response, key, value)
+                _apply_provider_fields(model_response, anthropic_response_obj["provider_specific_fields"])
 
             response_obj = cast(dict[str, object], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":

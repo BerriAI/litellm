@@ -282,10 +282,10 @@ try:
         .joinpath("anthropic_tokenizer.json")
         .open("r", encoding="utf-8") as f
     ):
-        json_data = json.load(f)
+        json_data = TypeAdapter(object).validate_python(json.load(f))
 except (ImportError, AttributeError, TypeError):
     with resources.open_text("litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json") as f:
-        json_data = json.load(f)
+        json_data = TypeAdapter(object).validate_python(json.load(f))
 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
