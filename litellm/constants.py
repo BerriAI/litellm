@@ -1686,6 +1686,7 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
+TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 
