@@ -331,6 +331,27 @@
     "description": "New Relic AI Monitoring Integration"
   },
   {
+    "id": "nops",
+    "displayName": "nOps",
+    "logo": "nops.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "NOPS_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "nOps API key with the telemetry:write permission (Inform + Operate plan)",
+        "required": true
+      },
+      "NOPS_OTEL_ENDPOINT": {
+        "type": "text",
+        "ui_name": "OTel Endpoint",
+        "description": "nOps OTLP endpoint. Leave blank to use https://api.nops.io/otel",
+        "required": false
+      }
+    },
+    "description": "nOps Logging Integration - sends LiteLLM traces (cost, tokens, model, team) to nOps"
+  },
+  {
     "id": "openmeter",
     "displayName": "OpenMeter",
     "logo": "openmeter.png",
