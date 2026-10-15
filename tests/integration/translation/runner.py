@@ -3,15 +3,15 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import JsonValue
-
-from openai.lib.streaming.chat import ChatCompletionStreamState
-from openai.types.chat import ChatCompletionChunk
-
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
+from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request
-from integration.translation.case import SSEFrame, StreamingTranslationTestCase, TranslationTestCase
+from integration.translation.case import EventStreamFrame, SSEFrame, StreamingTranslationTestCase, TranslationTestCase
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
+from pydantic import JsonValue
+
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 TRANSPORT_HEADERS: Final = frozenset(
@@ -34,11 +34,11 @@ def expected_response_for_deployment(
     }
 
 
-def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> dict[str, JsonValue]:
     provider.expect(Reply(status=case.mock_provider_status_code, body=json.dumps(case.mock_provider_response).encode()))
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
     received: Final = provider.received()
-    _assert_provider_request(
+    assert_provider_request(
         received,
         case.expected_provider_endpoint,
         case.expected_provider_headers,
@@ -58,9 +58,10 @@ def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: Sh
             for deployment in deployments
         ), "The encoded response ID must match the configured deployment"
     assert response.json() == expected
+    return JSON_OBJECT.validate_json(response.content)
 
 
-def _assert_provider_request(
+def assert_provider_request(
     received: tuple[Request, ...],
     endpoint: str,
     headers: Mapping[str, str],
@@ -80,6 +81,20 @@ def encode_sse_frame(frame: SSEFrame) -> bytes:
     serialized: Final = frame.data if isinstance(frame.data, str) else json.dumps(frame.data)
     event_line: Final = f"event: {frame.event}\n" if frame.event is not None else ""
     return f"{event_line}data: {serialized}\n\n".encode()
+
+
+def encode_provider_frame(frame: SSEFrame | EventStreamFrame) -> bytes:
+    if isinstance(frame, EventStreamFrame):
+        return aws_event_stream_frame(frame.headers, json.dumps(frame.data).encode())
+    return encode_sse_frame(frame)
+
+
+def streaming_reply(case: StreamingTranslationTestCase) -> Reply:
+    binary: Final = any(isinstance(frame, EventStreamFrame) for frame in case.mock_provider_frames)
+    return Reply(
+        content_type="application/vnd.amazon.eventstream" if binary else "text/event-stream",
+        chunks=tuple(encode_provider_frame(frame) for frame in case.mock_provider_frames),
+    )
 
 
 def _parse_sse_frame(block: str) -> SSEFrame | None:
@@ -118,14 +133,11 @@ def _join_stream_frames(endpoint: str, frames: tuple[SSEFrame, ...]) -> Mapping[
 def assert_streaming_translation(
     case: StreamingTranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    provider.expect(
-        Reply(
-            content_type="text/event-stream",
-            chunks=tuple(encode_sse_frame(frame) for frame in case.mock_provider_frames),
-        )
-    )
+    assert case.expected_litellm_frames is not None, "Exact replay requires expected frames"
+    assert case.expected_litellm_response is not None, "Exact replay requires an expected completion"
+    provider.expect(streaming_reply(case))
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
-    _assert_provider_request(
+    assert_provider_request(
         provider.received(),
         case.expected_provider_endpoint,
         case.expected_provider_headers,
