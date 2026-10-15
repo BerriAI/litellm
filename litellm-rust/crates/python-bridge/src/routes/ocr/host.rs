@@ -1,5 +1,5 @@
 use litellm_auth::ResolvedCredential;
-use litellm_host_python::{InvokeError, PythonBinding, missing_state};
+use litellm_host_python::{Error as HostError, InvokeError, PythonBinding};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_llms::base_llm::ocr::error::Error;
@@ -42,7 +42,7 @@ impl OcrPythonHost {
     fn handles(&self) -> PyResult<&OcrHostHandles> {
         match &self.data {
             OcrHostData::Projected(handles) => Ok(handles),
-            _ => Err(missing_state()),
+            _ => Err(HostError::MissingState.into()),
         }
     }
 
@@ -50,13 +50,13 @@ impl OcrPythonHost {
         self.handles()?
             .azure_ad_token_provider
             .as_ref()
-            .ok_or_else(missing_state)?
+            .ok_or(HostError::MissingState)?
             .acquire(py)
     }
 
     fn projection(&mut self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
         let OcrHostData::Unprojected = self.data else {
-            return Err(missing_state());
+            return Err(HostError::MissingState.into());
         };
         self.view.resolve(py, arguments)?;
         let (request, handles) = project_request(self.view.request(py)?, arguments)?;

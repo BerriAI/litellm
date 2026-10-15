@@ -4,8 +4,10 @@ from typing import Final
 import httpx
 
 from litellm.decisions.call import (
+    DecisionsAssetEntries,
     DecisionsAudioClips,
     DecisionsCall,
+    DecisionsImages,
     DecisionsVideoClips,
     SystemOneQuestions,
     SystemOneRequestFields,
@@ -23,6 +25,8 @@ def _prepare_systemone_call(
     model: str,
     state: DecisionsJSON | None,
     questions: SystemOneQuestions | None,
+    images: DecisionsImages | None,
+    assets: DecisionsAssetEntries | None,
     safety_identifier: str | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
@@ -36,7 +40,9 @@ def _prepare_systemone_call(
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(state=state, questions=questions, audio=audio, videos=videos),
+        fields=SystemOneRequestFields(
+            state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
+        ),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -65,12 +71,16 @@ async def asystemone(
     safety_identifier: str | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    images: DecisionsImages | None = None,
+    assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
         model=model,
         state=state,
         questions=questions,
+        images=images,
+        assets=assets,
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,
@@ -97,12 +107,16 @@ def systemone(
     safety_identifier: str | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    images: DecisionsImages | None = None,
+    assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
         model=model,
         state=state,
         questions=questions,
+        images=images,
+        assets=assets,
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,

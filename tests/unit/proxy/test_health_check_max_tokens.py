@@ -34,6 +34,22 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
     assert updated_params["max_tokens"] == 16
 
 
+def test_update_litellm_params_for_health_check_drops_model_capability_flags():
+    probe_params: Final = update_litellm_params_for_health_check(
+        model_info={},
+        litellm_params={
+            "model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "aws_region_name": "us-west-2",
+            "supports_max_reasoning_effort": False,
+            "supports_system_message": False,
+        },
+    )
+
+    assert "supports_max_reasoning_effort" not in probe_params
+    assert probe_params["aws_region_name"] == "us-west-2"
+    assert probe_params["supports_system_message"] is False
+
+
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_custom():
     """
