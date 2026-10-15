@@ -1,4 +1,4 @@
-"""Mixed traffic at 5 rps on the small gateway: three real model groups over the mock providers,
+"""Mixed-size requests at 5 rps on the small gateway: three real model groups over the mock providers,
 two teams plus users in no team, JWT and key callers, a pre and
 a post guardrail, half the requests streaming, short chats, long contexts and tool calls. Budgets
 are real money at cost-map prices (a 335k-token `claude-sonnet-5` request is about $0.70 and the
@@ -22,7 +22,7 @@ from setup.performance_test_case import (
 )
 
 CASE: Final = PerformanceTestCase(
-    name="mixed_5rps_small_gateway",
+    name="mixed_size_requests_5rps",
     teams=(
         Team("team-a", models=("gpt-6-luna", "claude-sonnet-5"), max_budget=5000.0, rpm_limit=6000),
         Team("team-b", models=("claude-sonnet-5-bedrock", "claude-sonnet-5"), max_budget=5000.0),
