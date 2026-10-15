@@ -35,7 +35,7 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -58,6 +58,7 @@ from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CredentialItem, LiteLLMBatch, SpecialEnums
 
 from fastapi import HTTPException, Request, Response
+from starlette.datastructures import Headers, QueryParams
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -123,8 +124,8 @@ class FakeRequest:
         headers: Optional[Dict[str, str]] = None,
         query: Optional[Dict[str, str]] = None,
     ):
-        self.headers = headers or {}
-        self.query_params = query or {}
+        self.headers = Headers(headers=headers or {})
+        self.query_params = QueryParams(query or {})
 
 
 @pytest.fixture
@@ -913,6 +914,42 @@ async def test_create__raw_file_with_executed_model_400_with_upload_guidance(har
     harness.router_acreate.assert_not_called()
 
 
+async def _create_with_model_headers(harness: Harness, *models: str):
+    harness.upstream_files_route.mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/batches",
+            "query_string": b"",
+            "headers": [(b"x-litellm-model", model.encode()) for model in models],
+        }
+    )
+    return await endpoints.create_batch(
+        request=request, fastapi_response=Response(), provider=None, user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+
+
+@pytest.mark.asyncio
+async def test_create__model_headers_naming_different_models_are_rejected_before_anything_runs(harness):
+    with pytest.raises(ProxyException) as exc:
+        await _create_with_model_headers(harness, "vertex-model", "my-vllm")
+
+    assert exc.value.code == "400"
+    assert "x-litellm-model" in exc.value.message
+    harness.pre_call.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__the_same_model_header_twice_still_routes_to_that_model(harness):
+    await _create_with_model_headers(harness, "my-vllm", "my-vllm")
+
+    assert harness.acreate_kwargs()["api_base"] == CREDS["my-vllm"]["api_base"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "upstream_answer",
@@ -1035,8 +1072,8 @@ def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
     request.url.path = "/v1/batches"
     request.method = "POST"
     request.scope = {"type": "http", "method": "POST", "path": "/v1/batches"}
-    request.query_params = {}
-    request.headers = {"Content-Type": "application/json"}
+    request.query_params = QueryParams({})
+    request.headers = Headers(headers={"Content-Type": "application/json"})
     request.client = MagicMock()
     request.client.host = "127.0.0.1"
     request.body = AsyncMock(return_value=json.dumps(body).encode())
