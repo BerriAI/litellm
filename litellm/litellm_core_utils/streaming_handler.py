@@ -2389,6 +2389,7 @@ class CustomStreamWrapper:
                 original_exception=e.original_exception,
                 generated_content=self.response_uptil_now,
                 is_pre_first_chunk=not self.sent_first_chunk,
+                emitted_disqualifying_content=self._emitted_disqualifying_content or e.emitted_disqualifying_content,
             )
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.

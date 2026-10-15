@@ -56,6 +56,37 @@ def test_deployment_model_info_override_wins_over_cost_map():
     assert _deployment_supports_prefill(_deployment(PREFILL_MODEL, "z")) is True
 
 
+@pytest.mark.parametrize(
+    "deployment,expected",
+    [
+        ({"litellm_params": {"model": "bedrock/arn:custom-import", "base_model": PREFILL_MODEL}}, True),
+        ({"litellm_params": {"model": "azure/my-deployment"}, "model_info": {"base_model": PREFILL_MODEL}}, True),
+        (
+            {
+                "litellm_params": {"model": "azure/my-deployment", "base_model": NON_PREFILL_MODEL},
+                "model_info": {"base_model": PREFILL_MODEL},
+            },
+            True,
+        ),
+        (
+            {
+                "litellm_params": {"model": PREFILL_MODEL, "base_model": NON_PREFILL_MODEL},
+                "model_info": {"base_model": NON_PREFILL_MODEL},
+            },
+            False,
+        ),
+    ],
+    ids=[
+        "litellm_params_base_model",
+        "model_info_base_model",
+        "model_info_base_model_wins",
+        "base_model_wins_over_model",
+    ],
+)
+def test_deployment_supports_prefill_reads_the_cost_map_key_of_the_base_model(deployment, expected):
+    assert _deployment_supports_prefill(deployment) is expected
+
+
 def test_deployment_supports_prefill_rejects_malformed_deployments():
     assert _deployment_supports_prefill({}) is False
     assert _deployment_supports_prefill({"litellm_params": {}}) is False
@@ -151,7 +182,9 @@ def _text_chunk(text: str) -> litellm.ModelResponseStream:
 async def test_continuation_output_drops_only_a_full_echo_of_the_prefill(
     prefill_content, fallback_texts, expected_texts
 ):
-    output = ContinuationOutput("Hello", {"role": "assistant", "content": prefill_content, "prefix": True}, "group")
+    output = ContinuationOutput(
+        "Hello", {"role": "assistant", "content": prefill_content, "prefix": True}, "group", ()
+    )
 
     async def fallback_stream():
         for text in fallback_texts:

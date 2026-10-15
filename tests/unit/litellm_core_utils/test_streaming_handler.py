@@ -932,6 +932,49 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outer_delta,inner_flag,expected",
+    [
+        ({"tool_calls": [{"index": 0}]}, False, True),
+        ({"content": "Let me check."}, True, True),
+        ({"content": "Let me check."}, False, False),
+    ],
+    ids=["bridge_wrapper_sent_a_tool_call", "inner_stream_sent_a_tool_call", "plain_text_only"],
+)
+async def test_bridged_stream_rebuild_keeps_the_continuation_disqualifier(
+    logging_obj: Logging, outer_delta: dict[str, object], inner_flag: bool, expected: bool
+):
+    from litellm.exceptions import InternalServerError, MidStreamFallbackError
+
+    provider_error: Final = InternalServerError(message="upstream 500", llm_provider="azure", model="gpt-6.1-sol")
+    inner_error: Final = MidStreamFallbackError(
+        message=str(provider_error),
+        model="gpt-6.1-sol",
+        llm_provider="azure",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+        emitted_disqualifying_content=inner_flag,
+    )
+
+    async def _raise_inner_error(**kwargs: object) -> NoReturn:
+        raise inner_error
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-6.1-sol",
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+        make_call=_raise_inner_error,
+    )
+    response._accumulate_streamed_delta(outer_delta)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.emitted_disqualifying_content is expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(logging_obj: Logging, sync_mode: bool):
     """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""

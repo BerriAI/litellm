@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
 from itertools import accumulate
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -11,7 +12,7 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.rules import Rules
 from litellm.router_utils.common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import supports_assistant_prefill
 
 
@@ -22,31 +23,26 @@ class _ContinuationMarker:
 MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _declared_prefill_support(deployment_map: Mapping[str, object]) -> bool | None:
+def _str_keyed(value: object) -> Mapping[str, object]:
     try:
-        model_info: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("model_info"))
+        return _STR_KEYED_DICT_ADAPTER.validate_python(value)
     except ValidationError:
-        return None
-    declared: Final = model_info.get("supports_assistant_prefill")
-    return declared if isinstance(declared, bool) else None
+        return _NO_FIELDS
 
 
 def _deployment_supports_prefill(deployment: object) -> bool:
-    try:
-        deployment_map: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment)
-    except ValidationError:
-        return False
-    declared: Final = _declared_prefill_support(deployment_map)
-    if declared is not None:
+    deployment_map: Final = _str_keyed(deployment)
+    model_info: Final = _str_keyed(deployment_map.get("model_info"))
+    declared: Final = model_info.get("supports_assistant_prefill")
+    if isinstance(declared, bool):
         return declared
-    try:
-        litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
-    except ValidationError:
-        return False
-    model: Final = litellm_params.get("model")
-    return isinstance(model, str) and bool(model) and supports_assistant_prefill(model=model)
+    litellm_params: Final = _str_keyed(deployment_map.get("litellm_params"))
+    candidates: Final = (model_info.get("base_model"), litellm_params.get("base_model"), litellm_params.get("model"))
+    model: Final = next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
+    return model is not None and supports_assistant_prefill(model=model)
 
 
 class ContinuationPrefillDeploymentCheck(CustomLogger):
@@ -88,12 +84,33 @@ def _prefill_text(prefill_message: Mapping[str, object]) -> str:
     )
 
 
+def without_prefill_echo(prefill_message: Mapping[str, object], generated_content: str) -> str:
+    prefill: Final = _prefill_text(prefill_message)
+    return generated_content[len(prefill) :] if prefill and generated_content.startswith(prefill) else generated_content
+
+
+def _with_first_delta(chunk: ModelResponseStream, update: Mapping[str, object]) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    delta: Final = choice.delta.model_copy(update=update)
+    return chunk.model_copy(update={"choices": [choice.model_copy(update={"delta": delta}), *chunk.choices[1:]]})
+
+
 def _without_leading_text(chunk: ModelResponseStream, count: int) -> ModelResponseStream:
     if count <= 0:
         return chunk
-    choice: Final = chunk.choices[0]
-    delta: Final = choice.delta.model_copy(update={"content": _delta_text(chunk)[count:]})
-    return chunk.model_copy(update={"choices": [choice.model_copy(update={"delta": delta}), *chunk.choices[1:]]})
+    return _with_first_delta(chunk, {"content": _delta_text(chunk)[count:]})
+
+
+def _without_role(chunk: ModelResponseStream) -> ModelResponseStream:
+    if not chunk.choices or chunk.choices[0].delta.role is None:
+        return chunk
+    return _with_first_delta(chunk, {"role": None})
+
+
+def _stream_identity(primary_response: object) -> Mapping[str, object]:
+    if not isinstance(primary_response, ModelResponse):
+        return _NO_FIELDS
+    return MappingProxyType({"id": primary_response.id, "created": primary_response.created})
 
 
 def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> tuple[ModelResponseStream, ...]:
@@ -106,14 +123,22 @@ def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> t
 
 
 class ContinuationOutput:
-    """Splices a fallback's continuation onto the text the client already received. Drops a leading echo of the
-    prefill, since some providers (Mistral) return the prefix inside the completion, and runs litellm.post_call_rules
-    over the joined text, since each stream wrapper only sees its own fragment."""
+    """Splices a fallback's continuation onto the stream the client already received. Drops a leading echo of the
+    prefill, since some providers (Mistral) return the prefix inside the completion, keeps the primary's chunk id,
+    created time and single role delta, and runs litellm.post_call_rules over the joined text, since each stream
+    wrapper only sees its own fragment."""
 
-    def __init__(self, emitted_text: str, prefill_message: Mapping[str, object], model: str) -> None:
+    def __init__(
+        self,
+        emitted_text: str,
+        prefill_message: Mapping[str, object],
+        model: str,
+        primary_response: object,
+    ) -> None:
         self._text = emitted_text
         self._prefill_text: Final = _prefill_text(prefill_message)
         self._model: Final = model
+        self._identity: Final = _stream_identity(primary_response)
         self._rules: Final = Rules()
         self._held: tuple[ModelResponseStream, ...] = ()
         self._echo_settled = not self._prefill_text
@@ -124,9 +149,12 @@ class ContinuationOutput:
                 yield item
                 continue
             for released in self._observed(self._released(item)):
-                yield released
+                yield self._in_primary_stream(released)
         for released in self._observed(self._flushed()):
-            yield released
+            yield self._in_primary_stream(released)
+
+    def _in_primary_stream(self, chunk: ModelResponseStream) -> ModelResponseStream:
+        return _without_role(chunk.model_copy(update=self._identity) if self._identity else chunk)
 
     def _flushed(self) -> tuple[ModelResponseStream, ...]:
         held: Final = self._held

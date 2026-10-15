@@ -3112,6 +3112,97 @@ async def test_acompletion_streaming_iterator_continuation_never_repeats_the_par
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_continuation_stays_in_the_primary_stream():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="openai", generated_content="Hello",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    primary_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-primary", created=111, choices=[{"index": 0, "delta": {"role": "assistant", "content": "Hello"}}]
+    )
+
+    async def fallback_stream():
+        yield litellm.ModelResponseStream(
+            id="msg-fallback", created=222, choices=[{"index": 0, "delta": {"role": "assistant", "content": " wor"}}]
+        )
+        yield litellm.ModelResponseStream(
+            id="msg-fallback", created=222, choices=[{"index": 0, "delta": {"content": "ld"}}]
+        )
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", new=AsyncMock(return_value=fallback_stream())
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error, chunks=[primary_chunk]),
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        collected = [chunk async for chunk in result]
+
+    continuation = [chunk for chunk in collected if isinstance(chunk, litellm.ModelResponseStream)]
+    assert [(chunk.id, chunk.created, chunk.choices[0].delta.role) for chunk in continuation] == [
+        ("chatcmpl-primary", 111, None),
+        ("chatcmpl-primary", 111, None),
+    ]
+    assert "".join(chunk.choices[0].delta.content for chunk in continuation) == " world"
+
+
+@pytest.mark.asyncio
+async def test_update_settings_turns_on_mid_stream_continuation(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+        MID_STREAM_CONTINUATION_KWARG,
+        MID_STREAM_CONTINUATION_MARKER,
+        ContinuationPrefillDeploymentCheck,
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+    )
+    router.update_settings(enable_mid_stream_fallback_continuation=True)
+
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="openai", generated_content="Hello",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    fallback_chunk = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " world"}}])
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_FakeFallbackStream(fallback_chunk)),
+    ) as mock_fallback:
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error),
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        collected = [chunk async for chunk in result]
+
+    assert mock_fallback.await_args.kwargs["kwargs"][MID_STREAM_CONTINUATION_KWARG] is MID_STREAM_CONTINUATION_MARKER
+    assert fallback_chunk in collected
+    assert any(isinstance(callback, ContinuationPrefillDeploymentCheck) for callback in litellm.callbacks)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_kwargs,request_kwargs",
     [
@@ -3119,8 +3210,9 @@ async def test_acompletion_streaming_iterator_continuation_never_repeats_the_par
         ({"emitted_disqualifying_content": False}, {"response_format": {"type": "json_object"}}),
         ({"emitted_disqualifying_content": False}, {"tool_choice": "required"}),
         ({"emitted_disqualifying_content": False}, {"merge_reasoning_content_in_choices": True}),
+        ({"emitted_disqualifying_content": False}, {"n": 2}),
     ],
-    ids=["tool_or_thinking_emitted", "json_mode", "forced_tool_choice", "merged_reasoning"],
+    ids=["tool_or_thinking_emitted", "json_mode", "forced_tool_choice", "merged_reasoning", "multiple_choices"],
 )
 async def test_acompletion_streaming_iterator_declines_ineligible_after_content(error_kwargs, request_kwargs):
     """Flag on but the break is not continuation-safe: the router re-raises and
@@ -3202,6 +3294,21 @@ def test_build_completion_continuation_input_folds_into_existing_prefill():
     twice = litellm.Router._build_completion_continuation_input(list(once), "part two")
     assert [m["role"] for m in twice] == ["user", "assistant"]
     assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
+
+
+@pytest.mark.parametrize(
+    "prefill_content,expected_content",
+    [
+        ("Hello", "Hello world"),
+        ([{"type": "text", "text": "Hello"}], [{"type": "text", "text": "Hello world"}]),
+    ],
+    ids=["string_prefill", "content_block_prefill"],
+)
+def test_build_completion_continuation_input_does_not_double_an_echoed_prefill(prefill_content, expected_content):
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": prefill_content, "prefix": True}]
+    built = litellm.Router._build_completion_continuation_input(messages, "Hello world")
+    assert built is not None
+    assert built[-1] == {"role": "assistant", "content": expected_content, "prefix": True}
 
 
 def test_build_completion_continuation_input_folds_into_trailing_plain_assistant_turn():

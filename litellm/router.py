@@ -1515,12 +1515,16 @@ class Router:
         self.add_optional_pre_call_checks(default_pre_call_checks)
 
         if self.enable_mid_stream_fallback_continuation:
-            from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
-                ContinuationPrefillDeploymentCheck,
-            )
+            self._register_continuation_prefill_check()
 
-            # Process-global on purpose: Router.discard() must not drop a filter another router still needs.
-            litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
+    @staticmethod
+    def _register_continuation_prefill_check() -> None:
+        from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+            ContinuationPrefillDeploymentCheck,
+        )
+
+        # Process-global on purpose: Router.discard() must not drop a filter another router still needs.
+        litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
 
     def discard(self):
         """
@@ -3276,7 +3280,9 @@ class Router:
                         else None
                     )
                     continuation_output: Final = (
-                        ContinuationOutput(e.generated_content, continuation_messages[-1], model_group)
+                        ContinuationOutput(
+                            e.generated_content, continuation_messages[-1], model_group, complete_response_object
+                        )
                         if continuation_messages is not None
                         else None
                     )
@@ -3503,6 +3509,9 @@ class Router:
             return False
         if not e.generated_content or e.emitted_disqualifying_content:
             return False
+        choice_count: Final = request_kwargs.get("n")
+        if isinstance(choice_count, int) and choice_count > 1:
+            return False
         response_format: Final = request_kwargs.get("response_format")
         if response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT:
             return False
@@ -3538,14 +3547,17 @@ class Router:
         last: Final = messages[-1] if messages else None
         if last is None or last.get("role") != "assistant":
             return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
+        from litellm.router_utils.pre_call_checks.continuation_prefill_check import without_prefill_echo
+
+        new_text: Final = without_prefill_echo(last, generated_content)
         content: Final = last.get("content")
         if content is None or isinstance(content, str):
-            return [*messages[:-1], {**last, "content": f"{content or ''}{generated_content}", "prefix": True}]
+            return [*messages[:-1], {**last, "content": f"{content or ''}{new_text}", "prefix": True}]
         try:
             blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
         except ValidationError:
             return None
-        extended: Final = _extend_trailing_text_block(blocks, generated_content)
+        extended: Final = _extend_trailing_text_block(blocks, new_text)
         return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
     @staticmethod
@@ -13104,12 +13116,10 @@ class Router:
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
                     self.set_optional_pre_call_checks(kwargs[var])
+                elif var == "enable_mid_stream_fallback_continuation":
+                    self._set_mid_stream_fallback_continuation(kwargs[var])
                 elif var == "retry_policy":
-                    value = kwargs[var]
-                    if isinstance(value, dict):
-                        value = RetryPolicy(**value)
-                    if value is None or isinstance(value, RetryPolicy):
-                        setattr(self, var, value)
+                    self._set_retry_policy(kwargs[var])
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
@@ -13135,6 +13145,16 @@ class Router:
             self._init_routing_groups(routing_groups_input)
             self._routing_groups_input = routing_groups_input
         verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
+
+    def _set_mid_stream_fallback_continuation(self, enabled: object) -> None:
+        self.enable_mid_stream_fallback_continuation = enabled is True
+        if self.enable_mid_stream_fallback_continuation:
+            self._register_continuation_prefill_check()
+
+    def _set_retry_policy(self, value: object) -> None:
+        policy: Final = RetryPolicy.model_validate(value) if isinstance(value, dict) else value
+        if policy is None or isinstance(policy, RetryPolicy):
+            self.retry_policy = policy
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
