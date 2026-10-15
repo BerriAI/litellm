@@ -844,6 +844,8 @@ class AsyncHTTPHandler:
         logging_obj: LiteLLMLoggingObject | None = None,
         files: RequestFiles | None = None,
         content: _RequestContent | None = None,
+        *,
+        idempotent: bool = False,
     ):
         start_time: Final = time.time()
         if timeout is None:
@@ -870,6 +872,10 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            return await self._resend_on_fresh_client(req, stream=stream)
+        except httpx.RemoteProtocolError:
+            if not idempotent:
+                raise
             return await self._resend_on_fresh_client(req, stream=stream)
         except httpx.TimeoutException as e:
             end_time: Final = time.time()

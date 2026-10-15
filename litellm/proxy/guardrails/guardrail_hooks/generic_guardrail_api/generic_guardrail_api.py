@@ -314,15 +314,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             httpx.HTTPStatusError.__name__ if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
         )
         verbose_proxy_logger.critical(
-            "Generic Guardrail API error (fail-open). Proceeding without guardrail. error_type=%s%s "
-            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
-            error_type,
+            "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s error_type=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
             getattr(self, "api_base", None),
             input_type,
             getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            error_type,
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
@@ -478,6 +478,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
                 timeout=self.timeout,
+                idempotent=True,
             )
 
             response.raise_for_status()

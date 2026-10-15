@@ -5,8 +5,12 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import asyncio
+import contextlib
+import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -667,21 +671,19 @@ class TestStructuredMessagesInResponse:
         ],
         ids=["extra_key", "tool_call_index", "tool_result_block", "tool_use_block", "image_block", "document_block"],
     )
-    async def test_rows_reach_the_guardrail_verbatim(self, generic_guardrail, mock_request_data_input, row):
+    async def test_rows_reach_the_guardrail_verbatim(self, mock_request_data_input, row):
         """Rows are the provider's own shape, so the guardrail must see every key and
         content block as sent, not a copy filtered through the chat completion types."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"action": "NONE", "texts": ["Look up 123-45-6789 for me."]}
-        mock_response.raise_for_status = MagicMock()
-
-        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
-            await generic_guardrail.apply_guardrail(
+        async with _guardrail_server(b'{"action": "NONE"}', cut_first=False) as (api_base, received_bodies):
+            await GenericGuardrailAPI(
+                api_base=api_base, guardrail_name="verbatim-rows", event_hook="pre_call"
+            ).apply_guardrail(
                 inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": [row]},
                 request_data=mock_request_data_input,
                 input_type="request",
             )
 
-        assert mock_post.call_args.kwargs["json"]["structured_messages"] == [row]
+        assert json.loads(received_bodies.get_nowait())["structured_messages"] == [row]
 
     @pytest.mark.asyncio
     async def test_rows_all_echoed_back_as_shown_leave_the_rewrite_to_texts(
@@ -2107,10 +2109,18 @@ class TestFailOnError:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("error", "error_type"),
+        ("error", "error_type", "pre_pr_text"),
         [
-            (Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"), "Timeout"),
-            (httpx.ConnectError("connection refused", request=MagicMock()), "ConnectError"),
+            (
+                Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"),
+                "Timeout",
+                "Proceeding without guardrail. guardrail_name=",
+            ),
+            (
+                httpx.ConnectError("connection refused", request=MagicMock()),
+                "ConnectError",
+                "Proceeding without guardrail. guardrail_name=",
+            ),
             (
                 MaskedHTTPStatusError(
                     httpx.HTTPStatusError(
@@ -2120,11 +2130,14 @@ class TestFailOnError:
                     )
                 ),
                 "HTTPStatusError",
+                "Proceeding without guardrail. http_status_code=502 guardrail_name=",
             ),
         ],
         ids=["timeout", "connect_error", "http_status"],
     )
-    async def test_fail_open_log_line_names_the_error_type(self, fail_open_guardrail, caplog, error, error_type):
+    async def test_fail_open_log_line_names_the_error_type(
+        self, fail_open_guardrail, caplog, error, error_type, pre_pr_text
+    ):
         """An operator grepping the fail-open line must be able to tell a timeout
         from a refused connection from an upstream status without the traceback."""
         from litellm._logging import verbose_proxy_logger
@@ -2144,7 +2157,8 @@ class TestFailOnError:
             record.getMessage() for record in caplog.records if record.levelno == logging.CRITICAL
         ]
         assert fail_open_lines
-        assert all(f"error_type={error_type} " in line for line in fail_open_lines)
+        assert all(f"error_type={error_type}" in line.split() for line in fail_open_lines)
+        assert all(pre_pr_text in line for line in fail_open_lines)
 
     @pytest.mark.asyncio
     async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
@@ -2163,3 +2177,51 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+async def _read_one_request_body(reader: asyncio.StreamReader) -> bytes:
+    head: Final = await reader.readuntil(b"\r\n\r\n")
+    content_length: Final = next(
+        (int(line.split(b":", 1)[1]) for line in head.lower().split(b"\r\n") if line.startswith(b"content-length:")),
+        0,
+    )
+    return await reader.readexactly(content_length)
+
+
+@contextlib.asynccontextmanager
+async def _guardrail_server(reply: bytes, *, cut_first: bool) -> AsyncIterator[tuple[str, "asyncio.Queue[bytes]"]]:
+    """A local guardrail endpoint that records every request body it reads. With
+    cut_first, the first connection is closed with no response, the way a load
+    balancer drops an idle keepalive connection."""
+    received_bodies: Final = asyncio.Queue[bytes]()
+
+    async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        received_bodies.put_nowait(await _read_one_request_body(reader))
+        if not (cut_first and received_bodies.qsize() == 1):
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                b"Content-Length: %d\r\n\r\n%s" % (len(reply), reply)
+            )
+            await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server: Final = await asyncio.start_server(answer, "127.0.0.1", 0)
+    async with server:
+        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", received_bodies
+
+
+@pytest.mark.asyncio
+async def test_guardrail_check_cut_before_a_response_is_resent_once() -> None:
+    async with _guardrail_server(b'{"action": "NONE"}', cut_first=True) as (api_base, received_bodies):
+        result: Final = await GenericGuardrailAPI(
+            api_base=api_base, guardrail_name="cut-once-guardrail", event_hook="pre_call"
+        ).apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data={},
+            input_type="request",
+        )
+
+    assert result == {"texts": ["hi"]}
+    assert received_bodies.qsize() == 2
+    assert received_bodies.get_nowait() == received_bodies.get_nowait()

@@ -1374,6 +1374,24 @@ async def test_server_disconnect_on_a_post_is_a_remote_protocol_error_and_is_not
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
+async def test_server_disconnect_on_an_idempotent_post_is_resent_on_a_fresh_connection(stream: bool) -> None:
+    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
+        handler: Final = AsyncHTTPHandler(timeout=5.0)
+        try:
+            response: Final = await handler.post(
+                f"{base_url}/", json={"hello": "world"}, stream=stream, idempotent=True
+            )
+            await response.aread()
+        finally:
+            await handler.close()
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert next(attempts) == 3
+
+
+@pytest.mark.asyncio
 async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
