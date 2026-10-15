@@ -5,6 +5,7 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 from collections.abc import Coroutine
 from typing import Final, Literal, overload
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -82,7 +83,4 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DashScope /chat/completions endpoint.
         """
-        resolved_api_base: Final = self._resolve_chat_api_base(api_base).rstrip("/")
-        if resolved_api_base.endswith("/chat/completions"):
-            return resolved_api_base
-        return f"{resolved_api_base}/chat/completions"
+        return join_api_base(self._resolve_chat_api_base(api_base), "chat/completions")

@@ -16,6 +16,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.gigachat.utils import get_api_base
@@ -97,8 +98,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base: Final = get_api_base(api_base)
-        return f"{base}/embeddings"
+        return join_api_base(get_api_base(api_base), "embeddings")
 
     def transform_embedding_request(
         self,

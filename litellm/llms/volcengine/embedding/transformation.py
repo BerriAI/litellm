@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
@@ -75,12 +76,8 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Complete URL for the embedding API endpoint
         """
-        base_url: Final = get_volcengine_base_url(api_base)
-        # Construct the complete URL with /embeddings endpoint
-        if base_url.endswith("/api/v3"):
-            return f"{base_url}/embeddings"
-        else:
-            return f"{base_url}/api/v3/embeddings"
+        versioned_base_url: Final = join_api_base(get_volcengine_base_url(api_base), "api/v3")
+        return join_api_base(versioned_base_url, "embeddings")
 
     def map_openai_params(
         self,
