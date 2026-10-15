@@ -5,6 +5,9 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    ALWAYS_OPEN_OFF_PEAK_WINDOW,
+    Deployment,
+    OffPeakPricing,
     CostTrackingTestCase,
     ExactExpected,
     JsonResponse,
@@ -3089,7 +3092,39 @@ FIREWORKS_EMBEDDINGS_V1: Final = CostTrackingTestCase(
 )
 
 
+_DEEPSEEK_V4P1_FLASH_OFF_PEAK: Final = Deployment(
+    off_peak_pricing=OffPeakPricing(
+        hours_utc=ALWAYS_OPEN_OFF_PEAK_WINDOW, input_cost_per_token=3e-07, output_cost_per_token=1.2e-06
+    )
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK: Final = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_INPUT_TEXT.model_copy(
+        update={
+            "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-off_peak",
+            "deployment": _DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+            "expected": ExactExpected(
+                spend=0.0010464, input_cost=0.000552, output_cost=0.0004944, prompt_tokens=1840, completion_tokens=412
+            ),
+        }
+    )
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK_STREAM: Final = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_STREAM.model_copy(
+        update={
+            "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-off_peak_stream",
+            "deployment": _DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+            "expected": ExactExpected(
+                spend=0.0010464, input_cost=0.000552, output_cost=0.0004944, prompt_tokens=1840, completion_tokens=412
+            ),
+        }
+    )
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK_STREAM,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_INPUT_TEXT,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_FALLBACK_CACHE_READ_AT_HALF_INPUT_RATE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_STREAM,

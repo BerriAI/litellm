@@ -62,6 +62,8 @@ BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bedrock_converse.BRIDGE_COST_PARITY,
     *azure.BRIDGE_COST_PARITY,
     *anthropic.BRIDGE_COST_PARITY,
+    *gemini.BRIDGE_COST_PARITY,
+    *vertex_ai.BRIDGE_COST_PARITY,
 )
 _PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
     leg.name for pair in BRIDGE_COST_PARITY_CASES for leg in (pair.native, pair.bridged)

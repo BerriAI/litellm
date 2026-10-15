@@ -12,6 +12,7 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_SONNET_5_5_INPUT_TEXT,
     CLAUDE_SONNET_5_5_STREAM,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     ExactExpected,
@@ -3156,4 +3157,9 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = bridge_pairs(
+    (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
+    ("/v1/responses", "/v1/messages"),
 )

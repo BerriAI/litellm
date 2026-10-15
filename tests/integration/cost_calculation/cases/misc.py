@@ -5,6 +5,8 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    ALWAYS_OPEN_OFF_PEAK_WINDOW,
+    OffPeakPricing,
     CostTrackingTestCase,
     Deployment,
     EventStreamEvent,
@@ -1697,7 +1699,22 @@ AZURE_AI_CLAUDE_HAIKU_5_5_STREAM: Final = CLAUDE_HAIKU_5_5_STREAM.model_copy(
 )
 
 
+PERPLEXITY_SONAR_NEXT_OFF_PEAK: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_copy(
+    update={
+        "name": "perplexity-sonar-next-off_peak",
+        "deployment": Deployment(
+            off_peak_pricing=OffPeakPricing(
+                hours_utc=ALWAYS_OPEN_OFF_PEAK_WINDOW, input_cost_per_token=2.26e-06, output_cost_per_token=2.1e-06
+            )
+        ),
+        "expected": ExactExpected(
+            spend=0.0050236, input_cost=0.0041584, output_cost=0.0008652, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
     AMAZON_NOVA_CANVAS_NEXT_IMAGES_ONE,
     COHERE_EMBEDDINGS_V5,
