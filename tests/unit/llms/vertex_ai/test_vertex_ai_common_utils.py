@@ -185,15 +185,21 @@ def test_anyof_conversion_with_null_before_empty_object():
     assert schema == expected
 
 
-def test_anyof_conversion_with_only_null_branches_raises():
-    """Several null branches and nothing else is still an invalid schema."""
+@pytest.mark.parametrize("null_count", [1, 2, 4])
+def test_anyof_conversion_with_only_null_branches_keeps_one_nullable_null(null_count: int):
+    """Vertex accepts a NULL type, so a null-only union is forwarded as one nullable null branch."""
     schema: Final = {
         "type": "object",
-        "properties": {"example": {"anyOf": [{"type": "null"}, {"type": "null"}]}},
+        "properties": {"example": {"anyOf": [{"type": "null"} for _ in range(null_count)]}},
     }
 
-    with pytest.raises(ValueError, match="only null type is not supported"):
-        convert_anyof_null_to_nullable(schema)
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null", "nullable": True}]}},
+    }
+    assert schema == expected
 
 
 def test_anyof_with_excessive_nesting():

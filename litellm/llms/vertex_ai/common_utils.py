@@ -930,15 +930,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         non_null_branches: Final = [
             atype for atype in anyof if not (isinstance(atype, dict) and atype.get("type") == "null")
         ]
-
-        if not non_null_branches:
-            # Edge case: response schema with only null type present is invalid in Vertex AI
-            raise ValueError(
-                "Invalid input: AnyOf schema with only null type is not supported. Please provide a non-null type."
-            )
-
         contains_null: Final = len(non_null_branches) < len(anyof)
-        for atype in non_null_branches:
+        anyof[:] = non_null_branches or anyof[:1]
+        for atype in anyof:
             if isinstance(atype, dict) and not atype:
                 atype["type"] = "object"
             if contains_null:
@@ -947,8 +941,6 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # process_items() converts it to {"type": "object"}, which Vertex
                 # requires whenever type == "array" (even inside anyOf).
                 atype["nullable"] = True
-
-        anyof[:] = non_null_branches
 
     properties: Final = schema.get("properties", None)
     if properties is not None:
