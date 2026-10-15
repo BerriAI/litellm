@@ -516,6 +516,7 @@ def test_anthropic_sdk_cache_control_on_a_tool_result_with_a_screenshot_marks_th
     assert screenshot == {
         "type": "input_image",
         "image_url": "data:image/png;base64,Zm9v",
+        "detail": "auto",
         "prompt_cache_breakpoint": pcb.EXPLICIT,
     }, "OpenAI caches only the prefix up to the breakpoint, so the screenshot must sit inside it"
     assert request.body.count(b"prompt_cache_breakpoint") == 1, request.body
