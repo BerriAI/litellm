@@ -190,10 +190,27 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
+                        message_content_parts = getattr(item, "content", ()) or ()
+                        text_chunks = tuple(
+                            getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", "")
+                            for part in message_content_parts
+                            if (getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")) != "refusal"
+                            and (getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", ""))
+                        )
+                        refusal_chunks = tuple(
+                            getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", "")
+                            for part in message_content_parts
+                            if (getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")) == "refusal"
+                            and (getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", ""))
+                        )
+                        joined_text = "".join(text_chunks)
+                        content_val = joined_text if joined_text else "".join(refusal_chunks)
+                        item_role = getattr(item, "role", "assistant") if not isinstance(item, dict) else item.get("role", "assistant")
+
                         output_items_data.append(
                             {
-                                "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+                                "role": item_role,
+                                "content": content_val,
                             }
                         )
                     elif item_type == "function_call":
