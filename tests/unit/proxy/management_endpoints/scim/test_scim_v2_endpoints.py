@@ -4282,7 +4282,9 @@ async def test_process_group_patch_operations_prefers_user_over_team_for_collidi
 
 
 @pytest.mark.asyncio
-async def test_create_group_whose_roster_write_fails_leaves_no_team_so_the_retry_creates_it(mocker: MockerFixture):
+async def test_create_group_whose_roster_write_fails_leaves_no_team_so_the_retry_creates_it(
+    mocker: MockerFixture, scim_upsert_user_enabled: None
+):
     """A POST whose roster write failed left the empty team behind, so the identity provider's
     retry got a 409 and the group never filled."""
     group_id: Final = "new-group"
@@ -4325,7 +4327,17 @@ async def test_create_group_whose_roster_write_fails_leaves_no_team_so_the_retry
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.sync_team_roster",
-        AsyncMock(side_effect=[MembersMissing(team_id=group_id, user_ids=("user2",)), filled]),
+        AsyncMock(
+            side_effect=[
+                MembersMissing(team_id=group_id, user_ids=("user2",)),
+                MembersMissing(team_id=group_id, user_ids=("user2",)),
+                filled,
+            ]
+        ),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="user2", key="k")),
     )
     mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
     mocker.patch(
@@ -5912,49 +5924,118 @@ async def test_patch_team_membership_attempts_every_team_before_reporting(mocker
     assert not [team for team in {"team-a", "team-b", "team-c"} - {failing_team} if f"add user1 to {team}" in message]
 
 
-@pytest.mark.asyncio
-async def test_update_group_roster_failure_propagates(mocker):
-    """PUT /Groups must fail loudly when the roster write cannot land every member,
-    instead of reporting a successful membership sync to the IdP."""
-    group_id = "test-team-123"
-    existing_team = LiteLLM_TeamTable(
+def _put_group_whose_member_is_deleted_mid_push(mocker: MockerFixture, group_id: str) -> set[str]:
+    """Wire a PUT whose member ``user2`` resolves as an existing user and then has its row
+    deleted before the locked roster write, and return the ids the endpoint creates."""
+    existing_team: Final = LiteLLM_TeamTable(
         team_id=group_id,
         team_alias="Engineering",
         members_with_roles=[Member(user_id="user1", role="user")],
         metadata={},
     )
-    scim_group = SCIMGroup(
+    created: Final[set[str]] = set()
+
+    async def create_user(user_id: str, created_via: str) -> NewUserResponse:
+        created.add(user_id)
+        return NewUserResponse(user_id=user_id, key="k")
+
+    async def sync(team_id: str, **kwargs: object) -> RosterSync | MembersMissing:
+        if "user2" not in created:
+            return MembersMissing(team_id=team_id, user_ids=("user2",))
+        return RosterSync(
+            team=existing_team.model_copy(
+                update={"members_with_roles": [Member(user_id="user1", role="user"), Member(user_id="user2", role="user")]}
+            ),
+            added=frozenset({"user2"}),
+            removed=frozenset(),
+        )
+
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=())
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=prisma_client),
+    )
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.sync_team_roster", AsyncMock(side_effect=sync))
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(side_effect=create_user),
+    )
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(side_effect=_group_of_roster),
+    )
+    return created
+
+
+async def _group_of_roster(team: LiteLLM_TeamTable) -> SCIMGroup:
+    return SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=team.team_id,
+        displayName=team.team_alias or team.team_id,
+        members=[SCIMMember(value=member.user_id) for member in team.members_with_roles if member.user_id is not None],
+    )
+
+
+def _engineering_group(group_id: str) -> SCIMGroup:
+    return SCIMGroup(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
         id=group_id,
         displayName="Engineering",
         members=[SCIMMember(value="user1"), SCIMMember(value="user2")],
     )
 
-    mock_prisma_client = mocker.MagicMock()
-    mock_prisma_client.db = mocker.MagicMock()
-    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
-    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=())
-    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
-    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
-    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
 
-    mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mock_prisma_client),
-    )
+@pytest.mark.asyncio
+async def test_update_group_creates_a_member_deleted_mid_push_again(mocker: MockerFixture, scim_upsert_user_enabled):
+    """A user deleted between member resolution and the locked roster write failed the whole
+    push with a 500, where the per-member write created the member again and answered 200."""
+    created: Final = _put_group_whose_member_is_deleted_mid_push(mocker, "test-team-123")
+
+    response: Final = await update_group(group_id="test-team-123", group=_engineering_group("test-team-123"))
+
+    assert created == {"user2"}
+    assert [member.value for member in response.members or []] == ["user1", "user2"]
+
+
+@pytest.mark.asyncio
+async def test_update_group_in_strict_mode_fails_when_a_member_is_deleted_mid_push(
+    mocker: MockerFixture, scim_upsert_user_disabled
+):
+    """With scim_upsert_user False a group write never creates users, so a member deleted
+    mid-push fails the request for the identity provider to retry."""
+    created: Final = _put_group_whose_member_is_deleted_mid_push(mocker, "test-team-123")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_group(group_id="test-team-123", group=_engineering_group("test-team-123"))
+
+    assert exc_info.value.code == "500"
+    assert "user2" in exc_info.value.message
+    assert created == set()
+
+
+@pytest.mark.asyncio
+async def test_update_group_roster_failure_propagates(mocker: MockerFixture, scim_upsert_user_enabled):
+    """PUT /Groups must fail loudly when the roster write cannot land every member,
+    instead of reporting a successful membership sync to the IdP."""
+    group_id: Final = "test-team-123"
+    _ = _put_group_whose_member_is_deleted_mid_push(mocker, group_id)
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.sync_team_roster",
         AsyncMock(return_value=MembersMissing(team_id=group_id, user_ids=("user2",))),
     )
-    recompute_mock = mocker.patch(
+    recompute_mock: Final = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
         AsyncMock(),
     )
 
     with pytest.raises(ProxyException) as exc_info:
-        await update_group(group_id=group_id, group=scim_group)
+        await update_group(group_id=group_id, group=_engineering_group(group_id))
 
     assert exc_info.value.code == "500"
     assert "user2" in exc_info.value.message

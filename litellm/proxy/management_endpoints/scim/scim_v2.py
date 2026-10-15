@@ -75,6 +75,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterDelta,
     RosterPlan,
     RosterSync,
+    RosterSyncOutcome,
     RosterTarget,
     TeamGone,
     sync_team_roster,
@@ -921,6 +922,27 @@ async def _ensure_group_member_user(
     raise HTTPException(status_code=500, detail=detail)
 
 
+async def _create_group_member_users(
+    user_ids: Sequence[str], created_via: str, prisma_client: PrismaClient
+) -> tuple[NewUserResponse, ...]:
+    """Create the group members' user rows, ``BULK_NEW_USER_CONCURRENCY`` at a time.
+
+    Raises:
+        HTTPException: 500 when a user can neither be created nor found.
+    """
+    creations: Final = await _bounded(
+        BULK_NEW_USER_CONCURRENCY,
+        tuple(
+            _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client)
+            for user_id in user_ids
+        ),
+    )
+    failure: Final = next((outcome for outcome in creations if isinstance(outcome, BaseException)), None)
+    if failure is not None:
+        raise failure
+    return tuple(created for created in creations if isinstance(created, NewUserResponse))
+
+
 def _roster_entries_named_by(value: str, roster: frozenset[str], resolved: tuple[str, ...]) -> tuple[str, ...]:
     """The members of this group a removal value names.
 
@@ -1052,17 +1074,7 @@ async def _resolve_group_member_ids(
             user_id,
         )
 
-    creations: Final = await _bounded(
-        BULK_NEW_USER_CONCURRENCY,
-        tuple(
-            _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client)
-            for user_id in unique_unknown_ids
-        ),
-    )
-    failure: Final = next((outcome for outcome in creations if isinstance(outcome, BaseException)), None)
-    if failure is not None:
-        raise failure
-    created_users: Final = tuple(created for created in creations if isinstance(created, NewUserResponse))
+    created_users: Final = await _create_group_member_users(unique_unknown_ids, created_via, prisma_client)
 
     return GroupMemberExtractionResult(
         existing_member_ids=partition.resolved_ids,
@@ -3066,17 +3078,10 @@ def _roles_to_recompute(sync: RosterSync, alias_changed: bool) -> frozenset[str]
     return (_roster_ids(sync.team) | sync.removed) if alias_changed else (sync.added | sync.removed)
 
 
-async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: PrismaClient) -> RosterSync:
-    """Bring the group's team roster to the plan in one locked bulk transaction.
-
-    Raises:
-        HTTPException: 404 when the team is gone, 500 when an admitted member's user
-        row vanished before the roster write. Either way the request fails whole and
-        the identity provider retries, as it did when members were written one at a time.
-    """
+async def _write_group_roster(group_id: str, plan: RosterPlan, prisma_client: PrismaClient) -> RosterSyncOutcome:
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, proxy_logging_obj, user_api_key_cache
 
-    outcome: Final = await sync_team_roster(
+    return await sync_team_roster(
         prisma_client=prisma_client,
         team_id=group_id,
         plan=plan,
@@ -3085,6 +3090,9 @@ async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: Pri
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+
+
+def _synced_roster_or_raise(group_id: str, outcome: RosterSyncOutcome) -> RosterSync:
     match outcome:
         case RosterSync():
             return outcome
@@ -3100,6 +3108,30 @@ async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: Pri
             )
         case _:
             assert_never(outcome)
+
+
+async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: PrismaClient) -> RosterSync:
+    """Bring the group's team roster to the plan in one locked bulk transaction.
+
+    A member whose user row was deleted after the members were resolved is created
+    again and the write retried once, as the per-member write did, unless
+    scim_upsert_user is False.
+
+    Raises:
+        HTTPException: 404 when the team is gone, 500 when an admitted member's user
+        row is still missing after that retry. Either way the request fails whole and
+        the identity provider retries, as it did when members were written one at a time.
+    """
+    outcome: Final = await _write_group_roster(group_id, plan, prisma_client)
+    if not isinstance(outcome, MembersMissing) or not await _get_scim_upsert_user_setting():
+        return _synced_roster_or_raise(group_id, outcome)
+    verbose_proxy_logger.warning(
+        "SCIM: users %s were deleted while the roster of group '%s' was being written; creating them again",
+        ", ".join(outcome.user_ids),
+        group_id,
+    )
+    _ = await _create_group_member_users(outcome.user_ids, "scim_group_membership", prisma_client)
+    return _synced_roster_or_raise(group_id, await _write_group_roster(group_id, plan, prisma_client))
 
 
 async def _fill_new_group(group_id: str, member_ids: frozenset[str], prisma_client: PrismaClient) -> RosterSync:
