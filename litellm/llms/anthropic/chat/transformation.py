@@ -146,6 +146,14 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+_DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+
+
+def _validated_defer_loading(value: object) -> bool:
+    try:
+        return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise ValueError("defer_loading must be a boolean") from exc
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -980,9 +988,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "computer_20250124",
             ):
                 if _defer_loading is not None:
-                    if not isinstance(_defer_loading, bool):
-                        raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading
+                    returned_tool["defer_loading"] = _validated_defer_loading(_defer_loading)
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
@@ -2338,9 +2344,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             ## TOOL RESULTS - handle all tool result types (code execution, etc.)
             elif content["type"].endswith("_tool_result"):
-                # Skip tool_search_tool_result as it's internal metadata
-                if content["type"] == "tool_search_tool_result":
-                    continue
                 # Handle web_search_tool_result separately for backwards compatibility
                 if content["type"] == "web_search_tool_result" or content["type"] == "web_fetch_tool_result":
                     if web_search_results is None:
@@ -2709,6 +2712,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
+
+        if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             container_id: Final = (
                 completion_response.get("container", {}).get("id")
                 if isinstance(completion_response.get("container"), dict)

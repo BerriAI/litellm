@@ -1611,6 +1611,19 @@ def test_defer_loading_preserved_in_transformation():
     assert mcp_server is None
 
 
+def test_defer_loading_rejects_non_boolean_values():
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": "true",
+    }
+
+    with pytest.raises(ValueError, match="defer_loading must be a boolean"):
+        config.map_tool_helper(tool)
+
+
 def test_tool_search_complete_response_parsing():
     """Test parsing a complete tool search response with server_tool_use and tool_search_tool_result blocks"""
     config = AnthropicConfig()
@@ -3503,49 +3516,203 @@ def test_code_execution_tool_results_in_hidden_params():
     assert hidden["provider_specific_fields"]["tool_results"][0]["content"]["stdout"] == "hello\n"
 
 
-def test_tool_search_tool_result_not_in_tool_results():
-    """
-    Test that tool_search_tool_result is NOT included in tool_results
-    since it's internal metadata, not actual tool execution results.
-    """
-    import httpx
+def _tool_search_turn(tool_references: list[str], last_block: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Search",
+            "name": "tool_search_tool_bm25",
+            "input": {"query": "weather"},
+        },
+        {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [{"type": "tool_reference", "tool_name": name} for name in tool_references],
+            },
+        },
+        last_block,
+    ]
 
-    from litellm.types.utils import ModelResponse
 
-    config = AnthropicConfig()
-
-    mock_anthropic_response = {
+def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str):
+    anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-4-5-20250929",
-        "content": [
-            {"type": "text", "text": "Found tools."},
-            {"type": "tool_search_tool_result", "tool_references": ["tool1", "tool2"]},
-        ],
-        "stop_reason": "stop",
+        "model": "claude-opus-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
         "stop_sequence": None,
         "usage": {"input_tokens": 100, "output_tokens": 50},
     }
-
-    mock_raw_response = MagicMock(spec=httpx.Response)
-    mock_raw_response.json.return_value = mock_anthropic_response
-    mock_raw_response.status_code = 200
-    mock_raw_response.headers = {}
-
-    model_response = ModelResponse()
-
-    transformed_response = config.transform_parsed_response(
-        completion_response=mock_anthropic_response,
-        raw_response=mock_raw_response,
-        model_response=model_response,
-        json_mode=False,
-        prefix_prompt=None,
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    return (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=anthropic_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+        )
+        .choices[0]
+        .message
     )
 
-    # Verify tool_search_tool_result is NOT in tool_results
-    provider_fields = transformed_response.choices[0].message.provider_specific_fields
-    assert provider_fields.get("tool_results") is None
+
+_WEATHER_CALL: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+
+
+def _web_search_turn(last_block: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {"query": "Paris facts"}},
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01Web",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://example.com/paris",
+                    "title": "Paris",
+                    "encrypted_content": "EqgfCioIARgB",
+                    "page_age": None,
+                }
+            ],
+        },
+        last_block,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("server_call_answered", "client_call_answered", "modify_params"),
+    [
+        pytest.param(False, True, False, id="client_answers_its_own_call"),
+        pytest.param(False, True, True, id="client_answers_its_own_call_with_modify_params"),
+        pytest.param(True, True, False, id="client_also_answers_the_server_call"),
+        pytest.param(False, False, True, id="modify_params_answers_the_unanswered_client_call"),
+    ],
+)
+@pytest.mark.parametrize(
+    "content",
+    [_tool_search_turn(["get_weather"], _WEATHER_CALL), _web_search_turn(_WEATHER_CALL)],
+    ids=["tool_search", "web_search"],
+)
+def test_server_tool_result_round_trips_right_after_its_call(
+    content: list[dict[str, object]],
+    server_call_answered: bool,
+    client_call_answered: bool,
+    modify_params: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    message: Final = _parsed_assistant_message(content, "tool_use")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    server_answer: Final = {"role": "tool", "tool_call_id": content[0]["id"], "content": "Error: unknown tool"}
+    client_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *((server_answer,) if server_call_answered else ()),
+            *((client_answer,) if client_call_answered else ()),
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert replayed[1]["content"] == content
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
+def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list[object]:
+    return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
+
+
+_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."})
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "modify_params", "server_tool_use_ids"),
+    [
+        pytest.param(
+            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},),
+            False,
+            [],
+            id="client_answers_a_search_that_found_nothing",
+        ),
+        pytest.param(
+            (
+                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},
+                {"role": "user", "content": "Book it anyway"},
+            ),
+            False,
+            ["srvtoolu_01Search"],
+            id="client_answers_a_search_that_found_nothing_and_writes_again",
+        ),
+        pytest.param((), True, [], id="modify_params_with_nothing_after_a_search_that_found_nothing"),
+    ],
+)
+def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a_user_turn(
+    follow_ups: tuple[dict[str, str], ...],
+    modify_params: bool,
+    server_tool_use_ids: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Find a tool and use it"}, message.model_dump(), *follow_ups],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
+    assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+_CODE_EXECUTION_BLOCKS: Final = [
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Bash",
+        "name": "bash_code_execution",
+        "input": {"command": "python3 -c 'print(2 + 2)'"},
+    },
+    {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01Bash",
+        "content": {"type": "bash_code_execution_result", "stdout": "4\n", "stderr": "", "return_code": 0},
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("code_execution_blocks", "code_interpreter_call_ids"),
+    [
+        pytest.param([], None, id="tool_search_only"),
+        pytest.param(_CODE_EXECUTION_BLOCKS, ["srvtoolu_01Bash"], id="tool_search_and_code_execution"),
+    ],
+)
+def test_parsed_tool_search_turn_adds_code_interpreter_results_only_for_code_execution(
+    code_execution_blocks: list[dict[str, object]], code_interpreter_call_ids: list[str] | None
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], {"type": "text", "text": "2 + 2 is 4"})
+    message: Final = _parsed_assistant_message([*code_execution_blocks, *search_turn], "end_turn")
+    code_interpreter_results: Final = message.provider_specific_fields.get("code_interpreter_results")
+
+    assert search_turn[1] in message.provider_specific_fields["tool_results"]
+    assert (
+        None if code_interpreter_results is None else [call.id for call in code_interpreter_results]
+    ) == code_interpreter_call_ids
 
 
 def test_web_search_tool_result_backwards_compatibility():
@@ -4345,9 +4512,7 @@ def test_service_tier_without_anthropic_equivalent_raises_with_drop_params_hint(
     monkeypatch.setattr(litellm, "drop_params", False)
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as exc_info:
-        litellm.utils.get_optional_params(
-            model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier
-        )
+        litellm.utils.get_optional_params(model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier)
 
     assert exc_info.value.status_code == 400
 
