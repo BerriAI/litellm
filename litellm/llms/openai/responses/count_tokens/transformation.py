@@ -5,7 +5,7 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, TypeAlias, cast
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -42,10 +42,6 @@ ResponsesCountRequestParts: TypeAlias = tuple[
 ]
 _RESPONSES_COUNT_REQUEST_PARTS: Final = TypeAdapter(ResponsesCountRequestParts)
 _TRANSLATED_REQUEST: Final = TypeAdapter(Mapping[str, object])
-
-
-def _is_anthropic_system(system: object) -> bool:
-    return isinstance(system, (str, list)) and system not in ("", [])
 
 
 def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
@@ -282,10 +278,11 @@ class OpenAICountTokensConfig:
         tools: Sequence[Mapping[str, object]] | None,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
-        system_field: Final[Mapping[str, object]] = {"system": system} if _is_anthropic_system(system) else {}
-        tools_field: Final[Mapping[str, object]] = {"tools": list(tools)} if tools else {}
-        anthropic_request: Final = cast(  # cast-ok: raw Anthropic body, the adapter reads it as inference does
-            AnthropicMessagesRequest, {"model": model, "messages": list(messages), **system_field, **tools_field}
+        anthropic_request: Final = AnthropicMessagesRequest(
+            model=model,
+            messages=[dict(message) for message in messages],
+            system=system if isinstance(system, (str, list)) else None,
+            tools=[dict(tool) for tool in tools] if tools else None,
         )
         translated: Final = _TRANSLATED_REQUEST.validate_python(
             LiteLLMAnthropicToResponsesAPIAdapter().translate_request(

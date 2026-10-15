@@ -46785,6 +46785,12 @@ export interface components {
             messages?: {
                 [key: string]: unknown;
             }[] | null;
+            /**
+             * Messages Format
+             * @default openai
+             * @enum {string}
+             */
+            messages_format: "openai" | "anthropic";
             /** Model */
             model: string;
             /** Prompt */
