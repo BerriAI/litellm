@@ -48,7 +48,7 @@ def telemetry_store() -> TelemetryStore | None:
     if known is not None or prisma_client is None:
         return known
     return TelemetryStore(
-        getattr(prisma_client.db, "writer", prisma_client.db),  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
+        prisma_client.writer_db,  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
         telemetry_runtime.settings.retention_days,
     )
 

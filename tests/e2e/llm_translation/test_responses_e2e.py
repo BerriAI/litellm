@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import threading
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -39,7 +37,7 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from provider_edge import LiveEdge, start_provider_edge
-from provider_edge_bedrock import bedrock_signer
+from provider_edge_bedrock import ConverseBodyCapture, bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, TypeAdapter
 from responses_helpers import AZURE_OPENAI_API_VERSION, AZURE_OPENAI_BACKEND, azure_openai_params
@@ -69,26 +67,6 @@ BEDROCK_EDGE_MOUNT: Final = f"bedrock/{BEDROCK_EDGE_REGION}"
 
 class ConverseRequestBody(BaseModel):
     additionalModelRequestFields: dict[str, str] | None = None
-
-
-@dataclass(slots=True)
-class ConverseRequestCapture:
-    """The Converse bodies the proxy actually sent upstream, as seen by a live
-    edge sitting between the proxy and Bedrock."""
-
-    _bodies: list[ConverseRequestBody] = field(default_factory=list)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
-        if body is None or "/converse" not in url:
-            return
-        with self._lock:
-            self._bodies.append(ConverseRequestBody.model_validate_json(body))
-
-    @property
-    def bodies(self) -> tuple[ConverseRequestBody, ...]:
-        with self._lock:
-            return tuple(self._bodies)
 
 
 WEATHER_TOOL: FunctionToolParam = {
@@ -950,7 +928,7 @@ class TestResponses:
         """Judges the Converse bodies the edge captured, not the reply: Claude on
         Bedrock rejects the forwarded field with a 400, which the chat leg's
         ``Result`` carries as a value and the OpenAI SDK raises."""
-        capture: Final = ConverseRequestCapture()
+        capture: Final = ConverseBodyCapture()
         edge: Final = start_provider_edge(
             LiveEdge(observe_request=capture.observe, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
             mounts=MappingProxyType(
@@ -995,10 +973,11 @@ class TestResponses:
                 ),
             )
 
-        forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
+        bodies: Final = tuple(ConverseRequestBody.model_validate_json(body) for body in capture.drain())
+        forwarded: Final = tuple(body.additionalModelRequestFields for body in bodies)
         assert forwarded, f"{endpoint} produced no Bedrock Converse request"
         assert forwarded == ({"safety_identifier": safety_identifier},) * len(forwarded), (
-            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
+            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {bodies}"
         )
 
     @pytest.mark.skip(

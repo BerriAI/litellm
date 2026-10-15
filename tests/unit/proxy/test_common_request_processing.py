@@ -8282,10 +8282,10 @@ def _apply_stream_usage_tracking(
     route_type: str,
     supports_stream_options: Callable[[], bool] = lambda: True,
 ) -> None:
-    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
 
     data.update(
-        _stream_usage_tracking_updates(
+        stream_usage_tracking_updates(
             data=data,
             general_settings=general_settings,
             route_type=route_type,
@@ -8295,6 +8295,32 @@ def _apply_stream_usage_tracking(
 
 
 class TestApplyStreamUsageTracking:
+    @pytest.mark.parametrize(
+        ("general_settings", "requested_stream_options", "expected_stream_options"),
+        [
+            ({"always_include_stream_usage": False}, None, {"include_usage": False}),
+            ({}, None, None),
+            ({"always_include_stream_usage": False}, {"include_usage": True}, {"include_usage": True}),
+        ],
+    )
+    def test_generate_content_stream_passes_only_the_admin_opt_out(
+        self,
+        general_settings: dict[str, bool],
+        requested_stream_options: dict[str, bool] | None,
+        expected_stream_options: dict[str, bool] | None,
+    ):
+        data = {
+            "stream": True,
+            "model": "grok-4.20-non-reasoning",
+            **({} if requested_stream_options is None else {"stream_options": requested_stream_options}),
+        }
+
+        _apply_stream_usage_tracking(
+            data=data, general_settings=general_settings, route_type="agenerate_content_stream"
+        )
+
+        assert data.get("stream_options") == expected_stream_options
+
     def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
         data = {"stream": True, "model": "gpt-5.4-nano"}
 
@@ -8430,10 +8456,10 @@ class TestApplyStreamUsageTracking:
 class TestModelDeploymentsSupportStreamOptions:
     def _support(self, model, llm_router=None, team_id=None) -> bool:
         from litellm.proxy.common_request_processing import (
-            _model_deployments_support_stream_options,
+            model_deployments_support_stream_options,
         )
 
-        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+        return model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
 
     def test_openai_compatible_deployment_supports_stream_options(self):
         router = litellm.Router(
@@ -8781,6 +8807,76 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestVideoServedModelPin:
+    """A video id names the group a poll asked for and the group that served the task. The served group may only
+    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias,
+    and only after the pre-call hooks, so a key's rate limits on that name still count the poll, and never over a
+    model a hook picked."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/sora-2", "api_key": "sk-fake"}}
+                for name in ("allowed", "restricted")
+            ],
+            routing_groups=[
+                {"group_name": "videos", "models": ["allowed", "restricted"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_aliases", "router_settings", "hook_rewrite", "hooked", "expected"),
+        [
+            ({}, None, None, "videos", "restricted"),
+            ({"videos": "allowed"}, None, None, "allowed", "allowed"),
+            ({}, {"model_group_alias": {"videos": "allowed"}}, None, "allowed", "allowed"),
+            ({}, None, "allowed", "videos", "allowed"),
+        ],
+        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins", "hook-rewrite-wins"],
+    )
+    async def test_served_group_is_pinned_after_the_hooks_only_when_the_aliased_name_routes_to_it(
+        self, monkeypatch, key_aliases, router_settings, hook_rewrite, hooked, expected
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "videos", "video_id": "video_abc"}, served_model="restricted"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            hooked_data = copy.deepcopy(data)
+            return hooked_data if hook_rewrite is None else {**hooked_data, "model": hook_rewrite}
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=router_settings)
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], aliases=key_aliases),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="avideo_status",
+            llm_router=self._router(),
+        )
+
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == hooked
+        assert returned_data["model"] == expected
 
 
 class TestInjectCostIntoUsageDict:
@@ -10823,3 +10919,63 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+class TestResponseCostFromLoggingObjForBridgedMessages:
+    """A /v1/messages request answered through the chat bridge arrives here as an Anthropic body whose
+    usage has no reasoning field, while the cost it recomputes must still price the reasoning tokens
+    the provider reported (LIT-9666)."""
+
+    @staticmethod
+    def _logging_obj(model: str):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="lit-9666",
+            function_id="lit-9666",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
+        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
+        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+        model = "dashscope/qwen-turbo"
+        pricing = litellm.get_model_info(model)
+        input_rate = pricing["input_cost_per_token"]
+        output_rate = pricing["output_cost_per_token"]
+        reasoning_rate = pricing["output_cost_per_reasoning_token"]
+        assert input_rate is not None and output_rate is not None and reasoning_rate is not None
+        assert reasoning_rate != output_rate
+        chat_completion = ModelResponse(
+            id="chatcmpl-upstream",
+            model="qwen-turbo",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+            usage=Usage(
+                prompt_tokens=1240,
+                completion_tokens=4040,
+                total_tokens=5280,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+            ),
+        )
+        served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+        assert served is not None and "reasoning" not in json.dumps(served["usage"])
+        logging_obj = self._logging_obj(model)
+        logging_obj.record_bridged_model_response(chat_completion)
+
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(served), logging_obj=logging_obj
+        )
+
+        expected_reasoning = 3480 * reasoning_rate
+        expected_output = expected_reasoning + (4040 - 3480) * output_rate
+        assert cost == pytest.approx(1240 * input_rate + expected_output)
+        assert logging_obj.cost_breakdown is not None
+        assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
+        assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)

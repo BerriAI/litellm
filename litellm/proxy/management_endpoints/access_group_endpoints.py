@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
@@ -45,6 +45,9 @@ from litellm.types.access_group import (
     AccessGroupUpdateRequest,
 )
 
+if TYPE_CHECKING:
+    from prisma import Json
+
 router: Final = APIRouter(
     tags=["access group management"],
 )
@@ -56,6 +59,9 @@ class _AccessGroupRecord(Protocol):
 
     @property
     def access_mcp_server_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def mcp_tool_permissions(self) -> "Mapping[str, Sequence[str]] | Json | None": ...
 
     @property
     def access_agent_ids(self) -> Sequence[str] | None: ...
@@ -177,6 +183,12 @@ def _require_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
+
+
+def _tool_permissions_json(value: Mapping[str, Sequence[str]] | None) -> "Json":
+    from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+    return Json(None) if value is None else Json({server: list(tools) for server, tools in value.items()})
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,7 +556,9 @@ async def create_access_group(
                     "description": data.description,
                     "access_model_names": data.access_model_names or [],
                     "access_mcp_server_ids": data.access_mcp_server_ids or [],
+                    "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
+                    "access_skill_names": list(data.access_skill_names or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -636,19 +650,18 @@ async def update_access_group(
     update_fields: Final = data.model_dump(exclude_unset=True)
     update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
-        if (
-            field
-            in (
-                "assigned_team_ids",
-                "assigned_key_ids",
-                "access_model_names",
-                "access_mcp_server_ids",
-                "access_agent_ids",
-            )
-            and value is None
+        if field in (
+            "assigned_team_ids",
+            "assigned_key_ids",
+            "access_model_names",
+            "access_mcp_server_ids",
+            "access_agent_ids",
+            "access_skill_names",
         ):
-            value = []
-        update_data[field] = value
+            value = list(value or ())
+        update_data[field] = (
+            _tool_permissions_json(data.mcp_tool_permissions) if field == "mcp_tool_permissions" else value
+        )
 
     # Initialize delta lists before the try block so they remain accessible
     # for cache updates after the transaction, even if an error path is added later.
