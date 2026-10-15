@@ -117,6 +117,7 @@ def _session_response(
     stored_session_id: str | None = None,
     seconds: float = 70,
     return_last_on_timeout: bool = False,
+    turns: int = 1,
 ) -> httpx.Response:
     if database_url is None or stored_session_id is None:
         return eventually(
@@ -126,7 +127,9 @@ def _session_response(
                 params={"session_id": session_id},
                 key=key,
             ),
-            lambda response: response.status_code == 200,
+            lambda response: (
+                response.status_code == 200 and JSON_OBJECT.validate_json(response.content).get("turns") == turns
+            ),
             seconds=seconds,
             return_last_on_timeout=return_last_on_timeout,
         )
@@ -393,7 +396,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     {"type": "text", "text": "synthetic tier response"}
                 ], messages_second_response.text
 
-                messages_session: Final = _session_response(candidate, key, messages_session_id)
+                messages_session: Final = _session_response(candidate, key, messages_session_id, turns=2)
                 assert JSON_OBJECT.validate_json(messages_session.content) == {
                     "session_id": messages_session_id,
                     "router_name": router_name,

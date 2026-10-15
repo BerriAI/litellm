@@ -237,6 +237,7 @@ def test_a_project_key_call_on_every_endpoint_lands_in_the_request_latency_and_p
             lambda: scrape(rig.gateway),
             lambda found: (
                 _total(found, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
+                and _total(found, _TOTAL_REQUESTS, hashed_api_key=owner.hashed) == 1
                 and len(_project_gauges(found, owner.project)) == 4
             ),
             seconds=30,
@@ -266,7 +267,10 @@ def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared
         assert len(forwarded) == 1, forwarded
         samples: Final = eventually(
             lambda: scrape(rig.gateway),
-            lambda found: _total(found, _FAILED_REQUESTS, hashed_api_key=owner.hashed) == 1,
+            lambda found: (
+                _total(found, _FAILED_REQUESTS, hashed_api_key=owner.hashed) == 1
+                and _total(found, _TOTAL_REQUESTS, hashed_api_key=owner.hashed) == 1
+            ),
             seconds=30,
         )
         failed: Final = _series(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed)
@@ -313,7 +317,10 @@ def test_a_key_outside_any_team_or_project_still_counts_its_request(rig: _Rig) -
         assert len(forwarded) == 1, forwarded
         samples: Final = eventually(
             lambda: scrape(rig.gateway),
-            lambda found: _total(found, _LATENCY_COUNT, hashed_api_key=hashed) == 1,
+            lambda found: (
+                _total(found, _LATENCY_COUNT, hashed_api_key=hashed) == 1
+                and _total(found, _TOTAL_REQUESTS, hashed_api_key=hashed) == 1
+            ),
             seconds=30,
         )
         requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=hashed)
@@ -385,6 +392,7 @@ def test_a_project_key_call_under_other_label_configurations_keeps_one_project_a
             lambda: scrape(owned.gateway),
             lambda found: (
                 _total(found, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
+                and _total(found, _TOTAL_REQUESTS, hashed_api_key=owner.hashed) == 1
                 and len(_project_gauges(found, owner.project)) == 4
             ),
             seconds=30,
