@@ -55303,6 +55303,709 @@
       }
     }
   },
+  "ternary": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "JsonValue": {},
+        "TernaryDryRunRequest": {
+          "description": "Request model for a Ternary dry run, which previews the export locally without contacting Ternary",
+          "properties": {
+            "limit": {
+              "default": 500,
+              "description": "Maximum number of usage rows to preview",
+              "exclusiveMinimum": 0.0,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          "title": "TernaryDryRunRequest",
+          "type": "object"
+        },
+        "TernaryDryRunResponse": {
+          "properties": {
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "normalized_data": {
+              "description": "The same rows as FOCUS records, including token counts in Tags, as Ternary would receive them",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "title": "Normalized Data",
+              "type": "array"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/TernaryDryRunSummary"
+            },
+            "usage_data": {
+              "description": "Sample of LiteLLM daily spend rows",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "title": "Usage Data",
+              "type": "array"
+            }
+          },
+          "required": [
+            "message",
+            "status",
+            "usage_data",
+            "normalized_data",
+            "summary"
+          ],
+          "title": "TernaryDryRunResponse",
+          "type": "object"
+        },
+        "TernaryDryRunSummary": {
+          "properties": {
+            "days": {
+              "description": "UTC days the previewed rows fall on, one upload each",
+              "items": {
+                "type": "string"
+              },
+              "title": "Days",
+              "type": "array"
+            },
+            "estimated_spend": {
+              "description": "LiteLLM's estimated spend for the previewed rows, not billed cost",
+              "title": "Estimated Spend",
+              "type": "number"
+            },
+            "total_records": {
+              "title": "Total Records",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "title": "Total Tokens",
+              "type": "integer"
+            },
+            "unique_models": {
+              "title": "Unique Models",
+              "type": "integer"
+            },
+            "unique_teams": {
+              "title": "Unique Teams",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_records",
+            "estimated_spend",
+            "total_tokens",
+            "unique_teams",
+            "unique_models",
+            "days"
+          ],
+          "title": "TernaryDryRunSummary",
+          "type": "object"
+        },
+        "TernaryExportRequest": {
+          "description": "Request model for a manual Ternary export. With no bounds, exports the scheduled window",
+          "properties": {
+            "end_time_utc": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "End of the export window in UTC",
+              "title": "End Time Utc"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional cap on the number of usage rows to export",
+              "title": "Limit"
+            },
+            "start_time_utc": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Start of the export window in UTC",
+              "title": "Start Time Utc"
+            }
+          },
+          "title": "TernaryExportRequest",
+          "type": "object"
+        },
+        "TernaryExportResponse": {
+          "properties": {
+            "end_time_utc": {
+              "format": "date-time",
+              "title": "End Time Utc",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "start_time_utc": {
+              "format": "date-time",
+              "title": "Start Time Utc",
+              "type": "string"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "status",
+            "start_time_utc",
+            "end_time_utc"
+          ],
+          "title": "TernaryExportResponse",
+          "type": "object"
+        },
+        "TernaryMessageResponse": {
+          "description": "Response model for Ternary settings writes",
+          "properties": {
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "status"
+          ],
+          "title": "TernaryMessageResponse",
+          "type": "object"
+        },
+        "TernarySettings": {
+          "description": "Ternary export settings. The init request body, and the stored row once the API key is decrypted",
+          "properties": {
+            "api_key": {
+              "description": "Ternary AI Gateway connection API key",
+              "title": "Api Key",
+              "type": "string"
+            },
+            "base_url": {
+              "default": "https://api.ternary.app",
+              "description": "Ternary API base URL",
+              "title": "Base Url",
+              "type": "string"
+            },
+            "connection_id": {
+              "description": "Ternary AI Gateway connection ID",
+              "title": "Connection Id",
+              "type": "string"
+            },
+            "frequency": {
+              "default": "daily",
+              "description": "Export cadence. 'interval' is meant for short setup-validation loops",
+              "enum": [
+                "daily",
+                "interval"
+              ],
+              "title": "Frequency",
+              "type": "string"
+            },
+            "interval_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Seconds between exports when frequency is 'interval'",
+              "title": "Interval Seconds"
+            }
+          },
+          "required": [
+            "api_key",
+            "connection_id"
+          ],
+          "title": "TernarySettings",
+          "type": "object"
+        },
+        "TernarySettingsUpdate": {
+          "description": "Request model for updating Ternary export settings. Omitted fields keep their stored value",
+          "properties": {
+            "api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New Ternary connection API key",
+              "title": "Api Key"
+            },
+            "base_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New Ternary API base URL",
+              "title": "Base Url"
+            },
+            "connection_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New Ternary connection ID",
+              "title": "Connection Id"
+            },
+            "frequency": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "daily",
+                    "interval"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New export cadence",
+              "title": "Frequency"
+            },
+            "interval_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New seconds between exports for 'interval'",
+              "title": "Interval Seconds"
+            }
+          },
+          "title": "TernarySettingsUpdate",
+          "type": "object"
+        },
+        "TernarySettingsView": {
+          "description": "Response model for viewing Ternary export settings with the API key masked",
+          "properties": {
+            "api_key_masked": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Masked API key",
+              "title": "Api Key Masked"
+            },
+            "base_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ternary API base URL",
+              "title": "Base Url"
+            },
+            "connection_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ternary connection ID",
+              "title": "Connection Id"
+            },
+            "frequency": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "daily",
+                    "interval"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Export cadence",
+              "title": "Frequency"
+            },
+            "interval_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Seconds between exports for 'interval'",
+              "title": "Interval Seconds"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Configuration status",
+              "title": "Status"
+            }
+          },
+          "title": "TernarySettingsView",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/ternary/delete": {
+        "delete": {
+          "description": "Delete the stored Ternary export settings. Proxy Admin only.",
+          "operationId": "delete_ternary_settings_ternary_delete_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernaryMessageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Ternary Settings",
+          "tags": [
+            "ternary"
+          ]
+        }
+      },
+      "/ternary/dry-run": {
+        "post": {
+          "description": "Preview the most recent usage as the FOCUS rows Ternary would receive. Sends nothing. Proxy Admin only.",
+          "operationId": "ternary_dry_run_ternary_dry_run_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TernaryDryRunRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernaryDryRunResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Ternary Dry Run",
+          "tags": [
+            "ternary"
+          ]
+        }
+      },
+      "/ternary/export": {
+        "post": {
+          "description": "Export usage to Ternary now, one upload per UTC day.\n\nWith no bounds this sends the same window as the next scheduled export. Proxy Admin only.",
+          "operationId": "ternary_export_ternary_export_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TernaryExportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernaryExportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Ternary Export",
+          "tags": [
+            "ternary"
+          ]
+        }
+      },
+      "/ternary/init": {
+        "post": {
+          "description": "Store the Ternary export settings, with the API key encrypted. Proxy Admin only.",
+          "operationId": "init_ternary_settings_ternary_init_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TernarySettings"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernaryMessageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Init Ternary Settings",
+          "tags": [
+            "ternary"
+          ]
+        }
+      },
+      "/ternary/settings": {
+        "get": {
+          "description": "View the Ternary export settings with the API key masked. Proxy Admin or Admin Viewer only.",
+          "operationId": "get_ternary_settings_ternary_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernarySettingsView"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Ternary Settings",
+          "tags": [
+            "ternary"
+          ]
+        },
+        "put": {
+          "description": "Update some of the Ternary export settings. Omitted fields keep their stored value. Proxy Admin only.",
+          "operationId": "update_ternary_settings_ternary_settings_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TernarySettingsUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TernaryMessageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Ternary Settings",
+          "tags": [
+            "ternary"
+          ]
+        }
+      }
+    }
+  },
   "tools": {
     "components": {
       "schemas": {

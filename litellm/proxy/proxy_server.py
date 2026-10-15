@@ -11768,7 +11768,13 @@ class ProxyStartupEvent:
         from litellm.integrations.ternary.ternary_logger import (  # noqa: PLC0415  # lazy import avoids a circular import at module load
             TernaryLogger,
         )
+        from litellm.proxy.spend_tracking.ternary_endpoints import (  # noqa: PLC0415  # mirrors the vantage DB-settings registration above
+            TernarySettingsStore,
+            register_ternary_logger_from_db,
+        )
 
+        if prisma_client is not None:
+            await register_ternary_logger_from_db(TernarySettingsStore(ConfigRepository(prisma_client)))
         await TernaryLogger.init_ternary_background_job(
             scheduler=scheduler,  # pyright: ignore[reportUnknownArgumentType]  # APScheduler ships no type information
         )
