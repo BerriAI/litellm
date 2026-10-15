@@ -3980,13 +3980,16 @@ async def update_key_fn(
             raise Exception("Not connected to DB!")
 
         is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
+        update_fields: Final[Mapping[str, object]] = cast(
+            "Mapping[str, object]", non_default_values
+        )  # cast-ok: prepare_key_update_data returns a bare dict
         object_permission_upsert: Final = await _prepare_key_update_object_permission(
-            object_permission_data=non_default_values.get("object_permission"),
+            object_permission_data=update_fields.get("object_permission"),
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
         )
         key_update_values: Final = MappingProxyType(
-            {field: value for field, value in non_default_values.items() if field != "object_permission"}
+            {field: value for field, value in update_fields.items() if field != "object_permission"}
         )
         await _check_key_project_team_on_mutation(
             data=data,
@@ -3994,7 +3997,7 @@ async def update_key_fn(
             prisma_client=prisma_client,
         )
         update_values: Final = (
-            non_default_values
+            update_fields
             if is_project_assignment
             else await _write_prepared_key_update_object_permission(
                 data_json=key_update_values,
@@ -4017,7 +4020,7 @@ async def update_key_fn(
             else await _update_key_row_assigning_project(
                 prisma_client=prisma_client,
                 key=key,
-                non_default_values=non_default_values,
+                non_default_values=update_fields,
                 existing_key_row=existing_key_row,
             )
             if is_project_assignment
