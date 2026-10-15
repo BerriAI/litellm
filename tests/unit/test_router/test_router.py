@@ -26243,8 +26243,14 @@ class _FirstPullStream:
             raise self._first
         return self._first
 
+    def __iter__(self) -> "_FirstPullStream":
+        return self
+
     def __next__(self) -> object:
         return self._pull(StopIteration)
+
+    def __aiter__(self) -> "_FirstPullStream":
+        return self
 
     async def __anext__(self) -> object:
         return self._pull(StopAsyncIteration)
@@ -26252,7 +26258,6 @@ class _FirstPullStream:
 
 def _first_chunk_cases():
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import _FirstChunk
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
     chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="hi"))])
@@ -26265,8 +26270,8 @@ def _first_chunk_cases():
         is_pre_first_chunk=True,
     )
     return [
-        pytest.param(chunk, _FirstChunk(chunk=chunk), None, id="first-chunk"),
-        pytest.param(None, _FirstChunk(chunk=None), None, id="empty-stream"),
+        pytest.param(chunk, chunk, None, id="first-chunk"),
+        pytest.param(None, None, None, id="empty-stream"),
         pytest.param(wrapped, None, provider_error, id="pre-content-failure"),
     ]
 
@@ -26275,11 +26280,13 @@ def _first_chunk_cases():
 def test_read_first_chunk_direct_call(first, expected, raised):
     from litellm.router import _read_first_chunk
 
+    stream = _FirstPullStream(first)
     if raised is None:
-        assert _read_first_chunk(_FirstPullStream(first)) == expected
+        taken = _read_first_chunk(stream)
+        assert (taken.chunk, taken.rest) == (expected, stream)
         return
     with pytest.raises(type(raised)) as caught:
-        _read_first_chunk(_FirstPullStream(first))
+        _read_first_chunk(stream)
     assert caught.value is raised
 
 
@@ -26288,38 +26295,84 @@ def test_read_first_chunk_direct_call(first, expected, raised):
 async def test_aread_first_chunk_direct_call(first, expected, raised):
     from litellm.router import _aread_first_chunk
 
+    stream = _FirstPullStream(first)
     if raised is None:
-        assert await _aread_first_chunk(_FirstPullStream(first)) == expected
+        taken = await _aread_first_chunk(stream)
+        assert (taken.chunk, taken.rest) == (expected, stream)
         return
     with pytest.raises(type(raised)) as caught:
-        await _aread_first_chunk(_FirstPullStream(first))
+        await _aread_first_chunk(stream)
     assert caught.value is raised
 
 
 def _chunks_with_first_cases():
-    from litellm.router import _FirstChunk
-
     return [
         pytest.param(None, ["a", "b"], ["a", "b"], id="nothing-read-stream-as-is"),
-        pytest.param(_FirstChunk(chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
-        pytest.param(_FirstChunk(chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
+        pytest.param((None, ["a", "b"]), ["a", "b"], [], id="empty-stream-not-touched"),
+        pytest.param(("first", ["a", "b"]), ["never-iterated"], ["first", "a", "b"], id="first-chunk-put-back"),
     ]
 
 
-@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
-def test_chunks_with_first_direct_call(taken, rest, expected):
-    from litellm.router import _chunks_with_first
+@pytest.mark.parametrize("taken, stream, expected", _chunks_with_first_cases())
+def test_chunks_with_first_direct_call(taken, stream, expected):
+    from litellm.router import _chunks_with_first, _FirstChunk
 
-    assert list(_chunks_with_first(iter(rest), taken)) == expected
+    first = None if taken is None else _FirstChunk(chunk=taken[0], rest=iter(taken[1]))
+    assert list(_chunks_with_first(iter(stream), first)) == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
-async def test_achunks_with_first_direct_call(taken, rest, expected):
-    from litellm.router import _achunks_with_first
+@pytest.mark.parametrize("taken, stream, expected", _chunks_with_first_cases())
+async def test_achunks_with_first_direct_call(taken, stream, expected):
+    from litellm.router import _achunks_with_first, _FirstChunk
 
-    async def stream():
-        for item in rest:
-            yield item
+    first = None if taken is None else _FirstChunk(chunk=taken[0], rest=_AsyncList(taken[1]))
+    assert [item async for item in _achunks_with_first(_AsyncList(stream), first)] == expected
 
-    assert [item async for item in _achunks_with_first(stream(), taken)] == expected
+
+class _IterationHandedOffStream(CustomStreamWrapper):
+    """A CustomStreamWrapper that, like the MCP gateway's MCPStreamWrapper, has no completion_stream of its
+    own and hands iteration to another object from __aiter__ / __iter__, a fresh one per call so a second
+    __aiter__ would replay the first chunk."""
+
+    def __init__(self, chunks: list[litellm.ModelResponseStream]) -> None:
+        super().__init__(completion_stream=None, model="gpt-5.4", custom_llm_provider="openai", logging_obj=MagicMock())
+        self._chunks: Final = chunks
+
+    def __aiter__(self):
+        return _AsyncList(self._chunks)
+
+    def __iter__(self):
+        return iter(self._chunks)
+
+
+def _handed_off_chunks() -> list[litellm.ModelResponseStream]:
+    return [
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": text}}]) for text in ("tool ", "answer")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_a_wrapper_that_hands_iteration_to_another_iterator():
+    """The eager first-chunk read goes through __aiter__ like `async for` does, so a wrapper with
+    completion_stream=None (MCPStreamWrapper) streams instead of failing with a NoneType iterator."""
+    router = _mid_stream_opt_out_router()
+    chunks = _handed_off_chunks()
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=_IterationHandedOffStream(chunks))):
+        response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True)
+        streamed = [chunk async for chunk in response]
+
+    assert streamed == chunks
+
+
+def test_completion_streams_a_wrapper_that_hands_iteration_to_another_iterator():
+    """Sync twin: Router._completion's first-chunk read goes through __iter__ like a for loop does."""
+    router = _mid_stream_opt_out_router()
+    chunks = _handed_off_chunks()
+
+    with patch("litellm.completion", return_value=_IterationHandedOffStream(chunks)):
+        response = router.completion(model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True)
+        streamed = list(response)
+
+    assert streamed == chunks
