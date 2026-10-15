@@ -133,7 +133,7 @@ def get_user_organization_info(
     return _user_organizations, _user_organization_role_mapping
 
 
-def _user_is_org_admin(
+def user_is_org_admin(
     request_data: dict,
     user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
@@ -171,6 +171,9 @@ def _user_is_org_admin(
 
     # User must be admin of ALL requested orgs, not just any one
     return all(org_id in admin_org_ids for org_id in candidate_org_ids)
+
+
+_user_is_org_admin: Final = user_is_org_admin
 
 
 TEAM_ORG_CONTEXT_ROUTES: Final = frozenset({"/team/update"})

@@ -2,7 +2,8 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
@@ -12,12 +13,27 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _BudgetDb(Protocol):
+    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
+
+    @property
+    def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
+
+
+class _PrismaClientView(Protocol):
+    """The one attribute this repository reads off the untyped Prisma client wrapper."""
+
+    @property
+    def db(self) -> _BudgetDb: ...
+
+
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
-        return self.prisma_client.db.litellm_budgettable
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db.litellm_budgettable
 
     @property
     def model_class(self) -> type[LiteLLM_BudgetTable]:
@@ -34,12 +50,12 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         max_parallel_requests: int | None = None,
         tpm_limit: int | None = None,
         rpm_limit: int | None = None,
-        model_max_budget: dict[str, Any] | None = None,
+        model_max_budget: Mapping[str, object] | None = None,
         budget_duration: str | None = None,
         allowed_models: list[str] | None = None,
     ) -> LiteLLM_BudgetTable:
         """Create a new budget record."""
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -71,12 +87,12 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         max_parallel_requests: int | None = None,
         tpm_limit: int | None = None,
         rpm_limit: int | None = None,
-        model_max_budget: dict[str, Any] | None = None,
+        model_max_budget: Mapping[str, object] | None = None,
         budget_duration: str | None = None,
         allowed_models: list[str] | None = None,
     ) -> LiteLLM_BudgetTable | None:
         """Update an existing budget record."""
-        data: Final[dict[str, Any]] = {"updated_by": updated_by}
+        data: Final[dict[str, object]] = {"updated_by": updated_by}
         if max_budget is not None:
             data["max_budget"] = max_budget
         if soft_budget is not None:

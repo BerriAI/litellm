@@ -16,8 +16,10 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
@@ -30,6 +32,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_reconcile_success,
     io_token_refund_failure,
 )
+from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -136,6 +139,29 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm_key, rpm_key
 
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def _get_current_tpm(self, tpm_key: str, tpm_limit: int) -> int | None:
+        local_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        try:
+            return redis_cache.get_cache(key=tpm_key)
+        except RedisCircuitBreakerOpenError:
+            return local_tpm
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: int, parent_otel_span: Span | None) -> int | None:
+        local_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        try:
+            return await redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
+        except RedisCircuitBreakerOpenError:
+            return local_tpm
+
+    @with_service_target(ROUTER_USAGE_TARGET)
     def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Synchronous pre-call check for model rate limits.
@@ -168,8 +194,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = self._get_current_tpm(tpm_key, tpm_limit)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -216,6 +241,7 @@ class ModelRateLimitingCheck(CustomLogger):
             # Don't fail the request if rate limit check fails
             return deployment
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None = None) -> dict | None:
         """
         Async pre-call check for model rate limits.
@@ -249,8 +275,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = await self._async_get_current_tpm(tpm_key, tpm_limit, parent_otel_span)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -304,9 +329,10 @@ class ModelRateLimitingCheck(CustomLogger):
             # Don't fail the request if rate limit check fails
             return deployment
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         try:
@@ -324,7 +350,7 @@ class ModelRateLimitingCheck(CustomLogger):
                     self.dual_cache,
                     kwargs,
                     response_obj,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
                 # Fall through: a deployment can also configure tpm/rpm alongside
                 # itpm/otpm, and that path's pre-call check reads the tpm_key
@@ -364,7 +390,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         # Never fail the primary logging pipeline over an io-token refund error.
@@ -372,9 +398,10 @@ class ModelRateLimitingCheck(CustomLogger):
             await async_io_token_refund_failure(
                 self.dual_cache,
                 kwargs,
-                parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Sync version of tracking TPM usage after successful request.

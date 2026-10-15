@@ -48,12 +48,20 @@ from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
+from litellm.integrations.ternary.ternary_logger import TernaryLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
 )
-from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
+from litellm.integrations.zerobus import ZerobusLogger
+from litellm.proxy.hooks.dynamic_rate_limiter import (  # noqa: F401  # legacy module exports
+    PROXY_DynamicRateLimitHandler,
+    _PROXY_DynamicRateLimitHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_DynamicRateLimitHandlerV3,
+    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
 
 
 class CustomLoggerRegistry:
@@ -88,6 +96,7 @@ class CustomLoggerRegistry:
         "langtrace": OpenTelemetry,
         "weave_otel": OpenTelemetry,
         "levo": OpenTelemetry,
+        "signoz": OpenTelemetry,
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
@@ -97,9 +106,10 @@ class CustomLoggerRegistry:
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
         "pointfive": PointFiveLogger,
+        "zerobus": ZerobusLogger,
         "aws_sqs": SQSLogger,
-        "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
-        "dynamic_rate_limiter_v3": _PROXY_DynamicRateLimitHandlerV3,
+        "dynamic_rate_limiter": PROXY_DynamicRateLimitHandler,
+        "dynamic_rate_limiter_v3": PROXY_DynamicRateLimitHandlerV3,
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
         "bitbucket": BitBucketPromptManager,
@@ -108,6 +118,7 @@ class CustomLoggerRegistry:
         "focus": FocusLogger,
         "mavvrik": MavvrikFocusLogger,
         "vantage": VantageLogger,
+        "ternary": TernaryLogger,
         "posthog": PostHogLogger,
         "newrelic": NewRelicLogger,
     }

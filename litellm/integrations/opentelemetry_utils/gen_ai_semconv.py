@@ -29,20 +29,25 @@ Events:
   included only when content capture is enabled).
 """
 
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
+    from opentelemetry._logs import SeverityNumber as _SeverityNumber
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = _Span | Any
+    Span = _Span
 else:
-    Span = Any
+
+    class Span(Protocol):
+        def set_attribute(self, key: str, value: object) -> None: ...
 
 
 # OTEL_SEMCONV_STABILITY_OPT_IN is a comma-separated list of category-specific
@@ -127,7 +132,7 @@ class OTELGenAISemconvMixin:
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[Callable[..., object], type[_SeverityNumber]]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -195,13 +200,16 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, str]:
+    def _build_inference_details_attrs(
+        self, kwargs: dict, response_obj: dict, provider: str | None
+    ) -> dict[str, str | None]:
         """Build the attribute payload for the inference-details event.
 
-        Always includes provider/operation; input/output messages are added
+        Always includes operation and provider (None when the call carries none,
+        dropped before the event is emitted); input/output messages are added
         only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: Final[dict[str, str]] = {
+        attrs: Final[dict[str, str | None]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
             "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
@@ -221,7 +229,7 @@ class OTELGenAISemconvMixin:
         self,
         kwargs: dict,
         response_obj: dict,
-        provider: str,
+        provider: str | None,
         otel_logger,
         parent_ctx,
     ) -> None:
@@ -239,6 +247,6 @@ class OTELGenAISemconvMixin:
             severity_number=SeverityNumber.INFO,
             severity_text="INFO",
             body=None,
-            attributes=self._build_inference_details_attrs(kwargs, response_obj, provider),
+            attributes=drop_none(self._build_inference_details_attrs(kwargs, response_obj, provider)),
         )
         otel_logger.emit(log_record)

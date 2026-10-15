@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -28,6 +28,7 @@ export interface KeyEditFormValues {
   tpm_limit_type?: string | null;
   rpm_limit?: number | string | null;
   rpm_limit_type?: string | null;
+  tpd_limit?: number | string | null;
   throttle_on_budget_exceeded?: boolean;
   enable_prompt_caching?: boolean;
   max_parallel_requests?: number | string | null;
@@ -77,6 +78,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
   rpm_limit: keyData.rpm_limit,
   rpm_limit_type: (keyData as { rpm_limit_type?: string | null }).rpm_limit_type ?? null,
+  tpd_limit: keyData.tpd_limit,
   throttle_on_budget_exceeded: Boolean(readMetadata(keyData, "throttle_on_budget_exceeded")),
   enable_prompt_caching: Boolean(readMetadata(keyData, "enable_prompt_caching")),
   max_parallel_requests: keyData.max_parallel_requests,
@@ -120,49 +122,52 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
 });
 
 export const keyEditFormSchema = z.object({
-  key_alias: z.custom<string | undefined>(),
-  models: z.custom<string[] | undefined>(),
-  allowed_routes: z.custom<string | undefined>(),
-  max_budget: z.custom<number | string | null | undefined>(),
-  soft_budget: z.custom<number | string | null | undefined>(),
-  budget_duration: z.custom<string | null | undefined>(),
-  tpm_limit: z.custom<number | string | null | undefined>(),
-  tpm_limit_type: z.custom<string | null | undefined>(),
-  rpm_limit: z.custom<number | string | null | undefined>(),
-  rpm_limit_type: z.custom<string | null | undefined>(),
-  throttle_on_budget_exceeded: z.custom<boolean | undefined>(),
-  enable_prompt_caching: z.custom<boolean | undefined>(),
-  max_parallel_requests: z.custom<number | string | null | undefined>(),
-  model_tpm_limit: z.custom<string | undefined>(),
-  model_rpm_limit: z.custom<string | undefined>(),
+  key_alias: z.custom<string | undefined>().optional(),
+  models: z.custom<string[] | undefined>().optional(),
+  allowed_routes: z.custom<string | undefined>().optional(),
+  max_budget: z.custom<number | string | null | undefined>().optional(),
+  soft_budget: z.custom<number | string | null | undefined>().optional(),
+  budget_duration: z.custom<string | null | undefined>().optional(),
+  tpm_limit: z.custom<number | string | null | undefined>().optional(),
+  tpm_limit_type: z.custom<string | null | undefined>().optional(),
+  rpm_limit: z.custom<number | string | null | undefined>().optional(),
+  rpm_limit_type: z.custom<string | null | undefined>().optional(),
+  tpd_limit: z.custom<number | string | null | undefined>().optional(),
+  throttle_on_budget_exceeded: z.custom<boolean | undefined>().optional(),
+  enable_prompt_caching: z.custom<boolean | undefined>().optional(),
+  max_parallel_requests: z.custom<number | string | null | undefined>().optional(),
+  model_tpm_limit: z.custom<string | undefined>().optional(),
+  model_rpm_limit: z.custom<string | undefined>().optional(),
   default_estimated_output_tokens: z
     .custom<number | string | null | undefined>()
-    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message),
+    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message)
+    .optional(),
   default_estimated_output_tokens_per_model: z
     .custom<string | undefined>()
-    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
-  guardrails: z.custom<string[] | undefined>(),
-  disable_global_guardrails: z.custom<boolean | undefined>(),
-  policies: z.custom<string[] | undefined>(),
-  tags: z.custom<string[] | undefined>(),
-  prompts: z.custom<string[] | undefined>(),
-  access_group_ids: z.custom<string[] | undefined>(),
-  allowed_passthrough_routes: z.custom<string[] | undefined>(),
-  vector_stores: z.custom<string[] | undefined>(),
-  mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
-  mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
-  agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
-  skills: z.custom<string[] | undefined>(),
-  organization_id: z.custom<string | null | undefined>(),
-  team_id: z.custom<string | null | undefined>(),
+    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message)
+    .optional(),
+  guardrails: z.custom<string[] | undefined>().optional(),
+  disable_global_guardrails: z.custom<boolean | undefined>().optional(),
+  policies: z.custom<string[] | undefined>().optional(),
+  tags: z.custom<string[] | undefined>().optional(),
+  prompts: z.custom<string[] | undefined>().optional(),
+  access_group_ids: z.custom<string[] | undefined>().optional(),
+  allowed_passthrough_routes: z.custom<string[] | undefined>().optional(),
+  vector_stores: z.custom<string[] | undefined>().optional(),
+  mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>().optional(),
+  mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>().optional(),
+  agents_and_groups: z.custom<AgentsAndGroups | undefined>().optional(),
+  skills: z.custom<string[] | undefined>().optional(),
+  organization_id: z.custom<string | null | undefined>().optional(),
+  team_id: z.custom<string | null | undefined>().optional(),
   project_id: z.string().nullable().optional(),
-  logging_settings: z.custom<unknown[] | undefined>(),
-  metadata: z.custom<string | undefined>(),
-  duration: z.custom<string | null | undefined>(),
-  token: z.custom<string | undefined>(),
-  disabled_callbacks: z.custom<string[] | undefined>(),
-  auto_rotate: z.custom<boolean | undefined>(),
-  rotation_interval: z.custom<string | undefined>(),
+  logging_settings: z.custom<unknown[] | undefined>().optional(),
+  metadata: z.custom<string | undefined>().optional(),
+  duration: z.custom<string | null | undefined>().optional(),
+  token: z.custom<string | undefined>().optional(),
+  disabled_callbacks: z.custom<string[] | undefined>().optional(),
+  auto_rotate: z.custom<boolean | undefined>().optional(),
+  rotation_interval: z.custom<string | undefined>().optional(),
 });
 
 export interface MountedFieldGates {
@@ -184,6 +189,7 @@ export const toSubmittedValues = (
   tpm_limit_type: values.tpm_limit_type,
   rpm_limit: values.rpm_limit,
   rpm_limit_type: values.rpm_limit_type,
+  tpd_limit: values.tpd_limit,
   throttle_on_budget_exceeded: values.throttle_on_budget_exceeded,
   enable_prompt_caching: values.enable_prompt_caching,
   max_parallel_requests: values.max_parallel_requests,

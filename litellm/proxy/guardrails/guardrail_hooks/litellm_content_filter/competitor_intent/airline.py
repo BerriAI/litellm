@@ -13,11 +13,14 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (  # noqa: F401  # legacy module exports
     BaseCompetitorIntentChecker,
-    _compile_marker,
-    _count_signals,
-    _word_boundary_match,
+    _compile_marker,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _count_signals,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _word_boundary_match,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    compile_marker,
+    count_signals,
+    word_boundary_match,
 )
 
 # Location/travel context: prepositions, travel verbs, booking nouns, entry/geo nouns.
@@ -170,8 +173,8 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         self._other_meaning_signals = list(merged.get("other_meaning_signals") or [])
         self._competitor_signals = list(merged.get("competitor_signals") or [])
         self._other_meaning_anchors = list(merged.get("other_meaning_anchors") or [])
-        self._explicit_competitor_marker = _compile_marker(merged.get("explicit_competitor_marker"))
-        self._explicit_other_meaning_marker = _compile_marker(merged.get("explicit_other_meaning_marker"))
+        self._explicit_competitor_marker = compile_marker(merged.get("explicit_competitor_marker"))
+        self._explicit_other_meaning_marker = compile_marker(merged.get("explicit_other_meaning_marker"))
 
     def _classify_ambiguous(self, text: str, token: str) -> tuple[str, float]:
         """Other meaning vs competitor using airline signals and explicit markers."""
@@ -179,21 +182,25 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         if (
             self._explicit_competitor_marker
             and self._explicit_competitor_marker.search(text_lower)
-            and _word_boundary_match(text_lower, token.lower())
+            and word_boundary_match(text_lower, token.lower())
         ):
             return "COMPETITOR", 0.85
         if self._explicit_other_meaning_marker and self._explicit_other_meaning_marker.search(text_lower):
             return "OTHER_MEANING", 0.85
         # Operational-only: baggage/lounge/check-in/refund with no comparison → product query
-        has_comparison: Final = _count_signals(text_lower, AIRLINE_COMPARISON_SIGNALS) > 0
-        operational_count: Final = _count_signals(text_lower, AIRLINE_OPERATIONAL_SIGNALS)
+        has_comparison: Final = count_signals(text_lower, AIRLINE_COMPARISON_SIGNALS) > 0
+        operational_count: Final = count_signals(text_lower, AIRLINE_OPERATIONAL_SIGNALS)
         if not has_comparison and operational_count > 0:
             return "OTHER_MEANING", 0.85
         # Score: location/travel context vs airline context (no place-name list)
-        other_count = _count_signals(text_lower, self._other_meaning_signals)
+        other_count = count_signals(  # rebind-ok: pre-existing rebinding on a rename-only line
+            text_lower, self._other_meaning_signals
+        )
         if self._other_meaning_anchors:
-            other_count += _count_signals(text_lower, self._other_meaning_anchors)
-        comp_count: Final = _count_signals(text_lower, self._competitor_signals)
+            other_count += count_signals(  # rebind-ok: pre-existing rebinding on a rename-only line
+                text_lower, self._other_meaning_anchors
+            )
+        comp_count: Final = count_signals(text_lower, self._competitor_signals)
         total: Final = other_count + comp_count
         if total == 0:
             return "OTHER_MEANING", 0.5
