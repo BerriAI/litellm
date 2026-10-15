@@ -420,12 +420,7 @@ async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
         MagicMock(async_realtime=mock_async_realtime),
     )
 
-    def fake_get_llm_provider(
-        model,
-        api_base=None,
-        api_key=None,
-        custom_llm_provider: str | None = None,
-    ):
+    def fake_get_llm_provider(model, api_base=None, api_key=None, custom_llm_provider=None):
         return (
             "gpt-realtime-whisper",
             "azure",
@@ -578,21 +573,16 @@ async def test_arealtime_resolves_azure_ad_token_when_no_api_key(monkeypatch):
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-
-    def fake_get_llm_provider(
-        model,
-        api_base=None,
-        api_key=None,
-        custom_llm_provider: str | None = None,
-    ):
-        return (
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             None,
             "https://my-endpoint.openai.azure.com",
-        )
-
-    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+        ),
+    )
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
 
     captured_params = {}
@@ -623,21 +613,16 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-
-    def fake_get_llm_provider(
-        model,
-        api_base=None,
-        api_key=None,
-        custom_llm_provider: str | None = None,
-    ):
-        return (
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             "test-key",
             "https://my-endpoint.openai.azure.com",
-        )
-
-    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+        ),
+    )
 
     def fail_get_azure_ad_token(litellm_params):
         raise AssertionError("should not resolve an AD token when an api_key is configured")
@@ -740,21 +725,16 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-
-    def fake_get_llm_provider(
-        model,
-        api_base=None,
-        api_key=None,
-        custom_llm_provider: str | None = None,
-    ):
-        return (
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             None,
             "https://my-endpoint.openai.azure.com",
-        )
-
-    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+        ),
+    )
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
     monkeypatch.setattr(realtime_main.litellm, "api_key", None)
 

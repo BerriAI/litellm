@@ -473,7 +473,7 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     import litellm
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_parallel_tool_use_config,
-        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
     )
 
     base = "anthropic.claude-fallback-test"
@@ -488,8 +488,28 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
         },
     )
 
-    assert is_claude_4_5_on_bedrock(regional) is True
+    assert supports_bedrock_prompt_cache_ttl(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypatch):
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
+    )
+
+    with_ttl = "anthropic.claude-ttl-supported"
+    without_ttl = "anthropic.claude-ttl-unsupported"
+    monkeypatch.setitem(litellm.model_cost, with_ttl, {"cache_creation_input_token_cost_above_1hr": 1e-05})
+    monkeypatch.setitem(litellm.model_cost, without_ttl, {"input_cost_per_token": 1e-06})
+
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(with_ttl) is True
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(without_ttl) is False
+    assert supports_bedrock_prompt_cache_ttl(with_ttl) is True
+    assert supports_bedrock_prompt_cache_ttl(without_ttl) is False
 
 
 @pytest.mark.parametrize(
@@ -1989,3 +2009,42 @@ class TestBedrockGovCloudSupport:
         """Test that GovCloud Titan models use Invoke API"""
         route = BedrockModelInfo.get_bedrock_route(model_name)
         assert route == "invoke"
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_event_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            BedrockEventStreamDecoderBase()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected"),
+    [
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "us.anthropic.claude-opus-4-8",
+        ),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            None,
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+        ),
+        ("us.anthropic.claude-opus-4-8", "anthropic.claude-sonnet-4-5", "us.anthropic.claude-opus-4-8"),
+    ],
+    ids=["profile-arn-with-base-model", "profile-arn-without-base-model", "named-model-keeps-its-name"],
+)
+def test_bedrock_capability_model_reads_base_model_only_for_application_profile_arns(model, base_model, expected):
+    from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
+    assert bedrock_capability_model(model, base_model) == expected

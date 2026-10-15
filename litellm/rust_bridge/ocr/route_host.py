@@ -12,7 +12,7 @@ from litellm.rust_bridge import failures
 from litellm.rust_bridge.failures import UpstreamFailure
 from litellm.rust_bridge.public_call import optional_str
 
-__all__ = ("UpstreamFailure", "arguments", "map_failure", "response")
+__all__ = ("UpstreamFailure", "map_failure", "response")
 
 _RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -27,10 +27,6 @@ def response(value: Mapping[str, object]) -> OCRResponse:
     return normalized
 
 
-def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
-    return request
-
-
 def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
     if getattr(error, "ocr_request_format_error", False):
         return litellm.UnsupportedParamsError(
@@ -39,5 +35,5 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             llm_provider=request_provider,
         )
     return failures.map_native_failure(
-        error, str(request["model"]), request_provider, arguments(request), optional_str(request.get("api_base"))
+        error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
     )

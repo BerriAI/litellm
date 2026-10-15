@@ -18,7 +18,7 @@ from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATIO
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -37,9 +37,13 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
+    configured_spend_logs_metadata_fields,
     get_logging_payload,
     get_spend_logs_id,
+    _stored_request_without_requester_ip_address,
+    requester_ip_address_logging_disabled,
     should_store_prompts_and_responses_in_spend_logs,
+    spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.router import GenericLiteLLMParams
@@ -79,10 +83,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -208,9 +218,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -2911,7 +2919,11 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
                 "extra_headers": {"Authorization": "Bearer canary-extra-header"},
                 "tools": [
                     {"type": "function", "function": {"name": "f", "parameters": tool_parameters}},
-                    {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
+                    {
+                        "type": "mcp",
+                        "server_url": "https://mcp.example.com",
+                        "headers": {"Authorization": "canary-mcp"},
+                    },
                 ],
                 "fallbacks": [{"model": "azure-b", **credentials}],
                 "metadata": metadata,
@@ -5465,7 +5477,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -5503,9 +5515,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -5581,9 +5591,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
@@ -5664,6 +5672,7 @@ def test_failed_agent_request_keeps_registered_display_name():
     assert payload["model"] == agent_model
     assert payload["status"] == "failure"
     assert payload["model_id"] == "registered-agent"
+
 
 _CLI_SESSION_ALIAS: Final = "cli-session-alice"
 _CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
@@ -5796,18 +5805,107 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
 def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_agent: str | None) -> None:
     kwargs = {
         "model": "gpt-4",
-        "litellm_params": {"metadata": {
-            "user_api_key": "test-key",
-            "agent_id": "header-selected-agent",
-            "billing_agent_id": billing_agent,
-        }},
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "agent_id": "header-selected-agent",
+                "billing_agent_id": billing_agent,
+            }
+        },
     }
     payload = get_logging_payload(
-        kwargs=kwargs, response_obj={"id": "request"},
-        start_time=datetime.datetime.now(timezone.utc), end_time=datetime.datetime.now(timezone.utc),
+        kwargs=kwargs,
+        response_obj={"id": "request"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+def _spend_log_row(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({"request_id": "req-1", "spend": 0.5, "metadata": json.dumps(dict(metadata))})
+
+
+_STORED_METADATA: Final = MappingProxyType(
+    {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"max_tokens": 10}},
+        "usage_object": {"prompt_tokens": 3},
+        "user_api_key_alias": "alias",
+    }
+)
+
+
+def test_spend_log_row_keeps_every_metadata_field_when_unconfigured() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    assert spend_log_row_with_retained_metadata(row, None) is row
+
+
+def test_spend_log_row_drops_excluded_metadata_fields_only() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    stored: Final = spend_log_row_with_retained_metadata(
+        row, SpendLogsMetadataFields(exclude=("model_map_information", "user_api_key_alias"))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+    assert {name: value for name, value in stored.items() if name != "metadata"} == {
+        "request_id": "req-1",
+        "spend": 0.5,
+    }
+
+
+def test_spend_log_row_include_keeps_listed_and_always_kept_fields() -> None:
+    stored: Final = spend_log_row_with_retained_metadata(
+        _spend_log_row(_STORED_METADATA), SpendLogsMetadataFields(include=("usage_object",))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {"include": ["usage_object"], "exclude": ["model_map_information"]},
+        {},
+        {"exclude": ["model_map_informaton"]},
+        {"include": ["usage_object", "not_a_field"]},
+        {"exclude": ["status"]},
+        {"exclude": ["cold_storage_object_key"]},
+        {"exclude": ["model_map_information"], "drop": ["usage_object"]},
+    ],
+)
+def test_spend_logs_metadata_fields_rejects_ambiguous_or_lossy_config(configured: dict[str, list[str]]) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"spend_logs_metadata_fields": configured})
+
+
+def test_configured_spend_logs_metadata_fields_ignores_invalid_runtime_value() -> None:
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"include": ["usage_object"], "exclude": ["status"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() is None
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"exclude": ["model_map_information"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() == SpendLogsMetadataFields(exclude=("model_map_information",))
 
 
 class _OcrUsageInfoDict(TypedDict, total=False):
@@ -6041,3 +6139,728 @@ class TestGetLoggingPayloadOCR:
         assert payload["spend"] == _OCR_RESPONSE_COST
         assert _additional_usage_values(payload)["pages_processed"] == 5
         assert _additional_usage_values(payload)["doc_size_bytes"] == 1024
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["chatcmpl-9XZmkzS1uPhRCoVdGQvBqqIbSgECt", "", None],
+)
+def test_spend_logs_payload(model_id: str | None):
+
+    kwargs: Final = {
+        "model": "chatgpt-v-3",
+        "messages": [
+            {"role": "system", "content": "you are a helpful assistant.\n"},
+            {"role": "user", "content": "bom dia"},
+        ],
+        "custom_llm_provider": "azure",
+        "optional_params": {
+            "stream": False,
+            "max_tokens": 10,
+            "user": "116544810872468347480",
+            "extra_body": {},
+        },
+        "litellm_params": {
+            "acompletion": True,
+            "api_key": "sk-test-mock-key-707",
+            "force_timeout": 600,
+            "logger_fn": None,
+            "verbose": False,
+            "custom_llm_provider": "azure",
+            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com//openai/",
+            "litellm_call_id": "b9929bf6-7b80-4c8c-b486-034e6ac0c8b7",
+            "model_alias_map": {},
+            "completion_call_id": None,
+            "metadata": {
+                "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+                "user_api_key": "sk-test-mock-api-key-123",
+                "user_api_key_alias": "custom-key-alias",
+                "user_api_end_user_max_budget": None,
+                "litellm_api_version": "0.0.0",
+                "global_max_parallel_requests": None,
+                "user_api_key_user_id": "116544810872468347480",
+                "user_api_key_org_id": "custom-org-id",
+                "user_api_key_team_id": "custom-team-id",
+                "user_api_key_team_alias": "custom-team-alias",
+                "user_api_key_metadata": {},
+                "requester_ip_address": "127.0.0.1",
+                "spend_logs_metadata": {"hello": "world"},
+                "headers": {
+                    "content-type": "application/json",
+                    "user-agent": "PostmanRuntime/7.32.3",
+                    "accept": "*/*",
+                    "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                    "host": "localhost:4000",
+                    "accept-encoding": "gzip, deflate, br",
+                    "connection": "keep-alive",
+                    "content-length": "163",
+                },
+                "endpoint": "http://localhost:4000/chat/completions",
+                "model_group": "gpt-5-mini",
+                "deployment": "azure/gpt-4.1-mini",
+                "model_info": {
+                    "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                    "db_model": False,
+                },
+                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+                "caching_groups": None,
+                "error_information": None,
+                "status": "success",
+                "proxy_server_request": "{}",
+                "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+            },
+            "model_info": {
+                "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                "db_model": False,
+            },
+            "proxy_server_request": {
+                "url": "http://localhost:4000/chat/completions",
+                "method": "POST",
+                "headers": {
+                    "content-type": "application/json",
+                    "user-agent": "PostmanRuntime/7.32.3",
+                    "accept": "*/*",
+                    "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                    "host": "localhost:4000",
+                    "accept-encoding": "gzip, deflate, br",
+                    "connection": "keep-alive",
+                    "content-length": "163",
+                },
+                "body": {
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "you are a helpful assistant.\n",
+                        },
+                        {"role": "user", "content": "bom dia"},
+                    ],
+                    "model": "gpt-5-mini",
+                    "max_tokens": 10,
+                },
+            },
+            "preset_cache_key": None,
+            "no-log": False,
+            "stream_response": {},
+            "input_cost_per_token": None,
+            "input_cost_per_second": None,
+            "output_cost_per_token": None,
+            "output_cost_per_second": None,
+        },
+        "start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 307665),
+        "stream": False,
+        "user": "116544810872468347480",
+        "call_type": "acompletion",
+        "litellm_call_id": "b9929bf6-7b80-4c8c-b486-034e6ac0c8b7",
+        "completion_start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+        "max_tokens": 10,
+        "extra_body": {},
+        "input": [
+            {"role": "system", "content": "you are a helpful assistant.\n"},
+            {"role": "user", "content": "bom dia"},
+        ],
+        "api_key": "1234",
+        "original_response": "",
+        "additional_args": {
+            "headers": {"Authorization": "Bearer 1234"},
+            "api_base": "openai-gpt-4-test-v-1.openai.azure.com",
+            "acompletion": True,
+            "complete_input_dict": {
+                "model": "chatgpt-v-3",
+                "messages": [
+                    {"role": "system", "content": "you are a helpful assistant.\n"},
+                    {"role": "user", "content": "bom dia"},
+                ],
+                "stream": False,
+                "max_tokens": 10,
+                "user": "116544810872468347480",
+                "extra_body": {},
+            },
+        },
+        "log_event_type": "post_api_call",
+        "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+        "cache_hit": None,
+        "response_cost": 2.4999999999999998e-05,
+        "standard_logging_object": {
+            "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+            "metadata": {
+                "user_api_key_end_user_id": "test-user",
+            },
+            "model_map_information": {
+                "tpm": 1000,
+                "rpm": 1000,
+            },
+        },
+    }
+    response_obj: Final = litellm.ModelResponse(
+        id=model_id,
+        choices=[
+            litellm.Choices(
+                finish_reason="length",
+                index=0,
+                message=litellm.Message(content="Bom dia! Como posso ajudar você", role="assistant"),
+            )
+        ],
+        created=1717789410,
+        model="gpt-35-turbo",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=litellm.Usage(completion_tokens=10, prompt_tokens=20, total_tokens=30),
+    )
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime(2024, 6, 7, 12, 43, 30, 308604),
+        end_time=datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+    )
+
+    assert len(payload["request_id"]) > 0
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+
+    assert "metadata" in payload
+    assert isinstance(payload["metadata"], str)
+    metadata: Final[Mapping[str, object]] = json.loads(payload["metadata"])
+    assert set(metadata.keys()) == set(expected_metadata_keys)
+
+    assert payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
+    assert metadata["user_api_key_org_id"] == "custom-org-id"
+    assert metadata["user_api_key_team_id"] == "custom-team-id"
+    assert metadata["user_api_key_team_alias"] == "custom-team-alias"
+    assert metadata["user_api_key_alias"] == "custom-key-alias"
+
+    assert payload["custom_llm_provider"] == "azure"
+
+
+def test_spend_logs_payload_whisper():
+
+    kwargs: Final = {
+        "model": "whisper-1",
+        "messages": [{"role": "user", "content": "audio_file"}],
+        "optional_params": {},
+        "litellm_params": {
+            "api_base": "",
+            "metadata": {
+                "user_api_key": "sk-test-mock-api-key-123",
+                "user_api_key_alias": None,
+                "user_api_key_end_user_id": "test-user",
+                "user_api_end_user_max_budget": None,
+                "litellm_api_version": "1.40.19",
+                "global_max_parallel_requests": None,
+                "user_api_key_user_id": "default_user_id",
+                "user_api_key_org_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_team_alias": None,
+                "user_api_key_team_max_budget": None,
+                "user_api_key_team_spend": None,
+                "user_api_key_spend": 0.0,
+                "user_api_key_max_budget": None,
+                "user_api_key_metadata": {},
+                "headers": {
+                    "host": "localhost:4000",
+                    "user-agent": "curl/7.88.1",
+                    "accept": "*/*",
+                    "content-length": "775501",
+                    "content-type": "multipart/form-data; boundary=------------------------21d518e191326d20",
+                },
+                "endpoint": "http://localhost:4000/v1/audio/transcriptions",
+                "litellm_parent_otel_span": None,
+                "model_group": "whisper-1",
+                "deployment": "whisper-1",
+                "model_info": {
+                    "id": "d7761582311451c34d83d65bc8520ce5c1537ea9ef2bec13383cf77596d49eeb",
+                    "db_model": False,
+                },
+                "caching_groups": None,
+            },
+        },
+        "start_time": datetime.datetime(2024, 6, 26, 14, 20, 11, 313291),
+        "stream": False,
+        "user": "",
+        "call_type": "atranscription",
+        "litellm_call_id": "05921cf7-33f9-421c-aad9-33310c1e2702",
+        "completion_start_time": datetime.datetime(2024, 6, 26, 14, 20, 13, 653149),
+        "stream_options": None,
+        "input": "tmp-requestc8640aee-7d85-49c3-b3ef-bdc9255d8e37.wav",
+        "original_response": '{"text": "Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."}',
+        "additional_args": {
+            "complete_input_dict": {
+                "model": "whisper-1",
+                "file": "<_io.BufferedReader name='tmp-requestc8640aee-7d85-49c3-b3ef-bdc9255d8e37.wav'>",
+                "language": None,
+                "prompt": None,
+                "response_format": None,
+                "temperature": None,
+            }
+        },
+        "log_event_type": "post_api_call",
+        "end_time": datetime.datetime(2024, 6, 26, 14, 20, 13, 653149),
+        "cache_hit": None,
+        "response_cost": 0.00023398580000000003,
+    }
+
+    response: Final = litellm.utils.TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
+    )
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response,
+        start_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
+        end_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
+    )
+
+    assert payload["call_type"] == "atranscription"
+    assert payload["spend"] == 0.00023398580000000003
+
+
+def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+
+    kwargs: Final = {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "litellm_params": {
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5.5",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            }
+        },
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "response": {"role": "assistant", "content": "Hi there!"},
+            "metadata": {
+                "user_api_key_end_user_id": "test-user",
+            },
+            "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+            "model_map_information": {
+                "tpm": 1000,
+                "rpm": 1000,
+            },
+        },
+    }
+    response_obj: Final = litellm.ModelResponse(
+        id="chatcmpl-123",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(content="Hi there!", role="assistant"),
+            )
+        ],
+        model="gpt-5-mini",
+        usage=litellm.Usage(completion_tokens=2, prompt_tokens=1, total_tokens=3),
+    )
+    logged_at: Final = datetime.datetime(2026, 1, 15, 12, 0, 0)
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=logged_at, end_time=logged_at
+    )
+
+    assert payload["response"] == json.dumps({"role": "assistant", "content": "Hi there!"})
+    proxy_server_request: Final = json.loads(payload["proxy_server_request"] or "{}")
+    assert proxy_server_request["model"] == "gpt-5.5"
+    assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", False)
+
+    payload_disabled: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=logged_at, end_time=logged_at
+    )
+    assert payload_disabled["messages"] == "{}"
+    assert payload_disabled["response"] == "{}"
+
+
+@pytest.mark.parametrize(
+    ("configured", "disabled"),
+    [
+        (True, True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        (1, True),
+        (False, False),
+        (None, False),
+        ("false", False),
+        ("no", False),
+        (0, False),
+        ("", False),
+        ("maybe", False),
+        ([1], False),
+    ],
+)
+def test_requester_ip_address_logging_disabled_reads_the_setting_as_the_settings_api_validates_it(
+    configured: object, disabled: bool
+) -> None:
+    with patch(  # test-quality-ok: general_settings is proxy config, loaded from yaml, not an HTTP boundary
+        "litellm.proxy.proxy_server.general_settings", {"disable_requester_ip_address_logging": configured}
+    ):
+        assert requester_ip_address_logging_disabled() is disabled
+
+
+def _request_ip_metadata() -> dict[str, object]:
+    return {
+        "requester_ip_address": "203.0.113.9",
+        "user_agent": "requester-ip-test",
+        "headers": {"X-Forwarded-For": "203.0.113.9, 10.0.0.1", "x-real-ip": "203.0.113.9", "accept": "*/*"},
+        "requester_metadata": {"headers": {"x-forwarded-for": "203.0.113.9"}, "team": "blue"},
+        "error_information": {
+            "error_code": "403",
+            "error_message": "Access forbidden: IP address 203.0.113.9 not allowed.",
+            "traceback": "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        },
+    }
+
+
+def _request_ip_kwargs(request_metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "litellm_params": {
+            "metadata": request_metadata,
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                    "metadata": request_metadata,
+                }
+            },
+        },
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "response": {"role": "assistant", "content": "Hi there!"},
+            "metadata": {"requester_ip_address": "203.0.113.9"},
+            "model_map_information": {"tpm": 1000, "rpm": 1000},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("disabled", "recorded_ip", "error_message", "traceback"),
+    [
+        (
+            False,
+            "203.0.113.9",
+            "Access forbidden: IP address 203.0.113.9 not allowed.",
+            "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        ),
+        (
+            True,
+            None,
+            "Access forbidden: IP address REDACTED_BY_LITELM not allowed.",
+            "HTTPException: client REDACTED_BY_LITELM via REDACTED_BY_LITELM denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        ),
+    ],
+    ids=["setting-off", "setting-on"],
+)
+def test_spend_logs_payload_keeps_no_requester_ip_address_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool, recorded_ip: str | None, error_message: str, traceback: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", disabled)
+    logged_at: Final = datetime.datetime(2026, 1, 15, 12, 0, 0)
+    request_metadata: Final = _request_ip_metadata()
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=_request_ip_kwargs(request_metadata),
+        response_obj=litellm.ModelResponse(id="chatcmpl-ip", model="gpt-5-mini"),
+        start_time=logged_at,
+        end_time=logged_at,
+    )
+
+    stored_metadata: Final = json.loads(payload["metadata"])
+    stored_request: Final = json.loads(payload["proxy_server_request"] or "{}")
+    stored_errors: Final = (stored_metadata["error_information"], stored_request["metadata"]["error_information"])
+    assert request_metadata == _request_ip_metadata()
+    assert stored_metadata["user_agent"] == "requester-ip-test"
+    assert stored_request["metadata"]["headers"]["accept"] == "*/*"
+    assert stored_request["metadata"]["requester_metadata"]["team"] == "blue"
+    assert payload["requester_ip_address"] == recorded_ip
+    assert stored_metadata["requester_ip_address"] == recorded_ip
+    assert stored_request["metadata"]["requester_ip_address"] == recorded_ip
+    assert [error["error_message"] for error in stored_errors] == [error_message, error_message]
+    assert [error["traceback"] for error in stored_errors] == [traceback, traceback]
+    assert [error["error_code"] for error in stored_errors] == ["403", "403"]
+    assert ("203.0.113.9" in json.dumps(payload, default=str)) is not disabled
+
+
+def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fields_from_request_metadata() -> None:
+    body: Final = {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "203.0.113.9"}],
+        "tools": [{"type": "function", "function": {"parameters": {"headers": {"x-real-ip": "keep"}}}}],
+        "error_information": {"error_message": "203.0.113.9"},
+        "litellm_metadata": {
+            "requester_ip_address": "203.0.113.9",
+            "headers": {
+                "Forwarded": "for=203.0.113.9",
+                "CF-Connecting-IP": "203.0.113.9",
+                "X-Envoy-External-Address": "203.0.113.9",
+                "CF-Connecting-IPv6": "2001:db8::9",
+                "CF-Pseudo-IPv4": "203.0.113.9",
+                "X-AppEngine-User-IP": "203.0.113.9",
+                "X-Vercel-Forwarded-For": "203.0.113.9",
+                "X-ARR-ClientIP": "203.0.113.9",
+                "DO-Connecting-IP": "203.0.113.9",
+                "Incap-Client-IP": "2001:db8::9",
+                "x-edge-client": "client=203.0.113.9, peer=[2001:db8::9]:443",
+                "host": "10.0.0.5:4000",
+                "user-agent": "ua",
+            },
+            "forwarded": "not a header",
+            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9", "x-client": "host:2001:db8::9"}}],
+            "error_information": {"error_message": "denied 203.0.113.9"},
+        },
+        "originating_request_masked": {
+            "messages": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {
+                "requester_ip_address": "203.0.113.9",
+                "headers": {"x-forwarded-for": "203.0.113.9", "host": "10.0.0.5:4000"},
+            },
+        },
+        "classifier_input": {
+            "input": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "curl"},
+        },
+    }
+
+    assert _stored_request_without_requester_ip_address(body) == {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "203.0.113.9"}],
+        "tools": [{"type": "function", "function": {"parameters": {"headers": {"x-real-ip": "keep"}}}}],
+        "error_information": {"error_message": "203.0.113.9"},
+        "litellm_metadata": {
+            "requester_ip_address": None,
+            "headers": {
+                "DO-Connecting-IP": "REDACTED_BY_LITELM",
+                "Incap-Client-IP": "REDACTED_BY_LITELM",
+                "x-edge-client": "client=REDACTED_BY_LITELM, peer=[REDACTED_BY_LITELM]:443",
+                "host": "REDACTED_BY_LITELM:4000",
+                "user-agent": "ua",
+            },
+            "forwarded": "not a header",
+            "spend_logs_metadata": [{"headers": {"x-client": "host:REDACTED_BY_LITELM"}}],
+            "error_information": {"error_message": "denied REDACTED_BY_LITELM"},
+        },
+        "originating_request_masked": {
+            "messages": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": None, "headers": {"host": "REDACTED_BY_LITELM:4000"}},
+        },
+        "classifier_input": {
+            "input": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": None, "user_agent": "curl"},
+        },
+    }
+
+
+@pytest.mark.parametrize("error_field", ["error_message", "traceback"])
+def test_stored_request_masks_ip_addresses_in_long_error_text_and_at_its_truncation_cut(
+    monkeypatch: pytest.MonkeyPatch, error_field: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    text: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
+    metadata: Final = {"error_information": {"error_code": "500", error_field: text}}
+
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata=metadata,
+            litellm_params={"proxy_server_request": {"body": {"model": "gpt-5-mini", "metadata": metadata}}},
+            drop_requester_ip_address=True,
+        )
+    )
+
+    stored_text: Final = stored["metadata"]["error_information"][error_field]
+    kept_head_and_tail: Final = stored_text[:350] + stored_text[-650:]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
+    assert kept_head_and_tail.startswith("a" * 345 + " REDA")
+    assert not any(char.isdigit() for char in kept_head_and_tail)
+    assert metadata["error_information"][error_field] == text
+
+
+_TRACE_ID: Final = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+_PLANTED_MARKER: Final = (
+    f"x ... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped 5 chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ... "
+)
+
+
+@pytest.mark.parametrize("requester_metadata", [False, True], ids=["headers", "requester-metadata-headers"])
+@pytest.mark.parametrize(
+    "value, stored_head, stored_tail",
+    [
+        (
+            "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8:0:0:1:0:0:9 " + "c" * 642,
+            "a" * 345 + " REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM " + "c" * 642,
+        ),
+        (
+            "a" * 343 + " ip:203.0.113.9 " + "b" * 2000 + " 192.0.2.1. " + "c" * 647,
+            "a" * 343 + " ip:REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM. " + "c" * 647,
+        ),
+        (
+            "x" * 296 + f" trace={_TRACE_ID}:203.0.113.9 " + "b" * 2000 + f" 203.0.113.9:{_TRACE_ID} " + "c" * 606,
+            "x" * 296 + f" trace={_TRACE_ID}:REDACTED_BY_LITELM",
+            f"REDACTED_BY_LITELM:{_TRACE_ID} " + "c" * 606,
+        ),
+        (
+            _PLANTED_MARKER
+            + "a" * (345 - len(_PLANTED_MARKER))
+            + " 203.0.113.9 "
+            + "b" * 2000
+            + " 2001:db8::dead:beef "
+            + "c" * 640,
+            _PLANTED_MARKER + "a" * (345 - len(_PLANTED_MARKER)) + " REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM " + "c" * 640,
+        ),
+        ("a" * 346 + " cafe:beef " + "b" * 2000 + " deadbeef " + "c" * 646, "a" * 346 + " caf", "eef " + "c" * 646),
+        ("0123456789abcdef" * 200, ("0123456789abcdef" * 22)[:350], ("0123456789abcdef" * 41)[-650:]),
+        (
+            "a" * 281 + " " + "ab1." * 17 + "b" * 2000 + " " + "1ba." * 17 + " " + "c" * 581,
+            "a" * 281 + " " + "ab1." * 6 + "REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELMba." + "1ba." * 5 + " " + "c" * 581,
+        ),
+    ],
+    ids=[
+        "ipv4-and-ipv6-split",
+        "ipv4-after-a-label-and-before-a-dot",
+        "ipv4-beside-long-hex-tokens",
+        "after-a-planted-marker-and-ipv6-groups-without-digits",
+        "hex-words-without-digits-or-colons",
+        "hex-run-longer-than-an-ip",
+        "short-groups-longer-than-an-ip",
+    ],
+)
+def test_stored_request_masks_the_piece_of_an_ip_address_a_header_truncation_cut_leaves(
+    monkeypatch: pytest.MonkeyPatch, requester_metadata: bool, value: str, stored_head: str, stored_tail: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    headers: Final = {"x-edge-trace": value}
+    metadata: Final = {"requester_metadata": {"headers": headers}} if requester_metadata else {"headers": headers}
+
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata=metadata,
+            litellm_params={"proxy_server_request": {"body": {"model": "gpt-5-mini", "metadata": metadata}}},
+            drop_requester_ip_address=True,
+        )
+    )
+
+    stored_metadata: Final = stored["metadata"]["requester_metadata"] if requester_metadata else stored["metadata"]
+    stored_value: Final = stored_metadata["headers"]["x-edge-trace"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_value
+    assert stored_value.startswith(stored_head + "... (")
+    assert stored_value.endswith(") ..." + stored_tail)
+    assert headers["x-edge-trace"] == value
+
+
+def test_stored_request_with_ip_logging_disabled_matches_setting_off_for_bodies_without_ip_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    loop: Final[dict[str, object]] = {}
+    loop["self"] = (loop,)
+    body: Final[dict[object, object]] = {"model": "gpt-5-mini", 7: "non-string key", "metadata": {"tags": (loop,)}}
+
+    stored: Final = [
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": body}},
+            drop_requester_ip_address=drop_requester_ip_address,
+        )
+        for drop_requester_ip_address in (False, True)
+    ]
+
+    assert json.loads(stored[0])["model"] == "gpt-5-mini"
+    assert stored[1] == stored[0]
+
+
+@pytest.mark.parametrize("disabled", [False, True], ids=["setting-off", "setting-on"])
+def test_failure_error_information_masks_ip_addresses_in_long_text_and_at_its_truncation_cut(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", disabled)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    text: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
+
+    sanitized: Final = sanitize_error_information_for_spend_logs(
+        {"error_code": "500", "error_message": text, "traceback": text}
+    )
+
+    assert sanitized is not None
+    for stored_text in (sanitized["error_message"], sanitized["traceback"]):
+        kept_head_and_tail = stored_text[:350] + stored_text[-650:]
+        assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
+        assert any(char.isdigit() for char in kept_head_and_tail) is not disabled
+    assert sanitized["error_code"] == "500"
+
+
+@pytest.mark.parametrize(
+    "address", ["203.0.113.9", "2001:db8::9", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::", "::1:2:3:4:5:6:7", "fe80::1"]
+)
+def test_failure_error_information_masks_every_ip_address_form_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, address: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", True)
+
+    sanitized: Final = sanitize_error_information_for_spend_logs(
+        {
+            "error_code": "403",
+            "error_message": f"IP address {address} not allowed.",
+            "traceback": f"peer [{address}]:443",
+        }
+    )
+
+    assert sanitized == {
+        "error_code": "403",
+        "error_message": "IP address REDACTED_BY_LITELM not allowed.",
+        "traceback": "peer [REDACTED_BY_LITELM]:443",
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "stored"),
+    [
+        ("connect to host:2001:db8::2 failed", "connect to host:REDACTED_BY_LITELM failed"),
+        ("peer_2001:db8::2_tail", "peer_REDACTED_BY_LITELM_tail"),
+        ("upstream 1:2:3:4:5:6:7:8:443 refused", "upstream REDACTED_BY_LITELM refused"),
+        ("upstream fe80::1:2:3:4:5:6:443 refused", "upstream REDACTED_BY_LITELM refused"),
+        ("label cafe:1:2:3:4:5:6:7::", "label REDACTED_BY_LITELM"),
+        ("label cafe:1:2:3:4:5:6:7:8:443", "label REDACTED_BY_LITELM"),
+        ("socket_192.0.2.65 closed", "socket_REDACTED_BY_LITELM closed"),
+        (
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
+        ),
+        ("IP 192.0.2.1.443 > 10.0.0.2.80: Flags [S]", "IP REDACTED_BY_LITELM.443 > REDACTED_BY_LITELM.80: Flags [S]"),
+    ],
+)
+def test_failure_error_information_masks_addresses_after_labels_and_before_ports(
+    monkeypatch: pytest.MonkeyPatch, text: str, stored: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", True)
+
+    assert sanitize_error_information_for_spend_logs({"error_code": "500", "error_message": text}) == {
+        "error_code": "500",
+        "error_message": stored,
+    }

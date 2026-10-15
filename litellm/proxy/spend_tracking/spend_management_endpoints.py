@@ -552,6 +552,20 @@ async def spend_user_fn(
         )
 
 
+def _parse_utc_day(value: str | None, param_name: str) -> datetime | None:
+    """Parse an optional YYYY-MM-DD query param to a UTC datetime, so the SQL
+    day window never depends on the database session timezone."""
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"{param_name} must be a YYYY-MM-DD date, got {value!r}"},
+        )
+
+
 @router.get(
     "/spend/tags",
     tags=["Budget & Spend Tracking"],
@@ -561,6 +575,8 @@ async def spend_user_fn(
     },
 )
 async def view_spend_tags(
+    log_team_lookup: LogTeamLookupDependency,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
@@ -572,6 +588,11 @@ async def view_spend_tags(
 ):
     """
     LiteLLM Enterprise - View Spend Per Request Tag
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+      across every spend log.
+    - All other callers see aggregates over their own spend logs and those of
+      teams they may view, exactly like ``/spend/logs/ui``.
 
     Example Request:
     ```
@@ -594,16 +615,19 @@ async def view_spend_tags(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # run the following SQL query on prisma
-        """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        GROUP BY individual_request_tag;
-        """
-        response: Final = await get_spend_by_tags(start_date=start_date, end_date=end_date, prisma_client=prisma_client)
+        read_scope: Final = (
+            AllRows()
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
+            if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            else OwnedRows(user_api_key_dict.user_id)
+        )
+        response: Final = await get_spend_by_tags(
+            prisma_client=prisma_client,
+            read_scope=read_scope,
+            start_date=_parse_utc_day(start_date, "start_date"),
+            end_date=_parse_utc_day(end_date, "end_date"),
+        )
 
         return response
     except Exception as e:
@@ -3767,7 +3791,7 @@ async def global_spend_refresh():
                 },
             )
             await new_client.db.connect()
-            await _query_raw(new_client, sql_query)
+            await new_client.db.execute_raw(sql_query)
             verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
             return {
                 "message": "MonthlyGlobalSpend view refreshed",
@@ -4377,17 +4401,41 @@ async def provider_budgets() -> ProviderBudgetResponse:
         raise handle_exception_on_proxy(e)
 
 
-async def get_spend_by_tags(prisma_client: PrismaClient, start_date=None, end_date=None):
+async def get_spend_by_tags(
+    prisma_client: PrismaClient,
+    read_scope: ReadScope,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+):
+    scope_clause, scope_params = read_scope_sql(read_scope, 1)
+    start_clause: Final = (
+        (f"\"startTime\" >= (${len(scope_params) + 1}::timestamptz AT TIME ZONE 'UTC')",) if start_date else ()
+    )
+    end_clause: Final = (
+        (
+            f"\"startTime\" < ((${len(scope_params) + len(start_clause) + 1}::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')",
+        )
+        if end_date
+        else ()
+    )
+    clauses: Final = tuple(clause for clause in (scope_clause, *start_clause, *end_clause) if clause)
+    where_sql: Final = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params: Final = (
+        *scope_params,
+        *((start_date,) if start_date else ()),
+        *((end_date,) if end_date else ()),
+    )
     response: Final[Sequence[Mapping[str, object]]] = await _query_raw(
         prisma_client,
-        """
+        f"""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
+        FROM "LiteLLM_SpendLogs"{where_sql}
         GROUP BY individual_request_tag;
         """,
+        *params,
     )
 
     return response

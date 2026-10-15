@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -17,16 +15,15 @@ from typing import Final
 
 import anthropic
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, group_members, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -1661,6 +1658,203 @@ def test_chat_pre_call_denial_returns_content_filter(gateway: Gateway, tmp_path:
         ) == (0, 0, 0), body["usage"]
 
 
+def _refusing_provider(request: Request) -> Reply:
+    raise AssertionError(f"denied text completion reached the provider: {request!r}")
+
+
+_STRING_REJECTION: Final = "__DENIAL__"
+_STRING_REJECTER_MODULE: Final = """from litellm.integrations.custom_guardrail import CustomGuardrail
+
+
+class StringRejecter(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return "__DENIAL__"
+"""
+
+
+class _TextCompletionChoice(BaseModel):
+    text: str
+
+
+class _TextCompletionResponse(BaseModel):
+    object: str
+    choices: list[_TextCompletionChoice]
+
+
+class _TextCompletionStreamChoice(BaseModel):
+    text: str | None = None
+
+
+class _TextCompletionStreamFrame(BaseModel):
+    object: str
+    choices: list[_TextCompletionStreamChoice]
+
+
+def _string_rejection_config(tmp_path: Path, identity: str) -> Path:
+    module: Final = "string_rejecter_" + uuid.uuid4().hex
+    (tmp_path / f"{module}.py").write_text(_STRING_REJECTER_MODULE)
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {"guardrail": f"{module}.StringRejecter", "mode": "pre_call"},
+        }
+    ]
+    path: Final = tmp_path / "string-rejection.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def test_text_completion_pre_call_denial_returns_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(
+                model=model, prompt="say hi", extra_body={"guardrails": [identity]}
+            )
+        assert completion.object == "text_completion", completion
+        assert [choice.text for choice in completion.choices] == [_RESPONSES_DENIAL], completion
+        assert wire.drain() == (), completion
+
+
+def test_text_completion_pre_call_denial_streams_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip("BUG: a streamed /v1/completions pre_call denial sends one frame with no text and no [DONE]")
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "stream": True, "guardrails": [identity]},
+            key=key,
+        )
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            chunks: Final = list(
+                client.completions.create(
+                    model=model, prompt="say hi", stream=True, extra_body={"guardrails": [identity]}
+                )
+            )
+        assert {chunk.object for chunk in chunks} == {"text_completion"}, chunks
+        assert "".join(choice.text or "" for chunk in chunks for choice in chunk.choices) == _RESPONSES_DENIAL, chunks
+        assert raw.headers["content-type"].startswith("text/event-stream"), raw.text
+        lines: Final = tuple(line for line in raw.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", raw.text
+        frames: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+        assert {frame["object"] for frame in frames} == {"text_completion"}, raw.text
+        assert "".join(choice.get("text") or "" for frame in frames for choice in frame["choices"]) == _RESPONSES_DENIAL
+        assert wire.drain() == (), raw.text
+
+
+def test_text_completion_pre_call_string_rejection_returns_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip("BUG: /v1/completions pre_call string rejection returns HTTP 400 instead of a text_completion response")
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _string_rejection_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "guardrails": [identity]},
+            key=key,
+        )
+        assert raw.status_code == 200, raw.text
+        payload: Final = _TextCompletionResponse.model_validate_json(raw.content)
+        assert payload.object == "text_completion", raw.text
+        assert [choice.text for choice in payload.choices] == [_STRING_REJECTION], raw.text
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(
+                model=model, prompt="say hi", extra_body={"guardrails": [identity]}
+            )
+        assert completion.object == "text_completion", completion
+        assert [choice.text for choice in completion.choices] == [_STRING_REJECTION], completion
+        assert wire.drain() == (), raw.text
+
+
+def test_text_completion_pre_call_string_rejection_streams_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip(
+        "BUG: /v1/completions pre_call string rejection returns HTTP 400 JSON instead of a text/event-stream denial"
+    )
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _string_rejection_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "stream": True, "guardrails": [identity]},
+            key=key,
+        )
+        assert raw.status_code == 200, raw.text
+        assert raw.headers["content-type"].startswith("text/event-stream"), raw.text
+        lines: Final = tuple(line for line in raw.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", raw.text
+        frames: Final = tuple(
+            _TextCompletionStreamFrame.model_validate_json(line.removeprefix("data: ")) for line in lines[:-1]
+        )
+        assert tuple(frame.object for frame in frames) == ("text_completion",) * len(frames), raw.text
+        assert "".join(choice.text or "" for frame in frames for choice in frame.choices) == _STRING_REJECTION, raw.text
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            chunks: Final = tuple(
+                client.completions.create(
+                    model=model, prompt="say hi", stream=True, extra_body={"guardrails": [identity]}
+                )
+            )
+        assert tuple(chunk.object for chunk in chunks) == ("text_completion",) * len(chunks), chunks
+        assert "".join(choice.text or "" for chunk in chunks for choice in chunk.choices) == _STRING_REJECTION, chunks
+        assert wire.drain() == (), raw.text
+
+
 @pytest.mark.covers("other.observability.guardrails.messages_pre_call_denial_returns_message")
 def test_messages_pre_call_denial_returns_message(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
@@ -1772,27 +1966,9 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
             model: Final = scenario.model(api_base=_dead_api_base())
-            members: Final = tuple(
-                member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
-            )
-            children: Final = tuple(member.pid for member in members)
-            workers: Final = tuple(
-                member.pid for member in members if any("spawn_main" in part for part in member.cmdline())
-            )
+            workers: Final = owned.worker_pids()
             assert len(workers) >= 2, workers
-            os.kill(workers[0], signal.SIGKILL)
-            expected: Final = len(children)
-            eventually(
-                lambda: tuple(
-                    member.pid
-                    for member in group_members(owned.process.pid)
-                    if member.pid != owned.process.pid
-                    and member.is_running()
-                    and member.status() != psutil.STATUS_ZOMBIE
-                ),
-                lambda pids: len(pids) >= expected and any(pid not in children for pid in pids),
-                seconds=30,
-            )
+            owned.kill_worker(min(workers))
 
             def burst(index: int) -> httpx.Response:
                 return candidate.request(
@@ -1807,11 +1983,16 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
 @pytest.mark.parametrize(
-    ("logging_only_scope", "scanned_directions"),
-    (("input", ("request",)), ("output", ("response",)), ("both", ("request", "response"))),
+    ("logging_only_settings", "scanned_directions"),
+    (
+        ({"logging_only_scope": "input"}, ("request",)),
+        ({"logging_only_scope": "output"}, ("response",)),
+        ({"logging_only_continue_on_input_failure": True}, ("request", "response")),
+    ),
+    ids=("input", "output", "continue_on_input_failure"),
 )
 def test_logging_only_scope_observes_only_the_configured_direction_without_blocking(
-    gateway: Gateway, tmp_path: Path, logging_only_scope: str, scanned_directions: tuple[str, ...]
+    gateway: Gateway, tmp_path: Path, logging_only_settings: dict[str, object], scanned_directions: tuple[str, ...]
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
     prompt: Final = "synthetic observed prompt " + identity
@@ -1848,7 +2029,7 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "logging_only",
-                    "logging_only_scope": logging_only_scope,
+                    **logging_only_settings,
                     "default_on": True,
                     "api_base": policy.url,
                     "api_key": "synthetic-guardrail-key",
@@ -2159,8 +2340,21 @@ def _failing_response_scans(reply: Reply) -> Callable[[Request], Reply]:
     return guardrail
 
 
+def _detect_only_pipeline_policy(identity: str) -> dict[str, JsonValue]:
+    return {
+        "guardrails": {"add": [identity]},
+        "pipeline": {"mode": "post_call", "steps": [{"guardrail": identity, "on_pass": "allow", "on_fail": "next"}]},
+    }
+
+
 def _post_call_config(
-    tmp_path: Path, identity: str, policy_url: str, params: Mapping[str, JsonValue], default_on: bool
+    tmp_path: Path,
+    identity: str,
+    policy_url: str,
+    params: Mapping[str, JsonValue],
+    default_on: bool,
+    *,
+    pipeline: bool = False,
 ) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["guardrails"] = [
@@ -2176,6 +2370,9 @@ def _post_call_config(
             },
         }
     ]
+    if pipeline:
+        config["policies"] = {f"{identity}-pipeline": _detect_only_pipeline_policy(identity)}
+        config["policy_attachments"] = [{"policy": f"{identity}-pipeline", "scope": "*"}]
     path: Final = tmp_path / f"{identity}.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -2227,6 +2424,7 @@ def _disconnect_rig(
     shape: str = "text",
     default_on: bool = True,
     workers: int = 1,
+    pipeline: bool = False,
 ) -> Iterator[_DisconnectRig]:
     identity: Final = "guardrail" + uuid.uuid4().hex
     gate: Final = threading.Event()
@@ -2234,7 +2432,7 @@ def _disconnect_rig(
         wire_server(guardrail) as policy,
         wire_server(_scripted_provider(gate if gated else None, pause, shape)) as upstream,
     ):
-        config: Final = _post_call_config(tmp_path, identity, policy.url, params, default_on)
+        config: Final = _post_call_config(tmp_path, identity, policy.url, params, default_on, pipeline=pipeline)
         try:
             with (
                 owned_proxy_process(gateway, tmp_path, {}, config=config, workers=workers) as owned,
@@ -2602,6 +2800,37 @@ def test_client_disconnect_mid_stream_scans_for_a_guardrail_the_request_opted_in
         assert _post_call_statuses(rig, rig.model) == (("success",),)
 
 
+_LIVE_DETECT_ONLY_PIPELINE: Final = MappingProxyType({"streaming_buffer_until_moderated": False})
+
+
+@pytest.mark.parametrize(
+    "disconnect",
+    (
+        pytest.param(_chat_httpx, id="chat-httpx"),
+        pytest.param(_responses_httpx, id="responses-httpx"),
+        pytest.param(_messages_httpx, id="messages-httpx"),
+    ),
+)
+def test_live_detect_only_pipeline_releases_chunks_before_the_scan_and_scans_what_a_disconnected_client_received(
+    gateway: Gateway, tmp_path: Path, disconnect: Callable[[_DisconnectRig, int], str]
+) -> None:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
+        scans: Final = _scanned_while_upstream_is_held(rig, disconnect)
+        assert len(scans) == 1, scans
+
+
+def test_live_detect_only_pipeline_records_the_verdict_of_a_disconnected_stream_on_the_spend_row(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
+        _scanned_while_upstream_is_held(rig, _chat_httpx)
+        assert _post_call_statuses(rig, rig.model) == (("success",),)
+
+
 def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Gateway, tmp_path: Path) -> None:
     with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
         try:
@@ -2614,16 +2843,17 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
 
 
 @pytest.mark.parametrize(
-    "params",
+    ("params", "pipeline"),
     (
-        pytest.param(dict(_END_OF_STREAM_ONLY), id="end-of-stream-only"),
-        pytest.param({"streaming_buffer_until_moderated": True}, id="buffered"),
+        pytest.param(dict(_END_OF_STREAM_ONLY), False, id="end-of-stream-only"),
+        pytest.param({"streaming_buffer_until_moderated": True}, False, id="buffered"),
+        pytest.param(dict(_LIVE_DETECT_ONLY_PIPELINE), True, id="live-detect-only-pipeline"),
     ),
 )
 def test_a_fully_read_stream_is_scanned_exactly_once(
-    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue]
+    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue], pipeline: bool
 ) -> None:
-    with _disconnect_rig(gateway, tmp_path, params=params, gated=False) as rig:
+    with _disconnect_rig(gateway, tmp_path, params=params, gated=False, default_on=not pipeline, pipeline=pipeline) as rig:
         response: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0))
         assert response.status_code == 200, response.text
         assert rig.secret() in response.text and "[DONE]" in response.text, response.text
@@ -2683,14 +2913,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
     with _disconnect_rig(gateway, tmp_path, gated=False, pause=3, workers=2) as rig:
-        members: Final = tuple(
-            member for member in group_members(rig.owned.process.pid) if member.pid != rig.owned.process.pid
-        )
-        workers: Final = tuple(member for member in members if any("spawn_main" in part for part in member.cmdline()))
-        assert len(workers) >= 2, members
-        workers[0].send_signal(signal.SIGKILL)
-        psutil.wait_procs((workers[0],), timeout=10)
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers: Final = rig.owned.worker_pids()
+        assert len(workers) >= 2, workers
+        with rig.owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
+            kill()
             received: Final = tuple(pool.map(lambda index: _chat_httpx(rig, index), range(8)))
         assert all(rig.secret(index) in line for index, line in enumerate(received)), received
         assert _post_call_statuses(rig, rig.model, rows=8) == (("success",),) * 8

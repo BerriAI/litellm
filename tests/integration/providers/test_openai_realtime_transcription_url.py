@@ -30,7 +30,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy_process, owned_upstream, stop_root_process
+from tests.integration._support.process import OwnedProxy, owned_proxy_process, owned_upstream, stop_root_process
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
@@ -572,7 +572,7 @@ async def _first_frames(sockets: tuple[ClientConnection, ...]) -> tuple[dict[str
     return tuple([JSON_OBJECT.validate_json(await socket.recv()) for socket in sockets])
 
 
-async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, root: psutil.Process) -> KillOutcome:
+async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, owned: OwnedProxy) -> KillOutcome:
     query: Final = f"model={model}&{TRANSCRIPTION_QUERY}"
     headers: Final = {"Authorization": f"Bearer {key}"}
     sockets: Final = tuple(
@@ -584,13 +584,15 @@ async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, root
     try:
         created: Final = await asyncio.wait_for(_first_frames(sockets), 60)
         assert [event.get("type") for event in created] == ["session.created"] * OPEN_SESSIONS, created
-        workers: Final = _workers(root)
-        assert len(workers) == WORKERS, [process.pid for process in workers]
+        workers: Final = tuple(sorted(owned.worker_pids()))
+        assert len(workers) == WORKERS, workers
         victim: Final = workers[0]
-        victim.kill()
-        await asyncio.to_thread(victim.wait, 10)
-        served: Final = await asyncio.wait_for(asyncio.gather(*(_one_turn_or_close(socket) for socket in sockets)), 60)
-        return KillOutcome(served.count(True), served.count(False), victim.pid)
+        with owned.replacing_worker(victim) as kill:
+            await asyncio.to_thread(kill)
+            served: Final = await asyncio.wait_for(
+                asyncio.gather(*(_one_turn_or_close(socket) for socket in sockets)), 60
+            )
+        return KillOutcome(served.count(True), served.count(False), victim)
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
 
@@ -647,7 +649,7 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_serving(
                 handle.scenario_id,
             )
             root: Final = psutil.Process(owned.process.pid)
-            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, root))
+            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, owned))
             record_property(
                 "worker_kill", {"served": outcome.served, "closed": outcome.closed, "killed": outcome.killed_pid}
             )

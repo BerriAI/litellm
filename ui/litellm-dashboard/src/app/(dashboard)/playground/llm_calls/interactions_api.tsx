@@ -1,5 +1,5 @@
 import { toast } from "@/lib/toast";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -26,7 +26,7 @@ export async function makeInteractionsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   const requestUrl = `${normalizedBaseUrl}/v1beta/interactions`;
 
