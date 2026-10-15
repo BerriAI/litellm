@@ -1,6 +1,7 @@
 import time
 from collections.abc import Iterator
-from unittest.mock import patch
+from typing import Final
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -1915,20 +1916,33 @@ def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host
     assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch
 
 
+@pytest.mark.parametrize(
+    ("base_model", "vertex_counted_tokens"),
+    [(None, None), ("gemini-3.8-flash", 7)],
+    ids=["model_garden_route", "gemini_base_model"],
+)
 @pytest.mark.asyncio
-async def test_vertex_ai_token_counter_leaves_model_garden_models_to_local_counting():
+async def test_vertex_ai_token_counter_routes_like_generate_content(
+    base_model: str | None, vertex_counted_tokens: int | None
+):
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
     with patch(
-        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
-    ) as mock_gemini_count_tokens:
-        result = await VertexAITokenCounter().count_tokens(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens",
+        new=AsyncMock(return_value={"totalTokens": 7}),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="xai/grok-4.20-non-reasoning",
             messages=[{"role": "user", "content": "Hello"}],
             contents=None,
-            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                    **({} if base_model is None else {"base_model": base_model}),
+                }
+            },
             request_model="vertex_ai/xai/grok-4.20-non-reasoning",
         )
 
-    assert result is None
-    assert not mock_gemini_count_tokens.called
+    assert (None if result is None else result.total_tokens) == vertex_counted_tokens

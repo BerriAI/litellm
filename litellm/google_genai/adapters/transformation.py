@@ -302,6 +302,10 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                 else:
                     yield str(chunk).encode()
 
+        finish_chunk: Final = self.take_finish_chunk_awaiting_usage()
+        if finish_chunk:
+            yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
+
 
 class GoogleGenAIAdapter:
     """Adapter for transforming Google GenAI generate_content requests to/from litellm.completion format"""

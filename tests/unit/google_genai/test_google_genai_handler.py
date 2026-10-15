@@ -5,6 +5,7 @@ Test to verify the Google GenAI generate_content handler functionality
 
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Final
 
@@ -16,7 +17,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
-from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter, GoogleGenAIStreamWrapper
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 
 def test_stream_response_when_stream_requested_sync():
@@ -350,6 +352,9 @@ class _FailureCallTypes(CustomLogger):
         super().__init__()
         self.call_types: list[str] = []
 
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.call_types.append(kwargs["call_type"])
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.call_types.append(kwargs["call_type"])
 
@@ -420,6 +425,7 @@ async def test_generate_content_adapter_logs_router_model_group(
     ("stream", "requested_stream_options", "expected_stream_options"),
     [
         (True, None, {"include_usage": True}),
+        (True, {"include_usage": True}, {"include_usage": True}),
         (True, {"include_usage": False}, None),
         (False, None, None),
     ],
@@ -472,6 +478,34 @@ async def test_generate_content_adapter_asks_openai_compatible_upstream_for_stre
 async def test_generate_content_adapter_stream_ends_with_upstream_usage(
     _httpx_transport: None, model: str, api_base: str, upstream_url: str, upstream_sse: str, prompt_tokens: int
 ):
+    payloads: Final = await _adapter_stream_payloads(model, api_base, upstream_url, upstream_sse)
+
+    assert payloads[-1]["candidates"][0]["finishReason"] == "STOP"
+    assert payloads[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "upstream_url", "upstream_sse"),
+    [
+        ("hosted_vllm/grok", "http://upstream.test/v1", "http://upstream.test/v1/chat/completions", _CHAT_SSE),
+        ("anthropic/claude-haiku-4-5", "http://upstream.test", "http://upstream.test/v1/messages", _ANTHROPIC_SSE),
+    ],
+    ids=["openai_compatible", "anthropic"],
+)
+@pytest.mark.asyncio
+async def test_generate_content_adapter_stream_without_usage_still_ends_with_stop(
+    _httpx_transport: None, model: str, api_base: str, upstream_url: str, upstream_sse: str
+):
+    payloads: Final = await _adapter_stream_payloads(
+        model, api_base, upstream_url, upstream_sse, stream_options={"include_usage": False}
+    )
+
+    assert [payload["candidates"][0].get("finishReason") for payload in payloads][-1] == "STOP"
+
+
+async def _adapter_stream_payloads(
+    model: str, api_base: str, upstream_url: str, upstream_sse: str, **kwargs: object
+):
     from litellm.types.router import GenericLiteLLMParams
 
     with respx.mock() as upstream:
@@ -483,16 +517,15 @@ async def test_generate_content_adapter_stream_ends_with_upstream_usage(
             contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
             litellm_params=GenericLiteLLMParams(api_base=api_base, api_key="k"),
             stream=True,
+            **kwargs,
         )
         events: Final = [chunk async for chunk in response]
 
-    payloads: Final = [
+    return [
         json.loads(line.removeprefix("data: "))
         for line in b"".join(events).decode().splitlines()
         if line.startswith("data: {")
     ]
-    assert payloads[-1]["candidates"][0]["finishReason"] == "STOP"
-    assert payloads[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
 
 
 @pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
@@ -517,3 +550,64 @@ async def test_generate_content_adapter_failure_is_logged_once(
     await asyncio.sleep(0.5)
 
     assert failures.call_types == ["acompletion"]
+
+
+def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: None, monkeypatch: pytest.MonkeyPatch):
+    failures = _FailureCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [failures])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+        )
+        with pytest.raises(litellm.BadRequestError):
+            litellm.google_genai.generate_content(
+                model="hosted_vllm/grok",
+                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                api_base="http://upstream.test/v1",
+                api_key="k",
+            )
+    time.sleep(0.5)
+
+    assert failures.call_types == ["completion"]
+
+
+def _stream_chunk(content: str | None, finish_reason: str | None, usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=finish_reason)],
+        **({} if usage is None else {"usage": usage}),
+    )
+
+
+_FINISH_WITHOUT_USAGE: Final = (_stream_chunk("144", None), _stream_chunk(None, "stop"))
+_FINISH_WITH_USAGE: Final = (
+    _stream_chunk("144", None),
+    _stream_chunk(None, "stop", Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21)),
+)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "prompt_tokens"), [(_FINISH_WITHOUT_USAGE, 0), (_FINISH_WITH_USAGE, 20)], ids=["no_usage", "usage"]
+)
+def test_stream_wrapper_iteration_ends_with_one_stop_event(chunks: tuple[ModelResponseStream, ...], prompt_tokens: int):
+    events: Final = list(GoogleGenAIStreamWrapper(completion_stream=iter(chunks)))
+
+    assert [event["candidates"][0].get("finishReason") for event in events] == [None, "STOP"]
+    assert events[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
+
+
+@pytest.mark.parametrize(
+    ("chunks", "prompt_tokens"), [(_FINISH_WITHOUT_USAGE, 0), (_FINISH_WITH_USAGE, 20)], ids=["no_usage", "usage"]
+)
+@pytest.mark.asyncio
+async def test_stream_wrapper_async_iteration_ends_with_one_stop_event(
+    chunks: tuple[ModelResponseStream, ...], prompt_tokens: int
+):
+    async def completion_stream():
+        for chunk in chunks:
+            yield chunk
+
+    events: Final = [event async for event in GoogleGenAIStreamWrapper(completion_stream=completion_stream())]
+
+    assert [event["candidates"][0].get("finishReason") for event in events] == [None, "STOP"]
+    assert events[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
