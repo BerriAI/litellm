@@ -1261,6 +1261,14 @@ def _save_environment_variables_as(database_url: str, values: dict[str, str]) ->
         )
 
 
+def _environment_variables_revision(database_url: str) -> JsonValue:
+    return read_rows(
+        'SELECT reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )[0]["reload_revision"]
+
+
 def test_a_database_role_with_no_sequence_grants_can_still_save_db_environment_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1279,17 +1287,29 @@ def test_a_database_role_with_no_sequence_grants_can_still_save_db_environment_v
             parsed._replace(netloc=f"{role}:{_TABLE_ONLY_ROLE_PASSWORD}@{parsed.netloc.rpartition('@')[2]}")
         )
 
-        def revision() -> JsonValue:
-            return read_rows(
-                'SELECT reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
-                ("environment_variables",),
-                database_url=database_url,
-            )[0]["reload_revision"]
-
         _save_environment_variables_as(role_url, {"TABLE_ONLY_ROLE_KEY": "stored"})
-        first: Final = revision()
+        first: Final = _environment_variables_revision(database_url)
         _save_environment_variables_as(role_url, {})
-        second: Final = revision()
+        second: Final = _environment_variables_revision(database_url)
 
         assert isinstance(first, int) and isinstance(second, int)
         assert 0 < first < second
+
+
+def test_db_environment_variables_revision_keeps_rising_after_its_sequence_falls_behind_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        for value in ("first", "second", "third"):
+            _save_environment_variables_as(database_url, {"SEQUENCE_BEHIND_KEY": value})
+        before_the_sequence_restarts: Final = _environment_variables_revision(database_url)
+        with psycopg.connect(database_url, autocommit=True) as owner:
+            owner.execute('ALTER SEQUENCE "litellm_environment_variables_revision_seq" RESTART WITH 1')
+
+        _save_environment_variables_as(database_url, {})
+        after_the_sequence_restarts: Final = _environment_variables_revision(database_url)
+
+        assert isinstance(before_the_sequence_restarts, int) and isinstance(after_the_sequence_restarts, int)
+        assert after_the_sequence_restarts > before_the_sequence_restarts

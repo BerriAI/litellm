@@ -9558,7 +9558,8 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
-    for key in ("ROTATION_TEST_ENCRYPTED", "ROTATION_TEST_PLAINTEXT"):
+    under_another_key = encrypt_value_helper("stored-under-another-key", new_encryption_key="sk-another-master-key")
+    for key in ("ROTATION_TEST_ENCRYPTED", "ROTATION_TEST_PLAINTEXT", "ROTATION_TEST_UNDER_ANOTHER_KEY"):
         monkeypatch.setenv(key, "restored-by-monkeypatch")
         monkeypatch.delenv(key)
     prisma_client = AsyncMock()
@@ -9573,6 +9574,7 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
                 param_value={
                     "ROTATION_TEST_ENCRYPTED": encrypt_value_helper("stored-encrypted"),
                     "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+                    "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
                 },
             )
         ]
@@ -9587,9 +9589,11 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(m
     )
 
     stored = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
-    assert {key: decrypt_if_encrypted_with(value, "sk-new-master-key") for key, value in stored.items()} == {
+    rotated = decrypt_if_encrypted_with(stored["ROTATION_TEST_ENCRYPTED"], "sk-new-master-key")
+    assert {**stored, "ROTATION_TEST_ENCRYPTED": rotated} == {
         "ROTATION_TEST_ENCRYPTED": "stored-encrypted",
         "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+        "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
     }
 
 

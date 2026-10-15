@@ -5,7 +5,13 @@ GRANT USAGE ON SEQUENCE "litellm_environment_variables_revision_seq" TO PUBLIC;
 
 CREATE OR REPLACE FUNCTION litellm_bump_environment_variables_revision() RETURNS TRIGGER AS $$
 BEGIN
-  NEW."reload_revision" := nextval('"litellm_environment_variables_revision_seq"');
+  IF TG_OP = 'UPDATE' THEN
+    NEW."reload_revision" := GREATEST(
+      nextval('"litellm_environment_variables_revision_seq"'), OLD."reload_revision" + 1
+    );
+  ELSE
+    NEW."reload_revision" := nextval('"litellm_environment_variables_revision_seq"');
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

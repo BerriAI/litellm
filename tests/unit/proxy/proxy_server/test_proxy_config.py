@@ -5040,24 +5040,35 @@ def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key)
 
 
+def _environment_variables_row(
+    values: Mapping[str, str | None] | None, revision: int | None
+) -> SimpleNamespace | None:
+    if values is None:
+        return None
+    return SimpleNamespace(
+        param_name="environment_variables",
+        param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
+        reload_revision=revision,
+    )
+
+
+async def _sync_cached_and_stored_environment_variables_rows(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, cached: SimpleNamespace | None, stored: SimpleNamespace | None
+) -> None:
+    async def get_config_param(_prisma_client: object, param_name: str) -> SimpleNamespace | None:
+        return cached if param_name == "environment_variables" else None
+
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_config.find_unique = AsyncMock(return_value=stored)
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    await pc._update_config_from_db(prisma_client, {}, store_model_in_db=True)
+
+
 async def _sync_environment_variables_row(
     monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, values: Mapping[str, str | None] | None, revision: int | None
 ) -> None:
-    row: Final = (
-        None
-        if values is None
-        else SimpleNamespace(
-            param_name="environment_variables",
-            param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
-            reload_revision=revision,
-        )
-    )
-
-    async def get_config_param(_prisma_client: object, param_name: str) -> SimpleNamespace | None:
-        return row if param_name == "environment_variables" else None
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
-    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+    row: Final = _environment_variables_row(values, revision)
+    await _sync_cached_and_stored_environment_variables_rows(monkeypatch, pc, cached=row, stored=row)
 
 
 async def _sync_sso_settings_row(pc: ProxyConfig, values: Mapping[str, str] | None) -> None:
@@ -5116,15 +5127,36 @@ async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_st
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("revision_test_environment")
-async def test_environment_variables_row_older_than_the_applied_one_changes_nothing(monkeypatch):
+async def test_cached_environment_variables_row_older_than_the_stored_one_changes_nothing(monkeypatch):
     pc: Final = ProxyConfig()
-
     await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
-    await _sync_environment_variables_row(
-        monkeypatch, pc, {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=4
+
+    await _sync_cached_and_stored_environment_variables_rows(
+        monkeypatch,
+        pc,
+        cached=_environment_variables_row(
+            {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=4
+        ),
+        stored=_environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=5),
     )
 
     assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_whose_stored_revision_went_backwards_is_applied(monkeypatch):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(
+        monkeypatch,
+        pc,
+        {"REVISION_TEST_KEPT": "before-the-restore", "REVISION_TEST_DB_ONLY": "dropped-by-the-restore"},
+        revision=500,
+    )
+
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "restored"}, revision=1)
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("restored", None)
 
 
 @pytest.mark.asyncio
@@ -5151,8 +5183,12 @@ async def test_stale_environment_variables_row_without_a_revision_cannot_bring_b
     await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": "db-only"}, revision=1)
     await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
 
-    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": "db-only"}, revision=None)
-    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+    await _sync_cached_and_stored_environment_variables_rows(
+        monkeypatch,
+        pc,
+        cached=_environment_variables_row({"REVISION_TEST_DB_ONLY": "db-only"}, revision=None),
+        stored=_environment_variables_row({"REVISION_TEST_DB_ONLY": None}, revision=2),
+    )
 
     assert os.environ.get("REVISION_TEST_DB_ONLY") is None
 
@@ -5198,6 +5234,24 @@ async def test_sso_key_the_sso_settings_table_holds_stays_set_while_the_environm
     await _sync_sso_settings_row(pc, {"google_client_id": "from-the-row"})
 
     assert (set_between_the_two_syncs, os.environ.get("GOOGLE_CLIENT_ID")) == ("from-the-row", "from-the-row")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_sso_key_the_environment_variables_row_drops_is_unset_when_sso_settings_are_not_loaded_from_the_db(
+    monkeypatch,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "from-the-row"}, revision=1)
+    await pc._init_non_llm_objects_in_db(prisma_client=MagicMock())
+
+    await _sync_environment_variables_row(monkeypatch, pc, {}, revision=2)
+    await pc._init_non_llm_objects_in_db(prisma_client=MagicMock())
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") is None
 
 
 # ---------------------------------------------------------------------------

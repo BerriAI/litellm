@@ -5578,7 +5578,7 @@ async def rotate_master_key(
 
         if environment_variables_dict:
             decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
-                environment_variables=dict[str, str](environment_variables_dict), return_original_value=True
+                environment_variables=dict[str, str](environment_variables_dict)
             )
             encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
@@ -5588,7 +5588,7 @@ async def rotate_master_key(
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},
+                    data={"param_value": prisma.Json({**environment_variables_dict, **encrypted_env_vars})},
                 )
 
     try:

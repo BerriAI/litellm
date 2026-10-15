@@ -8313,7 +8313,9 @@ class ProxyConfig:
 
         environment_before_db: Final = self._captured_environment_before_db()
         sections: Final = tuple(self._settings_stores)
-        responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        responses: Final = await asyncio.gather(
+            *(self._config_section_row(prisma_client, section) for section in sections)
+        )
         for section, response in zip(sections, responses):
             if response is None or (param_value := getattr(response, "param_value", None)) is None:
                 continue
@@ -8336,6 +8338,23 @@ class ProxyConfig:
         self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
 
+    async def _config_section_row(self, prisma_client: PrismaClient, section: Section) -> object | None:
+        cached: Final = await get_config_param(prisma_client, section)
+        if section != "environment_variables" or not self._is_behind_applied_environment_revision(cached):
+            return cached
+        return await call_with_db_reconnect_retry(
+            prisma_client,
+            lambda: ConfigRepository(prisma_client, use_writer=True).table.find_unique(where={"param_name": section}),
+            reason="environment_variables_writer_read_failure",
+        )
+
+    def _is_behind_applied_environment_revision(self, row: object) -> bool:
+        applied_revision: Final = self._db_environment_revision
+        if applied_revision is None or row is None:
+            return False
+        revision: Final = _config_row_revision(row)
+        return revision is None or revision < applied_revision
+
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
             (section, key) for section, store in self._settings_stores.items() for key in store.shadowed_db_keys()
@@ -8354,8 +8373,6 @@ class ProxyConfig:
         self, value: object, revision: int | None, environment_before_db: Mapping[str, str]
     ) -> None:
         applied_revision: Final = self._db_environment_revision
-        if applied_revision is not None and (revision is None or revision < applied_revision):
-            return
         row: Final = _as_settings_mapping(value)
         decrypted: Final = _ENVIRONMENT_VALUES.validate_python(
             self.decrypt_and_set_db_env_variables(dict(row), return_original_value=True)
@@ -8620,6 +8637,8 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        else:
+            self._restore_sso_environment_removals(frozenset())
         if self._should_load_db_object(object_type="cache_settings"):
             from litellm.proxy.management_endpoints.cache_settings_endpoints import (
                 CacheSettingsManager,
