@@ -6534,6 +6534,7 @@ class Router:
                     file = replace_model_in_jsonl(
                         file_content=file,
                         new_model_name=stripped_model,
+                        keep_line_numbers=custom_llm_provider == LlmProviders.VERTEX_AI.value,
                     )
 
                     kwargs_copy["file"] = file

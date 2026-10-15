@@ -26,6 +26,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 )
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -488,7 +489,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
-                func_tool["parameters"] = tool_dict["input_schema"]
+                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
             result.append(func_tool)
         return result
 
