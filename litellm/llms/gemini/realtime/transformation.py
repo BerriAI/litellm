@@ -475,13 +475,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _declared_rate_from_ga_shape(session_payload: Mapping[str, object]) -> object:
-        audio = session_payload.get("audio")
+        audio: Final = session_payload.get("audio")
         if not isinstance(audio, dict):
             return None
-        audio_input = audio.get("input")
+        audio_input: Final = audio.get("input")
         if not isinstance(audio_input, dict):
             return None
-        audio_format = audio_input.get("format")
+        audio_format: Final = audio_input.get("format")
         if not isinstance(audio_format, dict):
             return None
         return audio_format.get("rate")
@@ -495,9 +495,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _record_input_audio_sample_rate(self, session_payload: Mapping[str, object]) -> None:
         """Read both shapes so the OpenAI-Beta header cannot change the audio's declared rate."""
-        rate = self._declared_rate_from_ga_shape(session_payload)
-        if rate is None:
-            rate = self._declared_rate_from_beta_shape(session_payload)
+        ga_rate: Final = self._declared_rate_from_ga_shape(session_payload)
+        rate: Final = ga_rate if ga_rate is not None else self._declared_rate_from_beta_shape(session_payload)
         if isinstance(rate, bool) or not isinstance(rate, int):
             return
         if not (MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ <= rate <= MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ):
