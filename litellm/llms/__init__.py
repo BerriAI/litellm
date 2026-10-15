@@ -14,6 +14,21 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
+def get_cost_for_google_maps_grounding_request(
+    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
+) -> float | None:
+    """
+    Get the cost of Grounding with Google Maps for a given model. Only Gemini models on the
+    Gemini API and Vertex AI can populate the Maps grounding counter, so every other provider
+    returns None.
+    """
+    if custom_llm_provider != "gemini" and not custom_llm_provider.startswith("vertex_ai"):
+        return None
+    from .gemini.cost_calculator import cost_per_google_maps_grounding_request
+
+    return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
+
+
 def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
     """
     Get the cost for a web search request for a given model.
@@ -47,6 +62,15 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         )
 
         return cost_per_web_search_request_vertex_ai(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "azure_ai":
+        from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
+
+        azure_ai_model_key: Final[str] = model_info.get("key", "") if model_info else ""
+        if "claude" not in azure_ai_model_key.lower() and get_web_search_requests_from_usage(usage) is None:
+            return None
+        from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
+
+        return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
     elif custom_llm_provider == "perplexity":
         # Perplexity handles search costs internally in its own cost calculator
         # Return 0.0 to indicate costs are already accounted for

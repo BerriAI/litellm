@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, MockedFunction, vi } from "vitest";
 
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
 import { TeamsResponse, useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsTable";
@@ -32,6 +32,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeamsTable: vi.fn(),
   teamsTableKeys: { all: ["teamsTable"] },
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
@@ -134,6 +138,14 @@ it("shows a loading state on initial load and hides the data", () => {
   expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
 });
 
+it("replaces the previous rows with the loading state while a new search is pending", () => {
+  mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], {}, { isPlaceholderData: true, isFetching: true }));
+  renderTable();
+
+  expect(screen.getByText("Loading teams...")).toBeInTheDocument();
+  expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
+});
+
 describe("sort contract – only backend-sortable columns are sortable", () => {
   it("requests the default created_at descending sort on first render", () => {
     renderTable();
@@ -147,6 +159,12 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
     await waitFor(() => {
       expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "team_alias" }));
     });
+  });
+
+  it("right-aligns Spend / Budget but not Team", () => {
+    renderTable();
+    expect(screen.getByRole("columnheader", { name: "Spend / Budget" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Team" })).not.toHaveClass("text-right");
   });
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
@@ -243,8 +261,7 @@ describe("row actions", () => {
     await user.click(await screen.findByText("Edit team"));
     expect(onEditTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
 
-    await user.click(screen.getByTestId("team-actions-team-1"));
-    await user.click(await screen.findByText("Delete team"));
+    await chooseSelectOption(user, screen.getByTestId("team-actions-team-1"), "Delete team", "menuitem");
     expect(onDeleteTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
   });
 
@@ -307,10 +324,30 @@ describe("column rendering details", () => {
     });
   });
 
+  it("points the organization cell at the org's detail page, aliased or not", async () => {
+    mockUseTeamsTable.mockReturnValue(
+      teamsResult([
+        { ...mockTeam, team_id: "a", organization_id: "org-1" },
+        { ...mockTeam, team_id: "b", team_alias: "Orphan Team", organization_id: "org-unknown" },
+      ]),
+    );
+    renderTable();
+
+    expect(await screen.findByRole("link", { name: "Test Organization" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-1",
+    );
+    expect(screen.getByRole("link", { name: "org-unknown" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-unknown",
+    );
+  });
+
   it("renders an em dash for a team with no organization", () => {
     mockUseTeamsTable.mockReturnValue(teamsResult([{ ...mockTeam, organization_id: null as unknown as string }]));
     renderTable();
     expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /organization/i })).not.toBeInTheDocument();
   });
 
   it("falls back to keys.length when keys_count is absent", () => {

@@ -7,18 +7,24 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, SLOW_PROVIDER_TIMEOUT_SECONDS, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
     AnthropicMessagesResponse,
     ChatBody,
     ChatMessage,
+    ChatMetadata,
     ChatResponse,
+    ChatTool,
+    ImageEditForm,
+    ImageGenerationResponse,
     KeyGenerateBody,
+    KeyMetadata,
     LiteLLMParamsBody,
     TeamDeleteBody,
     TeamInfoParams,
@@ -26,11 +32,17 @@ from models import (
     TeamMetadata,
     TeamNewBody,
     TeamNewResponse,
+    VideoCreateBody,
+    VideoCreateResponse,
 )
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+GUARDRAIL_BACKEND: Final = "gemini/gemini-2.5-flash"
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
+PiiEntity = Literal["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON", "CREDIT_CARD", "US_SSN"]
+PiiAction = Literal["MASK", "BLOCK"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
 
 
@@ -40,7 +52,7 @@ class BlockedWordBody(BaseModel):
 
 
 class GuardrailParamsBase(BaseModel):
-    mode: GuardrailMode
+    mode: GuardrailMode | list[GuardrailMode]
     default_on: bool
 
 
@@ -53,14 +65,14 @@ class BedrockGuardrailParamsBody(GuardrailParamsBase):
     guardrail: Literal["bedrock"] = "bedrock"
     guardrailIdentifier: str
     guardrailVersion: str
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    aws_access_key_id: str | None = Field(default=None, repr=False)
+    aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
 
 
 class OpenAIModerationParamsBody(GuardrailParamsBase):
     guardrail: Literal["openai_moderation"] = "openai_moderation"
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
 
 
@@ -68,11 +80,59 @@ class BlockCodeExecutionParamsBody(GuardrailParamsBase):
     guardrail: Literal["block_code_execution"] = "block_code_execution"
 
 
+class PresidioParamsBody(GuardrailParamsBase):
+    """Presidio PII guardrail params. `presidio_filter_scope="input"` keeps the
+    registration to a single callback on the configured mode; the default
+    ("both") also registers a second post_call output-masking callback, which a
+    pre_call- or logging_only-scoped test must not drag in. `output_parse_pii`
+    stays unset/False: True would unmask the response back to the caller."""
+
+    guardrail: Literal["presidio"] = "presidio"
+    presidio_analyzer_api_base: str
+    presidio_anonymizer_api_base: str
+    presidio_filter_scope: Literal["input", "output", "both"] | None = None
+    presidio_language: str | None = None
+    output_parse_pii: bool | None = None
+    pii_entities_config: dict[PiiEntity, PiiAction] | None = None
+
+
+class ToolPermissionRuleBody(BaseModel):
+    """One tool_permission rule: a decision for the tool named by `tool_name`."""
+
+    id: str
+    tool_name: str
+    decision: Literal["allow", "deny"]
+
+
+class ToolPermissionParamsBody(GuardrailParamsBase):
+    """Tool-permission guardrail params. `default_action="deny"` makes the rules
+    an allow-list, and `on_disallowed_action="block"` turns a disallowed tool into
+    a 400 instead of rewriting the request; "rewrite" is a different product
+    promise and belongs to its own scenario."""
+
+    guardrail: Literal["tool_permission"] = "tool_permission"
+    rules: list[ToolPermissionRuleBody]
+    default_action: Literal["allow", "deny"] = "deny"
+    on_disallowed_action: Literal["block", "rewrite"] = "block"
+
+
+class CustomCodeParamsBody(GuardrailParamsBase):
+    """Custom-code guardrail params: `custom_code` is the sandboxed source the
+    proxy compiles, which must define `apply_guardrail(inputs, request_data,
+    input_type)` returning `allow()` or `block(reason)`."""
+
+    guardrail: Literal["custom_code"] = "custom_code"
+    custom_code: str
+
+
 GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
     | OpenAIModerationParamsBody
     | BlockCodeExecutionParamsBody
+    | PresidioParamsBody
+    | ToolPermissionParamsBody
+    | CustomCodeParamsBody
 )
 
 
@@ -87,6 +147,31 @@ class GuardrailCreateBody(BaseModel):
 
 class GuardrailCreateResponse(BaseModel):
     guardrail_id: str
+
+
+class PolicyConditionBody(BaseModel):
+    model: str
+
+
+class PolicyCreateBody(BaseModel):
+    policy_name: str
+    inherit: str | None = None
+    guardrails_add: list[str]
+    condition: PolicyConditionBody | None = None
+
+
+class PolicyCreateResponse(BaseModel):
+    policy_id: str
+    policy_name: str
+
+
+class PolicyAttachmentCreateBody(BaseModel):
+    policy_name: str
+    tags: list[str]
+
+
+class PolicyAttachmentCreateResponse(BaseModel):
+    attachment_id: str
 
 
 class ApplyGuardrailRequest(BaseModel):
@@ -104,22 +189,25 @@ class _ResponsesGuardrailBody(BaseModel):
     model: str
     input: str
     guardrails: list[str] | None = None
+    stream: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class GuardrailsClient:
     proxy: ProxyClient
 
-    def create_content_filter_guardrail(self, name: str, blocked_keyword: str) -> str:
+    @step("Register the content filter guardrail {name} that blocks prompts containing {blocked_keyword}")
+    def create_content_filter_guardrail(self, name: str, blocked_keyword: str, *, default_on: bool = True) -> str:
         return self.register(
             name,
             ContentFilterParamsBody(
                 mode="pre_call",
-                default_on=True,
+                default_on=default_on,
                 blocked_words=[BlockedWordBody(keyword=blocked_keyword, action="BLOCK")],
             ),
         )
 
+    @step("Register the Bedrock guardrail {name}")
     def create_bedrock_guardrail(
         self,
         name: str,
@@ -152,7 +240,7 @@ class GuardrailsClient:
         resources: ResourceManager,
         prefix: str = "e2e-guard-backend",
         *,
-        backend: str = "gemini/gemini-2.5-flash",
+        backend: str = GUARDRAIL_BACKEND,
         api_key: str = "os.environ/GEMINI_API_KEY",
     ) -> str:
         """Register a chat deployment for a guardrail test to run against
@@ -167,6 +255,7 @@ class GuardrailsClient:
         resources.defer(lambda: self.proxy.delete_model(model_id))
         return model_name
 
+    @step("Register the {params.guardrail} guardrail {name} with mode {params.mode}")
     def register(self, name: str, params: GuardrailParamsBody) -> str:
         """Register any guardrail via POST /guardrails and return its id, once every
         replica can be expected to serve it. New built-ins register with
@@ -184,15 +273,14 @@ class GuardrailsClient:
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)
-                ),
+                json=GuardrailCreateBody(guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)),
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
         settle_propagation(time.monotonic())
         return guardrail_id
 
+    @step("Delete the guardrail")
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
@@ -201,6 +289,54 @@ class GuardrailsClient:
             response_type=NoBody,
         )
 
+    @step("Create the guardrail policy {body.policy_name} that adds the guardrails {body.guardrails_add}")
+    def create_policy(self, body: PolicyCreateBody) -> str:
+        """Create a policy via POST /policies and return its name once every replica
+        can be expected to serve it (policies reach the data plane on the periodic
+        DB sync, same as guardrails)."""
+        created = unwrap(
+            self.proxy.transport.post(
+                "/policies",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=PolicyCreateResponse,
+            )
+        )
+        settle_propagation(time.monotonic())
+        return created.policy_name
+
+    @step("Delete every version of the guardrail policy {policy_name}")
+    def delete_policy(self, policy_name: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/policies/name/{policy_name}/all-versions",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    @step("Attach the guardrail policy {policy_name} to requests tagged {tags}")
+    def attach_policy_to_tags(self, policy_name: str, tags: list[str]) -> str:
+        attachment_id = unwrap(
+            self.proxy.transport.post(
+                "/policies/attachments",
+                headers=self.proxy.transport.master,
+                json=PolicyAttachmentCreateBody(policy_name=policy_name, tags=tags),
+                response_type=PolicyAttachmentCreateResponse,
+            )
+        ).attachment_id
+        settle_propagation(time.monotonic())
+        return attachment_id
+
+    @step("Delete the guardrail policy attachment")
+    def delete_policy_attachment(self, attachment_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/policies/attachments/{attachment_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    @step("Create the team {alias} opted out of global guardrails and wait until /team/info returns it")
     def create_team_opted_out_of_global_guardrails(self, alias: str) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
@@ -216,6 +352,7 @@ class GuardrailsClient:
         self._await_team(team_id)
         return team_id
 
+    @step("Delete the team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -224,11 +361,42 @@ class GuardrailsClient:
             response_type=NoBody,
         )
 
+    @step("Generate a virtual key in the team")
     def create_key_in_team(self, team_id: str) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user")
+        return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
+
+    @step("Generate a virtual key with the guardrails {guardrails}")
+    def create_key_with_guardrails(self, resources: ResourceManager, guardrails: list[str]) -> str:
+        key = self.proxy.generate_key(
+            KeyGenerateBody(user_id="e2e-guardrails-user", metadata=KeyMetadata(guardrails=guardrails))
+        )
+        resources.defer(lambda: self.proxy.delete_key(key))
+        return key
+
+    @step("Send a /v1/videos request to {model}")
+    def create_video(self, key: str, model: str, prompt: str) -> Result[VideoCreateResponse]:
+        return self.proxy.transport.post(
+            "/v1/videos",
+            headers=self.proxy.transport.bearer(key),
+            json=VideoCreateBody(model=model, prompt=prompt, seconds="4"),
+            response_type=VideoCreateResponse,
         )
 
+    @step("Send a /v1/images/edits request to {model}")
+    def edit_image(self, key: str, model: str, prompt: str, image: bytes) -> Result[ImageGenerationResponse]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename="image.png",
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImageGenerationResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    @step("Send a /chat/completions request to {model}")
     def chat(
         self,
         key: str,
@@ -236,7 +404,9 @@ class GuardrailsClient:
         text: str,
         *,
         guardrails: list[str] | None = None,
+        include_guardrail_response: bool | None = None,
         max_tokens: int = 16,
+        tools: list[ChatTool] | None = None,
     ) -> Result[ChatResponse]:
         """Drive a chat call, optionally opting into named guardrails for this
         request only (the per-request `guardrails` selector). With `guardrails`
@@ -250,9 +420,69 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                include_guardrail_response=include_guardrail_response,
+                tools=tools,
             ),
         )
 
+    @step("Send a /chat/completions request to {model}")
+    def chat_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 16,
+        tools: list[ChatTool] | None = None,
+        tool_choice: str | None = None,
+        tags: list[str] | None = None,
+    ) -> StreamingResponse:
+        """Drive /chat/completions returning the raw HTTP outcome, for the
+        assertions a typed body cannot carry: the `x-litellm-applied-guardrails`
+        response header, which is how an ALLOW scenario proves the guardrail ran
+        rather than being absent. `tags` land in `metadata.tags`, which is what a
+        tag-scoped policy attachment matches on."""
+        return self.proxy.transport.send(
+            "/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+                tools=tools,
+                tool_choice=tool_choice,
+                metadata=ChatMetadata(tags=tags) if tags is not None else None,
+            ),
+        )
+
+    @step("Send a streaming /chat/completions request to {model}")
+    def chat_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        """Drive /chat/completions with stream=true, returning the raw HTTP
+        outcome (status, headers, SSE events) via the shared ProxyClient stream
+        sender - a streamed guardrail block is judged on status and stream
+        shape, not a typed body."""
+        return self.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
+                guardrails=guardrails,
+            ),
+        )
+
+    @step("Send a /v1/messages request to {model}")
     def messages(
         self,
         key: str,
@@ -272,6 +502,49 @@ class GuardrailsClient:
             ),
         )
 
+    @step("Send a /v1/messages request to {model}")
+    def messages_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/v1/messages",
+            headers=self.proxy.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    @step("Send a streaming /v1/messages request to {model}")
+    def messages_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
+                guardrails=guardrails,
+            ),
+        )
+
+    @step("Send a /v1/responses request to {model}")
     def responses(
         self,
         key: str,
@@ -283,11 +556,29 @@ class GuardrailsClient:
         return self.proxy.transport.send(
             "/v1/responses",
             headers=self.proxy.transport.bearer(key),
-            json=_ResponsesGuardrailBody(
-                model=model, input=text, guardrails=guardrails
-            ),
+            json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails),
         )
 
+    @step("Send a streaming /v1/responses request to {model}")
+    def responses_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+    ) -> StreamingResponse:
+        """Drive /v1/responses with stream=true, returning the raw HTTP outcome:
+        a streamed block is judged on status, content-type, and the SSE event
+        sequence, not a typed JSON body."""
+        return self.proxy.transport.send(
+            "/v1/responses",
+            headers=self.proxy.transport.bearer(key),
+            json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails, stream=True),
+            stream=True,
+        )
+
+    @step("Apply the guardrail {name} to a piece of text with /guardrails/apply_guardrail")
     def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:
         return self.proxy.transport.post(
             "/guardrails/apply_guardrail",
@@ -309,16 +600,39 @@ class GuardrailsClient:
             if isinstance(last, Success):
                 return
             time.sleep(POLL_INTERVAL)
-        raise AssertionError(
-            f"team {team_id!r} was created but /team/info never returned it: {last}"
-        )
+        raise AssertionError(f"team {team_id!r} was created but /team/info never returned it: {last}")
 
 
 def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
 
 
-def poll_until_blocked(call: Callable[[], Result[ChatResponse]]) -> Result[ChatResponse]:
+@step("Retry the call until the guardrail {guardrail_name} is applied")
+def poll_until_guardrail_applied(
+    call: Callable[[], StreamingResponse],
+    guardrail_name: str,
+    *,
+    timeout: float = POLL_TIMEOUT,
+    interval: float = POLL_INTERVAL,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> StreamingResponse:
+    deadline: Final = now() + timeout
+    if not (result := call()).ok:
+        return result
+    while (
+        guardrail_name
+        not in (name.strip() for name in result.headers.get("x-litellm-applied-guardrails", "").split(","))
+        and (remaining := deadline - now()) > 0
+    ):
+        sleep(min(interval, remaining))
+        if now() >= deadline or not (result := call()).ok:
+            break
+    return result
+
+
+@step("Retry the call until a guardrail blocks it")
+def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]:
     """Retry a call that a guardrail should reject until it is, returning the last result.
 
     Registering a guardrail is a control-plane write; the data-plane worker that
@@ -333,6 +647,29 @@ def poll_until_blocked(call: Callable[[], Result[ChatResponse]]) -> Result[ChatR
     last = call()
     while time.monotonic() < deadline:
         if not isinstance(last, Success):
+            return last
+        time.sleep(POLL_INTERVAL)
+        last = call()
+    return last
+
+
+#: Statuses a stream poll keeps retrying through instead of returning as "the
+#: block": network failures (-1), key propagation (401), rate limits (429) -
+#: transient rig noise, not a guardrail verdict.
+_TRANSIENT_STREAM_STATUSES = frozenset({-1, 401, 429})
+
+
+@step("Retry the streamed call until a guardrail blocks it")
+def poll_until_blocked_stream(call: Callable[[], StreamingResponse]) -> StreamingResponse:
+    """poll_until_blocked for raw/streamed sends, which return a StreamingResponse
+    instead of a Result: retry while the call still succeeds (the data-plane worker
+    has not picked the new guardrail up yet) or fails with a transient status,
+    returning the first guardrail-shaped non-2xx outcome or the last result at
+    the deadline."""
+    deadline = time.monotonic() + POLL_TIMEOUT
+    last = call()
+    while time.monotonic() < deadline:
+        if not last.ok and last.status_code not in _TRANSIENT_STREAM_STATUSES:
             return last
         time.sleep(POLL_INTERVAL)
         last = call()

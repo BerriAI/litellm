@@ -1,12 +1,14 @@
+import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -40,10 +42,15 @@ from litellm.litellm_core_utils.cli_token_utils import (
 )
 
 from .claude_settings import (
-    CLAUDE_SETTINGS_PATH,
-    SETTINGS_FILE_OWNERS,
+    STARTING_MODEL_ROLE,
     ClaudeSettingsError,
-    write_claude_settings,
+    KeepModel,
+    StaticToken,
+    claude_settings_path,
+    configure_claude_settings,
+    configure_state_path,
+    refuse_while_owned,
+    settings_file_owners,
 )
 from .pkce_login import (
     Http,
@@ -89,6 +96,24 @@ class CliContextObj(TypedDict):
     api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
+class _CliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj: ...
+
+
+class _OptionalCliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj | None: ...
+
+
+def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+    return view.obj
+
+
+def _optional_cli_context_obj(view: _OptionalCliContextObjView) -> CliContextObj | None:
+    return view.obj
+
+
 class CliPollData(TypedDict, total=False):
     status: str
     key: str
@@ -99,15 +124,11 @@ class CliPollData(TypedDict, total=False):
     team_id: str
 
 
-class CliPollRequestKwargs(TypedDict, total=False):
-    timeout: int
-    headers: dict[str, str]
-
-
 class CliSsoStartData(TypedDict):
-    login_id: str
-    poll_secret: str
-    user_code: str
+    login_id: ReadOnly[str]
+    poll_secret: ReadOnly[str]
+    user_code: ReadOnly[str]
+    verification_uri_complete: ReadOnly[NotRequired[str]]
 
 
 class CliAuthResult(TypedDict):
@@ -116,6 +137,10 @@ class CliAuthResult(TypedDict):
     teams: list[str]
     team_id: str | None
 
+
+_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -166,31 +191,31 @@ def storage_notice(outcome: SecretSave) -> str:
             )
 
 
-def keychain_unreadable_notice(vault: SecretVault) -> str:
+def keychain_unreadable_notice(vault: SecretVault, login_command: str = "lite login") -> str:
     """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
     match vault.read():
         case KeyringNotInstalled():
             return (
                 "Your credential is in your OS keychain, which this install cannot read without the "
-                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run '{login_command}' to start over."
             )
         case KeyringDisabled():
             return (
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
-                "Unset it, or run 'lite login' to start over."
+                f"Unset it, or run '{login_command}' to start over."
             )
         case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
-                "'lite login' to start over."
+                f"'{login_command}' to start over."
             )
         case SecretFound() | SecretMissing():
-            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+            return f"Your credential could not be read from your OS keychain. Run '{login_command}' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
     """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
-    ctx_obj: Final[CliContextObj | None] = ctx.obj
+    ctx_obj: Final = _optional_cli_context_obj(ctx)
     if ctx_obj is None:
         return SYSTEM_KEYRING
     return ctx_obj.get("secret_vault") or SYSTEM_KEYRING
@@ -358,7 +383,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -396,7 +421,7 @@ def display_interactive_team_selection(teams: list[dict[str, Any]], selected_ind
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
+def prompt_team_selection(teams: Sequence[_TeamMapping]) -> _TeamMapping | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -446,8 +471,8 @@ def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def prompt_team_selection_fallback(
-    teams: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    teams: Sequence[_TeamMapping],
+) -> _TeamMapping | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None
@@ -481,7 +506,7 @@ def prompt_team_selection_fallback(
 
 def _response_error_detail(response: requests.Response) -> str | None:
     try:
-        body: Final[dict[str, object] | list[object] | str | int | float | bool | None] = response.json()
+        body: Final = _JSON_OBJECT.validate_python(response.json())
     except ValueError:
         return None
     detail: Final = body.get("detail") if isinstance(body, dict) else None
@@ -518,10 +543,7 @@ def _poll_for_ready_data(
 ) -> CliPollData | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: CliPollRequestKwargs = {"timeout": request_timeout}
-            if headers is not None:
-                request_kwargs["headers"] = headers
-            response = requests.get(url, **request_kwargs)
+            response = requests.get(url, headers=headers, timeout=request_timeout)
             if response.status_code == 200:
                 data: CliPollData = response.json()
                 status = data.get("status")
@@ -782,27 +804,47 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
-def _configure_claude_code(base_url: str) -> None:
-    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+def _configure_claude_code(base_url: str, api_key: str) -> None:
+    """Write the key this login just minted into Claude Code's settings.json as a static token, undoable with
+    `lite unconfigure claude`. The key expires with the login, so the flag is the re-wire step of each login
+    rather than a one-time setup: no apiKeyHelper is written, since Claude Code would spawn `lite` (and its
+    keychain probe) on every credential refresh to keep one fresh."""
+    settings_path: Final = claude_settings_path(os.environ)
     try:
-        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+        configure_claude_settings(
+            base_url,
+            StaticToken(api_key),
+            KeepModel(),
+            settings_path,
+            configure_state_path(settings_path),
+            settings_file_owners(settings_path),
+        )
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
-    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
-    click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
+    click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
+    click.echo(
+        "This login's key is stored in the file, so run `lite login --config-claude` again after it expires. "
+        "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
+        f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
+    )
 
 
 def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
+    """Claude Code is configured from the key in hand, so it does not wait on the CLI's own store: a login whose
+    token file or keychain refused it still has a usable key, and `--config-claude` asked for exactly that
+    key to be written into settings.json."""
     from litellm.proxy.client.cli.interface import show_commands
 
     click.echo("\nLogin successful!")
     click.echo(f"JWT Token: {api_key[:20]}...")
     click.echo(storage_notice(stored))
+    if config_claude:
+        _configure_claude_code(base_url, api_key)
     if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        if config_claude:
+            click.echo("Claude Code was configured with this key even though the CLI itself could not keep it.")
         return
     click.echo("You can now use the CLI without specifying --api-key")
-    if config_claude:
-        _configure_claude_code(base_url)
     click.echo("\n" + "=" * 60)
     show_commands()
 
@@ -837,8 +879,8 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After logging in, update ~/.claude/settings.json so Claude Code routes through this proxy. "
-        "Unrelated settings are preserved."
+        "After logging in, write this login's key into ~/.claude/settings.json so Claude Code routes through "
+        "this proxy; run it again after the key expires. Unrelated settings are preserved."
     ),
 )
 @click.option(
@@ -856,8 +898,14 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
+    if config_claude:
+        settings_path: Final = claude_settings_path(os.environ)
+        try:
+            refuse_while_owned(settings_path, settings_file_owners(settings_path))
+        except ClaudeSettingsError as e:
+            raise click.ClickException(f"Cannot configure Claude Code, so not logging in: {e}")
 
     try:
         if pkce:
@@ -868,11 +916,22 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         poll_secret: Final = cli_sso_flow["poll_secret"]
         user_code: Final = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
+        browser_prefills_code: Final = isinstance(cli_sso_flow.get("verification_uri_complete"), str)
+        sso_url: Final = f"{base_url}/sso/key/generate?" + urlencode(
+            (
+                ("source", LITELLM_CLI_SOURCE_IDENTIFIER),
+                ("key", key_id),
+                *((("user_code", user_code),) if browser_prefills_code else ()),
+            )
+        )
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
-        click.echo(f"Verification code: {user_code}")
+        click.echo(
+            f"Verification code: {user_code} (pre-filled in the browser, check it matches)"
+            if browser_prefills_code
+            else f"Verification code: {user_code}"
+        )
         click.echo(f"Session ID: {key_id}")
 
         # Open browser
@@ -989,7 +1048,7 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)

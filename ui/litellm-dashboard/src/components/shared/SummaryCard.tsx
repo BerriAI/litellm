@@ -12,6 +12,8 @@ export interface SummaryCardProps {
   hint?: string;
   /** Rendered behind an info affordance. Use it for how a figure is derived, not for restating the label. */
   info?: string;
+  /** A related figure the headline is a share of, shown beside it. */
+  secondary?: { label: string; value: string };
 }
 
 /**
@@ -21,7 +23,7 @@ export interface SummaryCardProps {
  */
 const slugOf = (label: string): string => label.toLowerCase().replace(/\s+/g, "-");
 
-const SummaryCard = ({ label, value, hint, info }: SummaryCardProps) => (
+const SummaryCard = ({ label, value, hint, info, secondary }: SummaryCardProps) => (
   <Card data-testid={`summary-card-${slugOf(label)}`}>
     <CardHeader className="flex flex-row items-center justify-between space-y-0">
       <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
@@ -41,8 +43,20 @@ const SummaryCard = ({ label, value, hint, info }: SummaryCardProps) => (
       )}
     </CardHeader>
     <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+      <div className="flex items-end gap-4">
+        <div>
+          <p className="text-2xl font-semibold text-foreground">{value}</p>
+          {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+        </div>
+        {secondary && (
+          <div className="self-stretch border-l pl-4">
+            <div className="flex h-full flex-col justify-end">
+              <p className="text-lg font-medium text-muted-foreground">{secondary.value}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{secondary.label}</p>
+            </div>
+          </div>
+        )}
+      </div>
     </CardContent>
   </Card>
 );

@@ -13,6 +13,7 @@ Reference: https://docs.cohere.com/v2/reference/embed
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
@@ -78,7 +79,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             input_list = [str(input)]
 
         return dict(
-            BedrockCohereEmbeddingConfig()._transform_request(
+            BedrockCohereEmbeddingConfig().transform_request(
                 model=model,
                 input=input_list,
                 inference_params=optional_params,
@@ -90,7 +91,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         raw_response: Response,
         model_response: "EmbeddingResponse",
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
@@ -110,7 +111,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(input_value, str):
             input_value = [input_value]
 
-        return CohereEmbeddingConfig()._populate_embedding_response(
+        return CohereEmbeddingConfig().populate_embedding_response(
             response_json=raw_response.json(),
             model_response=model_response,
             model=model,

@@ -1,0 +1,18 @@
+[package]
+name = "litellm-tracing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+fancy-regex.workspace = true
+percent-encoding.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+
+[dev-dependencies]
+rstest.workspace = true
+tokio.workspace = true

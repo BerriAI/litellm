@@ -1,18 +1,21 @@
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import (
@@ -22,11 +25,25 @@ from litellm.utils import (
     get_secret,
 )
 
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import (
+    STR_KEYED_MAPPING,
+    AWSEventStreamDecoder,
+    SagemakerError,
+    client_error_details,
+    with_inference_component_hint,
+)
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
 sagemaker_config: Final = SagemakerConfig()
+
+
+class _InvokeEndpointArgs(TypedDict):
+    EndpointName: ReadOnly[str]
+    ContentType: ReadOnly[str]
+    Body: ReadOnly[bytes]
+    CustomAttributes: ReadOnly[str]
+
 
 """
 SAGEMAKER AUTH Keys/Vars
@@ -41,22 +58,12 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         optional_params: dict,
     ):
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
+        ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
+
+        auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        optional_params.pop("aws_bedrock_runtime_endpoint", None)  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
+        optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -73,17 +80,7 @@ class SagemakerLLM(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
         return credentials, aws_region_name
 
     def _prepare_request(
@@ -97,17 +94,16 @@ class SagemakerLLM(BaseAWSLLM):
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
         if optional_params.get("stream") is True:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations-response-stream"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations-response-stream"
         else:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations"
 
         sagemaker_base_url: Final = optional_params.get("sagemaker_base_url", None)
         if sagemaker_base_url is not None:
@@ -270,7 +266,7 @@ class SagemakerLLM(BaseAWSLLM):
 
             ## LOGGING
             timeout = 300.0
-            sync_handler: Final = _get_httpx_client()
+            sync_handler: Final = get_httpx_client()
             ## LOGGING
             logging_obj.pre_call(
                 input=[],
@@ -307,10 +303,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise e
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
-            status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
-            if "Inference Component Name header is required" in error_message:
-                error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
+            status_code, error_message = client_error_details(e)
             raise SagemakerError(status_code=status_code, message=error_message)
 
         return sagemaker_config.transform_response(
@@ -334,7 +327,7 @@ class SagemakerLLM(BaseAWSLLM):
         client=None,
     ):
         if client is None:
-            client = _get_httpx_client()
+            client = get_httpx_client()
         sync_response: Final = client.post(
             api_base,
             headers=headers,
@@ -404,7 +397,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         model_id: str | None,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         headers: dict,
     ):
@@ -467,7 +460,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
         headers: dict,
         litellm_params: dict,
@@ -531,10 +524,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message = f"{e}"
-            if "Inference Component Name header is required" in error_message:
-                error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
-            raise SagemakerError(status_code=500, message=error_message)
+            raise SagemakerError(status_code=500, message=str(e))
         return sagemaker_config.transform_response(
             model=model,
             raw_response=response,
@@ -593,16 +583,29 @@ class SagemakerLLM(BaseAWSLLM):
         #### EMBEDDING LOGIC
         # Transform request based on model type
         provider_config: Final = SagemakerEmbeddingConfig.get_model_config(model)
-        request_data: Final = provider_config.transform_embedding_request(model, input, optional_params, {})
+        endpoint_name: Final = SagemakerEmbeddingConfig.get_endpoint_name(model)
+        embedding_params: Final = STR_KEYED_MAPPING.validate_python(optional_params)
+        inference_component_name: Final = embedding_params.get("model_id")
+        if inference_component_name is not None and not isinstance(inference_component_name, str):
+            raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
+        body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
+        request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
         data: Final = json.dumps(request_data).encode("utf-8")
+        invoke_args: Final = _InvokeEndpointArgs(
+            EndpointName=endpoint_name,
+            ContentType="application/json",
+            Body=data,
+            CustomAttributes="accept_eula=true",
+        )
 
         ## LOGGING
         request_str: Final = f"""
         response = client.invoke_endpoint(
-            EndpointName={model},
+            EndpointName={endpoint_name},
             ContentType="application/json",
             Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
+            InferenceComponentName={inference_component_name},
         )"""
         logging_obj.pre_call(
             input=input,
@@ -611,16 +614,14 @@ class SagemakerLLM(BaseAWSLLM):
         )
         ## EMBEDDING CALL
         try:
-            response = client.invoke_endpoint(
-                EndpointName=model,
-                ContentType="application/json",
-                Body=data,
-                CustomAttributes="accept_eula=true",
+            response = (
+                client.invoke_endpoint(**invoke_args, InferenceComponentName=inference_component_name)
+                if inference_component_name
+                else client.invoke_endpoint(**invoke_args)
             )
         except Exception as e:
-            status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message: Final = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
-            raise SagemakerError(status_code=status_code, message=error_message)
+            status_code, error_message = client_error_details(e)
+            raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))
 
         response = json.loads(response["Body"].read().decode("utf8"))
         ## LOGGING
@@ -647,7 +648,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         # Use the request_data that was already transformed above
         return provider_config.transform_embedding_response(
-            model=model,
+            model=endpoint_name,
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=logging_obj,

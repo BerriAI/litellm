@@ -1,0 +1,580 @@
+"""
+Unit tests for OpenAI Evals API transformation
+"""
+
+from typing import Final
+
+import httpx
+import pytest
+import respx
+from pydantic import TypeAdapter
+
+import litellm
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.types.router import GenericLiteLLMParams
+
+_API_BASE: Final = "https://api.openai.com"
+_API_KEY: Final = "sk-test"
+_EVAL_ID: Final = "eval_123"
+_EVAL_RESPONSE: Final = {
+    "id": _EVAL_ID,
+    "object": "eval",
+    "created_at": 1234567890,
+    "name": "Sentiment evaluation",
+    "data_source_config": {"type": "stored_completions"},
+    "testing_criteria": [{"type": "ground_truth", "metric": "exact_match"}],
+}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.fixture()
+def config() -> OpenAIEvalsConfig:
+    return OpenAIEvalsConfig()
+
+
+def _request_json(request: httpx.Request) -> dict[str, object]:
+    return _JSON_OBJECT.validate_json(request.content)
+
+
+def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
+    """Test that validate_environment correctly sets authorization headers"""
+    headers: dict = {}
+    params = GenericLiteLLMParams(api_key="sk-test-12345")
+
+    result = config.validate_environment(headers=headers, litellm_params=params)
+
+    assert result["Authorization"] == "Bearer sk-test-12345"
+    assert result["Content-Type"] == "application/json"
+
+
+def test_validate_environment_requires_api_key(config: OpenAIEvalsConfig, monkeypatch):
+    """Test that validate_environment raises error when no API key is provided"""
+
+    # Ensure OPENAI_API_KEY environment variable is None before validation
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    headers: dict = {}
+    params = GenericLiteLLMParams()
+
+    with pytest.raises(ValueError, match="OPENAI_API_KEY is required"):
+        config.validate_environment(headers=headers, litellm_params=params)
+
+
+def test_get_complete_url_with_eval_id(config: OpenAIEvalsConfig):
+    """Test URL construction with eval_id"""
+    url = config.get_complete_url(
+        api_base="https://api.openai.com",
+        endpoint="evals",
+        eval_id="eval_123",
+    )
+    assert url == "https://api.openai.com/v1/evals/eval_123"
+
+
+def test_get_complete_url_encodes_eval_id(config: OpenAIEvalsConfig):
+    """Test eval_id is treated as a single path segment."""
+    url = config.get_complete_url(
+        api_base="https://api.openai.com",
+        endpoint="evals",
+        eval_id="../../files?x=1#frag",
+    )
+
+    assert url == "https://api.openai.com/v1/evals/..%2F..%2Ffiles%3Fx%3D1%23frag"
+
+
+def test_get_complete_url_without_eval_id(config: OpenAIEvalsConfig):
+    """Test URL construction without eval_id"""
+    url = config.get_complete_url(
+        api_base="https://api.openai.com",
+        endpoint="evals",
+    )
+    assert url == "https://api.openai.com/v1/evals"
+
+
+def test_transform_create_eval_request(config: OpenAIEvalsConfig):
+    """Test transformation of create eval request"""
+    create_request = {
+        "name": "Test Eval",
+        "data_source_config": {
+            "type": "stored_completions",
+            "metadata": {"usecase": "chatbot"},
+        },
+        "testing_criteria": [
+            {
+                "type": "label_model",
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": "Test"}],
+                "passing_labels": ["positive"],
+                "labels": ["positive", "negative"],
+                "name": "Test Grader",
+            }
+        ],
+    }
+
+    result = config.transform_create_eval_request(
+        create_request=create_request,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["name"] == "Test Eval"
+    assert result["data_source_config"]["type"] == "stored_completions"
+    assert len(result["testing_criteria"]) == 1
+    assert result["testing_criteria"][0]["type"] == "label_model"
+
+
+def test_transform_create_eval_response(config: OpenAIEvalsConfig):
+    """Test transformation of create eval response"""
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "id": "eval_123",
+            "object": "eval",
+            "created_at": 1234567890,
+            "name": "Test Eval",
+            "data_source_config": {"type": "stored_completions"},
+            "testing_criteria": [],
+        },
+        request=httpx.Request("POST", "https://api.openai.com/v1/evals"),
+    )
+
+    result = config.transform_create_eval_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert result.id == "eval_123"
+    assert result.object == "eval"
+    assert result.name == "Test Eval"
+
+
+def test_transform_list_evals_request(config: OpenAIEvalsConfig):
+    """Test transformation of list evals request"""
+    list_params = {
+        "limit": 10,
+        "after": "eval_123",
+        "order": "desc",
+    }
+
+    url, query_params = config.transform_list_evals_request(
+        list_params=list_params,
+        litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com"),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals"
+    assert query_params["limit"] == 10
+    assert query_params["after"] == "eval_123"
+    assert query_params["order"] == "desc"
+
+
+def test_transform_list_evals_response(config: OpenAIEvalsConfig):
+    """Test transformation of list evals response"""
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "id": "eval_123",
+                    "object": "eval",
+                    "created_at": 1234567890,
+                    "name": "Test Eval",
+                    "data_source_config": {"type": "stored_completions"},
+                    "testing_criteria": [],
+                }
+            ],
+            "first_id": "eval_123",
+            "last_id": "eval_123",
+            "has_more": False,
+        },
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals"),
+    )
+
+    result = config.transform_list_evals_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert result.object == "list"
+    assert len(result.data) == 1
+    assert result.data[0].id == "eval_123"
+    assert result.has_more is False
+
+
+def test_transform_update_eval_request(config: OpenAIEvalsConfig):
+    """Test transformation of update eval request"""
+    update_request = {
+        "name": "Updated Eval Name",
+        "metadata": {"key": "value"},
+    }
+
+    url, headers, request_body = config.transform_update_eval_request(
+        eval_id="eval_123",
+        update_request=update_request,
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123"
+    assert request_body["name"] == "Updated Eval Name"
+    assert request_body["metadata"]["key"] == "value"
+
+
+def test_transform_delete_eval_request(config: OpenAIEvalsConfig):
+    """Test transformation of delete eval request"""
+    url, headers = config.transform_delete_eval_request(
+        eval_id="eval_123",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123"
+
+
+def test_transform_delete_eval_response(config: OpenAIEvalsConfig):
+    """Test transformation of delete eval response"""
+    response = httpx.Response(
+        status_code=200,
+        json={"object": "eval.deleted", "deleted": True, "eval_id": "eval_abc123"},
+        request=httpx.Request("DELETE", "https://api.openai.com/v1/evals/eval_123"),
+    )
+
+    result = config.transform_delete_eval_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert result.eval_id == "eval_abc123"
+    assert result.object == "eval.deleted"
+    assert result.deleted is True
+
+
+def test_transform_cancel_eval_request(config: OpenAIEvalsConfig):
+    """Test transformation of cancel eval request"""
+    url, headers, request_body = config.transform_cancel_eval_request(
+        eval_id="eval_123",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123/cancel"
+    assert request_body == {}
+
+
+def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
+    """Test transformation of cancel eval response"""
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "id": "eval_123",
+            "object": "eval",
+            "status": "cancelled",
+        },
+        request=httpx.Request("POST", "https://api.openai.com/v1/evals/eval_123/cancel"),
+    )
+
+    result = config.transform_cancel_eval_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert result.id == "eval_123"
+    assert result.object == "eval"
+
+
+def test_transform_run_requests_encode_eval_and_run_ids(config: OpenAIEvalsConfig):
+    """Test run path IDs are treated as single path segments."""
+    url, _, request_body = config.transform_cancel_run_request(
+        eval_id="../../evals?x=1#frag",
+        run_id="../runs#other",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other/cancel"
+    assert request_body == {}
+
+
+def _eval_json_response(url: str, method: str = "GET") -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "eval_123",
+            "object": "eval",
+            "created_at": 1234567890,
+            "name": "Test Eval",
+            "data_source_config": {"type": "stored_completions"},
+            "testing_criteria": [],
+        },
+        request=httpx.Request(method, url),
+    )
+
+
+def _run_json(run_id: str = "evalrun_123", status: str = "queued") -> dict:
+    return {
+        "id": run_id,
+        "object": "eval.run",
+        "created_at": 1234567890,
+        "status": status,
+        "data_source": {"type": "completions"},
+        "eval_id": "eval_123",
+    }
+
+
+def test_transform_get_eval_response(config: OpenAIEvalsConfig):
+    result = config.transform_get_eval_response(
+        raw_response=_eval_json_response("https://api.openai.com/v1/evals/eval_123"),
+        logging_obj=None,
+    )
+
+    assert result.id == "eval_123"
+    assert result.object == "eval"
+    assert result.name == "Test Eval"
+
+
+def test_transform_update_eval_response(config: OpenAIEvalsConfig):
+    result = config.transform_update_eval_response(
+        raw_response=_eval_json_response("https://api.openai.com/v1/evals/eval_123", method="POST"),
+        logging_obj=None,
+    )
+
+    assert result.id == "eval_123"
+    assert result.name == "Test Eval"
+
+
+def test_transform_create_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json=_run_json(),
+        request=httpx.Request("POST", "https://api.openai.com/v1/evals/eval_123/runs"),
+    )
+
+    result = config.transform_create_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "queued"
+    assert result.eval_id == "eval_123"
+
+
+def test_transform_list_runs_request(config: OpenAIEvalsConfig):
+    url, query_params = config.transform_list_runs_request(
+        eval_id="eval_123",
+        list_params={"limit": 5, "after": "evalrun_1", "order": "asc"},
+        litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com"),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123/runs"
+    assert query_params == {"limit": 5, "after": "evalrun_1", "order": "asc"}
+
+
+def test_transform_list_runs_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [_run_json()],
+            "first_id": "evalrun_123",
+            "last_id": "evalrun_123",
+            "has_more": False,
+        },
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals/eval_123/runs"),
+    )
+
+    result = config.transform_list_runs_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.object == "list"
+    assert len(result.data) == 1
+    assert result.data[0].id == "evalrun_123"
+    assert result.has_more is False
+
+
+def test_transform_get_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json=_run_json(status="completed"),
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"),
+    )
+
+    result = config.transform_get_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "completed"
+
+
+def test_transform_cancel_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={"id": "evalrun_123", "object": "eval.run", "status": "cancelled"},
+        request=httpx.Request(
+            "POST",
+            "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123/cancel",
+        ),
+    )
+
+    result = config.transform_cancel_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "cancelled"
+
+
+def test_transform_delete_run_request(config: OpenAIEvalsConfig):
+    url, headers, request_body = config.transform_delete_run_request(
+        eval_id="eval_123",
+        run_id="evalrun_123",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"
+    assert request_body == {}
+
+
+def test_transform_delete_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={"run_id": "evalrun_123", "object": "eval.run.deleted", "deleted": True},
+        request=httpx.Request("DELETE", "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"),
+    )
+
+    result = config.transform_delete_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.run_id == "evalrun_123"
+    assert result.deleted is True
+
+
+def test_create_eval_sends_configuration_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals").mock(return_value=httpx.Response(200, json=_EVAL_RESPONSE))
+
+    response: Final = litellm.create_eval(
+        name="Sentiment evaluation",
+        data_source_config={"type": "stored_completions"},
+        testing_criteria=[{"type": "ground_truth", "metric": "exact_match"}],
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "POST"
+    assert str(request.url) == f"{_API_BASE}/v1/evals"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert _request_json(request) == {
+        "name": "Sentiment evaluation",
+        "data_source_config": {"type": "stored_completions"},
+        "testing_criteria": [{"type": "ground_truth", "metric": "exact_match"}],
+    }
+    assert response.id == _EVAL_ID
+    assert response.name == "Sentiment evaluation"
+    assert response.testing_criteria == [{"type": "ground_truth", "metric": "exact_match"}]
+
+
+def test_get_eval_requests_the_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+    )
+
+    response: Final = litellm.get_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+
+    request: Final = route.calls[0].request
+    assert request.method == "GET"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.id == _EVAL_ID
+    assert response.data_source_config == {"type": "stored_completions"}
+    assert response.testing_criteria == [{"type": "ground_truth", "metric": "exact_match"}]
+
+
+def test_list_evals_sends_pagination_query_and_parses_page(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get(f"{_API_BASE}/v1/evals").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [_EVAL_RESPONSE],
+                "first_id": _EVAL_ID,
+                "last_id": _EVAL_ID,
+                "has_more": True,
+            },
+        )
+    )
+
+    response: Final = litellm.list_evals(
+        limit=10,
+        after=_EVAL_ID,
+        order="asc",
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "GET"
+    assert str(request.url) == f"{_API_BASE}/v1/evals?limit=10&after={_EVAL_ID}&order=asc"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.first_id == _EVAL_ID
+    assert response.data[0].id == _EVAL_ID
+    assert response.has_more is True
+
+
+def test_update_eval_sends_name_to_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+    )
+
+    response: Final = litellm.update_eval(
+        eval_id=_EVAL_ID,
+        name="Renamed evaluation",
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "POST"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert _request_json(request) == {"name": "Renamed evaluation"}
+    assert response.id == _EVAL_ID
+    assert response.name == "Sentiment evaluation"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_delete_eval_sends_delete_to_requested_id_and_parses_confirmation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.delete(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json={"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID})
+    )
+
+    response: Final = (
+        litellm.delete_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+        if sync_mode
+        else await litellm.adelete_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+    )
+
+    request: Final = route.calls[0].request
+    assert len(route.calls) == 1
+    assert request.method == "DELETE"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.model_dump() == {"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID}

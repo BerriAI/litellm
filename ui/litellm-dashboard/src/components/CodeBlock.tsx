@@ -20,10 +20,10 @@ const CodeBlock = ({ code, language }: CodeBlockProps) => {
   };
 
   return (
-    <div className="relative rounded-lg border border-border overflow-hidden">
+    <div className="relative rounded-lg border border-border bg-muted overflow-hidden">
       <button
         onClick={copyToClipboard}
-        className="absolute top-3 right-3 p-2 rounded-md bg-muted hover:bg-accent text-muted-foreground z-10"
+        className="absolute top-3 right-3 p-2 rounded-md border border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground z-raised"
         aria-label="Copy code"
       >
         {copied ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
@@ -36,8 +36,9 @@ const CodeBlock = ({ code, language }: CodeBlockProps) => {
           padding: "1.5rem",
           borderRadius: "0.5rem",
           fontSize: "0.9rem",
-          backgroundColor: "#fafafa",
+          background: "transparent",
         }}
+        codeTagProps={{ style: { background: "transparent" } }}
         showLineNumbers
       >
         {code}
