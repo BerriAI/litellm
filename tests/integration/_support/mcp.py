@@ -26,7 +26,7 @@ from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 Transport = Literal["http", "sse", "stdio"]
 STDIO_PEER: Final = Path(__file__).with_name("mcp_stdio_peer.py")
@@ -138,6 +138,38 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
         await app(scope, replay, send)
 
     return capture
+
+
+def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
+    async def ordered(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        pending: Final[list[Message]] = []
+
+        async def capture(message: Message) -> None:
+            if not pending and message["type"] == "http.response.start" and message["status"] == 202:
+                pending.append(message)
+            elif pending:
+                if (
+                    len(pending) != 1
+                    or message["type"] != "http.response.body"
+                    or message.get("body", b"")
+                    or message.get("more_body", False)
+                ):
+                    raise RuntimeError("MCP notification acknowledgement must be a single empty response")
+                pending.append(message)
+            else:
+                await send(message)
+
+        await app(scope, receive, capture)
+        if pending:
+            if len(pending) != 2:
+                raise RuntimeError("MCP notification acknowledgement did not complete")
+            for message in pending:
+                await send(message)
+
+    return ordered
 
 
 def _drain_sse_streams() -> None:

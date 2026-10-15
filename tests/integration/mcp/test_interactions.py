@@ -580,7 +580,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
     import httpx2
     from integration._support.asgi import asgi_server
-    from integration._support.mcp import _drain_sse_streams
+    from integration._support.mcp import _acknowledge_notifications_after_dispatch, _drain_sse_streams
     from mcp import ClientSession, MCPError
     from mcp.client.sse import sse_client
     from mcp.client.streamable_http import streamable_http_client
@@ -1151,7 +1151,8 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
         await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
-    hosted: Final = Starlette(routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=app)], lifespan=lifespan)
+    transport_app: Final = app if access == "legacy-upstream-sse" else _acknowledge_notifications_after_dispatch(app)
+    hosted: Final = Starlette(routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=transport_app)], lifespan=lifespan)
     with (
         asgi_server(hosted) as upstream_url,
         (sdk_interaction_peer() if access == "mixed-capabilities" else nullcontext(None)) as plain,
@@ -1527,3 +1528,79 @@ def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
         observed = peer.drain()
         calls = [json.loads(item.body) for item in observed if item.method == "POST" and json.loads(item.body).get("method") == "tools/call"] if modern_upstream else tool_calls(observed)
         assert len(calls) == (2 if modern_upstream else 1), "Gateway restarted work instead of returning or resuming the original request"
+
+
+def test_legacy_notification_dispatch_finishes_before_session_deletion() -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+    from threading import Event
+
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import _acknowledge_notifications_after_dispatch, _drain_sse_streams
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.transport_security import TransportSecuritySettings
+    from sse_starlette.sse import AppStatus
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    from starlette.types import Message, Receive, Scope, Send
+
+    peer = MCPServer("notification-order")
+    sdk_app = peer.streamable_http_app(
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette):
+        AppStatus.should_exit = False
+        async with sdk_app.router.lifespan_context(sdk_app):
+            yield
+        _drain_sse_streams()
+        watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
+        await asyncio.wait_for(asyncio.gather(*watchers), 2)
+
+    hosted = Starlette(routes=[Mount("/", app=sdk_app)], lifespan=lifespan)
+    ordered = _acknowledge_notifications_after_dispatch(hosted)
+    deleted = Event()
+
+    async def pause_after_acceptance(scope: Scope, receive: Receive, send: Send) -> None:
+        accepted = False
+
+        async def capture(message: Message) -> None:
+            nonlocal accepted
+            if message["type"] == "http.response.start":
+                accepted = message["status"] == 202
+            await send(message)
+            if accepted and message["type"] == "http.response.body" and not message.get("more_body", False):
+                assert await asyncio.to_thread(deleted.wait, 5), "Client did not complete session deletion"
+
+        await ordered(scope, receive, capture)
+
+    with asgi_server(pause_after_acceptance) as url, httpx.Client(timeout=8) as client:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-11-25",
+        }
+        initialized = client.post(
+            url + "/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25", "capabilities": {},
+                    "clientInfo": {"name": "notification-order", "version": "1"},
+                },
+            },
+        )
+        assert initialized.status_code == 200
+        headers["Mcp-Session-Id"] = initialized.headers["mcp-session-id"]
+        try:
+            accepted = client.post(
+                url + "/mcp", headers=headers,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            )
+            assert accepted.status_code == 202
+            assert accepted.content == b""
+            terminated = client.delete(url + "/mcp", headers=headers)
+            assert terminated.status_code == 200
+        finally:
+            deleted.set()
