@@ -801,6 +801,9 @@ async def test_usage_meter_snapshot_stored_in_model_call_details():
     backend_ws.recv = AsyncMock(
         side_effect=[
             json.dumps(
+                {"type": "session.created", "session": {"turn_detection": {"type": None}}}
+            ).encode(),
+            json.dumps(
                 {"type": "response.output_audio.delta", "delta": base64.b64encode(b"x" * 24000).decode()}
             ).encode(),
             ConnectionClosed(None, None),

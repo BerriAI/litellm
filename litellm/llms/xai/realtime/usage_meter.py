@@ -48,15 +48,16 @@ def _beta_audio_format_bytes_per_second(name: object) -> float | None:
     return None
 
 
-def _is_billable_text_item(item: Mapping[str, object]) -> bool:
+def _content_part_mappings(item: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    content: Final = item.get("content")
+    raw_parts: Final = _CONTENT_PART_LIST.validate_python(content) if isinstance(content, list) else ()
+    return tuple(part_map for part in raw_parts if (part_map := as_str_mapping(part)) is not None)
+
+
+def _is_billable_text_item(item: Mapping[str, object], parts: tuple[Mapping[str, object], ...]) -> bool:
     if item.get("type") == "function_call_output":
         return False
-    content: Final = item.get("content")
-    parts: Final = _CONTENT_PART_LIST.validate_python(content) if isinstance(content, list) else ()
-    return not any(
-        (part_map := as_str_mapping(part)) is not None and part_map.get("type") in _AUDIO_CONTENT_PART_TYPES
-        for part in parts
-    )
+    return not any(part.get("type") in _AUDIO_CONTENT_PART_TYPES for part in parts)
 
 
 class XAIRealtimeUsageMeter:
@@ -75,14 +76,26 @@ class XAIRealtimeUsageMeter:
         if event_type == "session.update":
             session: Final = as_str_mapping(event.get("session"))
             if session is not None:
+                self._apply_client_turn_detection(session)
                 self._apply_session_config(session)
         elif event_type == "input_audio_buffer.append":
             if self._input_bytes_per_second > 0:
                 self._audio_seconds_sent += _decoded_base64_length(event.get("audio")) / self._input_bytes_per_second
         elif event_type == "conversation.item.create":
             item: Final = as_str_mapping(event.get("item"))
-            if item is not None and _is_billable_text_item(item):
-                self._text_messages += 1
+            if item is not None:
+                parts: Final = _content_part_mappings(item)
+                if _is_billable_text_item(item, parts):
+                    self._text_messages += 1
+                if self._input_bytes_per_second > 0:
+                    self._audio_seconds_sent += (
+                        sum(
+                            _decoded_base64_length(part.get("audio"))
+                            for part in parts
+                            if part.get("type") in _AUDIO_CONTENT_PART_TYPES
+                        )
+                        / self._input_bytes_per_second
+                    )
 
     def observe_backend_event(self, event: Mapping[str, object]) -> None:
         event_type: Final = event.get("type")
@@ -107,10 +120,6 @@ class XAIRealtimeUsageMeter:
     def _apply_session_config(self, session: Mapping[str, object]) -> None:
         audio: Final = as_str_mapping(session.get("audio"))
         audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
-        if "turn_detection" in session:
-            self._apply_turn_detection(session["turn_detection"])
-        elif audio_input is not None and "turn_detection" in audio_input:
-            self._apply_turn_detection(audio_input["turn_detection"])
 
         input_bps: Final = _beta_audio_format_bytes_per_second(session.get("input_audio_format"))
         if input_bps is not None:
@@ -131,8 +140,19 @@ class XAIRealtimeUsageMeter:
             if output_format is not None:
                 self._output_bytes_per_second = _audio_format_bytes_per_second(output_format)
 
+    def _apply_client_turn_detection(self, session: Mapping[str, object]) -> None:
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
+        if "turn_detection" in session:
+            self._apply_turn_detection(session["turn_detection"])
+        elif audio_input is not None and "turn_detection" in audio_input:
+            self._apply_turn_detection(audio_input["turn_detection"])
+
     def _apply_turn_detection(self, value: object) -> None:
         if value is None:
             self._push_to_talk = True
-        elif isinstance(value, Mapping):
-            self._push_to_talk = False
+            return
+        config: Final = as_str_mapping(value)
+        if config is None or "type" not in config:
+            return
+        self._push_to_talk = config["type"] is None

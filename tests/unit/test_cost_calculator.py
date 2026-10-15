@@ -948,6 +948,45 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     assert router_model_id in selected
 
 
+def test_text_message_pricing_only_deployment_selects_router_model_id():
+    """A deployment priced solely via ``input_cost_per_text_message`` (an xAI realtime
+    deployment with no per-second rate) counts as priced, so cost resolves against its
+    ``router_model_id`` entry instead of falling back to the stripped backend alias."""
+    from litellm import Router
+    from litellm.cost_calculator import select_model_name_for_cost_calc
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "xai-text-only",
+                "litellm_params": {
+                    "model": "xai/grok-voice-text-only-test",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "input_cost_per_text_message": 0.004,
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    entry = litellm.model_cost[router_model_id]
+    assert entry.get("input_cost_per_token") is None
+    assert entry.get("input_cost_per_text_message") == 0.004
+    assert litellm.model_cost["xai/grok-voice-text-only-test"].get("input_cost_per_text_message") is None
+
+    selected = select_model_name_for_cost_calc(
+        model="xai/grok-voice-text-only-test",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="xai",
+        router_model_id=router_model_id,
+    )
+    assert selected is not None
+    assert router_model_id in selected
+
+
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 def test_completion_cost_image_generation_reads_deployment_model_info_price_from_logging_metadata(
     _local_model_cost_map: None, metadata_key: str
