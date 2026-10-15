@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,8 @@ func main() {
 	mocks := flag.String("mocks", "http://127.0.0.1:9000", "comma-separated mockllm base URLs; deployments are spread across them")
 	chatModel := flag.String("chat-model", "gpt-6-astra", "upstream model for chat deployments; groups are named <model>-0, <model>-1, ...")
 	messagesModel := flag.String("messages-model", "claude-opus-5-5", "upstream model for messages deployments; groups are named <model>-0, ...")
+	bedrockModel := flag.String("bedrock-model", "us.anthropic.claude-opus-5-5", "Bedrock model id for the Bedrock share of messages deployments")
+	bedrockFraction := flag.Float64("bedrock-fraction", 0, "share of each messages group's deployments served through Bedrock instead of Anthropic (0.5 once the gateway shapes Bedrock invoke requests)")
 	chatGroups := flag.Int("chat-groups", 4, "chat model groups")
 	messagesGroups := flag.Int("messages-groups", 4, "messages model groups")
 	deployments := flag.Int("deployments", 4, "deployments per model group")
@@ -54,11 +57,18 @@ func main() {
 			deployment(fmt.Sprintf("%s-%d", *chatModel, g), id, *chatProvider+"/"+*chatModel, fmt.Sprintf("%s/d/%s/v1", base, id))
 		}
 	}
+	bedrockPerGroup := int(math.Round(*bedrockFraction * float64(*deployments)))
 	for g := range *messagesGroups {
 		for i := range *deployments {
 			base := strings.TrimRight(bases[n%len(bases)], "/")
+			group := fmt.Sprintf("%s-%d", *messagesModel, g)
+			if i < bedrockPerGroup {
+				id := fmt.Sprintf("bedrock-%d-%d", g, i)
+				deployment(group, id, "bedrock/"+*bedrockModel, fmt.Sprintf("%s/d/%s", base, id))
+				continue
+			}
 			id := fmt.Sprintf("msg-%d-%d", g, i)
-			deployment(fmt.Sprintf("%s-%d", *messagesModel, g), id, "anthropic/"+*messagesModel, fmt.Sprintf("%s/d/%s", base, id))
+			deployment(group, id, "anthropic/"+*messagesModel, fmt.Sprintf("%s/d/%s", base, id))
 		}
 	}
 	fmt.Fprintf(&cfg, `router_settings:

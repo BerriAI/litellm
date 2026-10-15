@@ -6,7 +6,7 @@ machines.
 
 | Tool | What it does |
 | --- | --- |
-| `mockllm` | Fake OpenAI chat completions and Anthropic messages upstream. Streams or not, and takes its timing from a directive in the prompt (`[[mock ttft_ms=800 dur_ms=300000 out=2000]]`). Counts hits per deployment (`/d/<id>/` path prefix) at `GET /stats`; `-faults "chat-0-3=429:1.0"` makes chosen deployments fail. |
+| `mockllm` | Fake OpenAI chat completions, Anthropic messages and Bedrock invoke upstream. Streams or not, and takes its timing from a directive in the prompt (`[[mock ttft_ms=800 dur_ms=300000 out=2000]]`). Counts hits per deployment (`/d/<id>/` path prefix) at `GET /stats`; `-faults "chat-0-3=429:1.0"` makes chosen deployments fail. |
 | `loadgen` | Open-loop Poisson arrivals from a workload file: weighted request classes with their own endpoint, stream share, context size (10k to 1M tokens), time to first token and total time. Writes one JSON line per request. Shard across machines with `-shard i -shards n`. |
 | `genconfig` | Gateway `config.yaml` with many model groups and deployments pointing at the mocks, plus `keys.txt` and `keys.sql` (rows for `LiteLLM_VerificationToken`). `-key-seed` makes every machine generate the same keys. |
 | `summarize` | Merges result files and prints proxy overhead (observed minus planned time) by stage, class and context size. |
@@ -83,5 +83,9 @@ gateway samples and mock hit counts, and prints the summary.
   The gateway reads only `Authorization: Bearer` today.
 - Chat: deployments use `openai_like/` because the gateway rejects `openai/`, and chat streaming
   returns 501.
+- Bedrock: `/v1/messages` to a `bedrock/` deployment returns 501 ("Bedrock invoke messages request
+  shaping" is unimplemented in Rust). mockllm already serves Bedrock's `/invoke` and
+  `/invoke-with-response-stream` (AWS event-stream framing), so set `-bedrock-fraction 0.5`
+  (`bedrock_fraction` in Terraform) once that lands.
 - Routing: deployments sharing a model name overwrite each other, so all of a group's traffic goes
   to its last deployment (visible in the mock's `/stats`).

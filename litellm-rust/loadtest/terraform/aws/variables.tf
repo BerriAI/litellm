@@ -80,6 +80,12 @@ variable "messages_model" {
   default     = "claude-opus-5-5"
 }
 
+variable "bedrock_fraction" {
+  description = "Share of each Opus group's deployments served through Bedrock. Raise to 0.5 once the Rust gateway shapes Bedrock invoke requests (it returns 501 today)."
+  type        = number
+  default     = 0
+}
+
 variable "chat_groups" {
   type    = number
   default = 10

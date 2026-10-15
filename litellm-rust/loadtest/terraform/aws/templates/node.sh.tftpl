@@ -36,7 +36,7 @@ mkdir -p /opt/lt/out
 chmod 0777 /opt/lt /opt/lt/out
 pull ${tools_image}
 docker run --rm -v /opt/lt/out:/work/out ${tools_image} genconfig -out out \
-  -mocks '${mocks}' -chat-model '${chat_model}' -messages-model '${messages_model}' -chat-groups ${chat_groups} -messages-groups ${messages_groups} \
+  -mocks '${mocks}' -chat-model '${chat_model}' -messages-model '${messages_model}' -bedrock-fraction ${bedrock_fraction} -chat-groups ${chat_groups} -messages-groups ${messages_groups} \
   -deployments ${deployments} -chat-provider ${chat_provider} \
   -keys ${key_count} -key-seed '${key_seed}' -master-key '${master_key}'
 

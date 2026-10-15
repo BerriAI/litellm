@@ -1,5 +1,5 @@
-// mockllm is a fake LLM upstream for load tests. It speaks OpenAI chat completions and
-// Anthropic messages, streaming and non-streaming, and takes its timing from a directive
+// mockllm is a fake LLM upstream for load tests. It speaks OpenAI chat completions, Anthropic
+// messages and Bedrock's Anthropic invoke API, streaming and non-streaming, and takes its timing from a directive
 // the load generator embeds in the prompt, so the proxy in between forwards it untouched:
 //
 //	[[mock ttft_ms=800 dur_ms=300000 out=2000 status=200]]
@@ -15,9 +15,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log"
 	"math/rand/v2"
@@ -183,7 +186,9 @@ func main() {
 		injected := faulty && rand.Float64() < f.rate
 		st.hit(dep, injected)
 
-		anthropic := strings.HasSuffix(path, "/messages")
+		bedrockStream := strings.HasSuffix(path, "/invoke-with-response-stream")
+		bedrock := bedrockStream || strings.HasSuffix(path, "/invoke")
+		anthropic := bedrock || strings.HasSuffix(path, "/messages")
 		if !anthropic && !strings.HasSuffix(path, "/chat/completions") {
 			http.Error(w, "unknown path "+path, http.StatusNotFound)
 			return
@@ -198,7 +203,7 @@ func main() {
 			writeError(w, anthropic, d.status)
 			return
 		}
-		stream := bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`))
+		stream := bedrockStream || bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`))
 		usage := bytes.Contains(body, []byte(`"include_usage":true`)) || bytes.Contains(body, []byte(`"include_usage": true`))
 		inputTokens := len(body) / 4
 
@@ -229,7 +234,11 @@ func main() {
 		if !sleep(r, d.ttft) {
 			return
 		}
-		w.Header().Set("content-type", "text/event-stream")
+		if bedrock {
+			w.Header().Set("content-type", "application/vnd.amazon.eventstream")
+		} else {
+			w.Header().Set("content-type", "text/event-stream")
+		}
 		w.Header().Set("cache-control", "no-cache")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
@@ -239,23 +248,32 @@ func main() {
 		start := time.Now()
 
 		var event func(name string, data any)
-		if anthropic {
+		if bedrock {
+			event = func(_ string, data any) {
+				b, _ := json.Marshal(data)
+				payload, _ := json.Marshal(map[string]string{"bytes": base64.StdEncoding.EncodeToString(b)})
+				w.Write(eventStreamFrame(payload))
+				flusher.Flush()
+			}
+		} else if anthropic {
 			event = func(name string, data any) {
 				b, _ := json.Marshal(data)
 				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
 				flusher.Flush()
 			}
-			event("message_start", map[string]any{"type": "message_start", "message": map[string]any{
-				"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock", "content": []any{},
-				"stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": inputTokens, "output_tokens": 1}}})
-			event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
-				"content_block": map[string]any{"type": "text", "text": ""}})
 		} else {
 			event = func(_ string, data any) {
 				b, _ := json.Marshal(data)
 				fmt.Fprintf(w, "data: %s\n\n", b)
 				flusher.Flush()
 			}
+		}
+		if anthropic {
+			event("message_start", map[string]any{"type": "message_start", "message": map[string]any{
+				"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock", "content": []any{},
+				"stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": inputTokens, "output_tokens": 1}}})
+			event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+				"content_block": map[string]any{"type": "text", "text": ""}})
 		}
 		created := time.Now().Unix()
 		openaiChunk := func(delta map[string]any, finish any) map[string]any {
@@ -314,4 +332,25 @@ func writeError(w http.ResponseWriter, anthropic bool, status int) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "mock failure", "type": "server_error", "code": status}})
+}
+
+// eventStreamFrame encodes one AWS event-stream message, the framing of Bedrock's
+// invoke-with-response-stream: prelude (lengths + CRC), headers, payload, message CRC.
+func eventStreamFrame(payload []byte) []byte {
+	var headers bytes.Buffer
+	for _, h := range [][2]string{{":event-type", "chunk"}, {":content-type", "application/json"}, {":message-type", "event"}} {
+		headers.WriteByte(byte(len(h[0])))
+		headers.WriteString(h[0])
+		headers.WriteByte(7)
+		binary.Write(&headers, binary.BigEndian, uint16(len(h[1])))
+		headers.WriteString(h[1])
+	}
+	total := 12 + headers.Len() + len(payload) + 4
+	frame := make([]byte, 0, total)
+	frame = binary.BigEndian.AppendUint32(frame, uint32(total))
+	frame = binary.BigEndian.AppendUint32(frame, uint32(headers.Len()))
+	frame = binary.BigEndian.AppendUint32(frame, crc32.ChecksumIEEE(frame))
+	frame = append(frame, headers.Bytes()...)
+	frame = append(frame, payload...)
+	return binary.BigEndian.AppendUint32(frame, crc32.ChecksumIEEE(frame))
 }

@@ -16,6 +16,7 @@ locals {
     gateway_image    = local.gateway_image
     chat_model       = var.chat_model
     messages_model   = var.messages_model
+    bedrock_fraction = var.bedrock_fraction
     chat_groups      = var.chat_groups
     messages_groups  = var.messages_groups
     deployments      = var.deployments_per_group
