@@ -396,3 +396,15 @@ def test_proxy_level_drop_params_keeps_the_latest_four_breakpoints(drop_params_g
         status, _, text = post_chat(drop_params_gateway, _body(model, marker, _marked(_FIVE_SITES)))
         assert status == 200, text
         assert anthropic_labels(_only_request(wire)) == _latest_four("anthropic", marker)
+
+
+@pytest.mark.timeout(240)
+def test_proxy_level_drop_params_wins_over_a_request_that_sets_it_false(drop_params_gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marked(("user_part",), {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}})
+    with wire_server(anthropic_peer) as wire, drop_params_gateway.scenario() as scenario:
+        model: Final = _deployment(drop_params_gateway, scenario, wire, "anthropic")
+        status, _, text = post_chat(drop_params_gateway, _body(model, marker, marks, drop_params=False))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert anthropic_marks(request) == (Mark(ASK_LABEL, None),)
