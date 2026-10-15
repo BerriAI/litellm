@@ -1,5 +1,4 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_host_python::PythonOwned;
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
@@ -120,15 +119,11 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
     view: RequestView,
-    cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(view: RequestView, asynchronous: bool) -> Self {
-        Self {
-            view,
-            cache: PythonCache::new(asynchronous),
-        }
+    pub(super) fn new(view: RequestView) -> Self {
+        Self { view }
     }
 
     fn projection(
@@ -257,24 +252,20 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = Messages;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
+    ) -> Result<MessagesCall, InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
-        let selection =
-            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
-                .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
-            .map(|request| (request, selection))
     }
 
     fn encode_response(
@@ -314,43 +305,12 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
-    fn handle_host_call(
-        &mut self,
-        py: Python<'_>,
-        op: CacheCall,
-    ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
-    }
-
-    fn begin_host_call(
-        &mut self,
-        py: Python<'_>,
-        op: CacheCall,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
-    }
-
-    fn resume_host_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.resume(py, result).map_err(InvokeError::Python)
-    }
-}
-
 impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
         self.view.close();
-        self.cache.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.view.traverse(visit)?;
-        self.cache.traverse(visit)
+        self.view.traverse(visit)
     }
 }
 

@@ -32,6 +32,7 @@ _CACHE_PARAMETER_HELPERS: Final = frozenset(
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
+        "litellm/rust_bridge/host/cache.py",
         "litellm/utils.py",
     }
 )
