@@ -821,11 +821,13 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     if not isinstance(metadata, dict):
         return None
 
-    user_id: Final = metadata.get("user_id")
-    if isinstance(user_id, dict):
-        session_id = user_id.get("session_id")
-        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
-            return session_id
+    metadata_map: Final = cast(Mapping[object, object], metadata)  # cast-ok: dict checked above
+    user_id: Final = metadata_map.get("user_id")
+    identity: Final = safe_json_loads(user_id) if isinstance(user_id, str) else user_id
+    if isinstance(identity, dict):
+        identity_session_id: Final = identity.get("session_id")
+        if isinstance(identity_session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(identity_session_id):
+            return identity_session_id
         return None
     if not isinstance(user_id, str):
         return None

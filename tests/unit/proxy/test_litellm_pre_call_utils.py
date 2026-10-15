@@ -3357,6 +3357,55 @@ def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
     assert "litellm_trace_id" not in data
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("session_id", ("session-one", "session-two"))
+def test_anthropic_json_user_id_extracts_session_without_rewriting_payload(metadata_key: str, session_id: str) -> None:
+    user_id: Final = json.dumps({"device_id": "device", "account_uuid": "", "session_id": session_id})
+    data: Final = {"metadata": {"user_id": user_id}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name=metadata_key
+    )
+    assert data[metadata_key]["session_id"] == session_id
+    assert data["litellm_session_id"] == session_id
+    assert data["metadata"]["user_id"] == user_id
+
+
+@pytest.mark.parametrize("header", ("x-litellm-session-id", "x-claude-code-session-id"))
+def test_session_header_beats_anthropic_json_user_id(header: str) -> None:
+    user_id: Final = json.dumps({"session_id": "body-session-id"})
+    data: Final = {"metadata": {"user_id": user_id}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={header: "header-session-id"}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["metadata"]["user_id"] == user_id
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    (
+        '{"session_id":',
+        "[]",
+        "null",
+        "123",
+        '"session-123"',
+        "{}",
+        '{"session_id": null}',
+        '{"session_id": 123}',
+        '{"session_id": ""}',
+        '{"session_id": "invalid session!", "parent_session_id": "parent-session"}',
+        '{"device_id": "device", "parent_session_id": "parent-session"}',
+    ),
+)
+def test_anthropic_json_user_id_ignores_invalid_session(user_id: str) -> None:
+    data: Final = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
 def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
     data = {
         "metadata": {
