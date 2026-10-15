@@ -173,6 +173,21 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
     if secret_column.table == "LiteLLM_MCPServerTable" and secret_column.column == "env_vars":
         yield from _mcp_global_env_var_leaves(stored)
         return
+    if secret_column.table == "LiteLLM_SSOConfig":
+        # The SSO writer encrypts top-level string fields only; structured fields
+        # (role_mappings, team_mappings, model lists, …) are plaintext by construction.
+        settings: Final[JsonValue] = stored
+        if isinstance(settings, dict):
+            for value in settings.values():
+                if isinstance(value, str):
+                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        return
+    if secret_column.only_rows_with_marked_ciphertexts:
+        # The metadata columns' writers store ciphertext only as marked sensitive
+        # callback vars; every other string in the metadata JSON (callback names,
+        # hosts, public keys, …) is plaintext by construction.
+        yield from _sensitive_prefixed_leaves(stored)
+        return
     yield from _string_leaves(stored)
 
 

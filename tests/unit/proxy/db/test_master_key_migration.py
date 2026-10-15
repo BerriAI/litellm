@@ -813,3 +813,62 @@ async def test_mcp_metadata_and_user_scope_env_vars_do_not_block_a_pynacl_free_m
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["scopes"] == ["read"]
     assert tables["LiteLLM_MCPServerTable"][0]["env_vars"] == [{"name": "API_TOKEN", "scope": "user"}]
+
+
+@pytest.mark.asyncio
+async def test_sso_structured_fields_and_callback_metadata_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """SSO structured fields (models, role_mappings) and team metadata's plaintext
+    callback strings are stored plaintext by construction; only the writers' encrypted
+    leaves (SSO top-level strings; marked sensitive callback vars) count."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_SSOConfig": [
+            {
+                "id": "sso_config",
+                "sso_settings": {
+                    "google_client_secret": _encrypted("sso-secret"),
+                    "models": ["gpt-4o", "claude-3-5-sonnet"],
+                    "role_mappings": {"admin": "proxy-admin"},
+                },
+            }
+        ],
+        "LiteLLM_TeamTable": [
+            {
+                "team_id": "team-1",
+                "metadata": {
+                    "logging": [
+                        {
+                            "callback_name": "langfuse",
+                            "callback_type": "success",
+                            "callback_vars": {
+                                "langfuse_secret_key": "litellm_enc::" + _encrypted("team-secret"),
+                                "langfuse_host": "https://cloud.langfuse.com",
+                            },
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 2  # sso + team secrets only
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=2, remaining=0, unreadable=0)
+    sso = tables["LiteLLM_SSOConfig"][0]["sso_settings"]
+    assert sso["models"] == ["gpt-4o", "claude-3-5-sonnet"]
+    assert sso["role_mappings"] == {"admin": "proxy-admin"}
+    team_logging = tables["LiteLLM_TeamTable"][0]["metadata"]["logging"][0]
+    assert team_logging["callback_vars"]["langfuse_host"] == "https://cloud.langfuse.com"
+    assert team_logging["callback_name"] == "langfuse"
