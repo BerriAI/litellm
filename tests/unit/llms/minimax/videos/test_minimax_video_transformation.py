@@ -1071,6 +1071,18 @@ class TestMinimaxVideoEndToEndRequest:
         assert "additional_drop_params" not in body
 
     @pytest.mark.asyncio
+    async def test_a_dropped_field_is_not_sent_when_it_arrives_inside_parameters(self):
+        body = await self._wire_body(
+            model="minimax/MiniMax-H3",
+            prompt="p",
+            parameters={"aigc_watermark": True, "ratio": "1:1"},
+            additional_drop_params=["aigc_watermark"],
+        )
+
+        assert body["ratio"] == "1:1"
+        assert "aigc_watermark" not in body
+
+    @pytest.mark.asyncio
     async def test_a_param_minimax_cannot_honor_is_rejected_before_the_billed_call(self):
         """Regression: seed reached the mapper, never the body, and the video was
         still created and billed as if the caller had not asked for it."""
@@ -1175,6 +1187,25 @@ class TestMinimaxVideoInputBilling:
 
         assert custom_cost == pytest.approx(self._create_cost(model, image_count))
         assert custom_cost > self._create_cost(model, 0, router_model_id=deployment_id)
+
+    @pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
+    def test_a_deployment_pricing_only_seconds_bills_images_at_the_cost_map_rate(self, model, monkeypatch):
+        from litellm import get_model_info
+
+        info = get_model_info(model=model, custom_llm_provider="minimax")
+        deployment_id = f"seconds-only-{model}"
+        seconds_rate = info["output_cost_per_second_768p"] * 2
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "minimax", "mode": "video_generation", "output_cost_per_second": seconds_rate},
+        )
+        extra_images = 2
+        image_count = info["provider_specific_entry"]["minimax_free_input_images"] + extra_images
+
+        custom_cost = self._create_cost(model, image_count, router_model_id=deployment_id)
+
+        assert custom_cost == pytest.approx(seconds_rate * 5 + extra_images * info["input_cost_per_image"])
 
     @pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
     def test_images_beyond_the_free_allowance_are_billed_per_image(self, model):

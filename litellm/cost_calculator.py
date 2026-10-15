@@ -1549,6 +1549,7 @@ def completion_cost(
             region_name=region_name,
         )
 
+        requested_model: Final = model
         potential_model_names: Final = [
             selected_model,
             _get_response_model(completion_response),
@@ -1715,7 +1716,7 @@ def completion_cost(
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
                             ) * video_count + _video_input_image_cost(
-                                model,
+                                requested_model or model,
                                 custom_llm_provider,
                                 _video_model_info,
                                 getattr(completion_response, "usage", None),
@@ -2178,12 +2179,14 @@ def _video_input_image_cost(
 ) -> float:
     match usage:
         case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
-            pricing: Final = (
-                model_info
-                if model_info is not None
-                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
+            image_rate: Final = (
+                deployment_rate
+                if deployment_rate is not None
+                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                    "input_cost_per_image"
+                )
             )
-            image_rate: Final = pricing.get("input_cost_per_image")
             return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
         case _:
             return 0.0

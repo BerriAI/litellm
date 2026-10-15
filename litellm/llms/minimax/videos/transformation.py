@@ -390,6 +390,14 @@ def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
         return frozenset()
 
 
+def _parameters_fields(value: object, model: str, dropped_keys: frozenset[str]) -> Mapping[str, object]:
+    try:
+        fields: Final = _RESPONSE_ADAPTER.validate_python(value)
+    except ValidationError as e:
+        raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
+    return MappingProxyType({key: field for key, field in fields.items() if key not in dropped_keys})
+
+
 def _billable_input_image_count(model: str, input_image_count: int) -> int:
     """MiniMax bills input images beyond a per-model free allowance on top of output seconds."""
     try:
@@ -458,7 +466,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
-        dropped_keys: Final = _DROP_FROM_CREATE_BODY | _additional_drop_keys(video_create_optional_params)
+        additional_dropped_keys: Final = _additional_drop_keys(video_create_optional_params)
+        dropped_keys: Final = _DROP_FROM_CREATE_BODY | additional_dropped_keys
         for key, value in video_create_optional_params.items():
             if value is None or key in dropped_keys:
                 continue
@@ -467,10 +476,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             elif key == "size":
                 mapped_params.setdefault("ratio", _ratio_from_size(value, model))
             elif key == "parameters":
-                try:
-                    mapped_params.update(_RESPONSE_ADAPTER.validate_python(value))
-                except ValidationError as e:
-                    raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
+                mapped_params.update(_parameters_fields(value, model, additional_dropped_keys))
             else:
                 mapped_params[key] = value
         unsupported: Final = sorted(key for key in mapped_params if key not in _CREATE_REQUEST_PARAMS)
