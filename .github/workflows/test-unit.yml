@@ -346,6 +346,7 @@ jobs:
               tests/unit/llms/tinyfish
               tests/unit/llms/together_ai
               tests/unit/llms/tool_loop
+              tests/unit/llms/topaz
               tests/unit/llms/triton
               tests/unit/llms/v0
               tests/unit/llms/valkey
