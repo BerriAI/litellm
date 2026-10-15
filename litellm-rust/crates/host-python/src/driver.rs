@@ -645,12 +645,12 @@ where
     }
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Suspended(Suspension::Open(head)) => {
+        ExecutionStep::Suspended(Suspension::StreamOpen(head)) => {
             Execution::suspended(driver, options.lifecycle)
                 .into_sync_stream(py, head)
                 .map(Bound::unbind)
         }
-        ExecutionStep::Suspended(Suspension::Await(_) | Suspension::Yield(_)) => {
+        ExecutionStep::Suspended(Suspension::Await(_) | Suspension::StreamChunk(_)) => {
             Err(Error::SyncCallSuspended.into())
         }
     }

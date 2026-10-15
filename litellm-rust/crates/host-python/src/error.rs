@@ -12,6 +12,8 @@ pub enum Error {
     ExecutionRunning,
     #[error("execution is closed")]
     ExecutionClosed,
+    #[error("can't send non-None value to a just-started execution")]
+    SendBeforeStart,
     #[error("execution requires start before resume and can only start once")]
     ExecutionOutOfOrder,
     #[error("execution was closed while running")]
@@ -31,7 +33,9 @@ pub enum Error {
 impl From<Error> for PyErr {
     fn from(error: Error) -> Self {
         match error {
-            Error::FileContentType { .. } => PyTypeError::new_err(error.to_string()),
+            Error::SendBeforeStart | Error::FileContentType { .. } => {
+                PyTypeError::new_err(error.to_string())
+            }
             Error::MissingState
             | Error::ExecutionRunning
             | Error::ExecutionClosed
