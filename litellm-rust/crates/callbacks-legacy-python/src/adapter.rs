@@ -32,6 +32,15 @@ struct PassThroughStream {
     endpoint_type: &'static str,
 }
 
+/// Who logs a stream once it reaches the caller
+#[derive(Clone, Copy, Debug)]
+enum StreamLogging {
+    /// The adapter reproduces the pass-through iterator's billing over the delivered chunks
+    PassThrough(PassThroughStream),
+    /// The Python stream iterator the route hands its caller logs the stream itself
+    PythonIterator,
+}
+
 /// What the Messages stream iterator keeps for its end-of-stream billing.
 struct DeliveredStream {
     chunks: Py<PyList>,
@@ -111,15 +120,21 @@ impl LegacyLogging {
         }
     }
 
-    fn stream_billing(&self) -> Option<PassThroughStream> {
+    fn stream_logging(&self) -> Option<StreamLogging> {
         match self.operation {
-            LoggingOperation::Messages => Some(PassThroughStream {
+            LoggingOperation::Messages => Some(StreamLogging::PassThrough(PassThroughStream {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
-            }),
-            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
-                None
-            }
+            })),
+            LoggingOperation::Responses => Some(StreamLogging::PythonIterator),
+            LoggingOperation::Completion | LoggingOperation::Ocr => None,
+        }
+    }
+
+    fn stream_billing(&self) -> Option<PassThroughStream> {
+        match self.stream_logging()? {
+            StreamLogging::PassThrough(billing) => Some(billing),
+            StreamLogging::PythonIterator => None,
         }
     }
 
@@ -209,7 +224,10 @@ impl LegacyLogging {
 
     fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
         let logger = self.logger()?;
-        let billing = self.stream_billing().ok_or(HostError::MissingState)?;
+        let billing = match self.stream_logging().ok_or(HostError::MissingState)? {
+            StreamLogging::PassThrough(billing) => billing,
+            StreamLogging::PythonIterator => return Ok(()),
+        };
         let billed = Streaming::Success.call(
             py,
             (
@@ -535,7 +553,7 @@ impl LegacyLogging {
     }
 
     pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
-        if self.stream_billing().is_none() {
+        if self.stream_logging().is_none() {
             return Err(HostError::MissingState.into());
         }
         if let Some(key) = &self.cache_key {
@@ -551,6 +569,9 @@ impl LegacyLogging {
     }
 
     pub(crate) fn stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
+        if self.stream_billing().is_none() {
+            return Ok(());
+        }
         let stream = self.stream.as_mut().ok_or(HostError::MissingState)?;
         if stream.first_chunk.is_none() {
             stream.first_chunk = Some(datetime(py, epoch_seconds())?);

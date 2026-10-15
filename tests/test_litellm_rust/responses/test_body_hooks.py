@@ -13,7 +13,6 @@ from tests.test_litellm_rust.responses.data import (
     REQUEST,
     RESPONSES_EVENTS,
     RESPONSES_RESPONSE,
-    STREAMING,
     call,
 )
 from tests.test_litellm_rust.support.body_hooks import LegacyAgenticLoop, PlannedAgenticLoop, agentic_hooks
@@ -34,7 +33,6 @@ def server(server: RecordingServer) -> Iterator[RecordingServer]:
 
 
 @pytest.mark.asyncio
-@STREAMING
 async def test_body_streaming_deployment_hook_rewrites_chunks_before_delivery(server: RecordingServer) -> None:
     seen: Final[list[str]] = []
 

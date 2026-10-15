@@ -30,13 +30,19 @@ def native() -> Generator[None]:
 def native_responses() -> Iterator[FallbackProbe]:
     probe: Final = FallbackProbe()
     python_aresponses: Final = dispatch._PYTHON_ARESPONSES  # pyright: ignore[reportPrivateUsage]  # the fallback under observation
+    python_responses: Final = dispatch._PYTHON_RESPONSES  # pyright: ignore[reportPrivateUsage]  # the fallback under observation
 
     async def python_fallback(*args: object, **kwargs: object) -> object:
         probe.calls += 1
         return await python_aresponses(*args, **kwargs)
 
+    def python_sync_fallback(*args: object, **kwargs: object) -> object:
+        probe.calls += 1
+        return python_responses(*args, **kwargs)
+
     with (
         rebound(catalog, "RULES", (RouteRule(Route.RESPONSES, Rollout.RUST_OPT_IN), *catalog.RULES)),
         rebound(dispatch, "_PYTHON_ARESPONSES", python_fallback),
+        rebound(dispatch, "_PYTHON_RESPONSES", python_sync_fallback),
     ):
         yield probe

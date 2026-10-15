@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from tests.test_litellm_rust.responses.data import RESPONSES_EVENTS, RESPONSES_RESPONSE, STREAMING, call
+from tests.test_litellm_rust.responses.data import RESPONSES_EVENTS, RESPONSES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.results import consume, response_id
@@ -20,7 +20,6 @@ def server(server: RecordingServer) -> Iterator[RecordingServer]:
 
 
 @pytest.mark.asyncio
-@STREAMING
 async def test_stream_relays_provider_events_and_logs_success_once_after_the_last_chunk(
     server: RecordingServer,
 ) -> None:
@@ -45,7 +44,6 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
 
 
 @pytest.mark.asyncio
-@STREAMING
 async def test_sync_stream_relays_provider_events_and_logs_success_once(server: RecordingServer) -> None:
     server.enqueue(STREAM)
     recorder: Final = RecordingLogger()

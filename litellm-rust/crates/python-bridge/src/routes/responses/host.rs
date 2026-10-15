@@ -1,21 +1,24 @@
 use std::convert::Infallible;
 
 use crate::{marshal::project_optional_fields, routes::inference::InferenceHost};
+use bytes::Bytes;
 use litellm_auth::AwsParams;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py, to_py,
+};
 use litellm_inference_responses::{
     Error,
     ids::{self, IdScope},
     route::Responses,
-    types::ResponsesCall,
+    types::{ResponsesCall, ResponsesStreamHead},
 };
 use litellm_router_types::LitellmParams;
 use pyo3::{
     exceptions::PyValueError,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::PyDict,
+    types::{PyBytes, PyDict},
 };
 
 pub(super) struct ResponsesPythonHost {
@@ -182,15 +185,6 @@ impl PythonBinding for ResponsesPythonHost {
     ) -> Result<ResponsesCall, InvokeError<Error>> {
         let call = project(&mut self.host, py, arguments).map_err(InvokeError::Python)?;
         self.ids = id_scope(&self.host, py, arguments, &call).map_err(InvokeError::Python)?;
-        if call
-            .optional_params
-            .get("stream")
-            .is_some_and(|value| value == &serde_json::Value::Bool(true))
-        {
-            return Err(InvokeError::Native(Error::Unsupported(
-                "native Python responses streaming",
-            )));
-        }
         Ok(call)
     }
 
@@ -211,24 +205,17 @@ impl PythonBinding for ResponsesPythonHost {
 
     fn encode_stream_head(
         &mut self,
-        _py: Python<'_>,
-        head: <Responses as litellm_host::protocol::Protocol>::StreamHead,
+        py: Python<'_>,
+        head: ResponsesStreamHead,
     ) -> PyResult<Py<PyAny>> {
-        let _ = head;
-        Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "native Python Responses streaming is not supported",
-        ))
+        py.import(super::ROUTE_HOST_MODULE)?
+            .getattr("stream_head")?
+            .call1((to_py(py, &head.headers)?, self.host.request(py)?))
+            .map(Bound::unbind)
     }
 
-    fn encode_chunk(
-        &mut self,
-        _py: Python<'_>,
-        chunk: <Responses as litellm_host::protocol::Protocol>::Chunk,
-    ) -> PyResult<Py<PyAny>> {
-        let _ = chunk;
-        Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "native Python Responses streaming is not supported",
-        ))
+    fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
+        Ok(PyBytes::new(py, &chunk).into_any().unbind())
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {

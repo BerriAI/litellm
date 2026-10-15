@@ -97,14 +97,6 @@ def run(execution: Execution, open_stream: Callable[[Execution, object], object]
         return _hand_off(execution, _settled(execution.send(None)), open_stream, cleanup)
 
 
-def synchronous(native: Callable[[_Call], object]) -> Callable[[_Call], object]:
-    return lambda call: run(_execution(native(call)), SyncStream)
-
-
-def asynchronous(native: Callable[[_Call], object]) -> Callable[[_Call], Awaitable[object]]:
-    return lambda call: drive(_execution(native(call)), AsyncStream)
-
-
 def _execution(value: object) -> Execution:
     return cast("Execution", value)  # cast-ok: native entrypoints return Execution per _native.pyi
 
@@ -191,3 +183,15 @@ class SyncStream(Iterator[object]):
     def _finish(self) -> None:
         self._done = True
         self._execution.close()
+
+
+def synchronous(
+    native: Callable[[_Call], object], open_stream: Callable[[Execution, object], object] = SyncStream
+) -> Callable[[_Call], object]:
+    return lambda call: run(_execution(native(call)), open_stream)
+
+
+def asynchronous(
+    native: Callable[[_Call], object], open_stream: Callable[[Execution, object], object] = AsyncStream
+) -> Callable[[_Call], Awaitable[object]]:
+    return lambda call: drive(_execution(native(call)), open_stream)

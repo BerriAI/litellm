@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # narrows caller json the checker cannot see into
+from typing import Final, Protocol, cast  # noqa: TID251  # narrows caller json the checker cannot see into
+
+import httpx
 
 import litellm
 from litellm import get_llm_provider
+from litellm.litellm_core_utils import core_helpers
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.databricks.responses.transformation import DatabricksResponsesAPIConfig
@@ -17,6 +21,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import inference_decline_reason, optional_str
+from litellm.rust_bridge.responses.streams import StreamSource
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -24,6 +29,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
+_REQUEST_FIELDS: Final = frozenset((*PARAMETERS, "model", "input", "litellm_logging_obj"))
 _NATIVE_PARAMETERS: Final = (*PARAMETERS, "api_version")
 _MANTLE_PARAMETERS: Final = (
     *_NATIVE_PARAMETERS,
@@ -50,6 +56,15 @@ _CONFIGS: Final[Mapping[str, OpenAIResponsesAPIConfig]] = MappingProxyType(
     }
 )
 _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
+
+
+class _HeaderProcessor(Protocol):
+    def __call__(self, response_headers: httpx.Headers) -> Mapping[str, object]: ...
+
+
+_PROCESS_HEADERS: Final = cast(  # cast-ok: the shared header projection is untyped
+    _HeaderProcessor, core_helpers.process_response_headers
+)
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:
@@ -88,6 +103,45 @@ def response(value: Mapping[str, object]) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_validate(value)
 
 
+def stream_head(headers: Sequence[tuple[str, str]], request: Mapping[str, object]) -> Mapping[str, object]:
+    """The opened stream's headers for call logging, and what Python's Responses stream iterator is built from"""
+    model, provider = _resolved_model(request)
+    config: Final = _responses_config(provider, model)
+    logger: Final = request.get("litellm_logging_obj")
+    if config is None or not isinstance(logger, Logging):
+        raise RuntimeError("a native Responses stream opened without its provider config or call logger")
+    return {
+        "additional_headers": dict(_PROCESS_HEADERS(httpx.Headers(list(headers)))),
+        "source": StreamSource(
+            headers=tuple(headers),
+            model=model,
+            config=config,
+            logging_obj=logger,
+            litellm_metadata=_litellm_metadata(request),
+            custom_llm_provider=provider,
+            request_data={
+                "input": request.get("input"),
+                **{name: request[name] for name in PARAMETERS if request.get(name) is not None},
+                "litellm_params": dict(
+                    GenericLiteLLMParams(
+                        **{name: value for name, value in request.items() if name not in _REQUEST_FIELDS}
+                    )
+                ),
+            },
+            call_kwargs=request,
+        ),
+    }
+
+
+def _litellm_metadata(
+    request: Mapping[str, object],
+) -> dict[str, object] | None:  # mutable-ok: the caller's own dict, which the stream iterator writes into
+    metadata: Final = request.get("litellm_metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    return cast(dict[str, object], metadata)  # cast-ok: caller json
+
+
 def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
     _, provider = _resolved_model(request)
     return failures.map_native_failure(
@@ -119,7 +173,20 @@ def decline_reason(request: Mapping[str, object]) -> str | None:
         inference_decline_reason(_MANTLE_PARAMETERS if provider == "bedrock_mantle" else _NATIVE_PARAMETERS, request)
         or _provider_decline_reason(provider, model, request)
         or _model_rules_decline_reason(config, model, request)
+        or _stream_decline_reason(config, provider, model, request)
     )
+
+
+def _stream_decline_reason(
+    config: OpenAIResponsesAPIConfig, provider: str, model: str, request: Mapping[str, object]
+) -> str | None:
+    if request.get("stream") is not True:
+        return None
+    if litellm.cache is not None:
+        return "native Responses streaming does not implement caching"
+    if config.should_fake_stream(model=model, stream=True, custom_llm_provider=provider):
+        return "native Responses does not implement faked streams"
+    return None
 
 
 def _responses_config(provider: str, model: str) -> OpenAIResponsesAPIConfig | None:

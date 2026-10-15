@@ -102,6 +102,10 @@ impl InferenceHost {
         self.view.argument(py, arguments, name)
     }
 
+    pub fn request<'py>(&self, py: Python<'py>) -> PyResult<&Bound<'py, PyDict>> {
+        self.view.request(py)
+    }
+
     pub fn close(&mut self) {
         self.view.close();
     }

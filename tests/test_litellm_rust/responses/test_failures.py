@@ -62,7 +62,6 @@ async def test_provider_failure_is_terminal_and_shared_with_callbacks(
 @pytest.mark.parametrize(
     "options",
     (
-        {"stream": True},
         {"extra_body": {"provider_option": True}},
         {"mock_response": "mock"},
         {"num_retries": 1},
