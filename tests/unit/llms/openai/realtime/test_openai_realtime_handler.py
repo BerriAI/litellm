@@ -470,7 +470,7 @@ async def test_realtime_query_params_use_normalized_model_name(monkeypatch):
         MagicMock(async_realtime=mock_async_realtime),
     )
 
-    def fake_get_llm_provider(model, api_base=None, api_key=None):
+    def fake_get_llm_provider(model, api_base=None, api_key=None, custom_llm_provider=None):
         return ("gpt-4o-realtime-preview", "openai", None, None)
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
@@ -509,7 +509,7 @@ async def test_realtime_query_params_preserve_missing_model(monkeypatch):
         MagicMock(async_realtime=mock_async_realtime),
     )
 
-    def fake_get_llm_provider(model, api_base=None, api_key=None):
+    def fake_get_llm_provider(model, api_base=None, api_key=None, custom_llm_provider=None):
         return ("gpt-realtime-whisper", "openai", None, None)
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
