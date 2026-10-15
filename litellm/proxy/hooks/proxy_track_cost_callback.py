@@ -380,6 +380,16 @@ class _ProxyDBLogger(CustomLogger):
                 router=get_llm_router(),
             )
 
+            # An unpriced model has no dollar cost and skips the spend pipeline below, but it
+            # still consumes tokens a team token budget must count, so advance the counter here.
+            if (
+                response_cost is None
+                and team_id is not None
+                and ProxyUpdateSpend.disable_spend_updates() is not True
+                and not _is_unbilled_interaction_response(completion_response)
+            ):
+                await _increment_team_token_counter(team_id=team_id, total_tokens=_extract_total_tokens(sl_object))
+
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
                 verbose_proxy_logger.debug(
@@ -746,6 +756,22 @@ def _extract_total_tokens(sl_object: StandardLoggingPayload | None) -> int:
     )
 
 
+async def _increment_team_token_counter(team_id: str, total_tokens: int) -> None:
+    """Advance the cross-pod ``tokens:team:{id}`` counter so the next request's
+    auth check sees this request's tokens before the batched ``tokens_used``
+    flush lands. Best-effort, a counter hiccup must never fail a request that was
+    already served.
+    """
+    if not total_tokens:
+        return
+    from litellm.proxy.proxy_server import increment_spend_counter_cache
+
+    try:
+        await increment_spend_counter_cache(counter_key=f"tokens:team:{team_id}", increment=total_tokens)
+    except Exception:  # noqa: BLE001  # best-effort cross-pod token counter; a Redis failure must not break the response or the spend write
+        verbose_proxy_logger.warning("Failed to increment team token-budget counter for team_id=%s", team_id)
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: "ProxyLogging",
     increment_spend_counters: _IncrementSpendCounters,
@@ -898,17 +924,7 @@ async def _update_database_and_spend_counters_in_batch(
             "StandardLoggingPayload | None",
             kwargs.get("standard_logging_object"),  # pyright: ignore[reportUnknownMemberType]  # untyped callback kwargs
         )
-        total_tokens: Final = _extract_total_tokens(sl_object)
-        if total_tokens:
-            from litellm.proxy.proxy_server import increment_spend_counter_cache
-
-            try:
-                await increment_spend_counter_cache(
-                    counter_key=f"tokens:team:{team_id}",
-                    increment=total_tokens,
-                )
-            except Exception:  # noqa: BLE001  # best-effort cross-pod token counter; a Redis failure must not break the response or the spend write
-                verbose_proxy_logger.warning("Failed to increment team token-budget counter for team_id=%s", team_id)
+        await _increment_team_token_counter(team_id=team_id, total_tokens=_extract_total_tokens(sl_object))
 
     return True
 
