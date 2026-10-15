@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm._uuid import uuid
@@ -22,6 +24,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
 from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -308,10 +311,10 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
         block for chunk in parsed_chunks for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
     expected_delta_blocks = (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
-    expected_signature_block = {"type": "thinking", "thinking": "", "signature": "sig-final"}
+    expected_signature_block = {"type": "thinking", "thinking": "", "signature": "sig-final", "index": 0}
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (*expected_delta_blocks, expected_signature_block)
@@ -421,8 +424,8 @@ def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
 
 
@@ -456,9 +459,72 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
+
+
+def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_without_index():
+    """`client.chat.completions.stream()` feeds every delta through the OpenAI SDK's `ChatCompletionStreamState`,
+    which requires each dict inside a list to carry a list-position `index`. Unindexed `thinking_blocks` crashed it
+    with `RuntimeError: Expected list delta entry to have an \`index\` key` on the second thinking chunk"""
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_two_blocks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 20, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 1. "}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 2."}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-a"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Paris"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "thinking_delta", "thinking": "Step 3."}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "signature_delta", "signature": "sig-b"}},
+        {"type": "content_block_stop", "index": 2},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}},
+        {"type": "message_stop"},
+    )
+
+    state: Final = ChatCompletionStreamState()
+    for event in events:
+        state.handle_chunk(ChatCompletionChunk.model_validate(iterator.chunk_parser(chunk=event).model_dump()))
+    message: Final = state.get_final_completion().choices[0].message.model_dump()
+
+    assert message["content"] == "Paris"
+    assert message["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "sig-b", "index": 1},
+    ]
+
+    next_turn: Final = {
+        "role": "assistant",
+        "content": message["content"],
+        "thinking_blocks": message["thinking_blocks"],
+    }
+    replayed: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Capital of France?"}, next_turn, {"role": "user", "content": "And Spain?"}],
+        model="claude-haiku-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a"},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "sig-b"},
+        {"type": "text", "text": "Paris"},
+    ]
 
 
 def test_handle_json_mode_chunk_response_format_tool():
@@ -1360,6 +1426,24 @@ def test_multiple_tools_streaming_has_index_zero():
         parsed = iterator.chunk_parser(chunk)
         if parsed.choices:
             assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_streamed_tool_search_tool_result_is_kept_in_tool_results():
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    parsed: Final = iterator.chunk_parser(
+        chunk={"type": "content_block_start", "index": 1, "content_block": search_result}
+    )
+
+    assert parsed.choices[0].delta.provider_specific_fields == {"tool_results": [search_result]}
 
 
 def test_streaming_chunks_have_stable_ids():
@@ -3366,3 +3450,50 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     assert exc_info.value.status_code == 401
     assert exc_info.value.llm_provider == "anthropic"
     assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
+
+
+def _message_stream_events(stop_reason: str, stop_details: dict | None) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
+                "type": "message",
+                "role": "assistant",
+                "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
+                "content": [],
+                "usage": {"input_tokens": 412, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+
+
+def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    return litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+
+def test_streamed_refusal_stop_details_reach_the_assembled_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+
+
+def test_streamed_end_turn_carries_no_stop_details():
+    assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
+
+    assert assembled.choices[0].finish_reason == "stop"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields

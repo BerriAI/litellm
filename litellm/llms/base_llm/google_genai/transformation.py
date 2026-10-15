@@ -1,6 +1,7 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -30,9 +31,10 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -78,7 +80,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -161,7 +163,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> dict:
         """
         Transform the request parameters for the generate content API.

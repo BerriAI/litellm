@@ -4,6 +4,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 
 from typing import Final
 
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     ExactExpected,
@@ -3625,4 +3626,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_GEMINI_3_8_FLASH_STREAM_RESPONSE_MODEL_OVERRIDE,
     ),
     StreamParityTestCase(plain=GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, streamed=GEMINI_GEMINI_3_8_FLASH_STREAM_TOOL_CALL),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT,
+            GEMINI_GEMINI_3_8_FLASH_CACHE_READ,
+            GEMINI_GEMINI_3_8_FLASH_REASONING,
+            GEMINI_GEMINI_3_8_FLASH_STREAM,
+        ),
+        ("/v1/responses", "/v1/messages"),
+    ),
 )

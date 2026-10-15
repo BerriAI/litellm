@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -43,6 +43,7 @@ from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_DECODED_LITERAL: Final = TypeAdapter(object)
 
 
 @contextmanager
@@ -602,9 +603,11 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_LITERAL.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
             return cached_response
         return cached_result
 

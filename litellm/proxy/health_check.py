@@ -32,6 +32,7 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.router_utils.common_utils import is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
@@ -777,6 +778,9 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
     return None
 
 
+_PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
     """
     Update the litellm params for health check.
@@ -867,7 +871,8 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
                 "bedrock"
             )
 
-    return litellm_params
+    probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
+    return {key: value for key, value in probe_params.items() if not is_model_capability_field(key)}
 
 
 _update_litellm_params_for_health_check: Final = update_litellm_params_for_health_check

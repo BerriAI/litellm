@@ -20,6 +20,7 @@ BEDROCK_CACHE_CHECKPOINT_CAP: Final = 4
 
 ANTHROPIC_MODEL: Final = "claude-opus-5-5"
 BEDROCK_MODEL: Final = "anthropic.claude-opus-5-5"
+UNMAPPED_BEDROCK_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/scripted"
 PROVIDER_KEY: Final = "synthetic-provider-key"
 SYSTEM: Final = "Use the provided tool results to answer the user."
 ASK: Final = "Look up the weather in London, Paris, and Tokyo."
@@ -407,6 +408,23 @@ def bedrock_peer(request: Request) -> Reply:
             }
         ).encode()
     )
+
+
+def _without_cache_points(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return {key: _without_cache_points(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [
+            _without_cache_points(inner) for inner in value if not (isinstance(inner, dict) and "cachePoint" in inner)
+        ]
+    return value
+
+
+def sent_without_cache_points(requests: Sequence[Request], marker: str) -> list[JsonValue]:
+    return [
+        _without_cache_points(_JSON_OBJECT.validate_json(request.body.replace(marker.encode(), b"marker")))
+        for request in requests
+    ]
 
 
 def gateway_injected(response_id: str) -> bool:

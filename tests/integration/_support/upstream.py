@@ -24,7 +24,7 @@ from _fake_openai_endpoint_server import (
     moderations,
     triton_embeddings,
 )
-from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES, FALLBACK_GENERALIZATIONS
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -275,7 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        return JSONResponse(COST_MAP_ENTRIES)
+        return JSONResponse({**COST_MAP_ENTRIES, "fallback_generalizations": FALLBACK_GENERALIZATIONS})
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(

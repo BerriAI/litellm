@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
 from pydantic import JsonValue
@@ -141,6 +141,20 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _response_header(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name)
+
+
+class _HiddenParamsSink(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _StreamMetadataTarget(Protocol):
+    @property
+    def hidden_params(self) -> _HiddenParamsSink: ...
+
 
 # Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character;
 # nova is left out since Gemini 3.x TTS models accept it as given (live check 2026-10-08)
@@ -287,7 +301,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         presence_penalty: float | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -2241,7 +2255,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _set_stream_metadata_on_response(
-        model_response: Any,
+        model_response: _StreamMetadataTarget,
         grounding_metadata: Sequence[Mapping[str, object]],
         url_context_metadata: Sequence[Mapping[str, object]],
         safety_ratings: Sequence[Mapping[str, object]],
@@ -2256,11 +2270,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)
         setattr(model_response, "vertex_ai_safety_results", safety_ratings)
         if safety_ratings:
-            model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
-            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+            model_response.hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+            model_response.hidden_params["vertex_ai_safety_results"] = safety_ratings
         setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
         if citation_metadata:
-            model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata
+            model_response.hidden_params["vertex_ai_citation_metadata"] = citation_metadata
 
     @classmethod
     def set_stream_metadata_on_response(
@@ -2431,11 +2445,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
                 if audio_response is not None:
-                    cast(dict[str, Any], chat_completion_message)["audio"] = audio_response
+                    cast(dict[str, object], chat_completion_message)["audio"] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
                 if image_response is not None:
                     # Handle image response - combine with text content into structured format
-                    cast(dict[str, Any], chat_completion_message)["images"] = image_response
+                    cast(dict[str, object], chat_completion_message)["images"] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -2669,7 +2683,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
-                service_tier: Final[str | None] = raw_response.headers.get("x-gemini-service-tier")
+                service_tier: Final = _response_header(raw_response.headers, "x-gemini-service-tier")
                 if service_tier:
                     if service_tier.lower() == "standard":
                         setattr(model_response, "service_tier", "default")

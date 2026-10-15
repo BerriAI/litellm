@@ -132,8 +132,9 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
     const request = input instanceof Request ? input : new Request(new URL(String(input), "http://localhost"), init);
     const body: Record<string, unknown> = request.method === "GET" ? {} : await request.clone().json();
     const recorded = { url: request.url, headers: request.headers, body, signal: request.signal };
-    requests.push(recorded);
     const path = new URL(request.url).pathname;
+    if (path.endsWith("/ui/litellm-runtime-config.json")) return json({});
+    requests.push(recorded);
     if (path.endsWith("/litellm-ui-config"))
       return json({ proxy_base_url: MANAGEMENT, server_root_path: "", admin_ui_disabled: false });
     if (path.endsWith("/health/readiness/details")) return json({ status: "healthy" });

@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -26,6 +26,15 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
     }
 )
 _THINKING_OFF: Final = "none"
+
+_JsonValue: Final = TypeVar("_JsonValue")
+
+
+def json_copy_or_original(value: _JsonValue) -> _JsonValue:
+    try:
+        return json.loads(json.dumps(value, default=dict))
+    except (TypeError, ValueError, RecursionError):
+        return value
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):
