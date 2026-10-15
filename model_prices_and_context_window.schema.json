@@ -1209,10 +1209,12 @@
         },
         "token_count_fallback_model": {
           "type": "string",
+          "minLength": 1,
           "description": "Model that counts tokens for this one when the provider cannot count it."
         },
         "token_count_framing": {
           "type": "integer",
+          "minimum": 0,
           "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
         },
         "tpm": {
