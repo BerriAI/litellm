@@ -1,14 +1,23 @@
 import gzip
+import os
+from collections.abc import Callable
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
+import anyio
+import anyio.lowlevel
 import anyio.to_thread
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MINIMUM_SIZE_BYTES: Final = 500
-OFF_LOOP_SIZE_BYTES: Final = 16 * 1024
+OFF_LOOP_SIZE_BYTES: Final = 32 * 1024
 COMPRESS_LEVEL: Final = 6
+MAX_CONCURRENT_OFF_LOOP_COMPRESSIONS: Final = (
+    len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+)
+_OFF_LOOP_COMPRESS_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_gzip_compress_limiter")
+Compressor: TypeAlias = Callable[[bytes, int], bytes]
 
 
 def _coding_weight(part: str) -> tuple[str, float]:
@@ -25,18 +34,30 @@ def accepts_gzip(accept_encoding: str) -> bool:
     return weights.get("gzip", weights.get("x-gzip", weights.get("*", 0.0))) > 0
 
 
-async def _compress(body: bytes) -> bytes:
+def _off_loop_compress_limiter_for_this_loop() -> anyio.CapacityLimiter:
+    existing: Final = _OFF_LOOP_COMPRESS_LIMITER.get(None)
+    if existing is not None:
+        return existing
+    created: Final = anyio.CapacityLimiter(MAX_CONCURRENT_OFF_LOOP_COMPRESSIONS)
+    _OFF_LOOP_COMPRESS_LIMITER.set(created)
+    return created
+
+
+async def _compress(body: bytes, compress: Compressor) -> bytes:
     if len(body) < OFF_LOOP_SIZE_BYTES:
-        return gzip.compress(body, compresslevel=COMPRESS_LEVEL)
-    return await anyio.to_thread.run_sync(gzip.compress, body, COMPRESS_LEVEL)
+        return compress(body, COMPRESS_LEVEL)
+    return await anyio.to_thread.run_sync(
+        compress, body, COMPRESS_LEVEL, limiter=_off_loop_compress_limiter_for_this_loop()
+    )
 
 
 class _BufferedBodyGzipResponder:
     """Holds the response start until the first body message shows the body is complete, so streams are never delayed."""
 
-    def __init__(self, send: Send, gzip_accepted: bool) -> None:
+    def __init__(self, send: Send, gzip_accepted: bool, compress: Compressor) -> None:
         self.send = send
         self.gzip_accepted = gzip_accepted
+        self.compress = compress
         self.held_start: Message | None = None
         self.decided = False
 
@@ -70,7 +91,7 @@ class _BufferedBodyGzipResponder:
             await self.send(start)
             await self.send(message)
             return
-        compressed: Final = await _compress(body)
+        compressed: Final = await _compress(body, self.compress)
         headers["content-encoding"] = "gzip"
         headers["content-length"] = str(len(compressed))
         await self.send(start)
@@ -83,14 +104,15 @@ class _BufferedBodyGzipResponder:
 
 
 class GZipBufferedResponseMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, compress: Compressor = gzip.compress) -> None:
         self.app = app
+        self.compress = compress
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         gzip_accepted: Final = accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
-        responder: Final = _BufferedBodyGzipResponder(send, gzip_accepted)
+        responder: Final = _BufferedBodyGzipResponder(send, gzip_accepted, self.compress)
         await self.app(scope, receive, responder)
         await responder.release_held_start()

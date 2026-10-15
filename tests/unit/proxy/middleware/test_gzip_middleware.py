@@ -2,8 +2,10 @@ import asyncio
 import gzip
 import json
 import threading
+import time
 from typing import Final
 
+import anyio.to_thread
 import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -11,8 +13,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from litellm.proxy.middleware import gzip_middleware
 from litellm.proxy.middleware.gzip_middleware import (
+    MAX_CONCURRENT_OFF_LOOP_COMPRESSIONS,
     MINIMUM_SIZE_BYTES,
     OFF_LOOP_SIZE_BYTES,
     GZipBufferedResponseMiddleware,
@@ -51,18 +53,6 @@ async def _huge(request: Request) -> Response:
     return Response(b"z" * (OFF_LOOP_SIZE_BYTES * 2), media_type="application/json")
 
 
-async def _under_off_loop(request: Request) -> Response:
-    return Response(b"u" * (OFF_LOOP_SIZE_BYTES - 1), media_type="application/json")
-
-
-async def _at_off_loop(request: Request) -> Response:
-    return Response(b"a" * OFF_LOOP_SIZE_BYTES, media_type="application/json")
-
-
-async def _base64_embeddings_sized(request: Request) -> Response:
-    return Response(b"e" * BASE64_EMBEDDINGS_RESPONSE_BYTES, media_type="application/json")
-
-
 async def _json_stream(request: Request) -> Response:
     async def chunks():
         for chunk in STREAM_CHUNKS:
@@ -79,9 +69,6 @@ APP = Starlette(
         Route("/stream", _json_stream),
         Route("/etag", _with_etag),
         Route("/huge", _huge),
-        Route("/under-off-loop", _under_off_loop),
-        Route("/at-off-loop", _at_off_loop),
-        Route("/base64-embeddings-sized", _base64_embeddings_sized),
         Route("/partial", _partial),
         Route("/no-transform", _no_transform),
     ]
@@ -108,6 +95,30 @@ async def _send_messages(path: str, accept_encoding: str | None, app: ASGIApp = 
 
     await app(scope, receive, send)
     return tuple(sent)
+
+
+def _json_body_app(size: int) -> ASGIApp:
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b"u" * size})
+
+    return app
+
+
+class _SlowCompressor:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    def __call__(self, data: bytes, compresslevel: int) -> bytes:
+        with self._lock:
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
+        return gzip.compress(data, compresslevel)
 
 
 def _headers(messages: tuple[Message, ...]) -> dict[str, str]:
@@ -141,25 +152,49 @@ async def test_body_above_off_loop_threshold_round_trips():
 
 
 @pytest.mark.parametrize(
-    "path, compressed_on_loop_thread",
-    [("/under-off-loop", True), ("/at-off-loop", False), ("/base64-embeddings-sized", False), ("/huge", False)],
+    ("size", "compressed_on_loop_thread"),
+    [
+        (OFF_LOOP_SIZE_BYTES - 1, True),
+        (OFF_LOOP_SIZE_BYTES, False),
+        (BASE64_EMBEDDINGS_RESPONSE_BYTES, False),
+    ],
 )
 @pytest.mark.asyncio
 async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch, path: str, compressed_on_loop_thread: bool
+    size: int, compressed_on_loop_thread: bool
 ) -> None:
     loop_thread: Final = threading.get_ident()
-    real_compress: Final = gzip.compress
 
-    def compress_naming_its_thread(data: bytes, compresslevel: int = 9) -> bytes:
-        return real_compress(b"loop" if threading.get_ident() == loop_thread else b"worker", compresslevel)
+    def compress_naming_its_thread(data: bytes, compresslevel: int) -> bytes:
+        return gzip.compress(b"loop" if threading.get_ident() == loop_thread else b"worker", compresslevel)
 
-    monkeypatch.setattr(gzip_middleware.gzip, "compress", compress_naming_its_thread)
+    middleware: Final = GZipBufferedResponseMiddleware(_json_body_app(size), compress_naming_its_thread)
 
-    messages = await _send_messages(path, "gzip")
+    messages: Final = await _send_messages("/", "gzip", middleware)
 
     assert _headers(messages)["content-encoding"] == "gzip"
     assert gzip.decompress(_body(messages)) == (b"loop" if compressed_on_loop_thread else b"worker")
+
+
+@pytest.mark.asyncio
+async def test_off_loop_compressions_do_not_borrow_from_the_shared_thread_pool() -> None:
+    compressor: Final = _SlowCompressor()
+    middleware: Final = GZipBufferedResponseMiddleware(_json_body_app(OFF_LOOP_SIZE_BYTES), compressor)
+    shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
+    burst: Final = 2 * MAX_CONCURRENT_OFF_LOOP_COMPRESSIONS
+
+    async def shared_pool_borrowed_until_done(sending: asyncio.Future[list[tuple[Message, ...]]]) -> tuple[int, ...]:
+        if sending.done():
+            return ()
+        await asyncio.sleep(0.01)
+        return (shared_pool.borrowed_tokens, *await shared_pool_borrowed_until_done(sending))
+
+    sending: Final = asyncio.ensure_future(asyncio.gather(*(_send_messages("/", "gzip", middleware) for _ in range(burst))))
+    borrowed: Final = await shared_pool_borrowed_until_done(sending)
+
+    assert all(gzip.decompress(_body(messages)) == b"u" * OFF_LOOP_SIZE_BYTES for messages in await sending)
+    assert len(borrowed) > 1 and max(borrowed) == 0
+    assert compressor.peak_in_flight == MAX_CONCURRENT_OFF_LOOP_COMPRESSIONS
 
 
 @pytest.mark.parametrize(
