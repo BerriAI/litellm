@@ -320,6 +320,7 @@ def test_generator_classifies_token_count_settings():
     [
         {"token_count_framing": -1},
         {"token_count_framing": "78"},
+        {"token_count_framing": 1.5},
         {"token_count_fallback_model": ""},
         {"token_count_fallback_model": 5},
     ],
