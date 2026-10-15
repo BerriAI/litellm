@@ -1133,6 +1133,7 @@ def _call_type_for_route(route: str | None) -> str | None:
 
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_CALL_TYPE_VALUES: Final = frozenset(call_type.value for call_type in CallTypes)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -3527,7 +3528,9 @@ class ProxyLogging:
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = _call_type_for_route(route) or body_shape_call_type
+            resolved_call_type: Final = _call_type_for_route(route) or (
+                None if litellm_logging_obj.call_type in _CALL_TYPE_VALUES else body_shape_call_type
+            )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
                 litellm_logging_obj.model_call_details["call_type"] = resolved_call_type
