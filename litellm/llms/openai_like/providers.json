@@ -58,6 +58,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "zerogpu": {
+    "base_url": "https://api.zerogpu.ai/v1",
+    "api_key_env": "ZEROGPU_API_KEY",
+    "api_base_env": "ZEROGPU_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
     "api_key_env": "CHUTES_API_KEY",
