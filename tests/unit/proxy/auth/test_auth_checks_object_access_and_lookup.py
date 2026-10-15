@@ -674,6 +674,8 @@ async def test_get_key_object_miss_keeps_the_looked_up_value_out_of_the_401_and_
     for leaked in ("a-secret-looking-hash", "VerificationToken", "/key/generate"):
         assert leaked not in exc_info.value.message
     assert "a-secret-looking-hash" not in caplog.text
+
+
 class _InFlightCountingPrisma:
     def __init__(self) -> None:
         self.in_flight = 0
