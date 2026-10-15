@@ -15,8 +15,23 @@ CLAUDE_MODEL_ID: Final = "us.anthropic.claude-sonnet-4-6"
 NOVA_MODEL_ID: Final = "us.amazon.nova-pro-v1:0"
 APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
 TOKEN: Final = "synthetic-bedrock-bearer"
+# Synthetic stand-in shaped like the `data` Bedrock Invoke returned for us.anthropic.claude-sonnet-4-6 in
+# us-west-2 on 2026-10-14: base64 of a protobuf message, so it opens with "E" + the 0x12 field tag. The
+# real value embeds the caller's AWS account id, so it is not committed.
 NATIVE_REDACTED: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
-REDACTED: Final = base64.b64encode(NATIVE_REDACTED.encode()).decode()
+CONVERSE_REDACTED: Final = base64.b64encode(NATIVE_REDACTED.encode()).decode()
+OPENAI_ENCRYPTED: Final = "litellm_encrypted_reasoning:gAAAAABsynthetic-openai-reasoning=="
+ANTHROPIC_MODEL: Final = "claude-sonnet-4-6"
+ANTHROPIC_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "msg_redacted_replay",
+    "type": "message",
+    "role": "assistant",
+    "model": ANTHROPIC_MODEL,
+    "content": [{"type": "text", "text": "redacted thinking replay control"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 11, "output_tokens": 4},
+}
 FIRST_ANSWER: Final = "I looked into it."
 FINAL_ANSWER: Final = "redacted thinking replay control"
 QUESTION: Final = "What's the weather in Paris?"
@@ -78,9 +93,18 @@ class _ConverseRequest(_Frozen):
     messages: tuple[_ConverseMessage, ...]
 
 
+class _AnthropicMessage(_Frozen):
+    role: str
+    content: str | tuple[dict[str, JsonValue], ...]
+
+
+class _AnthropicRequest(_Frozen):
+    messages: tuple[_AnthropicMessage, ...]
+
+
 def _first_turn_content(with_tool: bool) -> list[JsonValue]:
     return [
-        {"reasoningContent": {"redactedContent": REDACTED}},
+        {"reasoningContent": {"redactedContent": CONVERSE_REDACTED}},
         {"text": FIRST_ANSWER},
         *([{"toolUse": TOOL_USE}] if with_tool else []),
     ]
@@ -108,7 +132,7 @@ def _stream_reply(*, first_turn: bool) -> Reply:
         (
             _frame(
                 "contentBlockDelta",
-                {"delta": {"reasoningContent": {"redactedContent": REDACTED}}, "contentBlockIndex": 0},
+                {"delta": {"reasoningContent": {"redactedContent": CONVERSE_REDACTED}}, "contentBlockIndex": 0},
             ),
             _frame("contentBlockStop", {"contentBlockIndex": 0}),
         )
@@ -140,6 +164,8 @@ def _bedrock_peer(*, with_tool: bool = False) -> Callable[[Request], Reply]:
     Turn 2, the one replaying that history, gets a plain answer."""
 
     def respond(request: Request) -> Reply:
+        if request.target == "/v1/messages":
+            return Reply(body=json.dumps(ANTHROPIC_REPLY).encode())
         if unquote(request.target).endswith("/converse-stream"):
             return _stream_reply(first_turn=not _is_replay(request))
         if _is_replay(request):
@@ -193,7 +219,7 @@ def test_claude_redacted_thinking_round_trips_back_to_converse_as_redacted_conte
         )
         question: Final[dict[str, JsonValue]] = {"role": "user", "content": QUESTION}
         first: Final = send(gateway, {"model": model, "messages": [question], "thinking": THINKING, "max_tokens": 2048})
-        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": REDACTED},)
+        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": NATIVE_REDACTED},)
 
         second: Final = send(
             gateway,
@@ -211,7 +237,7 @@ def test_claude_redacted_thinking_round_trips_back_to_converse_as_redacted_conte
 
         assert second.content == FINAL_ANSWER
         assert _replayed_assistant_turn(wire).content == (
-            {"reasoningContent": {"redactedContent": REDACTED}},
+            {"reasoningContent": {"redactedContent": CONVERSE_REDACTED}},
             {"text": FIRST_ANSWER},
         )
 
@@ -229,7 +255,7 @@ def test_claude_redacted_thinking_before_a_tool_call_is_replayed_with_the_tool_r
             gateway,
             {"model": model, "messages": [question], "tools": [WEATHER_TOOL], "thinking": THINKING, "max_tokens": 2048},
         )
-        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": REDACTED},)
+        assert first.thinking_blocks == ({"type": "redacted_thinking", "data": NATIVE_REDACTED},)
         assert len(first.tool_calls) == 1
 
         second: Final = _chat(
@@ -254,19 +280,26 @@ def test_claude_redacted_thinking_before_a_tool_call_is_replayed_with_the_tool_r
 
         assert second.content == FINAL_ANSWER
         assert _replayed_assistant_turn(wire).content == (
-            {"reasoningContent": {"redactedContent": REDACTED}},
+            {"reasoningContent": {"redactedContent": CONVERSE_REDACTED}},
             {"text": FIRST_ANSWER},
             {"toolUse": TOOL_USE},
         )
 
 
+_CLAUDE: Final[dict[str, JsonValue]] = {"model": f"bedrock/converse/{CLAUDE_MODEL_ID}"}
+
+
+def _redacted(data: str) -> dict[str, JsonValue]:
+    return {"type": "redacted_thinking", "data": data}
+
+
 @pytest.mark.parametrize(
-    "deployment, history_data, sent_data",
+    "deployment, history_block, sent_data",
     [
-        pytest.param({"model": f"bedrock/converse/{NOVA_MODEL_ID}"}, REDACTED, None, id="nova"),
+        pytest.param({"model": f"bedrock/converse/{NOVA_MODEL_ID}"}, _redacted(NATIVE_REDACTED), None, id="nova"),
         pytest.param(
             {"model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}"},
-            REDACTED,
+            _redacted(NATIVE_REDACTED),
             None,
             id="application-profile-arn-without-base-model",
         ),
@@ -275,30 +308,35 @@ def test_claude_redacted_thinking_before_a_tool_call_is_replayed_with_the_tool_r
                 "model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}",
                 "model_info": {"base_model": f"bedrock/{CLAUDE_MODEL_ID}"},
             },
-            REDACTED,
-            REDACTED,
+            _redacted(NATIVE_REDACTED),
+            CONVERSE_REDACTED,
             id="application-profile-arn-with-claude-base-model",
         ),
         pytest.param(
-            {"model": f"bedrock/converse/{CLAUDE_MODEL_ID}", "model_id": APPLICATION_PROFILE_ARN},
-            REDACTED,
-            REDACTED,
+            {**_CLAUDE, "model_id": APPLICATION_PROFILE_ARN},
+            _redacted(NATIVE_REDACTED),
+            CONVERSE_REDACTED,
             id="claude-model-id-override",
         ),
+        pytest.param(_CLAUDE, _redacted(NATIVE_REDACTED), CONVERSE_REDACTED, id="claude-native-history"),
         pytest.param(
-            {"model": f"bedrock/converse/{CLAUDE_MODEL_ID}"},
-            NATIVE_REDACTED,
-            REDACTED,
-            id="claude-history-minted-by-anthropic-or-bedrock-invoke",
+            _CLAUDE, _redacted(CONVERSE_REDACTED), CONVERSE_REDACTED, id="claude-history-saved-with-converse-wrapping"
+        ),
+        pytest.param(_CLAUDE, _redacted(OPENAI_ENCRYPTED), None, id="claude-redacted-openai-encrypted-reasoning"),
+        pytest.param(
+            _CLAUDE,
+            {"type": "thinking", "thinking": "Checking the forecast.", "signature": OPENAI_ENCRYPTED},
+            None,
+            id="claude-thinking-signed-with-openai-encrypted-reasoning",
         ),
     ],
 )
 def test_redacted_history_replayed_to_a_converse_target_carries_redacted_content_only_when_it_is_claude(
-    gateway: Gateway, deployment: dict[str, JsonValue], history_data: str, sent_data: str | None
+    gateway: Gateway, deployment: dict[str, JsonValue], history_block: dict[str, JsonValue], sent_data: str | None
 ) -> None:
     """A Router fallback or model switch replays a redacted history to a different Converse target. Non-Claude
-    targets 400 on redactedContent, so only a target known to be Claude gets the block. Data minted by the
-    Anthropic API or Bedrock Invoke is the bare string, which Converse needs wrapped in base64"""
+    targets 400 on redactedContent, so only a target known to be Claude gets the block, always as base64 of
+    Claude's own data. Claude cannot read OpenAI encrypted reasoning, so that block never reaches it"""
     model_info: Final = deployment.get("model_info")
     parameters: Final = {key: value for key, value in deployment.items() if key != "model_info"}
     with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
@@ -320,7 +358,7 @@ def test_redacted_history_replayed_to_a_converse_target_carries_redacted_content
                     {
                         "role": "assistant",
                         "content": FIRST_ANSWER,
-                        "thinking_blocks": [{"type": "redacted_thinking", "data": history_data}],
+                        "thinking_blocks": [history_block],
                     },
                     {"role": "user", "content": FOLLOW_UP},
                 ],
@@ -330,3 +368,48 @@ def test_redacted_history_replayed_to_a_converse_target_carries_redacted_content
         assert reply.content == FINAL_ANSWER
         redacted: Final = () if sent_data is None else ({"reasoningContent": {"redactedContent": sent_data}},)
         assert _replayed_assistant_turn(wire).content == (*redacted, {"text": FIRST_ANSWER})
+
+
+@pytest.mark.parametrize("legacy_history", [False, True], ids=["converse-reply", "history-saved-with-converse-wrapping"])
+def test_converse_redacted_thinking_replays_to_the_anthropic_api_as_claude_native_data(
+    gateway: Gateway, legacy_history: bool
+) -> None:
+    """A fallback from Claude on Converse to the Anthropic API (or Bedrock Invoke, which builds the same
+    messages) must hand Claude its own data back, or Anthropic 400s with "Invalid `data` in `redacted_thinking`"
+    """
+    with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
+        converse: Final = scenario.model(
+            model=f"bedrock/converse/{CLAUDE_MODEL_ID}",
+            api_key=TOKEN,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint=wire.url,
+        )
+        anthropic: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
+        )
+        question: Final[dict[str, JsonValue]] = {"role": "user", "content": QUESTION}
+        first: Final = _chat(
+            gateway, {"model": converse, "messages": [question], "thinking": THINKING, "max_tokens": 2048}
+        )
+        history: Final = (_redacted(CONVERSE_REDACTED),) if legacy_history else first.thinking_blocks
+
+        second: Final = _chat(
+            gateway,
+            {
+                "model": anthropic,
+                "thinking": THINKING,
+                "max_tokens": 2048,
+                "messages": [
+                    question,
+                    {"role": "assistant", "content": first.content, "thinking_blocks": list(history)},
+                    {"role": "user", "content": FOLLOW_UP},
+                ],
+            },
+        )
+
+        assert second.content == FINAL_ANSWER
+        sent: Final = _AnthropicRequest.model_validate_json(wire.drain()[-1].body)
+        assert sent.messages[1].content == (
+            {"type": "redacted_thinking", "data": NATIVE_REDACTED},
+            {"type": "text", "text": FIRST_ANSWER},
+        )

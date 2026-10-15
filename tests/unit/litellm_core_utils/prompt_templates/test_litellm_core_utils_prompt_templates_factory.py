@@ -57,7 +57,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_reasoning_signature,
+    get_completion_messages,
+)
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
@@ -466,18 +469,39 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
     ]
 
 
+_SENT_REDACTED: Final = [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
-async def test_bedrock_converse_wraps_redacted_thinking_minted_outside_converse(use_async: bool, placement: str):
-    """The Anthropic API, Vertex and Bedrock Invoke return the bare ``data`` string, while Converse wants it as a
-    base64 blob. Sending it bare made Bedrock 400 with "Invalid data in redacted_thinking block" when a Router
-    model group mixed anthropic/ or bedrock/invoke/ with bedrock/converse/."""
-    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+@pytest.mark.parametrize(
+    "block, sent",
+    [
+        pytest.param({"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}, _SENT_REDACTED, id="native"),
+        pytest.param(
+            {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}, _SENT_REDACTED, id="legacy-wrapped"
+        ),
+        pytest.param(
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}, [], id="openai-redacted"
+        ),
+        pytest.param(
+            {"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")},
+            [],
+            id="openai-thinking",
+        ),
+    ],
+)
+async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_claude_native_data(
+    use_async: bool, placement: str, block: dict[str, str], sent: list[dict[str, dict[str, str]]]
+):
+    """Converse wants base64 of Claude's own ``data``, which the Anthropic API, Vertex, Bedrock Invoke and now
+    Converse replies all hand out. Histories saved before Converse replies were decoded still hold it wrapped once.
+    Claude cannot verify OpenAI encrypted reasoning from the Responses bridge, so Bedrock 400ed on it."""
     assistant_message: Final = (
-        {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
         if placement == "thinking_blocks"
-        else {"role": "assistant", "content": [redacted, {"type": "text", "text": "hello"}]}
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
     )
     messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
     model: Final = "us.anthropic.claude-sonnet-4-6"
@@ -491,7 +515,7 @@ async def test_bedrock_converse_wraps_redacted_thinking_minted_outside_converse(
     )
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
-    assert assistant_content == [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}, {"text": "hello"}]
+    assert assistant_content == [*sent, {"text": "hello"}]
 
 
 def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
@@ -605,6 +629,31 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assert any(block.get("type") == "text" and block.get("text") == "2+2 equals 4." for block in content), (
         f"assistant answer text must be preserved, got {content!r}"
     )
+
+
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str):
+    """Histories saved from Converse before its replies were decoded hold the data base64-wrapped, and the
+    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block"."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "hello"},
+        ],
+    }
 
 
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
@@ -4495,7 +4544,7 @@ def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
     the same as a fully empty string and drop the block.
 
     The check lives in the shared `is_unsignable_thinking_block` helper, which
-    `_drop_unsignable_thinking_blocks` calls standalone, so the whitespace-aware
+    `_replayable_thinking_blocks` calls standalone, so the whitespace-aware
     test has to hold there rather than only at the factory call site.
     """
     from litellm.litellm_core_utils.prompt_templates.common_utils import (

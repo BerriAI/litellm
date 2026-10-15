@@ -41,13 +41,17 @@ def bedrock_transformer() -> AmazonInvokeConfig:
     return AmazonInvokeConfig()
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_block = {"redactedContent": "This is a redacted content"}
-    decoder = AWSEventStreamDecoder(model="test")
-    transformed_thinking_blocks = decoder.translate_thinking_blocks(thinking_block)
-    assert len(transformed_thinking_blocks) == 1
-    assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
-    assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+def test_transform_thinking_blocks_unwraps_converse_redacted_content_to_claude_native_data():
+    """Converse streams Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    decoder: Final = AWSEventStreamDecoder(model="test")
+
+    thinking_blocks: Final = decoder.translate_thinking_blocks(
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()}
+    )
+
+    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data}]
 
 
 def test_transform_tool_calls_index():

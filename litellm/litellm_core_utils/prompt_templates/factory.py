@@ -1,5 +1,4 @@
 import base64
-import binascii
 import copy
 import hashlib
 import itertools
@@ -51,10 +50,13 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    converse_redacted_content,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
+    is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
+    native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
@@ -2424,10 +2426,21 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def _drop_unsignable_thinking_blocks(
+def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [block for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+    return [_with_native_redacted_data(block) for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+
+
+def _with_native_redacted_data(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            native: Final[ChatCompletionRedactedThinkingBlock] = {**block, "data": native_redacted_thinking_data(data)}
+            return native
+        case _:
+            return block
 
 
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
@@ -2613,7 +2626,7 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _drop_unsignable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
+                _replayable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
             )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
@@ -4410,23 +4423,6 @@ def get_assistant_message_block_or_continue_message(
     raise ValueError(f"Unsupported content type: {type(content_block)}")
 
 
-def _as_converse_redacted_content(data: str) -> str:
-    """
-    Converse carries ``redactedContent`` as a base64 blob of Claude's own ``data`` string, and a Converse
-    response hands that blob back as ``data`` unchanged. The Anthropic API, Vertex and Bedrock Invoke return
-    the bare string, which Bedrock would decode into garbage and 400 on, so only those get wrapped.
-    """
-    return data if _decodes_to_base64_text(data) else base64.b64encode(data.encode()).decode()
-
-
-def _decodes_to_base64_text(data: str) -> bool:
-    try:
-        _ = base64.b64decode(base64.b64decode(data, validate=True), validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    return True
-
-
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -4478,7 +4474,7 @@ class BedrockConverseMessagesProcessor:
 
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
-        send_redacted: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+        to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
@@ -4628,7 +4624,7 @@ class BedrockConverseMessagesProcessor:
                 if thinking_blocks is not None:
                     converted_thinking_blocks = (
                         BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                            thinking_blocks, send_redacted=send_redacted
+                            thinking_blocks, to_claude=to_claude
                         )
                     )
                     assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4642,7 +4638,7 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element], send_redacted=send_redacted
+                                    thinking_blocks=[element], to_claude=to_claude
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4708,26 +4704,27 @@ class BedrockConverseMessagesProcessor:
     def translate_thinking_blocks_to_reasoning_content_blocks(
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
         *,
-        send_redacted: bool = False,
+        to_claude: bool = False,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
                 reasoningContent=BedrockConverseMessagesProcessor._to_reasoning_content_block(
-                    thinking_block, send_redacted=send_redacted
+                    thinking_block, to_claude=to_claude
                 )
             )
             for thinking_block in thinking_blocks
+            if not (to_claude and is_encrypted_reasoning_block(thinking_block))
         ]
 
     @staticmethod
     def _to_reasoning_content_block(
         thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
         *,
-        send_redacted: bool,
+        to_claude: bool,
     ) -> BedrockConverseReasoningContentBlock:
         match thinking_block:
-            case {"type": "redacted_thinking", "data": str() as data} if send_redacted and data.strip():
-                return BedrockConverseReasoningContentBlock(redactedContent=_as_converse_redacted_content(data))
+            case {"type": "redacted_thinking", "data": str() as data} if to_claude and data.strip():
+                return BedrockConverseReasoningContentBlock(redactedContent=converse_redacted_content(data))
             case {"signature": signature} if signature is not None:
                 return BedrockConverseReasoningContentBlock(
                     reasoningText=BedrockConverseReasoningTextBlock(
@@ -4878,7 +4875,7 @@ def _bedrock_converse_messages_pt(
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
-    send_redacted: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+    to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
@@ -5029,7 +5026,7 @@ def _bedrock_converse_messages_pt(
             if thinking_blocks is not None:
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks, send_redacted=send_redacted
+                        thinking_blocks, to_claude=to_claude
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5044,7 +5041,7 @@ def _bedrock_converse_messages_pt(
                         if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element], send_redacted=send_redacted
+                                    thinking_blocks=[element], to_claude=to_claude
                                 )
                             )
                             assistants_parts = (

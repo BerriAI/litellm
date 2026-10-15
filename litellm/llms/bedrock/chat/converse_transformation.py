@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_lookaround_regex_patterns,
+    native_redacted_thinking_data,
     parse_content_for_reasoning,
     tool_with_sanitized_parameters,
 )
@@ -2194,7 +2195,7 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_thinking_block)
             elif "redactedContent" in block:
                 _redacted_block = ChatCompletionRedactedThinkingBlock(
-                    type="redacted_thinking", data=block["redactedContent"]
+                    type="redacted_thinking", data=native_redacted_thinking_data(block["redactedContent"])
                 )
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list

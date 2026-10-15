@@ -618,23 +618,21 @@ def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Route
     assert response.choices[0].message.content == "ok"
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_blocks = [
-        {
-            "reasoningText": {
-                "text": "This is a test",
-                "signature": "test_signature",
-            }
-        },
-        {
-            "redactedContent": "This is a redacted content",
-        },
+def test_transform_thinking_blocks_unwraps_redacted_content_to_claude_native_data():
+    """Converse returns Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    thinking_blocks: Final = [
+        {"reasoningText": {"text": "This is a test", "signature": "test_signature"}},
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()},
     ]
-    config = AmazonConverseConfig()
-    transformed_thinking_blocks = config._transform_thinking_blocks(thinking_blocks)
-    assert len(transformed_thinking_blocks) == 2
-    assert transformed_thinking_blocks[0]["type"] == "thinking"
-    assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
+
+    transformed_thinking_blocks: Final = AmazonConverseConfig()._transform_thinking_blocks(thinking_blocks)
+
+    assert transformed_thinking_blocks == [
+        {"type": "thinking", "thinking": "This is a test", "signature": "test_signature"},
+        {"type": "redacted_thinking", "data": native_data},
+    ]
 
 
 def test_apply_tool_call_transformation_if_needed():
