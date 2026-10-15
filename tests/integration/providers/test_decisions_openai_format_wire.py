@@ -525,7 +525,12 @@ def test_openai_box_answers_reach_the_caller_as_boxes_not_refusals(gateway: Gate
         box: Final[dict[str, JsonValue]] = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
         box_answer: Final[dict[str, JsonValue]] = {"type": "box", "name": "crack", "box": box, "confidence": 0.7}
         handle: Final = _register(scenario, {**_OPENAI.upstream_reply(), "answers": [box_answer]})
-        model: Final = _deployment(scenario, handle, _OPENAI)
+        model: Final = scenario.model(
+            model=_OPENAI.model,
+            api_base=handle.api_base(),
+            api_key=_OPENAI.api_key,
+            model_info={"supports_box_questions": True},
+        )
         response: Final = _decide(
             gateway, model, questions=[{"type": "box", "name": "crack", "instructions": "Where is the crack?"}]
         )
