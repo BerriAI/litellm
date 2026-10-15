@@ -10668,10 +10668,12 @@ class Router:
         A ``responses`` pin still marks a row that has no routing mode, since that is how a model missing from
         the cost map opts into the Responses API. A ``chatgpt`` or ``github_copilot`` row takes any mode until it
         is ``responses``, since those providers read it by name to pick their endpoint. Elsewhere a ``chat`` pin
-        never marks a row, so the outcome does not depend on which deployment registers first."""
+        never marks a row, so the outcome does not depend on which deployment registers first. A ``mode`` that
+        is not a string names no mode, so it never reaches the row."""
         deployment_mode: Final = shared_model_info.get("mode")
+        without_mode: Final = {key: value for key, value in shared_model_info.items() if key != "mode"}
         if not isinstance(deployment_mode, str):
-            return shared_model_info
+            return without_mode
         registration_key: Final = model_cost_registration_key(
             backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
         )
@@ -10682,7 +10684,7 @@ class Router:
         ):
             return shared_model_info
         if registered_mode is None and deployment_mode == "chat":
-            return {key: value for key, value in shared_model_info.items() if key != "mode"}
+            return without_mode
         if registered_mode is None or registered_mode == deployment_mode:
             return shared_model_info
         verbose_router_logger.debug(

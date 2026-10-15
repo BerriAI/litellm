@@ -2309,6 +2309,30 @@ def test_a_non_routing_mode_pin_leaves_a_responses_row_on_the_responses_api(monk
     assert shared_info["mode"] == "responses"
 
 
+@pytest.mark.parametrize("registered_mode", ["responses", "chat"])
+@pytest.mark.parametrize("malformed_mode", [5, ["chat"], {"mode": "chat"}], ids=["int", "list", "object"])
+def test_a_malformed_mode_never_reaches_the_shared_row(
+    monkeypatch: pytest.MonkeyPatch, registered_mode: str, malformed_mode: object
+) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    _register_routing_test_row(monkeypatch, registered_mode)
+
+    Router(
+        model_list=[
+            {
+                "model_name": "malformed",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "malformed-id", "mode": malformed_mode},
+            }
+        ]
+    )
+
+    assert litellm.model_cost["routing-test-model"]["mode"] == registered_mode
+    shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == registered_mode
+
+
 def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_responses_api(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
