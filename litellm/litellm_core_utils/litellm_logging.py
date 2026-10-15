@@ -77,6 +77,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    process_response_headers,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
@@ -4617,6 +4618,29 @@ class Logging(LiteLLMLoggingBaseClass):
         The Anthropic shape served to the caller has no field for reasoning tokens, so the spend
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
+
+    def price_bridged_provider_response(self, response: ModelResponse | ResponsesAPIResponse) -> None:
+        """Stamps the cost and headers of the provider response a bridge translates into its client's shape.
+
+        The client shape has no field for some of the usage the price depends on (built-in tool calls,
+        the 1h cache-write split), and the translation carries the stamped cost over, so the request is
+        billed for what the provider returned. The headers get the round of processing the call that made
+        the response gave them, which also names the provider request id `llm_provider-request-id`."""
+        set_hidden_param(response, "response_cost", self.response_cost_calculator(result=response))
+        provider_headers: Final = (get_hidden_params(response) or {}).get("additional_headers")
+        if isinstance(provider_headers, dict):
+            set_hidden_param(
+                response,
+                "additional_headers",
+                process_response_headers(provider_headers, preserve_litellm_internal_headers=True),
+            )
+
+    def price_bridged_provider_stream(self, stream: object) -> None:
+        """Prices a provider stream a bridge wraps for its client, as the call that opened it did.
+
+        Nothing has streamed yet, so this only records the zero cost breakdown the proxy builds the
+        response headers from; the request is billed when the stream ends."""
+        self.response_cost_calculator(result=stream)
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))

@@ -15,7 +15,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
-from litellm.responses.main import _resolve_responses_api_provider_config
+from litellm.responses.main import resolve_responses_api_provider_config
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 
@@ -115,13 +115,13 @@ def _respx_interceptable_httpx_client(monkeypatch):
     ],
 )
 def test_resolver_opt_in_gates_openai_like_config(model_info, expected_type):
-    config = _resolve_responses_api_provider_config("my-model", "custom_openai", model_info, None)
+    config = resolve_responses_api_provider_config("my-model", "custom_openai", model_info, None)
     assert type(config) is expected_type
 
 
 def test_resolver_keeps_native_provider_config():
     """`openai/` already routes /v1/responses natively; the opt-in must not swap its config."""
-    config = _resolve_responses_api_provider_config("gpt-4.1", "openai", OPT_IN, None)
+    config = resolve_responses_api_provider_config("gpt-4.1", "openai", OPT_IN, None)
     assert type(config) is OpenAIResponsesAPIConfig
 
 
