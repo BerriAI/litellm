@@ -117,15 +117,10 @@ def _observation(text: str) -> dict[str, JsonValue]:
     }
 
 
-def _token_not_found_error(key: str) -> dict[str, JsonValue]:
-    hashed: Final = sha256(key.encode()).hexdigest()
+def _token_not_found_error() -> dict[str, JsonValue]:
     return {
         "error": {
-            "message": (
-                "Authentication Error, Invalid proxy server token passed. "
-                f"Received API Key = sk-...{key[-4:]}, Key Hash (Token) ={hashed}. "
-                "Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
-            ),
+            "message": "Authentication Error, Invalid API key provided.",
             "type": "token_not_found_in_db",
             "param": "key",
             "code": "401",
@@ -191,14 +186,14 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         for key in (organization_key, team_key):
             refused: Final = _chat(gateway, model, key, f"refused {uuid.uuid4().hex}")
             assert refused.status_code == 401, refused.text
-            assert refused.json() == _token_not_found_error(key), refused.text
+            assert refused.json() == _token_not_found_error(), refused.text
         for key in (organization_key, team_key):
             refused_peer: Final = eventually(
                 lambda k=key: _chat(peer, model, k, f"refused {uuid.uuid4().hex}"),
                 lambda response: response.status_code == 401,
                 seconds=10,
             )
-            assert refused_peer.json() == _token_not_found_error(key), refused_peer.text
+            assert refused_peer.json() == _token_not_found_error(), refused_peer.text
         refused_observations: Final = _observed(upstream)
         assert refused_observations == [], refused_observations
         for proxy in (gateway, peer):

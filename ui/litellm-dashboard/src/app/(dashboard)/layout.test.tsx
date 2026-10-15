@@ -40,22 +40,6 @@ vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
   ),
 }));
 
-vi.mock("@/components/DebugWarningBanner", () => ({
-  DebugWarningBanner: () => null,
-}));
-
-vi.mock("@/components/NoRedisWarningBanner", () => ({
-  NoRedisWarningBanner: () => null,
-}));
-
-vi.mock("@/components/EnvCredentialLoginWarningBanner", () => ({
-  EnvCredentialLoginWarningBanner: () => null,
-}));
-
-vi.mock("@/components/LicenseExpiryBanner", () => ({
-  LicenseExpiryBanner: () => null,
-}));
-
 vi.mock("@/components/UserBanner", () => ({
   UserBanner: () => null,
 }));
