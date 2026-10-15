@@ -412,6 +412,38 @@ def _billable_input_image_count(model: str, input_image_count: int) -> int:
     return max(0, input_image_count - free_images)
 
 
+_TIER_COST_PREFIX: Final = "output_cost_per_second_"
+
+
+def _priced_resolutions(model: str) -> frozenset[str]:
+    try:
+        info: Final = get_model_info(model=model, custom_llm_provider="minimax")
+    except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped model
+        return frozenset()
+    return frozenset(
+        key.removeprefix(_TIER_COST_PREFIX)
+        for key, cost in info.items()
+        if key.startswith(_TIER_COST_PREFIX) and cost is not None
+    )
+
+
+def _unpriced_resolution_drop(model: str, resolution: object, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+    priced: Final = _priced_resolutions(model)
+    if not priced or not isinstance(resolution, str) or resolution.strip().lower() in priced:
+        return frozenset()
+    if litellm_params.drop_params is True or litellm.drop_params is True:
+        return frozenset({"resolution"})
+    raise UnsupportedParamsError(
+        message=(
+            f"MiniMax {model} has no price for resolution {resolution!r} in litellm's cost map, so it would bill at "
+            f"another tier's rate. Use one of {', '.join(sorted(tier.upper() for tier in priced))}, or set "
+            "drop_params=True to send MiniMax's default resolution instead."
+        ),
+        model=model,
+        llm_provider="minimax",
+    )
+
+
 def _video_url_from_task(task: _MiniMaxTask) -> str:
     """A download before the video is ready is the caller polling too early, so it answers 400, which the
     router neither retries nor counts toward a deployment cooldown the way it counts a 404."""
@@ -547,7 +579,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
             "model": model,
             "content": content,
         }
-        dropped_keys: Final = _additional_drop_keys(litellm_params.model_dump())
+        dropped_keys: Final = _additional_drop_keys(litellm_params.model_dump()) | _unpriced_resolution_drop(
+            model, video_create_optional_request_params.get("resolution"), litellm_params
+        )
         for key in _CREATE_BODY_KEYS:
             if key not in dropped_keys and video_create_optional_request_params.get(key) is not None:
                 request_data[key] = video_create_optional_request_params[key]

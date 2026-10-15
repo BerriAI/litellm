@@ -1141,6 +1141,52 @@ class TestMinimaxVideoPricing:
             )
             assert cost == pytest.approx(tier_rate * 5.0)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "resolution_kwargs",
+        [{"resolution": "480P"}, {"parameters": {"resolution": "480P"}}, {"extra_body": {"resolution": "480p"}}],
+    )
+    async def test_a_resolution_without_a_price_is_rejected_before_the_billed_call(self, resolution_kwargs):
+        sent: Final[list[httpx.Request]] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"task_id": "t1"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.BadRequestError, match="480") as raised:
+                await avideo_generation(
+                    model="minimax/MiniMax-H3",
+                    prompt="p",
+                    api_key="sk-test",
+                    api_base=API_BASE,
+                    client=handler,
+                    **resolution_kwargs,
+                )
+
+        assert raised.value.status_code == 400
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_drop_params_sends_the_default_resolution_instead_of_one_without_a_price(self):
+        body = await TestMinimaxVideoEndToEndRequest._wire_body(
+            model="minimax/MiniMax-H3", prompt="p", resolution="480P", drop_params=True
+        )
+
+        assert body["resolution"] == MINIMAX_VIDEO_DEFAULT_RESOLUTION
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model,resolution", [("MiniMax-H3", "2K"), ("MiniMax-H3-Max", "480P")])
+    async def test_a_priced_resolution_is_sent_as_asked(self, model, resolution):
+        body = await TestMinimaxVideoEndToEndRequest._wire_body(
+            model=f"minimax/{model}", prompt="p", resolution=resolution
+        )
+
+        assert body["resolution"] == resolution
+
     def test_higher_resolution_never_bills_less(self):
         from litellm import get_model_info
 
