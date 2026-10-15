@@ -349,9 +349,7 @@ class AnthropicAdapter:
 
 def _base_tool_use_id(raw_id: object) -> str:
     """Strip an embedded thought signature from a tool_use / tool_result id."""
-    if isinstance(raw_id, str):
-        return split_anthropic_tool_use_id_signature(raw_id)[0]
-    return ""
+    return split_anthropic_tool_use_id_signature(raw_id)[0] if isinstance(raw_id, str) else ""
 
 
 _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
