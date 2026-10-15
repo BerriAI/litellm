@@ -21,10 +21,11 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
-    answered_tool_call_ids,
     anthropic_system_messages,
     find_anthropic_server_tool_result,
     is_anthropic_tool_search_use,
+    message_field,
+    parts_of,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -55,10 +56,13 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    converse_redacted_content,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
+    is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
+    native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
@@ -1820,6 +1824,60 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
+def _tool_call_ids_in_tool_messages(messages: Sequence[object]) -> frozenset[str]:
+    return frozenset(
+        tool_call_id for message in messages if isinstance(tool_call_id := message_field(message, "tool_call_id"), str)
+    )
+
+
+def _messages_until_the_next_assistant(messages: Sequence[object], index: int) -> tuple[object, ...]:
+    return tuple(
+        itertools.takewhile(
+            lambda message: message_field(message, "role") != "assistant",
+            (messages[following_index] for following_index in range(index + 1, len(messages))),
+        )
+    )
+
+
+def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
+
+    provider_specific_fields: Final = message_field(message, "provider_specific_fields")
+    return frozenset(
+        tool_call_id
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if isinstance(tool_call_id := message_field(tool_call, "id"), str)
+        and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
+    )
+
+
+def _server_tool_answers_replaced_after(messages: Sequence[object], index: int) -> frozenset[str]:
+    kept_server_result_ids: Final = _tool_call_ids_with_a_kept_server_result(messages[index])
+    if not kept_server_result_ids:
+        return frozenset()
+    following: Final = _messages_until_the_next_assistant(messages, index)
+    a_user_turn_remains: Final = any(
+        message_field(message, "role") in ("user", "tool", "function")
+        and message_field(message, "tool_call_id") not in kept_server_result_ids
+        for message in following
+    )
+    return _tool_call_ids_in_tool_messages(following) & kept_server_result_ids if a_user_turn_remains else frozenset()
+
+
+def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> frozenset[str]:
+    return frozenset(
+        itertools.chain.from_iterable(
+            _server_tool_answers_replaced_after(messages, index)
+            for index, message in enumerate(messages)
+            if message_field(message, "role") == "assistant"
+        )
+    )
+
+
+def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+    return _tool_call_ids_in_tool_messages(messages) - server_tool_answers_replaced_by_their_result(messages)
+
+
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
@@ -1888,7 +1946,11 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        server_tool_result = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
+        server_tool_result = (
+            None
+            if tool_id in answered_tool_ids
+            else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
+        )
         if server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
@@ -2414,10 +2476,21 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def _drop_unsignable_thinking_blocks(
+def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [block for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+    return [_with_native_redacted_data(block) for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+
+
+def _with_native_redacted_data(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    match block:
+        case {"type": "redacted_thinking", "data": str() as data}:
+            native: Final[ChatCompletionRedactedThinkingBlock] = {**block, "data": native_redacted_thinking_data(data)}
+            return native
+        case _:
+            return block
 
 
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
@@ -2453,6 +2526,8 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
+    replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
+    client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -2574,7 +2649,9 @@ def anthropic_messages_pt(
 
                     user_content.append(_anthropic_content_text_element)
 
-            elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
+            elif (
+                user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
+            ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
@@ -2589,7 +2666,6 @@ def anthropic_messages_pt(
         unique_tool_ids: set[str] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
-        answered_tool_ids = answered_tool_call_ids(messages, msg_i)
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]
@@ -2604,7 +2680,7 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _drop_unsignable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
+                _replayable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
             )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
@@ -2643,7 +2719,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
-                    answered_tool_ids=answered_tool_ids,
+                    answered_tool_ids=client_answered_tool_ids,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -2827,7 +2903,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
-                    answered_tool_ids=answered_tool_ids,
+                    answered_tool_ids=client_answered_tool_ids,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
@@ -3708,6 +3784,7 @@ class BedrockImageProcessor:
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
+    deployment_model: str | None = None,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -3789,6 +3866,7 @@ def _convert_to_bedrock_tool_call_invoke(
                                     {"cache_control": tool["cache_control"]},
                                     block_type="content_block",
                                     model=model,
+                                    deployment_model=deployment_model,
                                 )
                                 if _cache_point_block is not None:
                                     _parts_list.append(_cache_point_block)
@@ -3808,6 +3886,7 @@ def _convert_to_bedrock_tool_call_invoke(
                         {"cache_control": tool["cache_control"]},
                         block_type="content_block",
                         model=model,
+                        deployment_model=deployment_model,
                     )
                     if cache_point_block is not None:
                         _parts_list.append(cache_point_block)
@@ -4448,9 +4527,14 @@ class BedrockConverseMessagesProcessor:
         llm_provider: str,
         user_continue_message: ChatCompletionUserMessage | None = None,
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
+        deployment_model: str | None = None,
+        base_model: str | None = None,
     ) -> list[BedrockMessageBlock]:
+        from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
+        to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
@@ -4506,6 +4590,7 @@ class BedrockConverseMessagesProcessor:
                                 message_block=element,
                                 block_type="content_block",
                                 model=model,
+                                deployment_model=deployment_model,
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
@@ -4513,7 +4598,7 @@ class BedrockConverseMessagesProcessor:
                 elif message_content and isinstance(message_content, str):
                     _part = BedrockContentBlock(text=message_content)
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        message_block, block_type="content_block", model=model
+                        message_block, block_type="content_block", model=model, deployment_model=deployment_model
                     )
                     user_content.append(_part)
                     if _cache_point_block is not None:
@@ -4563,6 +4648,7 @@ class BedrockConverseMessagesProcessor:
                         {"cache_control": tool_msg_cache_control},
                         block_type="content_block",
                         model=model,
+                        deployment_model=deployment_model,
                     )
                     if cache_point_block is not None:
                         tool_content.append(cache_point_block)
@@ -4595,15 +4681,12 @@ class BedrockConverseMessagesProcessor:
                     assistant_continue_message=assistant_continue_message,
                 )
                 _assistant_content = assistant_message_block.get("content", None)
-                thinking_blocks = cast(
-                    list[ChatCompletionThinkingBlock] | None,
-                    assistant_message_block.get("thinking_blocks"),
-                )
+                thinking_blocks = assistant_message_block.get("thinking_blocks")
 
                 if thinking_blocks is not None:
                     converted_thinking_blocks = (
                         BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                            thinking_blocks
+                            thinking_blocks, to_claude=to_claude
                         )
                     )
                     assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4615,9 +4698,9 @@ class BedrockConverseMessagesProcessor:
                     assistants_parts: list[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "thinking":
+                            if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element]
+                                    thinking_blocks=[element], to_claude=to_claude
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4642,6 +4725,7 @@ class BedrockConverseMessagesProcessor:
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
+                            deployment_model=deployment_model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -4653,14 +4737,21 @@ class BedrockConverseMessagesProcessor:
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        assistant_message_block, block_type="content_block", model=model
+                        assistant_message_block,
+                        block_type="content_block",
+                        model=model,
+                        deployment_model=deployment_model,
                     )
                     if _cache_point_block is not None:
                         assistant_content.append(_cache_point_block)
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
-                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+                    assistant_content.extend(
+                        _convert_to_bedrock_tool_call_invoke(
+                            _tool_calls, model=model, deployment_model=deployment_model
+                        )
+                    )
 
                 msg_i += 1
 
@@ -4681,23 +4772,49 @@ class BedrockConverseMessagesProcessor:
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
-        thinking_blocks: list[ChatCompletionThinkingBlock],
+        thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+        *,
+        to_claude: bool = False,
     ) -> list[BedrockContentBlock]:
-        reasoning_content_blocks: Final[list[BedrockContentBlock]] = []
-        for thinking_block in thinking_blocks:
-            reasoning_text = thinking_block.get("thinking")
-            reasoning_signature = thinking_block.get("signature")
-            text_block = BedrockConverseReasoningTextBlock(
-                text=reasoning_text or "",
+        return [
+            BedrockContentBlock(
+                reasoningContent=BedrockConverseMessagesProcessor._to_reasoning_content_block(
+                    thinking_block, to_claude=to_claude
+                )
             )
-            if reasoning_signature is not None:
-                text_block["signature"] = reasoning_signature
-            reasoning_content_block = BedrockConverseReasoningContentBlock(
-                reasoningText=text_block,
-            )
-            bedrock_content_block = BedrockContentBlock(reasoningContent=reasoning_content_block)
-            reasoning_content_blocks.append(bedrock_content_block)
-        return reasoning_content_blocks
+            for thinking_block in thinking_blocks
+            if not (to_claude and is_encrypted_reasoning_block(thinking_block))
+        ]
+
+    @staticmethod
+    def _to_reasoning_content_block(
+        thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        *,
+        to_claude: bool,
+    ) -> BedrockConverseReasoningContentBlock:
+        match thinking_block:
+            case {"type": "redacted_thinking", "data": str() as data} if to_claude and data.strip():
+                return BedrockConverseReasoningContentBlock(redactedContent=converse_redacted_content(data))
+            case {"signature": signature} if signature is not None:
+                return BedrockConverseReasoningContentBlock(
+                    reasoningText=BedrockConverseReasoningTextBlock(
+                        text=BedrockConverseMessagesProcessor._thinking_text(thinking_block), signature=signature
+                    )
+                )
+            case _:
+                return BedrockConverseReasoningContentBlock(
+                    reasoningText=BedrockConverseReasoningTextBlock(
+                        text=BedrockConverseMessagesProcessor._thinking_text(thinking_block)
+                    )
+                )
+
+    @staticmethod
+    def _thinking_text(thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> str:
+        match thinking_block:
+            case {"thinking": str() as text}:
+                return text
+            case _:
+                return ""
 
     @staticmethod
     def process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
@@ -4815,6 +4932,8 @@ def _bedrock_converse_messages_pt(
     llm_provider: str,
     user_continue_message: ChatCompletionUserMessage | None = None,
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
+    deployment_model: str | None = None,
+    base_model: str | None = None,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -4823,9 +4942,11 @@ def _bedrock_converse_messages_pt(
     - Please ensure that function response turn comes immediately after a function call turn
     - Conversation blocks and tool result blocks cannot be provided in the same turn. Issue: https://github.com/BerriAI/litellm/issues/6053
     """
+    from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
+    to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
@@ -4880,6 +5001,7 @@ def _bedrock_converse_messages_pt(
                             message_block=element,
                             block_type="content_block",
                             model=model,
+                            deployment_model=deployment_model,
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
@@ -4887,7 +5009,7 @@ def _bedrock_converse_messages_pt(
             elif message_content and isinstance(message_content, str):
                 _part = BedrockContentBlock(text=message_content)
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    message_block, block_type="content_block", model=model
+                    message_block, block_type="content_block", model=model, deployment_model=deployment_model
                 )
                 user_content.append(_part)
                 if _cache_point_block is not None:
@@ -4939,6 +5061,7 @@ def _bedrock_converse_messages_pt(
                     {"cache_control": tool_msg_cache_control},
                     block_type="content_block",
                     model=model,
+                    deployment_model=deployment_model,
                 )
                 if cache_point_block is not None:
                     tool_content.append(cache_point_block)
@@ -4971,15 +5094,12 @@ def _bedrock_converse_messages_pt(
                 assistant_continue_message=assistant_continue_message,
             )
             _assistant_content = assistant_message_block.get("content", None)
-            thinking_blocks = cast(
-                list[ChatCompletionThinkingBlock] | None,
-                assistant_message_block.get("thinking_blocks"),
-            )
+            thinking_blocks = assistant_message_block.get("thinking_blocks")
 
             if thinking_blocks is not None:
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks
+                        thinking_blocks, to_claude=to_claude
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4991,10 +5111,10 @@ def _bedrock_converse_messages_pt(
                 assistants_parts: list[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "thinking":
+                        if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element]
+                                    thinking_blocks=[element], to_claude=to_claude
                                 )
                             )
                             assistants_parts = (
@@ -5021,6 +5141,7 @@ def _bedrock_converse_messages_pt(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
+                            deployment_model=deployment_model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -5031,13 +5152,15 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    assistant_message_block, block_type="content_block", model=model
+                    assistant_message_block, block_type="content_block", model=model, deployment_model=deployment_model
                 )
                 if _cache_point_block is not None:
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
-                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+                assistant_content.extend(
+                    _convert_to_bedrock_tool_call_invoke(_tool_calls, model=model, deployment_model=deployment_model)
+                )
 
             msg_i += 1
 
@@ -5084,20 +5207,22 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
-def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:
+def add_cache_point_tool_block(
+    tool: dict, model: str | None = None, deployment_model: str | None = None
+) -> BedrockToolBlock | None:
     from litellm.llms.bedrock.common_utils import (
+        bedrock_cache_point_ttl_supported,
         bedrock_model_accepts_cache_points,
-        supports_bedrock_prompt_cache_ttl,
     )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None and bedrock_model_accepts_cache_points(model):
+    if cache_control is not None and bedrock_model_accepts_cache_points(model, deployment_model):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
             if isinstance(cache_control, dict) and "ttl" in cache_control:
                 ttl: Final = cache_control["ttl"]
-                if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
+                if ttl in ["5m", "1h"] and bedrock_cache_point_ttl_supported(model, deployment_model):
                     cache_point_block["ttl"] = ttl
             return {"cachePoint": cache_point_block}
     return None
@@ -5127,7 +5252,9 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     return isinstance(tool, dict) and ("systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool)
 
 
-def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockToolBlock]:
+def _bedrock_tools_pt(
+    tools: list, model: str | None = None, deployment_model: str | None = None
+) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5247,7 +5374,7 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
+        cache_point_tool_block = add_cache_point_tool_block(tool, model=model, deployment_model=deployment_model)
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 
