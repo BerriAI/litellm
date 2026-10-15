@@ -8,7 +8,7 @@ are charged against a 24h token window instead of their minute counters.
 
 import json
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -539,6 +539,96 @@ async def test_batch_input_without_a_model_is_read_through_the_team_deployment(
     assert team_route.calls.last.request.headers["authorization"] == "Bearer sk-forwarded"
     assert environment_route.call_count == 1
     assert forwarded_usage.total_tokens == _token_counter_total(rows)
+
+
+_ROUTED_FILE_URL: Final = "https://routed.example/v1/files/file-abc123/content"
+
+
+def _serve_file_to_the_deployment_key(rows: Sequence[_BatchLine]) -> Callable[[httpx.Request], httpx.Response]:
+    jsonl: Final = "\n".join(json.dumps(row) for row in rows).encode()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization") != "Bearer sk-deployment":
+            return httpx.Response(401, json={"error": {"message": "Incorrect API key provided"}})
+        return httpx.Response(200, content=jsonl)
+
+    return respond
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query_string, routing_headers",
+    [(b"model=routed-batch-model", ()), (b"", ((b"x-litellm-model", b"routed-batch-model"),))],
+    ids=["query", "header"],
+)
+async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_request_key(
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: bytes,
+    routing_headers: tuple[tuple[bytes, bytes], ...],
+):
+    from starlette.requests import Request
+
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "routed-batch-model",
+                    "litellm_params": {
+                        "model": f"openai/{_BATCH_MODEL}",
+                        "api_key": "sk-deployment",
+                        "api_base": "https://routed.example/v1",
+                    },
+                    "model_info": {"id": "routed-batch-deployment"},
+                }
+            ]
+        ),
+    )
+    file_route: Final = openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key(_batch_rows(("Hello " * 50,)))
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/batches",
+            "raw_path": b"/v1/batches",
+            "root_path": "",
+            "scheme": "http",
+            "server": ("proxy.test", 80),
+            "client": ("127.0.0.1", 50000),
+            "query_string": query_string,
+            "headers": [(b"content-type", b"application/json"), *routing_headers],
+        }
+    )
+    data: Final = await add_litellm_data_to_request(
+        data={
+            "input_file_id": "file-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "api_key": "sk-not-the-deployment-key",
+        },
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type="acreate_batch"
+        )
+
+    assert exc.value.status_code == 429
+    assert file_route.call_count == 1
 
 
 async def _install_managed_file_hook(

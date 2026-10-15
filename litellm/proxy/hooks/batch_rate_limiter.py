@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
@@ -98,6 +99,28 @@ else:
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
+
+
+def _batch_create_routing_model(data: Mapping[str, object]) -> str | None:
+    body_model: Final = data.get("model")
+    if isinstance(body_model, str) and body_model:
+        return body_model
+    proxy_server_request: Final = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, Mapping):
+        return None
+    request_line: Final = _BATCH_BODY_ADAPTER.validate_python(proxy_server_request)
+    url: Final = request_line.get("url")
+    query_model: Final = (
+        parse_qs(urlsplit(url).query, keep_blank_values=True).get("model", [None])[-1] if isinstance(url, str) else None
+    )
+    if query_model:
+        return query_model
+    headers: Final = request_line.get("headers")
+    header_model: Final = (
+        _BATCH_BODY_ADAPTER.validate_python(headers).get("x-litellm-model") if isinstance(headers, Mapping) else None
+    )
+    return header_model if isinstance(header_model, str) and header_model else None
+
 
 IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
 
@@ -549,8 +572,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     pass
             return get_original_file_id(file_id), fetch_kwargs
 
-        request_model: Final = data.get("model")
-        if isinstance(request_model, str) and request_model:
+        request_model: Final = _batch_create_routing_model(data)
+        if request_model is not None:
             if llm_router is not None:
                 try:
                     credentials = get_credentials_for_model(
