@@ -12,11 +12,12 @@ from integration.cost_calculation.conftest import (
     assert_total_is_sum_of_components,
 )
 from integration.cost_calculation.cost_tracking_case import ExactExpected, RecountExpected
+from pydantic import JsonValue
 
 STREAMED_COST_ENDPOINTS: Final = frozenset({"/v1/chat/completions", "/v1/completions", "/v1/responses"})
 
 
-def _data_frames(response_text: str) -> Iterator[Mapping[str, object]]:
+def _data_frames(response_text: str) -> Iterator[Mapping[str, JsonValue]]:
     for line in response_text.splitlines():
         if not line.startswith("data:"):
             continue
@@ -25,13 +26,13 @@ def _data_frames(response_text: str) -> Iterator[Mapping[str, object]]:
             yield JSON_OBJECT.validate_json(payload)
 
 
-def _frame_usage(frame: Mapping[str, object]) -> Mapping[str, object] | None:
+def _frame_usage(frame: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
     usage: Final = frame.get("usage")
-    if isinstance(usage, Mapping):
+    if isinstance(usage, dict):
         return usage
     nested: Final = frame.get("response")
-    nested_usage: Final = nested.get("usage") if isinstance(nested, Mapping) else None
-    return nested_usage if isinstance(nested_usage, Mapping) else None
+    nested_usage: Final = nested.get("usage") if isinstance(nested, dict) else None
+    return nested_usage if isinstance(nested_usage, dict) else None
 
 
 def streamed_usage_cost(response_text: str) -> float | None:
