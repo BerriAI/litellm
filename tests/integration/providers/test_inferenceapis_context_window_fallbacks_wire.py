@@ -1,15 +1,19 @@
 import json
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
 
 import httpx
 import pytest
 import yaml
+from integration._support.bedrock_discovery import open_connections_to
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
@@ -146,11 +150,23 @@ def _slow_peer(request: Request) -> Reply:
 
 
 @dataclass(frozen=True, slots=True)
+class _HeldPeer:
+    release: threading.Event
+    held: SimpleQueue[str]
+
+    def respond(self, request: Request) -> Reply:
+        self.held.put(request.target)
+        assert self.release.wait(timeout=120), "The burst was never released"
+        return Reply(body=_completion(f"chatcmpl-held-{uuid4().hex}", "held"))
+
+
+@dataclass(frozen=True, slots=True)
 class Rig:
     gateway: Gateway
     owned: OwnedProxy
     peers: Mapping[str, Wire]
     models: Mapping[str, str]
+    held: _HeldPeer
 
 
 def _vendor(provider_model: str, wire: Wire) -> dict[str, JsonValue]:
@@ -175,8 +191,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     suffix: Final = uuid4().hex[:8]
     names: Final = {
         label: f"{label}-{suffix}"
-        for label in ("ia_cwf", "ia_plain", "mimo_fb", "ia_ok", "ia_slow", "fallback")
+        for label in ("ia_cwf", "ia_plain", "mimo_fb", "ia_ok", "ia_slow", "ia_held", "fallback")
     }
+    held: Final = _HeldPeer(threading.Event(), SimpleQueue())
     with (
         gateway_from_environment() as gateway,
         wire_server(_error_peer(_INFERENCEAPIS_OVERFLOW, "upstream_rejected")) as ia_overflow,
@@ -184,6 +201,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         wire_server(_error_peer(_STANDARD_OVERFLOW, None)) as mimo_overflow,
         wire_server(_healthy_peer) as healthy,
         wire_server(_slow_peer) as slow,
+        wire_server(held.respond) as held_wire,
         wire_server(_fallback_peer) as fallback,
     ):
         model_list: Final[list[JsonValue]] = [
@@ -192,6 +210,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             {"model_name": names["mimo_fb"], "litellm_params": _vendor("xiaomi_mimo/mimo-v2.6-flash", mimo_overflow)},
             {"model_name": names["ia_ok"], "litellm_params": _vendor(f"inferenceapis/{_BACKEND}", healthy)},
             {"model_name": names["ia_slow"], "litellm_params": _vendor(f"inferenceapis/{_BACKEND}", slow)},
+            {"model_name": names["ia_held"], "litellm_params": _vendor(f"inferenceapis/{_BACKEND}", held_wire)},
             {
                 "model_name": names["fallback"],
                 "litellm_params": {
@@ -219,9 +238,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                     "mimo_fb": mimo_overflow,
                     "ia_ok": healthy,
                     "ia_slow": slow,
+                    "ia_held": held_wire,
                     "fallback": fallback,
                 },
                 names,
+                held,
             )
 
 
@@ -347,13 +368,20 @@ def test_a_slow_vendor_under_a_burst_answers_every_request_once(rig: Rig) -> Non
 
 
 def test_killing_one_worker_mid_burst_leaves_the_sibling_serving_and_logging_once(rig: Rig) -> None:
-    workers: Final = eventually(rig.owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
-    with ThreadPoolExecutor(max_workers=12) as pool, rig.owned.replacing_worker(min(workers)) as kill:
-        in_flight: Final = tuple(pool.submit(_post_chat, rig, "ia_ok") for _ in range(12))
-        kill()
-        during: Final = tuple(future.result() for future in in_flight)
+    workers: Final = eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        in_flight: Final = tuple(pool.submit(_post_chat, rig, "ia_held") for _ in range(12))
+        eventually(rig.held.held.qsize, lambda size: size == len(in_flight), seconds=120)
+        held_by: Final = MappingProxyType({pid: open_connections_to(pid, rig.peers["ia_held"].url) for pid in workers})
+        assert sum(held_by.values()) == len(in_flight), held_by
+        survivor_pid, victim_pid = sorted(workers, key=held_by.__getitem__)
+        with rig.owned.replacing_worker(victim_pid) as kill:
+            kill()
+            rig.held.release.set()
+            during: Final = tuple(future.result() for future in in_flight)
     after: Final = tuple(_post_chat(rig, "ia_ok") for _ in range(6))
     assert [status for status, _ in after] == [200] * 6, after
+    assert [status for status, _ in during].count(200) == held_by[survivor_pid], (held_by, during)
     assert all(status in (200, 0, 500, 502, 503) for status, _ in during), during
     identities: Final = tuple(
         identity for identity in (_completion_id(status, text) for status, text in (*during, *after)) if identity
