@@ -920,7 +920,7 @@ def _get_session_id_for_spend_log(
     batch_trace_session_id: str | None = None,
 ) -> str | None:
     """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the caller's litellm_session_id, then trace ids."""
+    batch sessions outrank everything, then the caller session the logging payload records, then trace ids."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
@@ -929,14 +929,14 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
-    caller_session_id: Final = kwargs.get("litellm_session_id")
-    if caller_session_id:
-        return str(caller_session_id)
-    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
-        return str(standard_logging_payload.get("trace_id"))
-    if kwargs.get("litellm_trace_id") is not None:
-        return str(kwargs.get("litellm_trace_id"))
-    return str(uuid.uuid4())
+    match standard_logging_payload:
+        case {"session_id": str(caller_session_id)} if caller_session_id:
+            return caller_session_id
+        case {"trace_id": trace_id} if trace_id is not None:
+            return str(trace_id)
+        case _:
+            litellm_trace_id: Final = kwargs.get("litellm_trace_id")
+            return str(litellm_trace_id) if litellm_trace_id is not None else str(uuid.uuid4())
 
 
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:

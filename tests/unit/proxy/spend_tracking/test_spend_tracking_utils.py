@@ -241,25 +241,29 @@ def test_batch_session_outranks_the_per_request_trace_id():
     assert session_id == "batch-uid-1"
 
 
-def test_caller_litellm_session_id_wins_over_the_per_request_trace_id():
-    session_id: Final = _get_session_id_for_spend_log(
-        kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
-        metadata={"trace_id": "trace-abc"},
-        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+def _chat_session_id(standard_logging_session_id: str, batch_trace_session_id: str | None = None) -> str | None:
+    return _get_session_id_for_spend_log(
+        kwargs={"litellm_trace_id": "trace-abc", "litellm_params": {"litellm_session_id": "sess-1"}},
+        metadata={},
+        standard_logging_payload=cast(
+            StandardLoggingPayload,
+            {**_TRACE_ONLY_STANDARD_LOGGING, "session_id": standard_logging_session_id},
+        ),
         omit_when_missing=False,
+        batch_trace_session_id=batch_trace_session_id,
     )
-    assert session_id == "sess-1"
 
 
-def test_batch_session_outranks_a_caller_litellm_session_id():
-    session_id: Final = _get_session_id_for_spend_log(
-        kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
-        metadata={"trace_id": "trace-abc"},
-        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
-        omit_when_missing=False,
-        batch_trace_session_id="batch-uid-1",
-    )
-    assert session_id == "batch-uid-1"
+def test_caller_session_wins_over_the_per_request_trace_id():
+    assert _chat_session_id("sess-1") == "sess-1"
+
+
+def test_batch_session_outranks_a_caller_session():
+    assert _chat_session_id("sess-1", batch_trace_session_id="batch-uid-1") == "batch-uid-1"
+
+
+def test_empty_logging_session_keeps_the_trace_id_fallback():
+    assert _chat_session_id("") == "trace-abc"
 
 
 def test_omit_policy_still_suppresses_batch_sessions():
