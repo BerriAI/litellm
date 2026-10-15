@@ -159,7 +159,7 @@ def test_vispark_cost_follows_the_cost_map():
 def test_vispark_models_are_listed_for_the_provider():
     from litellm.utils import get_valid_models
 
-    expected: Final = {name for name, entry in litellm.model_cost.items() if entry["litellm_provider"] == "vispark"}
+    expected: Final = {name for name, entry in litellm.model_cost.items() if entry.get("litellm_provider") == "vispark"}
 
     assert expected
     assert set(litellm.models_by_provider["vispark"]) == expected
