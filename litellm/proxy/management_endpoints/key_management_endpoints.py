@@ -149,7 +149,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_master_key,
 )
-from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1973,7 +1973,13 @@ async def _validate_project_assignment(
         project_id=data.project_id,
         data=data.model_copy(
             update={
-                "models": data.models if "models" in data.model_fields_set else existing_key_row.models,
+                "models": (
+                    data.models
+                    if "models" in data.model_fields_set
+                    else cast(  # cast-ok: LiteLLM_VerificationToken.models is a bare list
+                        "list[str] | None", existing_key_row.models
+                    )
+                ),
                 "max_budget": data.max_budget if data.max_budget is not None else existing_key_row.max_budget,
             }
         ),
@@ -2796,8 +2802,10 @@ async def _update_key_row_with_soft_budget(
 ) -> _KeyUpdateResult:
     hashed_token: Final = hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
-    tx: _KeyUpdateTx
-    async with prisma_client.tx() as tx:
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final[_KeyUpdateTx] = cast(  # cast-ok: the transaction object exposes the same table actions
+            "_KeyUpdateTx", tx_ctx
+        )
         update_input: Final[Mapping[str, object]] = (
             await _apply_object_permission_update(
                 data_json=non_default_values,
