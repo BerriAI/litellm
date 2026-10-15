@@ -306,7 +306,7 @@ class ResponsesSessionHandler:
 
         query: Final = """
             WITH matching_session AS (
-                SELECT session_id, api_key
+                SELECT session_id, api_key, "user", team_id
                 FROM "LiteLLM_SpendLogs"
                 WHERE request_id = $1
             )
@@ -317,6 +317,8 @@ class ResponsesSessionHandler:
                 FROM matching_session
                 WHERE matching_session.session_id = logs.session_id
                   AND matching_session.api_key = logs.api_key
+                  AND matching_session."user" IS NOT DISTINCT FROM logs."user"
+                  AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
             )
             ORDER BY "endTime" ASC;
         """

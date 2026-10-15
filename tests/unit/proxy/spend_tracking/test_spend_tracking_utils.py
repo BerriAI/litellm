@@ -243,7 +243,7 @@ def test_batch_session_outranks_the_per_request_trace_id():
 
 def _chat_session_id(standard_logging_session_id: str, batch_trace_session_id: str | None = None) -> str | None:
     return _get_session_id_for_spend_log(
-        kwargs={"litellm_trace_id": "trace-abc", "litellm_params": {"litellm_session_id": "sess-1"}},
+        kwargs={"litellm_trace_id": "trace-abc"},
         metadata={},
         standard_logging_payload=cast(
             StandardLoggingPayload,
