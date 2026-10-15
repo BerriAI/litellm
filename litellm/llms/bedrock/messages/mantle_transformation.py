@@ -56,6 +56,10 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     model ID in the request body (unlike Bedrock Invoke which puts it in the URL).
     """
 
+    BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = (
+        AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS | {"service_tier"}
+    )
+
     @property
     def beta_headers_provider(self) -> str:
         return "bedrock_mantle"
@@ -104,13 +108,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             {
                 name: value
                 for name, value in (
-                    ("anthropic-workspace", project_id),
+                    ("anthropic-workspace-id", project_id),
                     ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
                 )
                 if value
             }
         )
-        return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
+        return {
             **merged_headers,
             **mantle_headers,
         }, resolved_api_base
@@ -141,7 +145,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         mantle_fields: Final = MappingProxyType(
             {key: value for key, value in (("model", model_id), ("stream", streaming)) if value}
         )
-        return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
+        return {
             **body,
             **mantle_fields,
         }

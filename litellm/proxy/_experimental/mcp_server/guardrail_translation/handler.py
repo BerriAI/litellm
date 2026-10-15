@@ -142,7 +142,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         data: dict[str, Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         mcp_tool_name: Final = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments: Final[object] = data.get("mcp_arguments") or data.get("arguments")
         mcp_tool_description: Final = data.get("mcp_tool_description") or data.get("description")
@@ -157,9 +157,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool: Final = MCPTool(
             name=mcp_tool_name,
             description=mcp_tool_description or "",
-            input_schema=dict(mcp_input_schema)
-            if isinstance(mcp_input_schema, Mapping)
-            else {},  # mutable-ok: SDK dict field
+            input_schema=dict(mcp_input_schema) if isinstance(mcp_input_schema, Mapping) else {},
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]
@@ -230,9 +228,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         response: "CallToolResult",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         """Scan the text content of an MCP tool result and write masked text back.
 
         The content list is rewritten in place (only the entries the guardrail

@@ -1,8 +1,9 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -43,11 +44,17 @@ from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
+    get_fireworks_forwarded_user_id,
     resolve_fireworks_resource_name,
+    without_caller_user,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -81,7 +88,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
 
 
 def _json_schema_response_format(schema: object, name: str) -> Mapping[str, object]:
-    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}  # mutable-ok: JSON request body
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
 
 
 EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
@@ -189,7 +196,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             top_p=top_p,
             response_format=response_format,
         )
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -353,7 +360,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
-            return dict(optional_params)  # mutable-ok: JSON request body
+            return dict(optional_params)
 
         stripped: Final = tuple(sorted(k for k in extra_body if k in NIM_VLLM_STRIP_PARAMS))
         if stripped:
@@ -377,11 +384,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             if k not in _EXTRA_BODY_CONSUMED_PARAMS
             and (k != "response_format" or "response_format" not in optional_params)
         )
-        base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}  # mutable-ok: JSON request body
-        return {  # mutable-ok: JSON request body
+        base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}
+        return {
             **base,
-            **dict(promoted),  # mutable-ok: JSON request body
-            **({"extra_body": dict(remaining)} if remaining else {}),  # mutable-ok: JSON request body
+            **dict(promoted),
+            **({"extra_body": dict(remaining)} if remaining else {}),
         }
 
     @staticmethod
@@ -450,12 +457,12 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if extra_body.get("guided_json") is not None:
             return (("response_format", _json_schema_response_format(extra_body["guided_json"], "response")),)
         if extra_body.get("guided_grammar") is not None:
-            grammar_response_format: Final = {  # mutable-ok: JSON request body
+            grammar_response_format: Final = {
                 "type": "grammar",
                 "grammar": extra_body["guided_grammar"],
             }
             return (("response_format", grammar_response_format),)
-        choice_schema: Final = {  # mutable-ok: JSON request body
+        choice_schema: Final = {
             "type": "string",
             "enum": extra_body["guided_choice"],
         }
@@ -674,13 +681,24 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     **stream_options,
                     "include_usage": True,
                 }
-        return super().transform_request(
+        request: Final = super().transform_request(
             model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        forwarded_user_id: Final = get_fireworks_forwarded_user_id(litellm_params)
+        return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(litellm_params))
 
     def _handle_message_content_with_tool_calls(
         self,
@@ -744,7 +762,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         additional_headers: Final = get_response_headers(raw_response_headers)
 
-        response: Final = ModelResponse(**completion_response)
+        completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
@@ -756,9 +775,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 tool_calls=optional_params.get("tools", None),
             )
 
-        response._hidden_params = {
+        response.hidden_params = {
             "additional_headers": additional_headers,
-            **_extract_fireworks_hidden_params(completion_response),
+            **_extract_fireworks_hidden_params(completion_fields),
         }
 
         return response
@@ -787,6 +806,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_models(self, api_key: str | None = None, api_base: str | None = None):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:
@@ -812,9 +838,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final = response.json()["models"]
+        models: Final = _JSON_OBJECTS.validate_python(_JSON_DICT.validate_python(response.json())["models"])
 
-        return ["fireworks_ai/" + model["name"] for model in models]
+        return ["fireworks_ai/" + _STR.validate_python(model["name"]) for model in models]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
