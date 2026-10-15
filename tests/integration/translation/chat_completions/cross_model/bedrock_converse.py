@@ -588,7 +588,13 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -998,7 +1004,13 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -1928,7 +1940,13 @@ CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1237,
         "completion_tokens": 155,
         "total_tokens": 1392,
-        "completion_tokens_details": {"reasoning_tokens": 54},
+        "completion_tokens_details": {"reasoning_tokens": 54, "text_tokens": 101},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1237,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -2575,7 +2593,13 @@ CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1144,
         "completion_tokens": 129,
         "total_tokens": 1273,
-        "completion_tokens_details": {"reasoning_tokens": 23},
+        "completion_tokens_details": {"reasoning_tokens": 23, "text_tokens": 106},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1144,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -3157,7 +3181,13 @@ CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1144,
         "completion_tokens": 105,
         "total_tokens": 1249,
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1144,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -3561,7 +3591,13 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1140,
         "completion_tokens": 105,
         "total_tokens": 1245,
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1140,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
     },
 )
 
@@ -3942,7 +3978,18 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ("call_56e00189845b5c3e9db58f1c533f8ffa", "call_5bc228109f6b50aab59208a1bb87a278"),
         thinking_blocks=({"type": "redacted_thinking", "data": "synthetic-redacted-content"},),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 65, "total_tokens": 513},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 65,
+        "total_tokens": 513,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {},
+    },
 )
 
 
@@ -4318,7 +4365,18 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_1f91223677b85208a50c2e468f13bec6", "call_22c1b20e86fc5591a38991235c16a738"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )
 
 
@@ -4694,7 +4752,18 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_0134ef3fc4655cf1bce3682ad64e2402", "call_158da03b42155f8698a5e305286b575a"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )
 
 
@@ -5073,7 +5142,18 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_8d938f5c31c25860ac7afbfabc6842e7", "call_50e1bcf30f0f530999ba77cb7a9af6e1"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )
 
 
@@ -5444,7 +5524,18 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_79fad04d4dc15725a47b94036fad121d", "call_5998b5b7890a5492b44686f49fdce50a"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )
 
 
@@ -5811,7 +5902,18 @@ GPT_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_27bae639df025a45b45f9d6f390cf640", "call_e1ff6a882dec5541999379a8e5ce6b4d"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )
 
 
@@ -6179,5 +6281,16 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_cfd44aa11ede5a6c99cf18ae774b7085", "call_027b2f22e5e959a38f6861130f2dc7df"),
     ),
-    expected_litellm_usage={"prompt_tokens": 448, "completion_tokens": 53, "total_tokens": 501},
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 448,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 53},
+    },
 )

@@ -342,8 +342,14 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -571,8 +577,14 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -1095,8 +1107,14 @@ CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1237,
         "completion_tokens": 150,
         "total_tokens": 1387,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 49},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1237,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 49, "text_tokens": 101},
     },
 )
 
@@ -1450,8 +1468,14 @@ CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -1685,8 +1709,14 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1180,
         "completion_tokens": 105,
         "total_tokens": 1285,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1180,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -2014,5 +2044,11 @@ GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     expected_litellm_message=coding_agent_stream_message(
         ("call_337037__thought__synthetic-signature", "call_337046"),
     ),
-    expected_litellm_usage={"prompt_tokens": 582, "completion_tokens": 48, "total_tokens": 630},
+    expected_litellm_usage={
+        "prompt_tokens": 582,
+        "completion_tokens": 48,
+        "total_tokens": 630,
+        "prompt_tokens_details": {"text_tokens": 582},
+        "completion_tokens_details": {"text_tokens": 48},
+    },
 )

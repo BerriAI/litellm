@@ -31,7 +31,7 @@ Start with `test_cross_model_contract.py` for the four scenarios and `contracts.
 
 Streaming cases store `expected_litellm_message` and `expected_litellm_usage`. Message values are compared after joining deltas and parsing tool argument JSON, so whitespace and chunk boundaries are irrelevant. Reasoning text, thinking signatures, redacted data and encrypted reasoning items must survive. An empty reasoning-item `content` list may be omitted. Thinking indexes are transport metadata, not compared as content. Raw assembly accepts the known unindexed Haiku thinking fragments, but does not claim SDK compatibility for them
 
-Usage requires nonnegative integer counts, positive prompt and completion counts, and `total_tokens == prompt_tokens + completion_tokens`. Every counter in the row's expected reported usage must also be present and equal, including optional cached and reasoning tokens. Extra client-generated usage metadata is allowed. Thus a wrong prompt count with an adjusted total still fails
+Usage requires nonnegative integer counts, positive prompt and completion counts, and `total_tokens == prompt_tokens + completion_tokens`. The complete normalized usage must equal the independently expected counters, including cached and reasoning tokens and derived text/cache details. Missing, changed or unexpected counters fail. Only null optional fields, the explicitly listed provider metadata/duplicate counters and computed `cost` are excluded. Thus a wrong prompt count with an adjusted total still fails
 
 The raw stream check assembles tool names and argument fragments by index. The SDK check separately uses `OpenAI.chat.completions.stream()` without removing reasoning fields. Seven Haiku SDK checks are explicitly skipped for [LIT-9653](https://linear.app/litellm-ai/issue/LIT-9653), because unindexed `thinking_blocks` crash the SDK assembler. Their non-streaming, tool-loop and raw-stream checks still run
 
@@ -48,6 +48,8 @@ Replace project paths, signatures, encrypted reasoning and redacted blocks with 
 Do not generate expectations with LiteLLM translators. Add the model's synthetic deployment to the shared proxy config. Reuse the common request in `chat_completions/templates.py` and the matching wire request in `translation/templates/<provider>.py`. Store only model-specific differences in the base or agent variant. Populate the stream message and usage expectations from the provider's own frames, including any reported optional counters. Add its initial, follow-up and streaming cases to the appropriate tier tuple
 
 ## Run
+
+The assertion verification rejected 2,179 malformed payloads with 137 valid controls passing. It covers missing or extra fields, wrong types, split choices, changed tool arguments, lost reasoning and missing, changed or unexpected usage counters. A synthetic positive control with `cached_tokens=600` also rejects dropping or changing that value. These are assertion-level mutations, not a historical production-version replay, and the recorded matrix itself does not exercise nonzero cache hits
 
 ```bash
 INTEGRATION_WORKERS=2 .venv/bin/python tests/integration/run.py providers \

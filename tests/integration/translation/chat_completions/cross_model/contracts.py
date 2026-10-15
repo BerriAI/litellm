@@ -50,6 +50,11 @@ class Choice(Contract):
     logprobs: ChoiceLogprobs | None = None
 
 
+class CacheCreationDetails(Contract):
+    ephemeral_5m_input_tokens: TokenCount | None = None
+    ephemeral_1h_input_tokens: TokenCount | None = None
+
+
 class PromptDetails(Contract):
     cached_tokens: TokenCount | None = None
     cache_write_tokens: TokenCount | None = None
@@ -57,6 +62,7 @@ class PromptDetails(Contract):
     audio_tokens: TokenCount | None = None
     text_tokens: TokenCount | None = None
     image_tokens: TokenCount | None = None
+    cache_creation_token_details: CacheCreationDetails | None = None
 
 
 class CompletionDetails(Contract):
@@ -258,16 +264,21 @@ def assert_stream_preserved(
     tokens: Final = Usage.model_validate(usage)
     assert tokens.prompt_tokens > 0 and tokens.completion_tokens > 0, case.id
     assert tokens.total_tokens == tokens.prompt_tokens + tokens.completion_tokens, case.id
-    _assert_reported_usage(usage, case.expected_litellm_usage)
+    assert _usage_values(usage) == _usage_values(case.expected_litellm_usage), (
+        case.id,
+        _usage_values(usage),
+        _usage_values(case.expected_litellm_usage),
+    )
 
 
-def _assert_reported_usage(actual: Mapping[str, JsonValue], expected: Mapping[str, JsonValue]) -> None:
-    for key, value in expected.items():
-        assert key in actual, (key, actual, expected)
-        if isinstance(value, dict):
-            _assert_reported_usage(object_value(actual[key]), value)
-        else:
-            assert actual[key] == value, (key, actual, expected)
+def _usage_values(usage: Mapping[str, JsonValue], path: str = "usage") -> Mapping[str, JsonValue]:
+    return {
+        key: dict(_usage_values(value, f"{path}.{key}")) if isinstance(value, dict) else value
+        for key, value in usage.items()
+        if value is not None
+        and key not in PROVIDER_EXTENSIONS.get(path, frozenset[str]())
+        and (path != "usage" or key != "cost")
+    }
 
 
 def assert_completion(body: Mapping[str, JsonValue]) -> Completion:

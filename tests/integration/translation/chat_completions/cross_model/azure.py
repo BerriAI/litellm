@@ -760,7 +760,7 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 75,
         "total_tokens": 523,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )
@@ -1329,7 +1329,7 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 53,
         "total_tokens": 501,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )
@@ -1858,7 +1858,7 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 53,
         "total_tokens": 501,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )
@@ -2486,7 +2486,7 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 63,
         "total_tokens": 511,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 8},
     },
 )
@@ -3079,7 +3079,7 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 53,
         "total_tokens": 501,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )
@@ -3618,7 +3618,7 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 53,
         "total_tokens": 501,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )
@@ -4213,7 +4213,7 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 448,
         "completion_tokens": 53,
         "total_tokens": 501,
-        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
         "completion_tokens_details": {"reasoning_tokens": 0},
     },
 )

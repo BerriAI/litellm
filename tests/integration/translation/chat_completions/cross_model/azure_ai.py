@@ -355,8 +355,14 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -593,8 +599,14 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "prompt_tokens": 1184,
         "completion_tokens": 105,
         "total_tokens": 1289,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 0},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
 
@@ -1167,8 +1179,14 @@ CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1237,
         "completion_tokens": 155,
         "total_tokens": 1392,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 54},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1237,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 54, "text_tokens": 101},
     },
 )
 
@@ -1607,7 +1625,13 @@ CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         "prompt_tokens": 1184,
         "completion_tokens": 196,
         "total_tokens": 1380,
-        "prompt_tokens_details": {"cached_tokens": 0},
-        "completion_tokens_details": {"reasoning_tokens": 90},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 90, "text_tokens": 106},
     },
 )
