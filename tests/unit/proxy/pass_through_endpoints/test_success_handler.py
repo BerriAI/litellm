@@ -648,3 +648,160 @@ def test_vertex_ai_live_route_without_usage_frames_yields_no_logging_response(
 
     assert normalized["standard_logging_response_object"] is None
     assert normalized["kwargs"] == {"model": _LIVE_MODEL}
+
+
+# --- regression for #45787: substring route matching must not classify plain
+# passthrough URLs (e.g. "http://example.com/api/predict/laya") as Vertex AI ---
+
+_NON_VERTEX_URLS_WITH_METHOD_SUBSTRINGS: Final = [
+    "http://example.com/api/predict/laya",
+    "http://example.com/api/search/items",
+    "http://example.com/api/embedContent/proxy",
+    "http://example.com/v1/rawPredict",
+    "http://example.com/predictLongRunning/jobs/1",
+    "http://example.com/api/streamGenerateContent/relay",
+]
+
+
+@pytest.mark.parametrize("url", _NON_VERTEX_URLS_WITH_METHOD_SUBSTRINGS)
+def test_is_vertex_route_ignores_non_vertex_urls_containing_method_substrings(url: str) -> None:
+    assert PassThroughEndpointLogging().is_vertex_route(url) is False
+
+
+def test_is_vertex_route_matches_authentic_vertex_method_urls() -> None:
+    handler = PassThroughEndpointLogging()
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/gemini-2.0-flash:predict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/gemini-2.0:search"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/text-embedding-005:embedContent"
+        )
+        is True
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_non_vertex_predict_url_normalizes_without_predictions_keyerror() -> None:
+    # Issue #45787: a plain passthrough URL containing the substring "predict"
+    # used to be misrouted to the Vertex handler, whose unguarded
+    # response["predictions"] access then raised KeyError inside the logging
+    # worker and silently dropped the spend row. After the fix the URL is no
+    # longer classified as a Vertex route, so normalization returns the generic
+    # (no-op) payload instead of crashing.
+    handler = PassThroughEndpointLogging()
+    assert handler.is_vertex_route("http://example.com/api/predict/laya") is False
+    normalized = handler.normalize_llm_passthrough_logging_payload(
+        httpx_response=httpx.Response(200, request=httpx.Request("GET", "http://example.com/api/predict/laya")),
+        response_body={},  # no "predictions" key
+        request_body={},
+        logging_obj=_logging_obj(),
+        url_route="http://example.com/api/predict/laya",
+        result="",
+        start_time=_START,
+        end_time=_END,
+        cache_hit=False,
+        custom_llm_provider=None,
+    )
+
+    # No longer misrouted to the Vertex handler, so no KeyError and no
+    # vertex-specific payload is produced.
+    assert normalized["standard_logging_response_object"] is None
+    assert "standard_logging_response_object" in normalized
+    assert "kwargs" in normalized
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://example.com/api/rawPredict/search", "http://example.com/api/streamRawPredict/relay?q=search"],
+)
+def test_vertex_handler_ignores_method_substrings_in_plain_urls(url: str) -> None:
+    # Before #45787 these hit the partner-model (``rawPredict``) and vector-store
+    # (``search``) branches by substring; now no Vertex method matches.
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+        VertexPassthroughLoggingHandler,
+    )
+
+    handled = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=httpx.Response(200, json={}, request=httpx.Request("POST", url)),
+        logging_obj=_logging_obj(),
+        url_route=url,
+        result="",
+        start_time=_START,
+        end_time=_END,
+        cache_hit=False,
+    )
+
+    assert handled["result"] is None
+
+
+_ANTHROPIC_STREAM_CHUNKS: Final = [
+    'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", '
+    '"model": "claude-sonnet-4@20250514", "content": [], "stop_reason": null, '
+    '"usage": {"input_tokens": 10, "output_tokens": 1}}}',
+    'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+    'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}',
+    'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}}',
+    'data: {"type": "content_block_stop", "index": 0}',
+    'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}}',
+    'data: {"type": "message_stop"}',
+]
+
+
+def test_streaming_response_is_rebuilt_for_stream_raw_predict_routes() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+        VertexPassthroughLoggingHandler,
+    )
+
+    rebuilt = VertexPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=list(_ANTHROPIC_STREAM_CHUNKS),
+        litellm_logging_obj=_logging_obj(),
+        model="claude-sonnet-4@20250514",
+        url_route=(
+            "v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
+        ),
+    )
+
+    assert isinstance(rebuilt, litellm.ModelResponse)
+    assert rebuilt.choices[0].message.content == "Hello world"
+
+
+def test_streaming_response_is_not_rebuilt_for_raw_predict_substring_urls() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+        VertexPassthroughLoggingHandler,
+    )
+
+    rebuilt = VertexPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=list(_ANTHROPIC_STREAM_CHUNKS),
+        litellm_logging_obj=_logging_obj(),
+        model="claude-sonnet-4@20250514",
+        url_route="http://example.com/api/streamRawPredict/relay",
+    )
+
+    assert rebuilt is None
+
+
+@pytest.mark.parametrize("model", ["text-embedding-005", "1234567890"])
+def test_vertex_embedding_response_without_predictions_raises_value_error(model: str) -> None:
+    # A numeric model id takes the fine-tuned branch; both report the missing
+    # field instead of a bare KeyError.
+    from litellm.llms.vertex_ai.vertex_embeddings.transformation import (
+        VertexAITextEmbeddingConfig,
+    )
+
+    with pytest.raises(ValueError, match="missing 'predictions' field"):
+        VertexAITextEmbeddingConfig().transform_vertex_response_to_openai(
+            response={}, model=model, model_response=litellm.EmbeddingResponse()
+        )
