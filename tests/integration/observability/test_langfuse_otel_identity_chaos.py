@@ -1,6 +1,4 @@
 import concurrent.futures
-import os
-import signal
 import threading
 import time
 import uuid
@@ -19,7 +17,7 @@ from _langfuse_otel import (
     _upstream_reply_for,
 )
 from integration._support.client import Gateway, eventually
-from integration._support.process import group_members, owned_proxy_process
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 
@@ -208,11 +206,9 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker(gateway: Gateway
             for future in concurrent.futures.as_completed(futures):
                 results[futures[future]] = future.result()
                 if len(results) >= 10 and not killed["done"]:
-                    children: Final = tuple(
-                        process for process in group_members(owned.process.pid) if process.pid != owned.process.pid
-                    )
-                    assert children, "no uvicorn worker child found"
-                    os.kill(children[0].pid, signal.SIGKILL)
+                    serving: Final = owned.worker_pids()
+                    assert serving, "no uvicorn worker child found"
+                    owned.kill_worker(min(serving))
                     killed["done"] = True
         assert killed["done"], "worker kill never fired"
         accepted: Final = {m for m, r in results.items() if r["status"] == 200}
