@@ -106,7 +106,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
                 <span className="font-mono">{settings.connection_id}</span>
               </DetailRow>
               <DetailRow label="Base URL">
-                <span className="font-mono">{settings.base_url}</span>
+                <span className="font-mono">{settings.ternary_base_url}</span>
               </DetailRow>
               <DetailRow label="Export Frequency">{describeFrequency(settings)}</DetailRow>
             </dl>
@@ -134,7 +134,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
             {summary && (
               <Alert>
                 <AlertTitle>Preview (LiteLLM estimated spend)</AlertTitle>
-                <AlertDescription>
+                <AlertDescription className="min-w-0">
                   <p>
                     {summary.total_records} FOCUS rows across {summary.days.length} day(s), estimated spend{" "}
                     {formatEstimatedSpend(summary.estimated_spend)}, {summary.total_tokens.toLocaleString()} tokens,{" "}
@@ -143,7 +143,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
                   <p className="text-xs text-muted-foreground">
                     Spend is LiteLLM&apos;s estimate, not your provider&apos;s invoice.
                   </p>
-                  <pre className="max-h-96 overflow-auto rounded-md border border-border bg-muted p-4 font-mono text-xs text-foreground">
+                  <pre className="max-h-96 w-full max-w-full overflow-auto rounded-md border border-border bg-muted p-4 font-mono text-xs text-foreground">
                     {JSON.stringify(dryRun.data?.normalized_data.slice(0, 5), null, 2)}
                   </pre>
                 </AlertDescription>

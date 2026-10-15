@@ -143,7 +143,7 @@ def _logger_from_settings(settings: TernarySettings) -> TernaryLogger:
     return TernaryLogger(
         api_key=settings.api_key,
         connection_id=settings.connection_id,
-        base_url=settings.base_url,
+        base_url=settings.ternary_base_url,
         frequency=settings.frequency,
         interval_seconds=settings.interval_seconds,
     )
@@ -168,7 +168,7 @@ def _destination_error(settings: TernarySettings) -> str | None:
             config={
                 "api_key": settings.api_key,
                 "connection_id": settings.connection_id,
-                "base_url": settings.base_url,
+                "base_url": settings.ternary_base_url,
             },
         )
     except ValueError as e:
@@ -204,7 +204,7 @@ async def get_ternary_settings(
     return TernarySettingsView(
         api_key_masked=_sensitive_masker.mask_dict({"api_key": settings.api_key}).get("api_key"),
         connection_id=settings.connection_id,
-        base_url=settings.base_url,
+        ternary_base_url=settings.ternary_base_url,
         frequency=settings.frequency,
         interval_seconds=settings.interval_seconds,
         status="configured",

@@ -46904,12 +46904,6 @@ export interface components {
              */
             api_key: string;
             /**
-             * Base Url
-             * @description Ternary API base URL
-             * @default https://api.ternary.app
-             */
-            base_url: string;
-            /**
              * Connection Id
              * @description Ternary AI Gateway connection ID
              */
@@ -46926,6 +46920,12 @@ export interface components {
              * @description Seconds between exports when frequency is 'interval'
              */
             interval_seconds?: number | null;
+            /**
+             * Ternary Base Url
+             * @description Ternary API base URL
+             * @default https://api.ternary.app
+             */
+            ternary_base_url: string;
         };
         /**
          * TernarySettingsUpdate
@@ -46937,11 +46937,6 @@ export interface components {
              * @description New Ternary connection API key
              */
             api_key?: string | null;
-            /**
-             * Base Url
-             * @description New Ternary API base URL
-             */
-            base_url?: string | null;
             /**
              * Connection Id
              * @description New Ternary connection ID
@@ -46957,6 +46952,11 @@ export interface components {
              * @description New seconds between exports for 'interval'
              */
             interval_seconds?: number | null;
+            /**
+             * Ternary Base Url
+             * @description New Ternary API base URL
+             */
+            ternary_base_url?: string | null;
         };
         /**
          * TernarySettingsView
@@ -46968,11 +46968,6 @@ export interface components {
              * @description Masked API key
              */
             api_key_masked?: string | null;
-            /**
-             * Base Url
-             * @description Ternary API base URL
-             */
-            base_url?: string | null;
             /**
              * Connection Id
              * @description Ternary connection ID
@@ -46993,6 +46988,11 @@ export interface components {
              * @description Configuration status
              */
             status?: string | null;
+            /**
+             * Ternary Base Url
+             * @description Ternary API base URL
+             */
+            ternary_base_url?: string | null;
         };
         /**
          * TestCustomCodeGuardrailRequest

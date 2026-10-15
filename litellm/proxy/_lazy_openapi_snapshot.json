@@ -55526,12 +55526,6 @@
               "title": "Api Key",
               "type": "string"
             },
-            "base_url": {
-              "default": "https://api.ternary.app",
-              "description": "Ternary API base URL",
-              "title": "Base Url",
-              "type": "string"
-            },
             "connection_id": {
               "description": "Ternary AI Gateway connection ID",
               "title": "Connection Id",
@@ -55558,6 +55552,12 @@
               ],
               "description": "Seconds between exports when frequency is 'interval'",
               "title": "Interval Seconds"
+            },
+            "ternary_base_url": {
+              "default": "https://api.ternary.app",
+              "description": "Ternary API base URL",
+              "title": "Ternary Base Url",
+              "type": "string"
             }
           },
           "required": [
@@ -55581,18 +55581,6 @@
               ],
               "description": "New Ternary connection API key",
               "title": "Api Key"
-            },
-            "base_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "New Ternary API base URL",
-              "title": "Base Url"
             },
             "connection_id": {
               "anyOf": [
@@ -55633,6 +55621,18 @@
               ],
               "description": "New seconds between exports for 'interval'",
               "title": "Interval Seconds"
+            },
+            "ternary_base_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "New Ternary API base URL",
+              "title": "Ternary Base Url"
             }
           },
           "title": "TernarySettingsUpdate",
@@ -55652,18 +55652,6 @@
               ],
               "description": "Masked API key",
               "title": "Api Key Masked"
-            },
-            "base_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Ternary API base URL",
-              "title": "Base Url"
             },
             "connection_id": {
               "anyOf": [
@@ -55716,6 +55704,18 @@
               ],
               "description": "Configuration status",
               "title": "Status"
+            },
+            "ternary_base_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ternary API base URL",
+              "title": "Ternary Base Url"
             }
           },
           "title": "TernarySettingsView",
