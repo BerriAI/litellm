@@ -35047,6 +35047,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
@@ -50233,6 +50235,8 @@ export interface components {
             input_cost_per_query?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
+            /** Input Cost Per Text Message */
+            input_cost_per_text_message?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /** Input Cost Per Token Above 100K Tokens */
