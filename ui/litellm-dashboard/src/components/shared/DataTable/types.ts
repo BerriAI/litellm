@@ -21,12 +21,13 @@ export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
 export type DataTableSkeletonShape = "text" | "twoLine" | "badge" | "chips" | "meter";
 
-export interface DataTableProps<TData extends RowData, TValue> {
+export interface DataTableResolvedProps<TData extends RowData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
   getRowId?: (row: TData, index: number, parent?: Row<TData>) => string;
 
   isLoading?: boolean;
+  isError?: boolean;
   loadingMessage?: string;
   skeletonRowCount?: number;
   noDataMessage?: React.ReactNode;
@@ -53,6 +54,8 @@ export interface DataTableProps<TData extends RowData, TValue> {
 
   enableColumnResizing?: boolean;
   columnResizeMode?: ColumnResizeMode;
+  columnVisibility?: VisibilityState;
+  onColumnVisibilityChange?: OnChangeFn<VisibilityState>;
   defaultColumnVisibility?: VisibilityState;
 
   getRowCanExpand?: (row: Row<TData>) => boolean;
@@ -81,3 +84,89 @@ export interface DataTableProps<TData extends RowData, TValue> {
   paginationSlot?: (table: Table<TData>) => React.ReactNode;
   footer?: (table: Table<TData>) => React.ReactNode;
 }
+
+type DataTableBaseProps<TData extends RowData, TValue> = Omit<
+  DataTableResolvedProps<TData, TValue>,
+  | "sortingMode"
+  | "sorting"
+  | "onSortingChange"
+  | "defaultSorting"
+  | "paginationMode"
+  | "pagination"
+  | "onPaginationChange"
+  | "rowCount"
+  | "filterMode"
+  | "columnFilters"
+  | "onColumnFiltersChange"
+  | "defaultColumnFilters"
+  | "columnVisibility"
+  | "onColumnVisibilityChange"
+  | "defaultColumnVisibility"
+  | "rowSelection"
+  | "onRowSelectionChange"
+>;
+
+type SortingProps =
+  | {
+      sorting: SortingState;
+      onSortingChange: OnChangeFn<SortingState>;
+      sortingMode?: SortingMode;
+      defaultSorting?: never;
+    }
+  | {
+      sortingMode?: Exclude<SortingMode, "server">;
+      sorting?: never;
+      onSortingChange?: never;
+      defaultSorting?: SortingState;
+    };
+
+type PaginationProps =
+  | {
+      paginationMode: "server";
+      pagination: PaginationState;
+      onPaginationChange: OnChangeFn<PaginationState>;
+      rowCount: number;
+    }
+  | {
+      paginationMode?: Exclude<PaginationMode, "server">;
+      pagination?: PaginationState;
+      onPaginationChange?: OnChangeFn<PaginationState>;
+      rowCount?: number;
+    };
+
+type FilterProps =
+  | {
+      columnFilters: ColumnFiltersState;
+      onColumnFiltersChange: OnChangeFn<ColumnFiltersState>;
+      filterMode?: FilterMode;
+      defaultColumnFilters?: never;
+    }
+  | {
+      filterMode?: Exclude<FilterMode, "server">;
+      columnFilters?: never;
+      onColumnFiltersChange?: never;
+      defaultColumnFilters?: ColumnFiltersState;
+    };
+
+type ColumnVisibilityProps =
+  | {
+      columnVisibility: VisibilityState;
+      onColumnVisibilityChange: OnChangeFn<VisibilityState>;
+      defaultColumnVisibility?: never;
+    }
+  | {
+      columnVisibility?: never;
+      onColumnVisibilityChange?: never;
+      defaultColumnVisibility?: VisibilityState;
+    };
+
+type RowSelectionProps =
+  | { rowSelection: RowSelectionState; onRowSelectionChange: OnChangeFn<RowSelectionState> }
+  | { rowSelection?: never; onRowSelectionChange?: OnChangeFn<RowSelectionState> };
+
+export type DataTableProps<TData extends RowData, TValue> = DataTableBaseProps<TData, TValue> &
+  SortingProps &
+  PaginationProps &
+  FilterProps &
+  ColumnVisibilityProps &
+  RowSelectionProps;

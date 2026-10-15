@@ -10,9 +10,11 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
-from typing import Any, Final, cast
+from collections.abc import Iterable, Mapping, Sized
+from typing import Final, Protocol, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
@@ -28,6 +30,15 @@ from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, U
 from litellm.utils import is_base64_encoded
 
 from ..common_utils import CohereError
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_EMBEDDINGS_BY_TYPE: Final = TypeAdapter(Mapping[str, Iterable[object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _SupportsEncode(Protocol):
+    """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
+
+    def encode(self, text: str, /) -> Sized: ...
 
 
 class CohereEmbeddingConfig(BaseEmbeddingConfig):
@@ -133,7 +144,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
         input_tokens = 0
 
         text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
@@ -169,7 +180,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
@@ -191,7 +202,8 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
                 'usage'
             }
         """
-        embeddings: Final = response_json["embeddings"]
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        embeddings: Final = _EMBEDDINGS_BY_TYPE.validate_python(payload["embeddings"])
         output_data: Final = []
         for k, embedding_list in embeddings.items():
             for idx, embedding in enumerate(embedding_list):
@@ -206,7 +218,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         setattr(
             model_response,
             "usage",
-            self._calculate_usage(input, encoding, response_json.get("meta", {})),
+            self._calculate_usage(input, encoding, dict(_JSON_OBJECT.validate_python(payload.get("meta", {})))),
         )
 
         return model_response

@@ -1,0 +1,5 @@
+# mutmut's gather_coverage() looks covered lines up by absolute path, so the
+# repo's `relative_files = true` makes every lookup miss and mutmut generates
+# zero mutants. Point COVERAGE_RCFILE here for mutation runs only.
+[run]
+relative_files = false

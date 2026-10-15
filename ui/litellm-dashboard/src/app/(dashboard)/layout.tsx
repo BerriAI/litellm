@@ -1,20 +1,33 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { DebugWarningBanner } from "@/components/DebugWarningBanner";
-import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  createDeploymentHealthHandle,
+  DeploymentHealthBanner,
+  DeploymentHealthIcon,
+} from "@/components/DeploymentHealth/DeploymentHealth";
+import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
-import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Menu } from "lucide-react";
+import { useMediaQuery } from "usehooks-ts";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
+import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -68,7 +81,7 @@ export function AgentControlPlaneView() {
 
   if (!agentPlatformUrl) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-500">
+      <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p className="text-lg font-medium mb-2">Plugin</p>
           <p className="text-sm">Configure the plugin URL in settings</p>
@@ -95,21 +108,33 @@ export function AgentControlPlaneView() {
   );
 }
 
+const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+
 function DashboardShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
   const { accessToken } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
+  const pathname = usePathname();
+  const routeSegment = routeSegmentForPathname(pathname);
+  useEffect(() => {
+    void recordUiEvent({ page: routeSegment || "home", action: "view" });
+  }, [routeSegment]);
+  const searchParams = useSearchParams();
+  const navigationKey = `${pathname}?${searchParams.toString()}`;
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
+  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
+  const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
+  if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
+    setMobileNavigationKey(null);
+  }
+  const mobileNavigationOpen = !isDesktop && mobileNavigationKey === navigationKey;
+  const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
+  const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
+  const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
+  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
 
-  const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
   const isGateway = mode === "ai-gateway";
-
-  const navigateToPage = (newPage: string) => {
-    const migratedRoute = MIGRATED_PAGES[newPage];
-    router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
-  };
 
   // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
   // which carries the account menu; the redesigned sidebar + header shell is
@@ -118,9 +143,13 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   if (!isGateway) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
+        <Navbar
+          accessToken={accessToken}
+          isPublicPage={false}
+          deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+        />
+        <DeploymentHealthBanner handle={deploymentHealthHandle} />
+        <DeploymentHealthPanel handle={deploymentHealthHandle} />
         <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
@@ -133,20 +162,54 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      <SidebarProvider
-        setPage={navigateToPage}
-        defaultSelectedKey={page}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-      />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DashboardHeader page={page} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
-        <UserBanner accessToken={accessToken} />
-        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+    <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+      <div className="hidden h-full md:flex">
+        <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       </div>
+      <Sheet
+        handle={mobileNavigationHandle}
+        open={mobileNavigationOpen}
+        onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
+      >
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+          onClickCapture={(event) => {
+            if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
+          }}
+        >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
+        </SheetContent>
+      </Sheet>
+      <LiteAdminFrame>
+        <CommandPaletteProvider>
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <DashboardHeader
+              accessToken={accessToken}
+              navigationTrigger={
+                <SheetTrigger
+                  handle={mobileNavigationHandle}
+                  render={
+                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                  }
+                >
+                  <Menu />
+                </SheetTrigger>
+              }
+              deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+            />
+            <DeploymentHealthBanner handle={deploymentHealthHandle} />
+            <DeploymentHealthPanel handle={deploymentHealthHandle} />
+            <UserBanner accessToken={accessToken} />
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+              <TelemetryEnvBanner />
+              {children}
+            </main>
+          </div>
+        </CommandPaletteProvider>
+      </LiteAdminFrame>
     </div>
   );
 }
@@ -154,16 +217,25 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { accessToken, authLoading } = useAuth();
+  const pathname = usePathname();
+  const { accessToken, authLoading, passwordResetRequired } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
-  // /onboarding route. Redirect once ui-config has loaded so migratedHref resolves the SERVER_ROOT_PATH base.
+  // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
   useEffect(() => {
     if (!authLoading && isInvitationFlow) {
-      router.replace(`${migratedHref("onboarding")}?${searchParams.toString()}`);
+      router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
     }
   }, [authLoading, isInvitationFlow, router, searchParams]);
+
+  // A session flagged for a forced password reset can only reach the change-password
+  // endpoint server-side; keep the UI on the matching page.
+  useEffect(() => {
+    if (!authLoading && passwordResetRequired && !pathname?.endsWith("/change-password")) {
+      router.replace(uiHref("change-password"));
+    }
+  }, [authLoading, passwordResetRequired, pathname, router]);
 
   if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;

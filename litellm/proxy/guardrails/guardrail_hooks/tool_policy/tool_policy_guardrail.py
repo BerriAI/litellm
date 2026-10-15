@@ -20,11 +20,14 @@ Configuration in proxy config YAML:
         mode: post_call
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import replayed_tool_search_tool_names
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -37,6 +40,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME: Final = "tool_policy"
+_REQUEST_DATA: Final = TypeAdapter(object)
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
 def _get_request_object_permission_ids(
@@ -106,7 +114,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
     ToolPolicyRegistry (synced from DB).
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Unpack[_CustomGuardrailOptions]) -> None:
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
@@ -128,15 +136,18 @@ class ToolPolicyGuardrail(CustomGuardrail):
         """
         if input_type == "request":
             tools: Final = inputs.get("tools") or []
-            tool_names = [
+            function_tool_names: Final = [
                 t["function"]["name"]
                 for t in tools
                 if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
             ]
-            if not tool_names:
-                route: Final = _get_request_route_from_data(request_data)
-                if route:
-                    tool_names = extract_request_tool_names(route, request_data)
+            route: Final = _get_request_route_from_data(request_data)
+            replayed_tool_names: Final = replayed_tool_search_tool_names(_REQUEST_DATA.validate_python(request_data))
+            tool_names = (
+                extract_request_tool_names(route, request_data)
+                if route and not function_tool_names
+                else [*function_tool_names, *replayed_tool_names]
+            )
         else:
             tool_calls: Final = inputs.get("tool_calls") or []
             tool_names = []

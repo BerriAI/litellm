@@ -9,9 +9,11 @@ from .bytedance_transformation import (
     FalAIBytedanceDreaminaV31Config,
     FalAIBytedanceSeedreamV3Config,
 )
+from .flux_dev_transformation import FalAIFluxDevConfig
 from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 from .flux_schnell_transformation import FalAIFluxSchnellConfig
+from .gpt_image_2_transformation import FalAIGPTImage2Config
 from .ideogram_v3_transformation import FalAIIdeogramV3Config
 from .imagen4_transformation import FalAIImagen4Config
 from .nano_banana_transformation import FalAINanoBananaConfig
@@ -24,9 +26,11 @@ __all__ = [
     "FalAIBriaConfig",
     "FalAIBytedanceDreaminaV31Config",
     "FalAIBytedanceSeedreamV3Config",
+    "FalAIFluxDevConfig",
     "FalAIFluxProV11Config",
     "FalAIFluxProV11UltraConfig",
     "FalAIFluxSchnellConfig",
+    "FalAIGPTImage2Config",
     "FalAIIdeogramV3Config",
     "FalAIImageGenerationConfig",
     "FalAIImagen4Config",
@@ -49,7 +53,9 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     model_lower: Final = model.lower()
 
     # Map model names to their corresponding configuration classes
-    if "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
+    if "gpt-image-2" in model_lower:
+        return FalAIGPTImage2Config()
+    elif "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
         return FalAINanoBananaConfig()
     elif "imagen4" in model_lower or "imagen-4" in model_lower:
         return FalAIImagen4Config()
@@ -61,6 +67,8 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         if "ultra" in model_lower:
             return FalAIFluxProV11UltraConfig()
         return FalAIFluxProV11Config()
+    elif "flux/dev" in model_lower or "flux-dev" in model_lower:
+        return FalAIFluxDevConfig()
     elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
         return FalAIFluxSchnellConfig()
     elif "bytedance/seedream" in model_lower:

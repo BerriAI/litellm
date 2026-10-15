@@ -5,14 +5,21 @@ import type { Table } from "@tanstack/react-table";
 import { Check, Columns3 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 
 interface DataTableViewOptionsProps<TData> {
   table: Table<TData>;
   label?: string;
+  iconOnly?: boolean;
   className?: string;
 }
 
-export function DataTableViewOptions<TData>({ table, label = "View", className }: DataTableViewOptionsProps<TData>) {
+export function DataTableViewOptions<TData>({
+  table,
+  label = "View",
+  iconOnly = false,
+  className,
+}: DataTableViewOptionsProps<TData>) {
   const hideableColumns = table.getAllLeafColumns().filter((column) => column.getCanHide());
 
   if (hideableColumns.length === 0) {
@@ -23,14 +30,30 @@ export function DataTableViewOptions<TData>({ table, label = "View", className }
     <Menu.Root>
       <Menu.Trigger
         render={
-          <Button variant="outline" size="sm" className={className} data-testid="view-options-trigger">
-            <Columns3 />
-            {label}
-          </Button>
+          iconOnly ? (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={label}
+              title={label}
+              className={cn(
+                "text-muted-foreground/60 hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground",
+                className,
+              )}
+              data-testid="view-options-trigger"
+            >
+              <Columns3 />
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" className={className} data-testid="view-options-trigger">
+              <Columns3 />
+              {label}
+            </Button>
+          )
         }
       />
       <Menu.Portal>
-        <Menu.Positioner side="bottom" align="end" sideOffset={4} className="isolate z-50">
+        <Menu.Positioner side="bottom" align="end" sideOffset={4} className="isolate z-popup">
           <Menu.Popup className="min-w-[12rem] rounded-md bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden">
             {hideableColumns.map((column) => (
               <Menu.CheckboxItem

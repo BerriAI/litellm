@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_tool_search_shape,
@@ -61,6 +63,16 @@ VERTEX_AI_MODELS = [
 
 @pytest.mark.skip(reason="stage red: Vertex rejects tool_search when deployment extra_headers inject context-1m beta; product/config")
 @pytest.mark.covers("llm.messages.vertex.tool_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_vertex_ai(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Vertex AI

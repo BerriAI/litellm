@@ -14,7 +14,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import ConfigDict, SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
@@ -32,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_envelope,
     open_refresh_envelope,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-signing:"
 _ENCRYPTION_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-encryption:"
@@ -92,7 +93,7 @@ def build_bridge_token_response(
 
     The producer mirror of :func:`resolve_bridge_envelope`: a thin, pure wrapper over
     :func:`mint_envelope` that returns the sealed envelope, or the mint error as a value
-    (an oversized grant) for the caller to map onto an OAuth error response.
+    for the caller to map onto an OAuth error response.
     """
     return mint_envelope(identity, grant, keys, now)
 
@@ -110,7 +111,7 @@ def build_bridge_refresh_token_response(
     return mint_refresh_envelope(identity, refresh, keys, now)
 
 
-class BridgeRefreshOpened(BaseModel):
+class BridgeRefreshOpened(LiteLLMBaseModel):
     """A valid refresh envelope presented to the token endpoint: the identity to re-validate and renew
     under, and the upstream refresh grant to exchange."""
 
@@ -120,7 +121,7 @@ class BridgeRefreshOpened(BaseModel):
     refresh: RefreshCredential
 
 
-class BridgeRefreshInvalid(BaseModel):
+class BridgeRefreshInvalid(LiteLLMBaseModel):
     """The presented refresh grant is not a valid refresh envelope for this server (not refresh-shaped,
     will not open, or minted for a different server); the token endpoint fails the refresh closed."""
 
@@ -158,14 +159,14 @@ def open_bridge_refresh_envelope(
     return BridgeRefreshOpened(identity=opened.identity, refresh=opened.refresh)
 
 
-class NotBridgeEnvelope(BaseModel):
+class NotBridgeEnvelope(LiteLLMBaseModel):
     """The bearer is not an envelope; admission continues on its normal path."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["not_bridge_envelope"] = "not_bridge_envelope"
 
 
-class BridgeEnvelopeAdmitted(BaseModel):
+class BridgeEnvelopeAdmitted(LiteLLMBaseModel):
     """A valid envelope: the identity to admit under and the full upstream ``Authorization``
     value (``token_type access_token``) to forward to the upstream MCP server."""
 
@@ -175,7 +176,7 @@ class BridgeEnvelopeAdmitted(BaseModel):
     upstream_authorization: SecretStr
 
 
-class BridgeEnvelopeInvalid(BaseModel):
+class BridgeEnvelopeInvalid(LiteLLMBaseModel):
     """The bearer is envelope-shaped but did not open (expired, tampered, wrong key);
     admission must fail closed rather than fall through to normal validation."""
 
@@ -239,5 +240,6 @@ def resolve_bridge_envelope(
     if opened.identity.server_id != expected_server_id:
         return BridgeEnvelopeInvalid()
     grant: Final = opened.grant
-    upstream_authorization: Final = f"{grant.token_type} {grant.access_token.get_secret_value()}"
+    authorization_scheme: Final = "Bearer" if grant.token_type.lower() == "bearer" else grant.token_type
+    upstream_authorization: Final = f"{authorization_scheme} {grant.access_token.get_secret_value()}"
     return BridgeEnvelopeAdmitted(identity=opened.identity, upstream_authorization=SecretStr(upstream_authorization))

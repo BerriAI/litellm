@@ -17,7 +17,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.proxy.common_utils.callback_utils import add_guardrail_scan_id
+from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -115,6 +116,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 "Content-Type": "application/json",
             },
             json=request_body,
+            timeout=self.timeout,
         )
 
         verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())
@@ -218,6 +220,13 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             metadata: Final = request_data.get("metadata") or {}
             request_data["metadata"] = metadata
             metadata["_openai_moderation_response"] = moderation_response.model_dump()
+            add_guardrail_scan_id(
+                request_data=request_data,
+                scan_id=moderation_response.id,
+                guardrail_name=self.guardrail_name,
+                provider=SupportedGuardrailIntegrations.OPENAI_MODERATION.value,
+                stage=GuardrailEventHooks.post_call if input_type == "response" else GuardrailEventHooks.pre_call,
+            )
 
         # Check if content is flagged and raise exception if needed
         self._check_moderation_result(moderation_response)

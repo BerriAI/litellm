@@ -2,9 +2,12 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,11 +17,20 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_PERPLEXITY_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = MappingProxyType({"X-Pplx-Integration": "litellm"})
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
 
 class PerplexityChatConfig(OpenAIGPTConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "perplexity"
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        return _PERPLEXITY_ATTRIBUTION_HEADERS
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
@@ -26,6 +38,13 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -72,7 +91,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -93,7 +112,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Extract and enhance usage with Perplexity-specific fields
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             self._enhance_usage_with_perplexity_fields(model_response, raw_response_json)
             self._add_citations_as_annotations(model_response, raw_response_json)
         except Exception as e:

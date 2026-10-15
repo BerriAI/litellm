@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -20,10 +21,13 @@ class _ConfigSyncPubSub(Protocol):
     def aclose(self) -> Awaitable[object]: ...
 
 
+ConfigSyncPubSub = _ConfigSyncPubSub
+
+
 class _ConfigSyncPubSubClient(Protocol):
     def publish(self, channel: str, message: str) -> Awaitable[int]: ...
 
-    def pubsub(self) -> _ConfigSyncPubSub: ...
+    def pubsub(self) -> ConfigSyncPubSub: ...
 
 
 CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
@@ -54,6 +58,7 @@ _CONFIG_SYNCED_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "litellm_ssoconfig",
         "litellm_cacheconfig",
         "litellm_configoverrides",
+        "litellm_uisettings",
     }
 )
 
@@ -80,20 +85,14 @@ def config_sync_channel(redis_cache: "RedisCache") -> str:
     return f"{redis_cache.namespace}:{CONFIG_SYNC_CHANNEL}"
 
 
-def _raw_async_client(redis_cache: "RedisCache") -> object:
-    return cast(  # cast-ok: redis-py generics leave the client type partially unknown
-        object,
-        redis_cache.init_async_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
+def pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
+    return cast(  # cast-ok: protocol view of the pub/sub-capable async redis client
+        _ConfigSyncPubSubClient,
+        redis_cache.init_pubsub_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
     )
 
 
-def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient | None:
-    from redis.asyncio import Redis
-
-    client: Final = _raw_async_client(redis_cache)
-    if isinstance(client, Redis):
-        return cast(_ConfigSyncPubSubClient, client)  # cast-ok: protocol view of the standalone redis client
-    return None
+_pubsub_capable_client: Final = pubsub_capable_client
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,13 +108,7 @@ async def publish_config_change(redis_cache: "RedisCache | None", object_type: s
     if redis_cache is None:
         return
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "config sync publish for %s skipped: cluster redis client has no pub/sub support",
-                object_type,
-            )
-            return
+        client: Final = pubsub_capable_client(redis_cache)
         await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
@@ -163,13 +156,14 @@ class _PublishOnWriteActions:
 
 
 def wrap_table_actions_for_config_sync(
-    actions: object,
+    actions: "TableActions[RowT_co]",
     table_name: str,
     publish: Callable[[str], Awaitable[None]] = publish_config_change_for_object_type,
-) -> object:
+) -> "TableActions[RowT_co]":
     if table_name not in _CONFIG_SYNCED_TABLE_NAMES:
         return actions
-    return _PublishOnWriteActions(actions=actions, object_type=table_name, publish=publish)
+    wrapped: Final = _PublishOnWriteActions(actions=actions, object_type=table_name, publish=publish)
+    return cast("TableActions[RowT_co]", wrapped)  # cast-ok: dynamic write-through proxy keeps the wrapped row type
 
 
 class ConfigSyncSubscriber:
@@ -234,13 +228,7 @@ class ConfigSyncSubscriber:
         backoff_seconds = self._backoff_initial_seconds
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "config sync subscriber disabled: cluster redis client has no pub/sub support; "
-                        "interval polling remains the only sync mechanism"
-                    )
-                    return
+                client = pubsub_capable_client(self._redis_cache)
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
@@ -259,7 +247,7 @@ class ConfigSyncSubscriber:
                 await self._sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, self._backoff_max_seconds)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
@@ -283,7 +271,7 @@ class ConfigSyncSubscriber:
         await self._sleep(seconds_until_next_resync)
 
     @staticmethod
-    async def _drain_pending(pubsub: _ConfigSyncPubSub) -> None:
+    async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
         while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
             pass
 
@@ -295,7 +283,7 @@ class ConfigSyncSubscriber:
                 verbose_proxy_logger.warning("config sync resync callback failed: %s", e)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
         try:
             await pubsub.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection

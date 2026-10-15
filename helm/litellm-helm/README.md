@@ -26,10 +26,10 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `replicaCount`              | The number of LiteLLM Proxy pods to be deployed                                                                                                                                                                                               | `1`                       |
 | `masterkeySecretName`       | The name of the Kubernetes Secret that contains the Master API Key for LiteLLM. If not specified, use the generated secret name.                                                                                                              | N/A                       |
 | `masterkeySecretKey`        | The key within the Kubernetes Secret that contains the Master API Key for LiteLLM. If not specified, use `masterkey` as the key.                                                                                                              | N/A                       |
-| `masterkey`                 | The Master API Key for LiteLLM. If not specified, a random key in the `sk-...` format is generated.                                                                                                                                           | N/A                       |
+| `masterkey`                 | The Master API Key for LiteLLM. If not specified, a random key in the `sk-...` format is generated on first install and reused on upgrades. | N/A                       |
 | `environmentSecrets`        | An optional array of Secret object names. The keys and values in these secrets will be presented to the LiteLLM proxy pod as environment variables. See below for an example Secret object.                                                   | `[]`                      |
 | `environmentConfigMaps`     | An optional array of ConfigMap object names. The keys and values in these configmaps will be presented to the LiteLLM proxy pod as environment variables. See below for an example Secret object.                                             | `[]`                      |
-| `image.repository`          | LiteLLM Proxy image repository                                                                                                                                                                                                                | `docker.litellm.ai/berriai/litellm` |
+| `image.repository`          | LiteLLM Proxy image repository                                                                                                                                                                                                                | `ghcr.io/berriai/litellm` |
 | `image.pullPolicy`          | LiteLLM Proxy image pull policy                                                                                                                                                                                                               | `IfNotPresent`            |
 | `image.tag`                 | Overrides the image tag whose default the latest version of LiteLLM at the time this chart was published.                                                                                                                                     | `""`                      |
 | `imagePullSecrets`          | Registry credentials for the LiteLLM and initContainer images.                                                                                                                                                                                | `[]`                      |
@@ -212,6 +212,8 @@ service, the **Proxy Endpoint** should be set to `http://<RELEASE>-litellm:4000`
 The **Proxy Key** is the value specified for `masterkey` or, if a `masterkey`
 was not provided to the helm command line, the `masterkey` is a randomly
 generated string in the `sk-...` format stored in the `<RELEASE>-litellm-masterkey` Kubernetes Secret.
+The key is generated once on the first install; later `helm upgrade` runs reuse the
+value already in that Secret, so upgrading never rotates the master key.
 
 ```bash
 kubectl -n litellm get secret <RELEASE>-litellm-masterkey -o jsonpath="{.data.masterkey}"
@@ -223,3 +225,9 @@ At the time of writing, the Admin UI is unable to add models. This is because
 it would need to update the `config.yaml` file which is a exposed ConfigMap, and
 therefore, read-only. This is a limitation of this helm chart, not the Admin UI
 itself.
+
+## Connect Lens
+
+`lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+
+Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published

@@ -21,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Result,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    DEFAULT_CREDENTIAL_HEADER,
     Ambient,
     ApiKeyConfig,
     ApiKeySource,
@@ -35,7 +36,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientCredentialsConfig,
     ClientSecretAuth,
     CredError,
+    HeaderCarrier,
     IdJagConfig,
+    IdJagResourceClient,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -45,9 +48,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
     parse_auth_spec_kind,
+    validate_header_name,
 )
 
 __all__ = [
+    "DEFAULT_CREDENTIAL_HEADER",
     "Ambient",
     "ApiKeyConfig",
     "ApiKeySource",
@@ -63,7 +68,9 @@ __all__ = [
     "ClientSecretAuth",
     "CredError",
     "Error",
+    "HeaderCarrier",
     "IdJagConfig",
+    "IdJagResourceClient",
     "NoOpAuth",
     "NoneConfig",
     "Ok",
@@ -78,4 +85,5 @@ __all__ = [
     "TokenExchangeConfig",
     "UpstreamCredentialProvider",
     "parse_auth_spec_kind",
+    "validate_header_name",
 ]

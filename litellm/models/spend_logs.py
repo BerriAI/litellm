@@ -33,6 +33,8 @@ class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     requester_ip_address: str | None = None
     messages: str | list | dict | None
     response: str | list | dict | None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):

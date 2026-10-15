@@ -69,7 +69,7 @@ describe("MCPSemanticFilterTestPanel", () => {
 
   it("should enable the Test Filter button when testQuery is set and filter is enabled", () => {
     render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query" })} />);
-    expect(screen.getByRole("button", { name: /test filter/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /test filter/i })).toBeEnabled();
   });
 
   it("should call onTest when the Test Filter button is clicked", async () => {
@@ -151,7 +151,8 @@ describe("MCPSemanticFilterTestPanel", () => {
 
   it("should show the curl command in the API Usage tab", async () => {
     const user = userEvent.setup();
-    const curlCommand = "curl --location 'http://localhost:4000/v1/responses' --header 'Authorization: Bearer sk-1234'";
+    const curlCommand =
+      'curl --location "http://localhost:4000/v1/responses" --header "Authorization: Bearer $LITELLM_MASTER_KEY"';
     render(<MCPSemanticFilterTestPanel {...buildProps({ curlCommand })} />);
 
     await user.click(screen.getByRole("tab", { name: "API Usage" }));

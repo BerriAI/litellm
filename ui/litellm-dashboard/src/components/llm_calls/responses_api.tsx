@@ -1,8 +1,11 @@
 import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
-import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
+import { toast } from "@/lib/toast";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
+import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -83,6 +86,7 @@ export async function makeOpenAIResponsesRequest(
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
   onTotalLatency?: (latency: number) => void,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -98,12 +102,9 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
+  const mcpBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new openai.OpenAI({
     apiKey: accessToken,
@@ -115,6 +116,7 @@ export async function makeOpenAIResponsesRequest(
   try {
     const startTime = Date.now();
     let firstTokenReceived = false;
+    let servedFromResponseCache = false;
 
     // Format messages for the API
     const formattedInput = messages.map((message) => {
@@ -144,7 +146,7 @@ export async function makeOpenAIResponsesRequest(
         tools.push({
           type: "mcp",
           server_label: "litellm",
-          server_url: `${proxyBaseUrl}/mcp`,
+          server_url: `${mcpBaseUrl}/mcp`,
           require_approval: "never",
         });
       } else {
@@ -158,7 +160,7 @@ export async function makeOpenAIResponsesRequest(
             tools.push({
               type: "mcp",
               server_label: toolsetName,
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
+              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
               require_approval: "never",
             });
           } else {
@@ -171,7 +173,7 @@ export async function makeOpenAIResponsesRequest(
             tools.push({
               type: "mcp",
               server_label: routeName, // unique per request — collisions cause silent tool-routing failures
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
+              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
               require_approval: "never",
               ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
             });
@@ -201,7 +203,15 @@ export async function makeOpenAIResponsesRequest(
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create({ ...requestBody, stream: streamingEnabled }, { signal });
+    const response = streamingEnabled
+      ? await (client as any).responses.create({ ...requestBody, stream: true }, { signal })
+      : await (async () => {
+          const nonStreamingResponse = await (client as any).responses
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return nonStreamingResponse.data;
+        })();
     const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";
@@ -290,11 +300,20 @@ export async function makeOpenAIResponsesRequest(
               completionTokens: usage.output_tokens,
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
+              ...extractPromptCacheTokens(usage),
+              ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
             };
 
             // Add reasoning tokens if available
-            if (usage.completion_tokens_details?.reasoning_tokens) {
-              usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            const reasoningTokens =
+              usage.output_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens;
+            if (reasoningTokens) {
+              usageData.reasoningTokens = reasoningTokens;
+            }
+
+            const parsedCost = parseUsageCost(usage.cost);
+            if (parsedCost !== undefined) {
+              usageData.cost = parsedCost;
             }
 
             onUsageData(usageData, mcpToolUsed);
@@ -311,9 +330,7 @@ export async function makeOpenAIResponsesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-      );
+      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

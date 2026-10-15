@@ -1,9 +1,10 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -11,6 +12,7 @@ from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.types.videos.main import CharacterObject as _CharacterObject
     from litellm.types.videos.main import VideoObject as _VideoObject
 
@@ -91,6 +93,14 @@ class BaseVideoConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
+    def use_multipart_form_data(self) -> bool:
+        """
+        Whether video create requests without files must still be sent as
+        multipart/form-data (the encoding the OpenAI SDK always uses for
+        /videos), instead of falling back to JSON.
+        """
+        return False
+
     @abstractmethod
     def transform_video_create_request(
         self,
@@ -135,24 +145,35 @@ class BaseVideoConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
-        pass
+        """
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            client: The client that served the request, for providers that download
+                the video from a second URL instead of reading the response body
+        """
 
     async def async_transform_video_content_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         """
         Async transform video content download response to bytes.
         Optional method - providers can override if they need async transformations
         (e.g., RunwayML for downloading video from CloudFront URL).
 
-        Default implementation falls back to sync transform_video_content_response.
+        Default implementation falls back to sync transform_video_content_response,
+        which takes the sync client, so providers that download through the client
+        have to override this method to receive the async one.
 
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
+            client: The async client that served the request
 
         Returns:
             Video content as bytes
@@ -171,7 +192,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request into a URL and data
@@ -198,7 +219,7 @@ class BaseVideoConfig(ABC):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request into a URL and params
@@ -260,8 +281,23 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         pass
+
+    async def async_transform_video_status_retrieve_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> VideoObject:
+        """Async transform video status retrieve response."""
+        return self.transform_video_status_retrieve_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     def transform_video_create_character_request(
         self,
@@ -332,14 +368,18 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
-        prefetched_source_data: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        video_file: FileContent | None = None,
+        extra_body: dict[str, object] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
-        Transform the video edit request into a URL and JSON data.
+        Transform the video edit request into a URL plus either JSON data or
+        multipart form fields and files.
 
         Returns:
-            Tuple[str, Dict]: (url, data) for the POST request
+            tuple[str, Mapping[str, object], RequestFiles | None]: (url, data,
+            files). When files is None the handler sends data as JSON; otherwise
+            data holds the form fields and files holds the uploaded source video.
         """
         raise NotImplementedError("video edit is not supported for this provider")
 
@@ -360,7 +400,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video extension request into a URL and JSON data.

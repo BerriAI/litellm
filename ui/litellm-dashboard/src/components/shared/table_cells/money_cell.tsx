@@ -9,15 +9,23 @@ interface MoneyCellProps {
   showZero?: boolean;
 }
 
+const placeholderClassName = "block w-full whitespace-nowrap text-right tabular-nums text-muted-foreground";
+const moneyClassName = "block w-full whitespace-nowrap text-right tabular-nums";
+
 export function MoneyCell({ value, decimals = 4, emptyText = "-", showZero = false }: MoneyCellProps) {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return <span className="text-muted-foreground">{emptyText}</span>;
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return <span className={placeholderClassName}>{emptyText}</span>;
   }
-  if (value === 0) {
-    if (!showZero) {
-      return <span className="text-muted-foreground">-</span>;
-    }
-    return <span className="whitespace-nowrap">{`$${formatNumberWithCommas(0, decimals, false, true)}`}</span>;
+  if (value === 0 && !showZero) {
+    return <span className={placeholderClassName}>-</span>;
   }
-  return <span className="whitespace-nowrap">{getSpendString(value, decimals)}</span>;
+
+  const formattedValue =
+    value === 0 ? `$${formatNumberWithCommas(0, decimals, false, true)}` : getSpendString(value, decimals);
+
+  return (
+    <span data-slot="money-cell" className={moneyClassName}>
+      {formattedValue}
+    </span>
+  );
 }

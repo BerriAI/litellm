@@ -2,9 +2,11 @@
 Repository classes for database operations.
 """
 
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
@@ -28,6 +30,8 @@ from litellm.repositories.table_repositories import (
     ClaudeCodePluginRepository,
     ConfigOverridesRepository,
     DailyGuardrailMetricsRepository,
+    DailyGuardrailUsageUnitsRepository,
+    DailyModelUsageRepository,
     DailyPolicyMetricsRepository,
     DailyTagSpendRepository,
     DailyToolSpendRepository,
@@ -39,7 +43,6 @@ from litellm.repositories.table_repositories import (
     HealthCheckRepository,
     InvitationLinkRepository,
     JWTKeyMappingRepository,
-    ManagedFileRepository,
     ManagedObjectRepository,
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
@@ -70,10 +73,14 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
+    BudgetCascadeUnitOfWork,
+    BudgetWindowWrites,
     KeySpendResetWrites,
+    LinkedSpendResetWrites,
     SpendResetUnitOfWork,
     TeamSpendResetWrites,
     UserSpendResetWrites,
+    budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -87,14 +94,19 @@ __all__ = [
     "AdaptiveRouterStateRepository",
     "AgentsRepository",
     "AuditLogRepository",
+    "AutoRouterSessionRepository",
     "BatchTable",
+    "BudgetCascadeUnitOfWork",
     "BudgetRepository",
+    "BudgetWindowWrites",
     "CacheConfigRepository",
     "ClaudeCodePluginRepository",
     "ConfigOverridesRepository",
     "ConfigRepository",
     "CredentialsRepository",
     "DailyGuardrailMetricsRepository",
+    "DailyGuardrailUsageUnitsRepository",
+    "DailyModelUsageRepository",
     "DailyPolicyMetricsRepository",
     "DailyTagSpendRepository",
     "DailyToolSpendRepository",
@@ -107,6 +119,7 @@ __all__ = [
     "InvitationLinkRepository",
     "JWTKeyMappingRepository",
     "KeySpendResetWrites",
+    "LinkedSpendResetWrites",
     "MCPServerRepository",
     "MCPToolsetRepository",
     "MCPUserCredentialsRepository",
@@ -149,5 +162,6 @@ __all__ = [
     "WorkflowEventRepository",
     "WorkflowMessageRepository",
     "WorkflowRunRepository",
+    "budget_cascade_unit_of_work",
     "spend_reset_unit_of_work",
 ]

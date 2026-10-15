@@ -1,18 +1,41 @@
 import hashlib
 import json
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
-from litellm._logging import verbose_logger
+import litellm
+from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
-from litellm.types.router import CredentialLiteLLMParams
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.types.router import (
+    CredentialLiteLLMParams,
+    Deployment,
+    FallbackSkipReason,
+    LiteLLM_Params,
+    SkippedFallbackTarget,
+)
+from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
+
+_V = TypeVar("_V")
+
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
-def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
+def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
+    return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     if request_kwargs is None:
         return False
     metadata_value: Final = request_kwargs.get("metadata")
@@ -21,6 +44,21 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
     user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+
+
+_is_proxy_admin_request = is_proxy_admin_request
+
+
+def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
+    """The caller's team id, from whichever metadata bucket this surface writes to."""
+    if request_kwargs is None:
+        return None
+    for bucket_name in ("metadata", "litellm_metadata"):
+        bucket = request_kwargs.get(bucket_name)
+        team_id = bucket.get("user_api_key_team_id") if isinstance(bucket, Mapping) else None
+        if isinstance(team_id, str) and team_id:
+            return team_id
+    return None
 
 
 def resolve_model_group_alias(model_group_alias: object, model: str) -> str | None:
@@ -44,6 +82,30 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
+def resolve_served_model(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+) -> str:
+    """Model the request preparation serves for `model`.
+
+    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
+    """
+    global_aliases: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
+    )
+    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
+    after_global: Final = global_target if isinstance(global_target, str) else model
+    key_alias_mapping: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
+    )
+    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
+    after_key: Final = key_target if isinstance(key_target, str) else after_global
+    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
+    return router_target if router_target is not None else after_key
+
+
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -58,6 +120,82 @@ def truncate_fallback_error_detail(detail: str) -> str:
         return detail
     dropped: Final = len(detail) - ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
     return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
+
+
+def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
+    """User-facing explanation appended when a request fails and no fallback chain matches its model group."""
+    requested: Final = " -> ".join(lookup_groups)
+    configured: Final = tuple(dict.fromkeys(key for entry in fallbacks for key in entry))
+    configured_text: Final = (
+        f" Fallbacks are configured for: {', '.join(configured)}." if configured else " No fallbacks are configured."
+    )
+    return (
+        f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
+        f"for it, so the request was not retried on another model.{configured_text}"
+        " Add a fallbacks entry for that model group (Router fallbacks or proxy router_settings.fallbacks)"
+        " to retry on another model."
+    )
+
+
+def format_fallback_outcome_message(
+    model_group: str | None,
+    fallback_model_group: Sequence[object] | None,
+    fallback_failure_detail: str,
+    skipped: Sequence[SkippedFallbackTarget] = (),
+) -> str:
+    """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
+    lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
+    if not fallback_model_group:
+        return f"{lead} No fallback was attempted."
+
+    def fallback_target_model_group(target: object) -> str | None:
+        if isinstance(target, str):
+            return target
+        if not isinstance(target, Mapping):
+            return None
+        model: Final = target.get("model")
+        return model if isinstance(model, str) else None
+
+    skipped_targets: Final = frozenset(target.target for target in skipped)
+    attempted_targets: Final = tuple(
+        target for target in fallback_model_group if fallback_target_model_group(target) not in skipped_targets
+    )
+    not_authorized_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.NOT_AUTHORIZED)
+    )
+    over_budget_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
+    )
+    attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
+    not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
+    over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    attempted_failure: Final = (
+        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        if fallback_failure_detail and attempted_targets
+        else ()
+    )
+    not_authorized_sentence: Final = (
+        (
+            f"Fallback to {not_authorized_text} was skipped because the caller is not authorized to call "
+            f"{'it' if len(not_authorized_targets) == 1 else 'them'}.",
+        )
+        if not_authorized_targets
+        else ()
+    )
+    over_budget_sentence: Final = (
+        (
+            f"Fallback to {over_budget_text} was skipped because the caller is over budget for "
+            f"{'it' if len(over_budget_targets) == 1 else 'them'}.",
+        )
+        if over_budget_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    if sentences:
+        return f"{lead} {' '.join(sentences)}"
+
+    targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
+    return f"{lead} Fallback model group(s) configured: {targets}."
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -107,8 +245,8 @@ def filter_team_based_models(
 
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-    request_team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
-    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+    request_team_id: Final = get_request_team_id(request_kwargs)
+    if request_team_id is None and is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )
@@ -210,3 +348,140 @@ def filter_web_search_deployments(
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
+
+
+# Credential params that only one provider family reads, paired with the providers
+# that read them. A deployment carrying them while resolving elsewhere is almost
+# always a missing route prefix: `model: claude-sonnet-5` with `aws_region_name`
+# set resolves to the first-party Anthropic API, silently ignores the AWS
+# credentials, and 401s at request time.
+_AWS_PROVIDERS: Final = frozenset(
+    provider.value for provider in LlmProviders if provider.value.startswith(("bedrock", "sagemaker"))
+)
+_VERTEX_PROVIDERS: Final = frozenset(
+    provider.value for provider in LlmProviders if provider.value.startswith("vertex_ai")
+)
+
+PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "aws_access_key_id": _AWS_PROVIDERS,
+        "aws_profile_name": _AWS_PROVIDERS,
+        "aws_region_name": _AWS_PROVIDERS,
+        "aws_role_name": _AWS_PROVIDERS,
+        "aws_secret_access_key": _AWS_PROVIDERS,
+        "aws_session_name": _AWS_PROVIDERS,
+        "aws_session_token": _AWS_PROVIDERS,
+        "aws_web_identity_token": _AWS_PROVIDERS,
+        "vertex_credentials": _VERTEX_PROVIDERS,
+        "vertex_location": _VERTEX_PROVIDERS,
+        "vertex_project": _VERTEX_PROVIDERS,
+    }
+)
+
+
+def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | None:
+    """
+    The provider the router hands a deployment's generic SDK call, or None when it cannot be resolved.
+
+    A model that carries its own provider prefix keeps that prefix even where get_llm_provider
+    would resolve it to a sibling provider (azure_ai/<openai model> on an Azure OpenAI host
+    resolves to azure): the SDK call still receives the prefixed model, and an explicit provider
+    that contradicts the prefix makes get_llm_provider re-prefix it into a deployment name that
+    does not exist upstream.
+    """
+    declared: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(declared, str) and declared:
+        return declared
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    prefix: Final = model.split("/", 1)[0]
+    if "/" in model and prefix in litellm.provider_list:
+        return prefix
+    try:
+        _, inferred, _, _ = get_llm_provider(model=model)
+    except BadRequestError:
+        return None
+    return inferred
+
+
+PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo.__annotations__)
+
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def is_model_capability_field(name: str) -> bool:
+    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (
+        name.startswith("supports_") and name in GetModelCostMap.loaded_model_cost_map_fields()
+    )
+
+
+def without_model_capability_flags(deployment: Deployment) -> Deployment:
+    flags: Final = frozenset(
+        key for key in (deployment.litellm_params.model_extra or {}) if is_model_capability_field(key)
+    )
+    if not flags:
+        return deployment
+    declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump())
+    served_params: Final = {key: value for key, value in declared_params.items() if key not in flags}
+    return deployment.model_copy(update={"litellm_params": LiteLLM_Params.model_validate(served_params)})
+
+
+def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    flags: Final = sorted(
+        key for key, value in litellm_params.items() if value is not None and is_model_capability_field(key)
+    )
+    if not flags:
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets {flags} under litellm_params, where litellm ignores them and never "
+        "sends them to the provider. Move them under model_info for litellm to use them."
+    )
+    verbose_router_logger.warning(warning)
+    return warning
+
+
+def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    """
+    Warn when a deployment carries one provider's credentials but resolves to another.
+
+    Returns the warning text (for tests), or None when the deployment is consistent
+    or its provider cannot be resolved. Never raises: a deployment litellm cannot
+    classify is left alone rather than blocking router startup.
+
+    Only inline credential params are examined. A deployment that sources them
+    through ``litellm_credential_name`` resolves them after registration, so it
+    carries none of these keys here and is left alone rather than warned about
+    on incomplete information.
+    """
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    scoped: Final = tuple(param for param in PROVIDER_SCOPED_CREDENTIAL_PARAMS if litellm_params.get(param) is not None)
+    if not scoped:
+        return None
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    try:
+        _, resolved_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+    except BadRequestError:
+        return None
+    mismatched: Final = sorted(
+        param for param in scoped if resolved_provider not in PROVIDER_SCOPED_CREDENTIAL_PARAMS[param]
+    )
+    if not mismatched:
+        return None
+    expected: Final = sorted(
+        {provider for param in mismatched for provider in PROVIDER_SCOPED_CREDENTIAL_PARAMS[param]}
+    )
+    warning: Final = (
+        f"Deployment '{model_name}' sets {mismatched} but 'model={model}' resolves to provider "
+        f"'{resolved_provider}', which ignores them. Those params are read by {expected}, so this is "
+        f"usually a missing route prefix (e.g. '{expected[0]}/{model}'); as written the request goes to "
+        f"'{resolved_provider}' and will fail on that provider's credentials."
+    )
+    verbose_router_logger.warning(warning)
+    return warning

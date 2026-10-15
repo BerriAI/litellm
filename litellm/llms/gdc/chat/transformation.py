@@ -6,11 +6,43 @@ import json
 import os
 import re
 import threading
-from typing import Any, Final
+from collections.abc import Callable
+from typing import Final, Protocol
 from urllib.parse import urlsplit
+
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.types.llms.openai import AllMessageValues
+
+
+class _OpenAIGPTConfigOptions(TypedDict, total=False):
+    """The sampling defaults ``OpenAIGPTConfig.__init__`` accepts and stashes on the class."""
+
+    frequency_penalty: ReadOnly[int | None]
+    function_call: ReadOnly[str | dict[str, object] | None]
+    functions: ReadOnly[list[object] | None]
+    logit_bias: ReadOnly[dict[str, object] | None]
+    max_tokens: ReadOnly[int | None]
+    n: ReadOnly[int | None]
+    presence_penalty: ReadOnly[int | None]
+    stop: ReadOnly[str | list[object] | None]
+    temperature: ReadOnly[int | None]
+    top_p: ReadOnly[int | None]
+    response_format: ReadOnly[dict[str, object] | None]
+
+
+class _GDCHAudienceCredentials(Protocol):
+    """A GDCH service account credential already bound to an audience, ready to mint a bearer token."""
+
+    @property
+    def valid(self) -> bool: ...
+
+    @property
+    def token(self) -> str: ...
+
+    def refresh(self, request: object) -> None: ...
 
 
 class GDCGeminiConfig(OpenAILikeChatConfig):
@@ -18,10 +50,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     _GDCH_CREDENTIAL_TYPE: Final[str] = "gdch_service_account"
     _PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_-]+$")
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Unpack[_OpenAIGPTConfigOptions]) -> None:
         super().__init__(**kwargs)
         self._creds_lock = threading.Lock()
-        self._gdch_creds_cache: dict = {}
+        self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -110,7 +142,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
         return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
 
-    def _read_env_bool(self, val: Any, env_var: str, default: bool = True) -> bool | str:
+    def _read_env_bool(self, val: bool | str | None, env_var: str, default: bool = True) -> bool | str:
         def _parse(s: str) -> bool | str:
             cleaned: Final = s.strip().lower()
             if cleaned in ("false", "0", "no", "off"):
@@ -129,7 +161,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             return default
         return _parse(_env_val)
 
-    def _fetch_auth(self, gdch_creds: Any, ssl_verify: bool | str) -> None:
+    def _fetch_auth(self, gdch_creds: _GDCHAudienceCredentials, ssl_verify: bool | str) -> None:
         import requests
         from google.auth.transport import requests as auth_requests
 
@@ -138,13 +170,24 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         auth_request: Final = auth_requests.Request(session=auth_session)
         gdch_creds.refresh(auth_request)
 
-    def _cached_fetch_token(self, creds: Any, audience: str, ssl_verify: bool | str, api_key: str | None = None) -> str:
+    def _with_gdch_audience(self, creds: object, audience: str) -> _GDCHAudienceCredentials:
+        """The credential rebound to ``audience``, which GDCH requires before a token refresh."""
+        bind_audience: Final[Callable[[str], _GDCHAudienceCredentials] | None] = getattr(
+            creds, "with_gdch_audience", None
+        )
+        if bind_audience is None:
+            raise AttributeError("GDC credentials must expose with_gdch_audience to be bound to a request audience")
+        return bind_audience(audience)
+
+    def _cached_fetch_token(
+        self, creds: object, audience: str, ssl_verify: bool | str, api_key: str | None = None
+    ) -> str:
         # Key cache by both audience and credential identity to prevent cross-caller contamination
         cache_key: Final = (audience.rstrip("/"), api_key or str(id(creds)))
 
         with self._creds_lock:
             if cache_key not in self._gdch_creds_cache:
-                self._gdch_creds_cache[cache_key] = creds.with_gdch_audience(audience.rstrip("/"))
+                self._gdch_creds_cache[cache_key] = self._with_gdch_audience(creds, audience.rstrip("/"))
 
             gdch_creds: Final = self._gdch_creds_cache[cache_key]
 
@@ -155,7 +198,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
         return token
 
-    def _load_creds_from_key(self, api_key: str) -> tuple[Any, bool]:
+    def _load_creds_from_key(self, api_key: str) -> tuple[object | None, bool]:
         import google.auth
 
         try:
@@ -175,7 +218,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -230,7 +273,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             if self._read_env_bool(litellm_params.get("gdc_token_caching"), "GDC_TOKEN_CACHING", default=False):
                 token = self._cached_fetch_token(creds, audience, ssl_verify, api_key)
             else:
-                gdch_creds: Final = creds.with_gdch_audience(audience)
+                gdch_creds: Final = self._with_gdch_audience(creds, audience)
                 self._fetch_auth(gdch_creds, ssl_verify)
                 token = gdch_creds.token
             headers["Authorization"] = f"Bearer {token}"
@@ -252,7 +295,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[Any],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

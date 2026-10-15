@@ -62,11 +62,11 @@ interface WorkflowRunMessage {
 // ── design tokens ─────────────────────────────────────────────────────────────
 
 const STATUS_DOT: Record<RunStatus, string> = {
-  pending: "bg-gray-400",
-  running: "bg-blue-500",
-  paused: "bg-amber-500",
-  completed: "bg-green-500",
-  failed: "bg-red-500",
+  pending: "bg-border",
+  running: "bg-info",
+  paused: "bg-warning",
+  completed: "bg-success",
+  failed: "bg-destructive",
 };
 
 const RUN_STATUS_OPTIONS: RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
@@ -79,10 +79,10 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 };
 
 const EVENT_COLOR: Record<string, { bar: string; text: string }> = {
-  "step.started": { bar: "border-green-300 bg-green-50", text: "text-green-600" },
-  "step.failed": { bar: "border-red-300 bg-red-50", text: "text-red-600" },
-  "hook.waiting": { bar: "border-amber-300 bg-amber-50", text: "text-amber-600" },
-  "hook.received": { bar: "border-blue-300 bg-blue-50", text: "text-blue-600" },
+  "step.started": { bar: "border-success/30 bg-success/10", text: "text-success" },
+  "step.failed": { bar: "border-destructive/30 bg-destructive/10", text: "text-destructive" },
+  "hook.waiting": { bar: "border-warning/30 bg-warning/10", text: "text-warning" },
+  "hook.received": { bar: "border-info/30 bg-info/10", text: "text-info" },
 };
 
 function eventStyle(type: string) {
@@ -122,7 +122,7 @@ function shortId(id: string): string {
 // ── status dot ────────────────────────────────────────────────────────────────
 
 const StatusDot: React.FC<{ status: RunStatus; className?: string }> = ({ status, className }) => (
-  <span className={cn("inline-block flex-none rounded-full", STATUS_DOT[status] ?? "bg-gray-400", className)} />
+  <span className={cn("inline-block flex-none rounded-full", STATUS_DOT[status] ?? "bg-border", className)} />
 );
 
 // ── truncated text value ──────────────────────────────────────────────────────
@@ -340,10 +340,10 @@ const GanttTimeline: React.FC<{
 // ── message row ───────────────────────────────────────────────────────────────
 
 const ROLE_COLOR: Record<string, string> = {
-  user: "text-blue-600",
-  assistant: "text-green-600",
+  user: "text-info",
+  assistant: "text-success",
   system: "text-violet-600",
-  tool_result: "text-amber-600",
+  tool_result: "text-warning",
 };
 
 const MessageRow: React.FC<{ msg: WorkflowRunMessage }> = ({ msg }) => (
