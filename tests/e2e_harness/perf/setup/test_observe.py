@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Final
 
-import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
 from setup.datastore import DbCounters
@@ -40,12 +39,12 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
     case: Final = replace(
         CASE,
         limits=(
-            Limit("gateway_added_seconds", percentile=50, max=0.5),
+            Limit("gateway_added_seconds", percentile=50, max=0.625),
             Limit("redis_calls_per_request", max=35),
         ),
     )
     observation: Final = Observation(
-        records=(served(0, 1.2), served(1, 1.3), served(2, 1.4)),
+        records=(served(0, 1.25), served(1, 1.5), served(2, 1.75)),
         mock_requests=(),
         guardrail_calls=(),
         rss_before=NO_RSS,
@@ -59,13 +58,11 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
     properties: Final = junit_properties(rows)
 
     assert len({name for name, _ in properties}) == len(properties)
-    assert dict(properties) == pytest.approx(
-        {
-            "perf_unexpected_status_count": 0.0,
-            "perf_gateway_added_seconds_p50": 0.3,
-            "perf_gateway_added_seconds_p50_limit": 0.5,
-            "perf_gateway_added_seconds_p99": 0.4,
-            "perf_postgres_calls_per_request": 10.0,
-            "perf_redis_calls_per_request_limit": 35.0,
-        }
-    )
+    assert dict(properties) == {
+        "perf_unexpected_status_count": 0.0,
+        "perf_gateway_added_seconds_p50": 0.5,
+        "perf_gateway_added_seconds_p50_limit": 0.625,
+        "perf_gateway_added_seconds_p99": 0.75,
+        "perf_postgres_calls_per_request": 10.0,
+        "perf_redis_calls_per_request_limit": 35.0,
+    }
