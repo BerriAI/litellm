@@ -22,7 +22,7 @@ def _cache(
     *,
     drop_params: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
-    return claude_prompt_cache(messages, tools, params or {}, drop_params=drop_params)
+    return claude_prompt_cache(messages, tools, params or {}, drop_params=drop_params, tool_history_as_text=False)
 
 
 def _resolved(
@@ -388,6 +388,85 @@ def test_a_message_level_breakpoint_on_a_tool_call_turn_without_content_takes_no
     result: Final = _resolved(messages, drop_params=True)
 
     assert list(result.messages)[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
+
+
+def test_a_breakpoint_on_assistant_text_read_before_a_one_hour_tool_call_mark_is_sent_as_one_hour():
+    messages: Final = [
+        {"role": "user", "content": "Look it up."},
+        {
+            "role": "assistant",
+            "content": "Checking.",
+            "prompt_cache_breakpoint": _EXPLICIT,
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {"name": "t", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "content": "blue"},
+    ]
+
+    result: Final = _resolved(messages)
+
+    assistant: Final = result.messages[1]
+    assert isinstance(assistant, dict)
+    assert assistant["cache_control"] == _ONE_HOUR
+    assert assistant["tool_calls"][0]["cache_control"] == _ONE_HOUR
+
+
+def test_a_message_level_breakpoint_on_a_developer_message_takes_no_slot_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "developer", "content": "rules", "prompt_cache_breakpoint": _EXPLICIT},
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert result.messages[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
+
+
+@pytest.mark.parametrize(
+    ("message_mark", "part_mark", "sent_message_mark", "sent_part"),
+    [
+        (
+            {"prompt_cache_breakpoint": _EXPLICIT},
+            {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+            {"cache_control": _EPHEMERAL},
+            _part("r1"),
+        ),
+        (
+            {"cache_control": _EPHEMERAL},
+            {"prompt_cache_breakpoint": _EXPLICIT},
+            {"cache_control": _EPHEMERAL},
+            _part("r1"),
+        ),
+        (
+            {"prompt_cache_breakpoint": _EXPLICIT},
+            {"cache_control": _EPHEMERAL},
+            {},
+            _part("r1", cache_control=_EPHEMERAL),
+        ),
+    ],
+)
+def test_a_tool_result_marked_at_both_levels_reaches_claude_with_one_mark(
+    message_mark: dict[str, object],
+    part_mark: dict[str, object],
+    sent_message_mark: dict[str, object],
+    sent_part: dict[str, object],
+):
+    messages: Final = [
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1", **part_mark)], **message_mark},
+    ]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages) == [
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), sent_part], **sent_message_mark},
+    ]
 
 
 def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():

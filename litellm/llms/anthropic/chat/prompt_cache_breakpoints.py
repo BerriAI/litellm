@@ -16,6 +16,7 @@ _Fields: TypeAlias = Mapping[str, object]
 _Mark: TypeAlias = Callable[[_Path, _Fields], _Fields]
 _Kind: TypeAlias = Literal["written", "explicit", "free"]
 _MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
+_TOOL_RESULT_ROLES: Final = ("tool", "function")
 _REQUEST: Final[_Path] = ("cache_control",)
 _CLAUDE_TTL_MARKS: Final = MappingProxyType(
     {
@@ -140,11 +141,34 @@ def _marked_blocks(message: _Fields, path: _Path, key: str, mark: _Mark) -> _Fie
     return {key: [_marked_block((*path, key, j), block, mark) for j, block in enumerate(blocks)]}
 
 
+def _without_breakpoint(block: object) -> object:
+    fields: Final = _fields(block)
+    return (
+        block if fields is None else {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    )
+
+
+def _with_one_tool_result_mark(message: _Fields) -> _Fields:
+    """Claude rejects a tool result marked both on the result and inside its content, so a ``cache_control`` the
+    client wrote at either level wins over every breakpoint at the other, and a breakpoint on the message wins over
+    the ones on its parts."""
+    parts: Final = _blocks(message.get("content"))
+    if message.get("role") not in _TOOL_RESULT_ROLES or parts is None:
+        return message
+    if message.get("prompt_cache_breakpoint") is not None and any(
+        (_fields(part) or {}).get("cache_control") is not None for part in parts
+    ):
+        return {key: value for key, value in message.items() if key != "prompt_cache_breakpoint"}
+    if message.get("prompt_cache_breakpoint") is None and message.get("cache_control") is None:
+        return message
+    return {**message, "content": [_without_breakpoint(part) for part in parts]}
+
+
 def _marked_message(index: int, message: object, mark: _Mark) -> object:
     fields: Final = _fields(message)
     if fields is None:
         return message
-    marked: Final = mark(("messages", index), fields)
+    marked: Final = mark(("messages", index), _with_one_tool_result_mark(fields))
     return {
         **marked,
         **_marked_blocks(marked, ("messages", index), "content", mark),
@@ -250,14 +274,13 @@ def _leading_system_count(messages: Sequence[object]) -> int:
 
 def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
     """Where Claude reads a mark: tool definitions, then the leading system messages it hoists, then every other
-    message in place, with a message-level mark on the message's last block."""
+    message in place, with a message-level mark on the message's text, after its content parts and before its tool
+    calls."""
     if path[0] == "tools":
         return (0, *(index for index in path if isinstance(index, int)))
     index: Final = int(path[1])
     group: Final = 1 if index < leading_system_count else 2
-    block: Final = (
-        (_MESSAGE_BLOCK_KEYS.index(str(path[2])), int(path[3])) if len(path) == 4 else (len(_MESSAGE_BLOCK_KEYS),)
-    )
+    block: Final = (1,) if len(path) == 2 else (0 if path[2] == "content" else 2, int(path[3]))
     return (group, index, *block)
 
 
@@ -265,15 +288,31 @@ def _tool_call_id(message: _Fields, index: int) -> object:
     return (_fields((_blocks(message.get("tool_calls")) or ())[index]) or {}).get("id")
 
 
-def _on_wire(path: _Path, messages: Sequence[object], tools: Sequence[object], unsent_call_ids: frozenset[str]) -> bool:
-    """Claude sends a message-level mark on string content, or on list content only for a tool result, a mark
-    under ``function`` only when the tool carries none of its own, and no tool_search call nobody answered."""
+def _is_tool_history(message: _Fields) -> bool:
+    role: Final = message.get("role")
+    return role in ("tool", "function") or (role == "assistant" and bool(message.get("tool_calls")))
+
+
+def _on_wire(
+    path: _Path,
+    messages: Sequence[object],
+    tools: Sequence[object],
+    unsent_call_ids: frozenset[str],
+    tool_history_as_text: bool,
+) -> bool:
+    """Claude sends a message-level mark on string content, or on list content only for a tool result, and none on
+    a developer message, which reaches it as a system message without one; a mark under ``function`` only when the
+    tool carries none of its own; no tool_search call nobody answered; and no mark on tool history the route sends
+    as text."""
     if path[0] == "tools":
         return len(path) == 2 or (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
     message: Final = _fields(messages[int(path[1])]) or {}
+    if tool_history_as_text and _is_tool_history(message):
+        return False
     if len(path) == 4:
         return path[2] != "tool_calls" or _tool_call_id(message, int(path[3])) not in unsent_call_ids
-    return isinstance(message.get("content"), str) or message.get("role") == "tool"
+    role: Final = message.get("role")
+    return role in _TOOL_RESULT_ROLES or (role != "developer" and isinstance(message.get("content"), str))
 
 
 def _ttl(cache_control: object) -> Literal["5m", "1h"]:
@@ -323,11 +362,13 @@ def claude_prompt_cache(
     params: _Fields,
     *,
     drop_params: bool,
+    tool_history_as_text: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` takes one of the
-    four. A request carrying no breakpoint is returned as written."""
+    four, and marks on tool history a ``tool_history_as_text`` route flattens take none. A request carrying no
+    breakpoint is returned as written."""
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
@@ -346,7 +387,7 @@ def claude_prompt_cache(
             _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None
-            and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids)
+            and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text)
         ),
         key=lambda mark: _wire_position(mark.path, leading_system_count),
     )

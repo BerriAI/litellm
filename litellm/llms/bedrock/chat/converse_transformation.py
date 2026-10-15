@@ -255,6 +255,14 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
+    def sends_tool_history_as_text(tools: object, non_default_params: Mapping[str, object]) -> bool:
+        return (
+            litellm.bedrock_neutralize_orphaned_tool_blocks
+            and not tools
+            and not any(map(non_default_params.__contains__, ("functions", "response_format", "web_search_options")))
+        )
+
+    @staticmethod
     def _neutralize_orphaned_tool_blocks(
         messages: list[AllMessageValues], optional_params: dict
     ) -> list[AllMessageValues]:

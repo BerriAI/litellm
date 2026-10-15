@@ -218,6 +218,7 @@ from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -5597,6 +5598,8 @@ def completion(
                     cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
                     non_default_params,
                     drop_params=claude_drop_params,
+                    tool_history_as_text=isinstance(provider_config, AmazonConverseConfig)
+                    and AmazonConverseConfig.sends_tool_history_as_text(tools, non_default_params),
                 ),
                 model=model,
                 llm_provider=custom_llm_provider,

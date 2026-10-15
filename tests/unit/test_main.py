@@ -672,6 +672,36 @@ def test_a_breakpoint_on_an_unanswered_tool_search_call_takes_no_slot_from_the_f
     assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
 
 
+def test_breakpoints_on_tool_history_converse_sends_as_text_take_no_slot_under_drop_params(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):
