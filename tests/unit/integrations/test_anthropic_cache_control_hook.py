@@ -4665,7 +4665,8 @@ def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_requ
     weather_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
     messages: Final = [
         cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
-        cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]}),
+        cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]}),
+        cast(AllMessageValues, _SEARCH_ANSWER),
         cast(AllMessageValues, weather_answer),
         cast(AllMessageValues, weather_answer),
     ]
@@ -4676,7 +4677,7 @@ def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_requ
     warnings_from_the_hook: Final = len(caplog.records)
     wire_marks: Final = _wire_cache_marks(messages)
 
-    assert (census, wire_marks) == (1, 1)
+    assert (census, wire_marks) == (2, 2)
     assert (warnings_from_the_hook, len(caplog.records)) == (0, 1)
 
 
@@ -4688,13 +4689,14 @@ def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_requ
         pytest.param(ChatCompletionMessage(role="assistant", content="Checking the weather"), id="openai_sdk_message"),
     ],
 )
-def test_cache_control_hook_counts_a_marked_tool_call_next_to_a_message_it_cannot_pair(
+def test_cache_control_hook_counts_marked_tool_calls_next_to_a_message_it_cannot_pair(
     monkeypatch: pytest.MonkeyPatch, stray_message: object
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
     messages: Final = [
         stray_message,
-        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]},
+        _SEARCH_ANSWER,
         {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
     ]
 
@@ -4703,7 +4705,7 @@ def test_cache_control_hook_counts_a_marked_tool_call_next_to_a_message_it_canno
         None, request_kwargs={"extra_body": {"messages": messages}}
     )
 
-    assert (census, envelope_census) == (1, 1)
+    assert (census, envelope_census) == (2, 2)
 
 
 @pytest.mark.parametrize("modify_params", [False, True])
@@ -4729,8 +4731,8 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
     messages: Final = [
         {"role": "system", "content": "You are a weather assistant."},
         {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
-        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL]},
+        _SEARCH_ANSWER,
         malformed,
         _SYSTEM_NOTE,
     ]

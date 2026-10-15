@@ -40,6 +40,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
     CacheControlMessageInjectionPoint,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicSystemMessageContent,
@@ -238,13 +239,22 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answ
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(messages: Sequence[object]) -> frozenset[str]:
+def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages: Sequence[object]) -> frozenset[str]:
     tool_calls: Final = itertools.chain.from_iterable(
         _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
     )
-    if not any(_attribute_or_key(tool_call, "cache_control") is not None for tool_call in tool_calls):
+    if not any(_is_marked_server_tool_call(tool_call) for tool_call in tool_calls):
         return frozenset()
     return tool_call_ids_answered_by_client(messages)
+
+
+def _is_marked_server_tool_call(tool_call: object) -> bool:
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    return (
+        isinstance(tool_call_id, str)
+        and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        and _attribute_or_key(tool_call, "cache_control") is not None
+    )
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -374,7 +384,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(processed_messages)
+        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+            processed_messages
+        )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
             processed_messages, answered_tool_ids=answered_tool_ids
         )
@@ -449,7 +461,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         message_list: Final = tuple(messages)
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(message_list)
+            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(message_list)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -541,7 +553,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(messages)
+            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
