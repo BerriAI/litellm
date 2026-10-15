@@ -29,7 +29,7 @@ export const AUTH_TYPES_REQUIRING_CREDENTIALS = [
 
 export interface DcrClient {
   readonly client_id: string;
-  readonly client_secret?: string;
+  readonly client_secret?: string | null;
 }
 
 export interface CreateServerUiState {

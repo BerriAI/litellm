@@ -1,0 +1,98 @@
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use rmcp::{
+    model::{ErrorCode, ErrorData},
+    service::ServiceError,
+};
+use serde_json::json;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    InvalidRequest(String),
+    #[error("User not allowed to access this MCP server or operation.")]
+    Forbidden,
+    #[error("{0}")]
+    Configuration(String),
+    #[error("MCP upstream request failed")]
+    Upstream(#[from] ServiceError),
+    #[error("MCP operation returned an unexpected result")]
+    UnexpectedResult,
+    #[error("MCP request cancelled")]
+    Cancelled,
+}
+
+impl Error {
+    pub fn into_mcp(self) -> ErrorData {
+        match self {
+            Self::Upstream(ServiceError::McpError(error)) => error,
+            Self::InvalidRequest(message) => ErrorData::invalid_params(message, None),
+            Self::Forbidden => ErrorData::new(ErrorCode(-32003), self.to_string(), None),
+            _ => ErrorData::internal_error(self.to_string(), None),
+        }
+    }
+}
+
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Upstream(_) => StatusCode::BAD_GATEWAY,
+            Self::Cancelled => StatusCode::REQUEST_TIMEOUT,
+            Self::Configuration(_) | Self::UnexpectedResult => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(json!({"detail": self.to_string()}))).into_response()
+    }
+}
+
+#[derive(thiserror::Error)]
+pub enum ConnectError {
+    #[error("MCP server {server}: {message}")]
+    Configuration { server: String, message: String },
+    #[error("could not resolve MCP credentials")]
+    Secret(#[from] litellm_secrets::Error),
+    #[error("could not start MCP child process")]
+    Process(#[from] std::io::Error),
+    #[error("could not initialize MCP upstream {server}")]
+    Initialize {
+        server: String,
+        #[source]
+        source: Box<rmcp::service::ClientInitializeError>,
+    },
+    #[error("MCP upstream {0} initialization timed out")]
+    Timeout(String),
+    #[error("MCP upstream startup cancelled")]
+    Cancelled,
+    #[error(transparent)]
+    Registry(#[from] Error),
+}
+
+impl std::fmt::Debug for ConnectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    fn startup_diagnostics_do_not_expose_upstream_details() {
+        let error = ConnectError::Initialize {
+            server: "docs".into(),
+            source: Box::new(rmcp::service::ClientInitializeError::ConnectionClosed(
+                "https://example.test/mcp?token=private-secret".into(),
+            )),
+        };
+        assert_eq!(
+            format!("{error:?}"),
+            "could not initialize MCP upstream docs"
+        );
+        assert!(std::error::Error::source(&error).is_some());
+    }
+}

@@ -1,15 +1,13 @@
-"""Declarative Rust/Python selection for routes with Rust integration.
+"""Ordered rollout policy for routes.
 
-Rules are static data matched top to bottom; the first match wins and a
-context with no matching rule stays on Python. Whether the Rust core can serve
-a specific request body is not decided here: that is Rust admission, which
-signals ``RustBridgeDeclined`` before any provider I/O.
+The first matching rule wins; unmatched contexts stay on Python. Native
+admission separately decides whether the selected implementation can execute.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
@@ -18,54 +16,56 @@ from litellm.rust_bridge.configuration import decision as _decision
 
 class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
+    EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
-
-
-class Delivery(Enum):
-    COMPLETED = auto()
-    STREAMING = auto()
-    WEBSOCKET = auto()
+    TOKEN_COUNTER = "token_counter"
+    TOKENIZER = "tokenizer"
 
 
 @dataclass(frozen=True, slots=True)
-class Context:
+class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
-    delivery: Delivery = Delivery.COMPLETED
 
 
 @dataclass(frozen=True, slots=True)
-class Rule:
+class RouteRule:
     route: Route
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
-    deliveries: frozenset[Delivery] | None = None
 
-    def matches(self, context: Context) -> bool:
+    def matches(self, context: RouteContext) -> bool:
         return (
             context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
-            and (self.deliveries is None or context.delivery in self.deliveries)
         )
 
 
-Rules: TypeAlias = tuple[Rule, ...]
+Rules: TypeAlias = tuple[RouteRule, ...]
 
 RULES: Final[Rules] = (
-    Rule(Route.OCR, Rollout.RUST_OPT_OUT),
-    Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic", "deepseek", "vertex_ai"})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 
 
-def rollout(context: Context, rules: Rules = RULES) -> Rollout:
-    return next((rule.rollout for rule in rules if rule.matches(context)), Rollout.PYTHON_ONLY)
+def rollout(context: RouteContext, rules: Rules | None = None) -> Rollout:
+    selected_rules: Final = RULES if rules is None else rules
+    return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
 
 
-def decision(context: Context, rules: Rules = RULES) -> Decision:
+def decision(context: RouteContext, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))

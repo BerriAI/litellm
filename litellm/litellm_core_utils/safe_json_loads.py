@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 
-def safe_json_loads(data: str, default: Any = None) -> Any:
+def safe_json_loads(data: str, default: object = None) -> Any:
     """
     Safely parse a JSON string. If parsing fails, return the default value (None by default).
     """

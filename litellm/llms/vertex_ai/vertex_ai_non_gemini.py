@@ -1,4 +1,3 @@
-import json
 import os
 import time
 from collections.abc import Callable
@@ -10,6 +9,12 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.vertex_ai.credentials_source import (
+    VertexCredentialsJson,
+    build_vertex_credentials,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -64,7 +69,7 @@ def _get_client_from_cache(client_cache_key: str):
     return litellm.in_memory_llm_clients_cache.get_cache(client_cache_key)
 
 
-def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object):
     litellm.in_memory_llm_clients_cache.set_cache(
         key=client_cache_key,
         value=vertex_llm_model,
@@ -132,11 +137,15 @@ def completion(
         if vertex_credentials is not None and isinstance(vertex_credentials, str):
             import google.oauth2.service_account
 
-            json_obj: Final = json.loads(vertex_credentials)
+            source: Final = load_vertex_credentials_source(vertex_credentials)
+            if not isinstance(source, VertexCredentialsJson):
+                raise_vertex_credentials_failure(source)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            creds = build_vertex_credentials(
+                source,
+                lambda info: google.oauth2.service_account.Credentials.from_service_account_info(
+                    info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                ),
             )
         else:
             creds, _ = google.auth.default(quota_project_id=vertex_project)

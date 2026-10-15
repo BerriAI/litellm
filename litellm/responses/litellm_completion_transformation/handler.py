@@ -5,6 +5,8 @@ Handler for transforming responses api requests to litellm.completion requests
 from collections.abc import Coroutine, Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -20,6 +22,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
+
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -106,6 +110,8 @@ class LiteLLMCompletionTransformationHandler:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
+                instructions=responses_api_request.get("instructions"),
+                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
 
         acompletion_args: Final = {}

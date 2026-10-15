@@ -15,13 +15,15 @@ reliability behavior.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
+from e2e_metadata import step
 from models import (
     CacheControl,
     ChatMessage,
@@ -42,7 +44,7 @@ REAL_KEY = "os.environ/OPENAI_API_KEY"
 CACHING_MODEL = "anthropic/claude-haiku-4-5"
 CACHING_KEY = "os.environ/ANTHROPIC_API_KEY"
 
-CONTENT_FILTERED_MODEL = "azure/gpt-5.4-nano"
+AZURE_MODEL = "azure/gpt-5.4-nano"
 AZURE_KEY = "os.environ/AZURE_API_KEY"
 AZURE_BASE = "os.environ/AZURE_API_BASE"
 AZURE_API_VERSION = "2024-10-21"
@@ -53,6 +55,7 @@ CONTENT_POLICY_PROMPT = (
 )
 
 COOLDOWN_SECONDS = 30.0
+REPLICA_PROPAGATION_SECONDS = 15.0
 
 # The smallest-context chat model OpenAI still serves (16385 tokens). A prompt
 # past that limit comes back as a real `context_length_exceeded` 400, which is
@@ -77,6 +80,7 @@ def cached_system_turn(marker: str) -> ChatMessage:
     return ChatMessage(role="system", content=[TextContentPart(text=filler, cache_control=CacheControl())])
 
 
+@step(f"Add a deployment named {{name}} that calls {REAL_MODEL} at an unreachable address")
 def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment pointing at an unreachable base, so every call to it
     fails with a real connection error the fallback can reroute around."""
@@ -85,6 +89,7 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step(f"Add a deployment named {{name}} that calls {REAL_MODEL} at an unreachable address and is never benched")
 def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
     return proxy.create_model(
         name,
@@ -92,17 +97,22 @@ def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> s
     )
 
 
+@step(f"Add a deployment named {{name}} that calls {REAL_MODEL} with a 1ms timeout")
 def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment with a 1ms deadline the real backend always exceeds."""
-    return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001))
+    return proxy.create_model(
+        name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001), provider_live=True
+    )
 
 
+@step(f"Add a deployment named {{name}} that calls the small-context model {SMALL_CONTEXT_MODEL}")
 def create_small_context_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment on the smallest-context model OpenAI still serves, so an
     oversized prompt earns a real context-window refusal from the provider."""
     return proxy.create_model(name, LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY))
 
 
+@step(f"Add a deployment named {{name}} that calls {AZURE_MODEL} behind Azure's content filter")
 def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     """Register the Azure OpenAI deployment whose content filter refuses
     CONTENT_POLICY_PROMPT with a real policy-violation 400 (the one live trigger
@@ -111,7 +121,7 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     return proxy.create_model(
         name,
         LiteLLMParamsBody(
-            model=CONTENT_FILTERED_MODEL,
+            model=AZURE_MODEL,
             api_key=AZURE_KEY,
             api_base=AZURE_BASE,
             api_version=AZURE_API_VERSION,
@@ -120,13 +130,38 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step(
+    f"Add a deployment named {{name}} that calls {AZURE_MODEL} and is benched for {{cooldown_time}}s"
+    " on its first failure"
+)
+def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: str, cooldown_time: float) -> str:
+    """The live Azure OpenAI deployment holding all of the group's shuffle weight,
+    benched on its first failure of any class, with the client's own retries off."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(
+                model=AZURE_MODEL,
+                api_key=AZURE_KEY,
+                api_base=AZURE_BASE,
+                api_version=AZURE_API_VERSION,
+                max_retries=0,
+                weight=1,
+                cooldown_time=cooldown_time,
+            ),
+            model_info=ModelInfoBody(allowed_fails=0),
+        )
+    )
+
+
+@step(f"Add a deployment named {{name}} that calls {CACHING_MODEL} with prompt caching")
 def create_caching_deployment(proxy: ProxyClient, name: str) -> str:
     """Register the Anthropic deployment whose prompt cache the affinity check pins to."""
     return proxy.create_model(name, LiteLLMParamsBody(model=CACHING_MODEL, api_key=CACHING_KEY, weight=1))
 
 
 def _register_benched_on_first_failure(
-    proxy: ProxyClient, name: str, litellm_params: LiteLLMParamsBody, allowed_fails: str
+    proxy: ProxyClient, name: str, litellm_params: LiteLLMParamsBody, allowed_fails: str, *, provider_live: bool = False
 ) -> str:
     """The always-picked half of a failing pair: all of the group's shuffle weight,
     and a cooldown policy that benches it on its first failure of the given class,
@@ -136,10 +171,12 @@ def _register_benched_on_first_failure(
             model_name=name,
             litellm_params=litellm_params,
             model_info=ModelInfoBody(allowed_fails_policy={allowed_fails: 0}),
-        )
+        ),
+        provider_live=provider_live,
     )
 
 
+@step(f"Add a deployment named {{name}} that calls {REAL_MODEL} with a 1ms timeout and is benched on its first timeout")
 def create_always_timing_out_deployment(proxy: ProxyClient, name: str, cooldown_time: float | None = None) -> str:
     """A 1ms deadline the real backend always exceeds, benched on its first Timeout."""
     return _register_benched_on_first_failure(
@@ -147,9 +184,11 @@ def create_always_timing_out_deployment(proxy: ProxyClient, name: str, cooldown_
         name,
         LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001, weight=1, cooldown_time=cooldown_time),
         "TimeoutErrorAllowedFails",
+        provider_live=True,
     )
 
 
+@step(f"Add a deployment named {{name}} that calls {REAL_MODEL} with an invalid key and is benched on its first 401")
 def create_always_unauthorized_deployment(proxy: ProxyClient, name: str, cooldown_time: float | None = None) -> str:
     """A key the real backend rejects with a 401, benched on its first AuthenticationError."""
     return _register_benched_on_first_failure(
@@ -178,6 +217,10 @@ def _nested_proxy_params(upstream_group: str, upstream_key: str, cooldown_time: 
     )
 
 
+@step(
+    "Add a deployment named {name} that fronts {upstream_group} on this proxy, so it always gets a 500"
+    " and is benched on the first one"
+)
 def create_always_5xx_deployment(
     proxy: ProxyClient, name: str, upstream_group: str, upstream_key: str, cooldown_time: float | None = None
 ) -> str:
@@ -191,6 +234,10 @@ def create_always_5xx_deployment(
     )
 
 
+@step(
+    "Add a deployment named {name} that fronts {upstream_group} on this proxy with a key out of rpm,"
+    " so it always gets a 429 and is benched on the first one"
+)
 def create_always_rate_limited_deployment(
     proxy: ProxyClient, name: str, upstream_group: str, upstream_key: str, cooldown_time: float | None = None
 ) -> str:
@@ -201,6 +248,7 @@ def create_always_rate_limited_deployment(
     )
 
 
+@step(f"Use up the rpm-limited key's one allowed request with a /chat/completions call to {CHEAP_OPENAI_MODEL}")
 def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
     """Uses up the one request an rpm_limit=1 key allows. The proxy's rate limiter
     opens the key's 60s window on this call, so it goes right before the calls that
@@ -213,6 +261,7 @@ def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
     )
 
 
+@step(f"Add a deployment named {{name}} that calls {SMALL_CONTEXT_MODEL} and takes all of its group's traffic")
 def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str) -> str:
     """The always-picked half of a retry pair on the smallest-context model OpenAI
     still serves: it holds all of the model group's shuffle weight, so an oversized
@@ -227,6 +276,14 @@ def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str)
     )
 
 
+@step(f"Add a deployment named {{name}} for {REAL_MODEL} that answers with a canned reply")
+def create_canned_deployment(proxy: ProxyClient, name: str) -> str:
+    """A deployment that answers from a canned reply, so a call to it goes through the
+    router's deployment pick like any other but never reaches a provider."""
+    return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, mock_response="ok"))
+
+
+@step(f"Add a zero-weight backup deployment named {{name}} that calls {REAL_MODEL}")
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
     never opens on it. It is reachable only once its sibling is out of the running,
@@ -241,6 +298,7 @@ def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step("Send a /chat/completions request to {model} with a full message history and stream set to {stream}")
 def chat_turns_override(
     proxy: ProxyClient,
     key: str,
@@ -268,6 +326,7 @@ def chat_turns_override(
     )
 
 
+@step("Send a /chat/completions request to {model} with stream set to {stream}")
 def chat_override(
     proxy: ProxyClient,
     key: str,
@@ -290,6 +349,7 @@ def chat_override(
     )
 
 
+@step('Open a streaming /chat/completions request to {model} with the prompt "{content}" and leave it in flight')
 def open_chat_stream(
     proxy: ProxyClient,
     key: str,
@@ -316,6 +376,26 @@ def open_chat_stream(
 def model_id_of(resp: StreamingResponse) -> str | None:
     """The deployment the proxy served this response from, as it reports it."""
     return resp.headers.get("x-litellm-model-id")
+
+
+class _AzurePromptFilterResult(BaseModel):
+    content_filter_results: Mapping[str, object] | None = None
+
+
+class _AzureAnnotatedChatBody(BaseModel):
+    prompt_filter_results: Sequence[_AzurePromptFilterResult] | None = None
+
+
+def azure_prompt_filter_skipped(resp: StreamingResponse) -> bool:
+    """True when Azure's 200 recorded no prompt-filter verdict (every `content_filter_results`
+    empty), so the prompt has to be sent again."""
+    try:
+        annotated: Final = _AzureAnnotatedChatBody.model_validate_json(resp.body)
+    except ValidationError:
+        return False
+    if not annotated.prompt_filter_results:
+        return False
+    return all(not entry.content_filter_results for entry in annotated.prompt_filter_results)
 
 
 def _parsed(resp: StreamingResponse) -> ChatResponse | None:

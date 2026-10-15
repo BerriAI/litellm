@@ -143,9 +143,9 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     reason: "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
   },
   heuristicClassifier: {
-    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin"],
+    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin", "local_heuristic"],
     reason:
-      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM classifier. " +
+      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. " +
       "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
   },
   heuristicScoring: {

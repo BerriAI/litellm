@@ -6,7 +6,6 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
-import os
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -20,21 +19,29 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
 from .common_utils import (
-    _get_gemini_url,
-    _get_vertex_url,
     all_gemini_url_modes,
+    get_gemini_url,
     get_vertex_base_model_name,
     get_vertex_base_url,
+    get_vertex_url,
+)
+from .credentials_source import (
+    VertexCredentialsJson,
+    build_vertex_credentials,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
 )
 
 
-def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
+def graft_default_vertex_path(api_base: str, default_url: str) -> str:
     parsed_api_base: Final = urlparse(api_base)
     default_segments: Final = urlparse(default_url).path.lstrip("/").split("/")
     graft_segments: Final = default_segments[1:] if default_segments[0] in ("v1", "v1beta1") else default_segments
     grafted_path: Final = parsed_api_base.path.rstrip("/") + "/" + "/".join(graft_segments)
     return parsed_api_base._replace(path=grafted_path).geturl()
 
+
+_graft_default_vertex_path = graft_default_vertex_path
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
@@ -127,83 +134,21 @@ class VertexBase:
     ) -> tuple[_VertexCredentialsObject | None, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path: Final = os.path.exists(
-                    credentials
-                )  # credentials is from server config (litellm_params), not user input
-                verbose_logger.debug(
-                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    _is_path,
-                    os.getcwd(),
-                )
-
-                try:
-                    if _is_path:
-                        with open(credentials) as f:
-                            json_obj = json.load(f)
-                    else:
-                        json_obj = json.loads(credentials)
-                except Exception as e:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. "
-                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        f"Parse error: {type(e).__name__}"
-                    )
+                source: Final = load_vertex_credentials_source(credentials)
+                if not isinstance(source, VertexCredentialsJson):
+                    raise_vertex_credentials_failure(source)
+                json_obj: Mapping[str, object] = source.value
+                creds = build_vertex_credentials(source, self._credentials_from_json)
             elif isinstance(credentials, dict):
                 json_obj = credentials
+                creds = self._credentials_from_json(credentials)
             else:
                 raise ValueError(f"Invalid credentials type: {type(credentials)}")
 
-            # Check if the JSON object contains Workload Identity Federation configuration
-            if "type" in json_obj and json_obj["type"] == "external_account":
-                # If environment_id key contains "aws" value it corresponds to an AWS config file
-                credential_source: Final = json_obj.get("credential_source", {})
-                environment_id: Final = (
-                    credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
-                )
-                if isinstance(environment_id, str) and "aws" in environment_id:
-                    # Check if explicit AWS params are in the JSON (bypasses metadata)
-                    from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
-                        VertexAIAwsWifAuth,
-                    )
-
-                    aws_params: Final = VertexAIAwsWifAuth.extract_aws_params(json_obj)
-                    if aws_params:
-                        creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
-                            json_obj,
-                            aws_params=aws_params,
-                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                        )
-                    else:
-                        creds = self._credentials_from_identity_pool_with_aws(
-                            json_obj,
-                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                        )
-                elif isinstance(credential_source, dict) and "executable" in credential_source:
-                    creds = self._credentials_from_pluggable(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-                else:
-                    creds = self._credentials_from_identity_pool(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
-            elif "type" in json_obj and json_obj["type"] == "authorized_user":
-                creds = self._credentials_from_authorized_user(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-                if project_id is None:
-                    project_id = (
-                        creds.quota_project_id
-                    )  # authorized user credentials don't have a project_id, only quota_project_id
-            else:
-                creds = self._credentials_from_service_account(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-
+            if project_id is None and json_obj.get("type") == "authorized_user":
+                project_id = (
+                    creds.quota_project_id
+                )  # authorized user credentials don't have a project_id, only quota_project_id
             if project_id is None:
                 project_id = getattr(creds, "project_id", None)
         else:
@@ -222,6 +167,54 @@ class VertexBase:
             raise TypeError(f"Expected project_id to be a str but got {type(project_id)}")
 
         return creds, project_id
+
+    def _credentials_from_json(self, json_obj: Mapping[str, object]) -> _VertexCredentialsObject:
+        # Check if the JSON object contains Workload Identity Federation configuration
+        if "type" in json_obj and json_obj["type"] == "external_account":
+            # If environment_id key contains "aws" value it corresponds to an AWS config file
+            credential_source: Final = json_obj.get("credential_source", {})
+            environment_id: Final = (
+                credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
+            )
+            if isinstance(environment_id, str) and "aws" in environment_id:
+                # Check if explicit AWS params are in the JSON (bypasses metadata)
+                from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
+                    VertexAIAwsWifAuth,
+                )
+
+                aws_params: Final = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                if aws_params:
+                    return VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                        json_obj,
+                        aws_params=aws_params,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                else:
+                    return self._credentials_from_identity_pool_with_aws(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+            elif isinstance(credential_source, dict) and "executable" in credential_source:
+                return self._credentials_from_pluggable(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+            else:
+                return self._credentials_from_identity_pool(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+        # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+        elif "type" in json_obj and json_obj["type"] == "authorized_user":
+            return self._credentials_from_authorized_user(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            return self._credentials_from_service_account(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
     def _credentials_from_identity_pool(self, json_obj, scopes) -> _VertexCredentialsObject:
@@ -618,14 +611,13 @@ class VertexBase:
                 project_id=project_id,
             )
 
-    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
-        """
-        use this helper to decide if request should be sent to v1 or v1beta1
-
-        Returns true if any beta feature is enabled
-        Returns false in all other cases
-        """
-        return False
+    def ensure_access_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return self._ensure_access_token(credentials, project_id, custom_llm_provider)
 
     def _check_custom_proxy(
         self,
@@ -697,7 +689,7 @@ class VertexBase:
                 elif urlparse(api_base).path in ("", "/"):
                     url = api_base.rstrip("/") + urlparse(url).path
                 elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
-                    url = _graft_default_vertex_path(api_base=api_base, default_url=url)
+                    url = graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
                     url = f"{api_base}:{endpoint}"
             if stream is True:
@@ -735,7 +727,7 @@ class VertexBase:
                 raise ValueError(
                     "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                 )
-            url, endpoint = _get_gemini_url(
+            url, endpoint = get_gemini_url(
                 mode=mode,
                 model=model,
                 stream=stream,
@@ -749,7 +741,7 @@ class VertexBase:
 
             ### SET RUNTIME ENDPOINT ###
             version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            url, endpoint = _get_vertex_url(
+            url, endpoint = get_vertex_url(
                 mode=mode,
                 model=model,
                 stream=stream,
@@ -771,6 +763,36 @@ class VertexBase:
             vertex_location=vertex_location,
             vertex_api_version=version,
             use_psc_endpoint_format=use_psc_endpoint_format,
+        )
+
+    def get_token_and_url(
+        self,
+        model: str,
+        auth_header: str | None,
+        gemini_api_key: str | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        stream: bool | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        api_base: str | None,
+        should_use_v1beta1_features: bool | None = False,
+        mode: all_gemini_url_modes = "chat",
+        use_psc_endpoint_format: bool = False,
+    ) -> tuple[str | None, str]:
+        return self._get_token_and_url(
+            model,
+            auth_header,
+            gemini_api_key,
+            vertex_project,
+            vertex_location,
+            vertex_credentials,
+            stream,
+            custom_llm_provider,
+            api_base,
+            should_use_v1beta1_features,
+            mode,
+            use_psc_endpoint_format,
         )
 
     def _handle_reauthentication(
@@ -1143,6 +1165,14 @@ class VertexBase:
                 credentials=credentials,
                 project_id=project_id,
             )
+
+    async def ensure_access_token_async(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return await self._ensure_access_token_async(credentials, project_id, custom_llm_provider)
 
     def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
         headers: Final = {

@@ -13,18 +13,29 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   call, so a never-seen prefix must come back cached on its very first call
   (Gemini's implicit caching cannot hit a cold prefix), the cached count must
   cover the marked block, and the spend row must be billed below the uncached
-  price of the prompt.
+  price of the cached tokens. Vertex's cache create is nondeterministic:
+  identical bodies come back 200 or with the minimum-token 400 ("The cached
+  content is of 1 tokens"), in failure bursts of 45 seconds and more, so up to
+  eight never-seen prefixes are tried with a pause after each rejection. The
+  billing check prices the cached tokens rather than prompt_tokens, which
+  Vertex reports inclusive of the cached prefix on some calls and exclusive
+  of it on others.
 - Anthropic (claude-haiku-4-5, direct): the same ``cache_control`` prefix over
   the OpenAI-compatible route; the second call must report cache-read tokens > 0.
 - OpenAI (gpt-5.6): automatic prompt caching needs no request marker, so the
   cacheable prefix goes out as a plain system string with a ``prompt_cache_key``
   and the second call must report ``prompt_tokens_details.cached_tokens`` > 0.
 
+- OpenAI (gpt-5.6) in explicit cache mode: OpenAI caches nothing unless a
+  breakpoint reaches it, so a ``cache_control`` mark on a system part, a string
+  system message, a user part or a tool result must write the cache on the
+  first call and read it on the second.
+
 service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-built from the typed content blocks shared in ``endpoints_client.py``.
+built from the typed content blocks shared in ``models.py``.
 """
 
 from __future__ import annotations
@@ -34,13 +45,30 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import Result, UnknownApiError, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
+from models import (
+    CacheControl,
+    ChatAssistantTurn,
+    ChatBody,
+    ChatMessage,
+    ChatResponse,
+    ChatTool,
+    ChatToolFunction,
+    ChatToolResultTurn,
+    LiteLLMParamsBody,
+    PromptCacheOptions,
+    RichMessage,
+    TextBlock,
+    TextContentPart,
+    ToolCall,
+    ToolCallFunction,
+    Usage,
+)
 from passthrough_client import PassthroughClient
 import os
 
@@ -51,13 +79,16 @@ VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
 ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
 OPENAI_MODEL = "openai/gpt-5.6"
 VERTEX_CACHE_TTL: Final = "300s"
-VERTEX_COLD_CALL_ATTEMPTS: Final = 3
+VERTEX_COLD_CALL_ATTEMPTS: Final = 8
+VERTEX_COLD_CALL_PAUSE_SECONDS: Final = 15.0
 VERTEX_MINIMUM_CACHED_TOKENS: Final = 1024
 CACHED_SHARE_OF_PROMPT: Final = 0.9
 VERTEX_CACHE_REJECTION_MARKER: Final = "minimum token count to start explicit caching"
 
 
 class CacheChatBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model: str
     messages: list[RichMessage]
     max_tokens: int = 64
@@ -148,6 +179,30 @@ def _assert_cache_read_on_second_call(
     )
 
 
+def _cache_write_tokens(usage: Usage | None) -> int:
+    if usage is None or usage.prompt_tokens_details is None:
+        return 0
+    return usage.prompt_tokens_details.cache_write_tokens or 0
+
+
+def _assert_openai_writes_then_reads_cache(client: PassthroughClient, key: str, body: ChatBody) -> None:
+    first: Final = unwrap(client.proxy.chat(key, body))
+    assert _cache_write_tokens(first.usage) > 0, (
+        f"{body.model}: the first call on a never-seen prefix wrote no cache ({first.usage}), "
+        "so the cache_control mark never reached OpenAI as a breakpoint"
+    )
+
+    deadline: Final = time.monotonic() + 30.0
+    while True:
+        second = unwrap(client.proxy.chat(key, body))
+        read_tokens = _cached_read_tokens(second.usage)
+        if read_tokens > 0 or time.monotonic() >= deadline:
+            break
+        time.sleep(3.0)
+
+    assert read_tokens > 0, f"{body.model}: the identical second call read no cache ({second.usage})"
+
+
 def _cold_cache_call(send: Callable[[str], Result[ChatResponse]]) -> ChatResponse | None:
     result: Final = send(_cacheable_prefix())
     match result:
@@ -157,26 +212,36 @@ def _cold_cache_call(send: Callable[[str], Result[ChatResponse]]) -> ChatRespons
             return unwrap(result)
 
 
+def _first_engaged_cold_call(send: Callable[[str], Result[ChatResponse]]) -> ChatResponse | None:
+    for attempt in range(1, VERTEX_COLD_CALL_ATTEMPTS + 1):
+        candidate = _cold_cache_call(send)
+        if candidate is not None and _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS:
+            return candidate
+        if attempt < VERTEX_COLD_CALL_ATTEMPTS:
+            print(
+                f"cache_control: vertex did not engage the cache on cold attempt {attempt}/{VERTEX_COLD_CALL_ATTEMPTS}; "
+                f"pausing {VERTEX_COLD_CALL_PAUSE_SECONDS}s before the next never-seen prefix",
+                flush=True,
+            )
+            time.sleep(VERTEX_COLD_CALL_PAUSE_SECONDS)
+    return None
+
+
 def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatResponse]]) -> ChatResponse:
-    completion: Final = next(
-        (
-            candidate
-            for candidate in (_cold_cache_call(send) for _ in range(VERTEX_COLD_CALL_ATTEMPTS))
-            if candidate is not None and _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS
-        ),
-        None,
-    )
+    completion: Final = _first_engaged_cold_call(send)
     assert completion is not None, (
-        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control were each either "
-        f"rejected by Vertex's minimum-token check or served with fewer than {VERTEX_MINIMUM_CACHED_TOKENS} "
-        "cached tokens on their first call; explicit context caching did not engage"
+        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control, spread over "
+        f"{VERTEX_COLD_CALL_PAUSE_SECONDS * (VERTEX_COLD_CALL_ATTEMPTS - 1):.0f}s, were each either rejected by "
+        f"Vertex's minimum-token check or served with fewer than {VERTEX_MINIMUM_CACHED_TOKENS} cached tokens on "
+        "their first call; explicit context caching did not engage"
     )
     assert completion.choices, f"{model}: cached call returned no choices: {completion}"
     usage: Final = completion.usage
     cached: Final = _cached_read_tokens(usage)
-    assert usage and usage.prompt_tokens and cached >= CACHED_SHARE_OF_PROMPT * usage.prompt_tokens, (
-        f"{model}: only {cached} of {usage.prompt_tokens if usage else None} prompt tokens were served from the "
-        "cache; the cache_control block was not cached whole"
+    assert usage and usage.prompt_tokens, f"{model}: cached completion carried no prompt_tokens: {usage}"
+    assert cached >= CACHED_SHARE_OF_PROMPT * usage.prompt_tokens, (
+        f"{model}: only {cached} of {usage.prompt_tokens} prompt tokens were served from the cache; the "
+        "cache_control block was not cached whole"
     )
     return completion
 
@@ -197,10 +262,11 @@ def _assert_billed_below_uncached_prompt(client: PassthroughClient, model: str, 
     assert row.prompt_tokens == usage.prompt_tokens, (
         f"{model}: spend row prompt_tokens {row.prompt_tokens} != response prompt_tokens {usage.prompt_tokens}"
     )
-    uncached_prompt_cost: Final = usage.prompt_tokens * _input_rate(client, model)
-    assert row.spend is not None and row.spend < uncached_prompt_cost, (
-        f"{model}: spend {row.spend} is not below the uncached price of the prompt alone ({uncached_prompt_cost} for "
-        f"{usage.prompt_tokens} tokens); cache-read pricing was not applied"
+    cached: Final = _cached_read_tokens(usage)
+    uncached_read_cost: Final = cached * _input_rate(client, model)
+    assert row.spend is not None and row.spend < uncached_read_cost, (
+        f"{model}: spend {row.spend} is not below the uncached price of the {cached} tokens read from the cache "
+        f"({uncached_read_cost}); cache-read pricing was not applied"
     )
 
 
@@ -208,6 +274,16 @@ class TestCacheControl:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
@@ -224,6 +300,16 @@ class TestCacheControl:
     @pytest.mark.covers(
         "llm.chat_completions.vertex.prompt_cache_5m.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_vertex_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
@@ -249,6 +335,16 @@ class TestCacheControl:
         "llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_anthropic_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -261,9 +357,92 @@ class TestCacheControl:
         key = resources.key()
         _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
 
+    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_prompt_caching_reads_cache_with_version_header(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model: Final = f"e2e-anthropic-cache-version-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=ANTHROPIC_MODEL,
+                api_key="os.environ/ANTHROPIC_API_KEY",
+                extra_headers={"anthropic-version": "2023-06-01"},
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key: Final = resources.key()
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+
+    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_prompt_caching_reports_creation_tokens(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model: Final = f"e2e-anthropic-cache-create-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key: Final = resources.key()
+        body: Final = CacheChatBody(
+            model=model,
+            messages=[
+                RichMessage(
+                    role="system",
+                    content=[TextBlock(text=_cacheable_prefix(), cache_control=CacheControl(ttl="1h"))],
+                ),
+                RichMessage(
+                    role="user",
+                    content=[TextBlock(text="Reply with one word.", cache_control=CacheControl(ttl="5m"))],
+                ),
+            ],
+        )
+        response: Final = unwrap(
+            client.proxy.transport.post(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=body,
+                response_type=ChatResponse,
+            )
+        )
+        assert response.usage and response.usage.cache_creation_input_tokens, (
+            f"{model}: a never-seen prefix marked 1h then 5m reported no cache-creation tokens ({response.usage})"
+        )
+
     @pytest.mark.covers(
         "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
@@ -279,3 +458,96 @@ class TestCacheControl:
         _assert_cache_read_on_second_call(
             model, lambda prefix: _plain_cache_chat(client, key, model, prefix, cache_key)
         )
+
+
+@pytest.mark.covers("llm.chat_completions.openai.prompt_cache_5m.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_MODEL,),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
+class TestCacheControlOnOpenAIExplicitCaching:
+    @pytest.fixture
+    def model(self, client: PassthroughClient, resources: ResourceManager) -> str:
+        name: Final = f"e2e-openai-explicit-cache-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            name,
+            LiteLLMParamsBody(
+                model=OPENAI_MODEL,
+                api_key="os.environ/OPENAI_API_KEY",
+                prompt_cache_options=PromptCacheOptions(mode="explicit"),
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return name
+
+    def test_cache_control_on_a_system_text_part(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=[TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl())],
+                ),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_string_system_message(
+        self, client: PassthroughClient, scoped_key: str, model: str
+    ) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(role="system", content=_cacheable_prefix(), cache_control=CacheControl()),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_user_text_part(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl()),
+                        TextContentPart(text="Reply with one word."),
+                    ],
+                ),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_tool_result(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            reasoning_effort="none",
+            tools=[ChatTool(function=ChatToolFunction(name="fetch_report", parameters={"type": "object"}))],
+            messages=[
+                ChatMessage(role="user", content="Fetch the report and summarize it in one sentence."),
+                ChatAssistantTurn(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1", type="function", function=ToolCallFunction(name="fetch_report", arguments="{}")
+                        )
+                    ]
+                ),
+                ChatToolResultTurn(
+                    tool_call_id="call_1",
+                    content=[TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl())],
+                ),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
