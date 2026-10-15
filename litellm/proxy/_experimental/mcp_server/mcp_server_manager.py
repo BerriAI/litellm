@@ -1194,6 +1194,8 @@ def should_strip_caller_authorization(
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
     """
+    if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
+        return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
         # OBO: the inbound Authorization is the subject token. It is exchanged at the IdP and only the
         # exchanged token is sent upstream, so the raw caller bearer must never be forwarded.
@@ -1251,6 +1253,16 @@ def _authorization_is_litellm_admission_credential(
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
     return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+
+
+def _authorization_is_admission_jwt(
+    raw_headers: Mapping[str, str] | None, user_api_key_auth: UserAPIKeyAuth | None
+) -> bool:
+    return bool(
+        user_api_key_auth
+        and user_api_key_auth.jwt_claims
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    )
 
 
 def _server_auth_header_for(
@@ -4001,10 +4013,12 @@ class MCPServerManager:
     ) -> str | None:
         """The caller's upstream identity token, or ``None`` when the bearer is a LiteLLM key.
 
-        Rejects the key admission validated and, because virtual keys always carry the ``sk-`` prefix,
-        any other LiteLLM key a client puts in ``Authorization`` next to ``x-litellm-api-key``.
+        Validated JWT claims survive virtual-key mapping, so JWT admission still supplies a subject.
+        Virtual keys are rejected even when the auth context carries JWT claims.
         """
-        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth):
+        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) and not (
+            user_api_key_auth and user_api_key_auth.jwt_claims
+        ):
             return None
         bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
         if bearer is not None and bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
@@ -4252,7 +4266,7 @@ class MCPServerManager:
         subject_token: Final = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         match server.auth_type:
             case MCPAuth.oauth2_token_exchange:
-                if not self._extract_bearer_token(oauth2_headers, None):
+                if not self._extract_bearer_token(oauth2_headers, raw_headers):
                     return
             case MCPAuth.oauth2_id_jag:
                 if subject_token is not None:
@@ -4552,6 +4566,7 @@ class MCPServerManager:
                     status_code=e.status_code,
                     www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
+                    public_detail=e.detail if server.auth_type == MCPAuth.oauth2_token_exchange else None,
                 ) from e
             verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e

@@ -6,6 +6,11 @@ from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
 
+TOKEN_EXCHANGE_SUBJECT_ERROR: Final = (
+    "Missing or invalid subject token. Authenticate with your identity provider and send its token "
+    "in the Authorization Bearer header. LiteLLM API keys and Admin UI sessions cannot be used for token exchange."
+)
+
 
 class MCPServerURLCredentialsError(HTTPException):
     """A fixed, sanitized URL-credential migration error safe for operator previews."""
@@ -41,12 +46,14 @@ class MCPUpstreamAuthError(Exception):
         server_name: str,
         required_scope: str | None = None,
         server_id: str | None = None,
+        public_detail: object = None,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
         self.server_name = server_name
         self.required_scope = required_scope
         self.server_id = server_id
+        self.public_detail = TOKEN_EXCHANGE_SUBJECT_ERROR if public_detail == TOKEN_EXCHANGE_SUBJECT_ERROR else None
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(
@@ -107,7 +114,7 @@ class MCPUpstreamAuthError(Exception):
             if self.required_scope is not None
             else challenge
         )
-        detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
+        detail: Final = self.public_detail or ("Forbidden" if self.status_code == 403 else "Unauthorized")
         return HTTPException(
             status_code=self.status_code,
             detail=detail,

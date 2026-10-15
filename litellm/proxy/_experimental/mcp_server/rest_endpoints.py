@@ -623,6 +623,7 @@ if MCP_AVAILABLE:
         ) = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             admitted_credential=admitted_credential,
+            preserve_jwt_subject=bool(user_api_key_dict.jwt_claims),
             oauth2_headers=oauth2_headers_from_request,
             raw_headers=dict(headers),
             mcp_auth_header=MCPRequestHandler.get_mcp_auth_header_from_headers(headers),
