@@ -208,6 +208,7 @@ class TestVertexAIFilesHandler:
         assert service_account == "/model/sa.json"
 
     def test_resolve_read_gcs_config_falls_back_to_env(self, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.setenv("GCS_BUCKET_NAME", "env-default-bucket")
         monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/env/sa.json")
 
@@ -215,6 +216,40 @@ class TestVertexAIFilesHandler:
 
         assert bucket == "env-default-bucket"
         assert service_account == "/env/sa.json"
+
+    def test_resolve_read_gcs_config_prefers_batch_env_over_logging_env(self, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
+
+        bucket, _ = self.handler._resolve_read_gcs_config(litellm_params={}, vertex_credentials=None)
+
+        assert bucket == "batch-bucket"
+
+    def test_resolve_read_gcs_config_prefers_per_model_bucket_over_batch_env(self, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"gcs_bucket_name": "my-model-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "my-model-bucket"
+
+    def test_resolve_read_gcs_config_prefers_gcs_bucket_name_over_legacy(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"gcs_bucket_name": "my-model-bucket", "bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "my-model-bucket"
+
+    def test_resolve_read_gcs_config_accepts_legacy_bucket_name_alone(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "legacy-bucket"
 
     def test_resolve_read_gcs_config_serializes_dict_credentials(self, monkeypatch):
         monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)

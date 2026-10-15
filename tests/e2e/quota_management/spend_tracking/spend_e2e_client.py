@@ -20,6 +20,7 @@ from typing import Final
 
 from e2e_config import unique_marker
 from e2e_http import (
+    AuthHeaders,
     FileUploadForm,
     Headers,
     NoBody,
@@ -30,12 +31,14 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
+from e2e_metadata import step
 from models import (
     AnthropicMessagesBody,
     ChatBody,
     ChatMessage,
     ChatMetadata,
     ChatResponse,
+    CustomerInfoParams,
     DateRangeParams,
     EmbedBody,
     EmbedResponse,
@@ -63,9 +66,10 @@ METRICS_PATH: Final = "/metrics/"
 
 __all__ = [
     "BatchCreateBody",
+    "BatchObject",
     "CallbackLogMetadata",
     "CallbackLogPayload",
-    "BatchObject",
+    "ClientAttributionHeaders",
     "DailyActivityKeyBreakdown",
     "FileObject",
     "ProbeResult",
@@ -78,6 +82,16 @@ __all__ = [
     "unique_marker",
     "unwrap",
 ]
+
+
+class ClientAttributionHeaders(AuthHeaders):
+    """The attribution headers a coding agent attaches to every call from its own
+    config (Codex CLI's config.toml ``http_headers``, Claude Code's
+    ``ANTHROPIC_CUSTOM_HEADERS``) because it has no body field for the end user."""
+
+    x_litellm_customer_id: str | None = Field(default=None, alias="x-litellm-customer-id")
+    x_litellm_end_user_id: str | None = Field(default=None, alias="x-litellm-end-user-id")
+    x_litellm_tags: str | None = Field(default=None, alias="x-litellm-tags")
 
 
 class GeminiApiKeyHeaders(Headers):
@@ -222,6 +236,10 @@ class TeamInfoSpendResponse(BaseModel):
     team_info: TeamInfoSpend
 
 
+class CustomerSpendResponse(BaseModel):
+    spend: float | None = None
+
+
 def _chat_body(
     model: str,
     content: str,
@@ -247,6 +265,7 @@ def _chat_body(
 class SpendClient:
     proxy: ProxyClient
 
+    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
     def chat(
         self,
         key: str,
@@ -263,6 +282,7 @@ class SpendClient:
             _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user, cache=cache),
         )
 
+    @step('Send a streaming /chat/completions request to {model} with the prompt "{content}"')
     def chat_stream(
         self, key: str, model: str, content: str, *, max_tokens: int | None = None
     ) -> StreamingResponse:
@@ -270,6 +290,7 @@ class SpendClient:
             key, _chat_body(model, content, max_tokens=max_tokens, stream=True)
         )
 
+    @step('Send a streaming /v1/messages request to {model} with the prompt "{content}"')
     def messages_stream(
         self, key: str, model: str, content: str, *, max_tokens: int
     ) -> StreamingResponse:
@@ -283,9 +304,11 @@ class SpendClient:
             ),
         )
 
+    @step('Send an /embeddings request to {model} for "{content}"')
     def embed(self, key: str, model: str, content: str) -> Result[EmbedResponse]:
         return self.proxy.embed(key, EmbedBody(model=model, input=content))
 
+    @step("Wait for at least {min_rows} of the key's spend logs in /spend/logs")
     def poll_logs_for_key(
         self,
         key: str,
@@ -297,6 +320,7 @@ class SpendClient:
             key, min_rows=min_rows, predicate=predicate
         )
 
+    @step('Estimate the cost of sending "{content}" to {model} with /spend/calculate')
     def calculate_spend(self, model: str, content: str) -> float:
         return unwrap(
             self.proxy.transport.post(
@@ -309,6 +333,7 @@ class SpendClient:
             )
         ).cost
 
+    @step("Read the spend per tag from /spend/tags")
     def spend_by_tags(self) -> list[TagSpend]:
         result = self.proxy.transport.get(
             "/spend/tags",
@@ -322,6 +347,7 @@ class SpendClient:
             case _:
                 return []
 
+    @step("Wait for the tag {tag} to reach the expected spend in /spend/tags")
     def poll_tag_spend(self, tag: str, *, minimum: float = 0.0) -> TagSpend | None:
         """Poll /spend/tags until the tag's aggregate reaches `minimum`; last seen."""
         deadline = time.monotonic() + self.proxy.poll_timeout
@@ -337,6 +363,7 @@ class SpendClient:
             time.sleep(self.proxy.poll_interval)
         return entry
 
+    @step("Wait for the key's spend in /key/info to reach the expected minimum")
     def poll_key_spend(self, key: str, *, minimum: float = 0.0) -> float:
         deadline = time.monotonic() + self.proxy.poll_timeout
         spend = 0.0
@@ -347,6 +374,7 @@ class SpendClient:
             time.sleep(self.proxy.poll_interval)
         return spend
 
+    @step("Read the team's spend from /team/info")
     def team_spend(self, team_id: str) -> float:
         return (
             unwrap(
@@ -360,6 +388,7 @@ class SpendClient:
             or 0.0
         )
 
+    @step("Wait for the team's spend in /team/info to reach the expected minimum")
     def poll_team_spend(self, team_id: str, *, minimum: float = 0.0) -> float:
         outcome: Final = await_converged(
             lambda: self.team_spend(team_id),
@@ -371,6 +400,34 @@ class SpendClient:
         )
         return outcome.result if isinstance(outcome, Converged) else outcome.last_result
 
+    @step("Read the end user's spend from /customer/info")
+    def customer_spend(self, customer_id: str) -> float:
+        """0.0 until the spend writer has upserted the end-user row, which /customer/info 404s before."""
+        looked_up: Final = self.proxy.transport.get(
+            "/customer/info",
+            headers=self.proxy.transport.master,
+            params=CustomerInfoParams(end_user_id=customer_id),
+            response_type=CustomerSpendResponse,
+        )
+        match looked_up:
+            case Success(data=data):
+                return data.spend or 0.0
+            case _:
+                return 0.0
+
+    @step("Wait for the end user's spend in /customer/info to go above {minimum}")
+    def poll_customer_spend(self, customer_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.customer_spend(customer_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+    @step("Scrape /metrics/ on every proxy replica")
     def scrape_metrics(self) -> Mapping[str, ProbeResult]:
         """GET /metrics/ on every replica in PROXY_REPLICA_URLS, keyed by replica. The
         counter is per pod, so the union of the replicas is the fleet's exposition; the
@@ -383,6 +440,7 @@ class SpendClient:
             }
         )
 
+    @step("Read page {page} of /spend/logs/v2 at a page size of {page_size}")
     def spend_logs_page(
         self, *, api_key: str | None, page: int, page_size: int
     ) -> SpendLogsPage:
@@ -405,9 +463,11 @@ class SpendClient:
             )
         )
 
+    @step("Call the management route {path}")
     def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         return self.proxy.transport.probe(path, params=params)
 
+    @step("Call the management route {path} until it answers successfully")
     def probe_until_healthy(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         outcome: Final = await_converged(
             lambda: self.probe(path, params=params),
@@ -419,6 +479,7 @@ class SpendClient:
         )
         return outcome.result if isinstance(outcome, Converged) else outcome.last_result
 
+    @step("Create an internal user with the role {role}")
     def create_user(self, *, email: str, role: UserRole, user_id: str) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -429,6 +490,7 @@ class SpendClient:
             )
         ).user_id
 
+    @step("Delete the internal user")
     def delete_user(self, user_id: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
@@ -439,6 +501,7 @@ class SpendClient:
             )
         )
 
+    @step("Generate a virtual key with {body}")
     def generate_key_record(self, body: KeyGenerateBody) -> KeyGenerateResponse:
         return unwrap(
             self.proxy.transport.post(
@@ -449,6 +512,7 @@ class SpendClient:
             )
         )
 
+    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
     def send_chat(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.transport.send(
             "/chat/completions",
@@ -456,6 +520,7 @@ class SpendClient:
             json=_chat_body(model, content, max_tokens=max_tokens),
         )
 
+    @step('Send a /queue/chat/completions request to {model} with the prompt "{content}"')
     def send_queued_chat(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.transport.send(
             "/queue/chat/completions",
@@ -467,6 +532,7 @@ class SpendClient:
             ),
         )
 
+    @step('Send a /v1/messages request to {model} with the prompt "{content}"')
     def send_messages(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.transport.send(
             "/v1/messages",
@@ -478,13 +544,19 @@ class SpendClient:
             ),
         )
 
+    @step('Send a /v1/responses request to {model} with the prompt "{content}"')
     def send_responses(self, key: str, model: str, content: str) -> StreamingResponse:
+        return self.send_responses_with_headers(self.proxy.transport.bearer(key), model, content)
+
+    @step('Send a /v1/responses request to {model} with custom headers and the prompt "{content}"')
+    def send_responses_with_headers(self, headers: AuthHeaders, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/v1/responses",
-            headers=self.proxy.transport.bearer(key),
+            headers=headers,
             json=ResponsesBody(model=model, input=content),
         )
 
+    @step('Send an /embeddings request to {model} for "{content}"')
     def send_embed(self, key: str, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/embeddings",
@@ -492,6 +564,7 @@ class SpendClient:
             json=EmbedBody(model=model, input=content),
         )
 
+    @step('Send a Gemini generateContent request to {model} through /gemini with the prompt "{content}"')
     def send_gemini_generate(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:generateContent",
@@ -502,6 +575,7 @@ class SpendClient:
             ),
         )
 
+    @step("Upload a batch input file for {model} to /v1/files")
     def upload_batch_file(self, key: str, model: str, content: bytes) -> FileObject:
         return unwrap(
             self.proxy.transport.upload(
@@ -515,6 +589,7 @@ class SpendClient:
             )
         )
 
+    @step("Create a batch for {body.model} on /v1/batches")
     def create_batch(self, key: str, body: BatchCreateBody) -> BatchObject:
         return unwrap(
             self.proxy.transport.post(
@@ -525,6 +600,7 @@ class SpendClient:
             )
         )
 
+    @step("Retrieve the {provider} batch from /v1/batches")
     def retrieve_batch(self, key: str, batch_id: str, *, provider: str) -> BatchObject:
         return unwrap(
             self.proxy.transport.get(
@@ -535,6 +611,7 @@ class SpendClient:
             )
         )
 
+    @step("Post a callback log for {payload.model} to /v1/rust_control_plane/logs")
     def replay_callback_log(self, key: str, payload: CallbackLogPayload) -> CallbackLogsResponse:
         return unwrap(
             self.proxy.transport.post(
@@ -545,12 +622,15 @@ class SpendClient:
             )
         )
 
+    @step("Run a health check on {model} with /health")
     def health(self, model: str) -> ProbeResult:
         return self.proxy.transport.probe("/health", params=HealthParams(model=model))
 
+    @step("Read the key's daily activity from /user/daily/activity")
     def daily_activity_for_key(self, token: str, *, start: datetime, end: datetime) -> DailyActivityKeyBreakdown | None:
         return self._key_breakdown("/user/daily/activity", token, start=start, end=end)
 
+    @step("Read the key's usage export row from /user/daily/activity/aggregated")
     def usage_export_row_for_key(
         self, token: str, *, start: datetime, end: datetime
     ) -> DailyActivityKeyBreakdown | None:
@@ -578,11 +658,13 @@ class SpendClient:
             None,
         )
 
+    @step("Wait for at least {min_requests} of the key's requests in /user/daily/activity")
     def poll_daily_activity_for_key(
         self, token: str, *, start: datetime, end: datetime, min_requests: int
     ) -> DailyActivityKeyBreakdown | None:
         return self._poll_key_breakdown(lambda: self.daily_activity_for_key(token, start=start, end=end), min_requests)
 
+    @step("Wait for at least {min_requests} of the key's requests in /user/daily/activity/aggregated")
     def poll_usage_export_row_for_key(
         self, token: str, *, start: datetime, end: datetime, min_requests: int
     ) -> DailyActivityKeyBreakdown | None:
@@ -603,6 +685,7 @@ class SpendClient:
         )
         return outcome.result if isinstance(outcome, Converged) else outcome.last_result
 
+    @step("Read the OpenAPI schema from /openapi.json")
     def openapi(self) -> OpenAPISchema:
         return unwrap(
             self.proxy.transport.get(

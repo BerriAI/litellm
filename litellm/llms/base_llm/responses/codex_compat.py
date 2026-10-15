@@ -129,7 +129,7 @@ def normalize_codex_input_items(
         return input, ()
     normalized: Final = tuple(_normalize_input_item(item) for item in input)
     rewritten_types: Final = tuple(sorted(frozenset(item_type for _, item_type in normalized if item_type is not None)))
-    kept: Final = [i for i, _ in normalized if i is not None]  # mutable-ok: downstream narrows on isinstance(list)
+    kept: Final = [i for i, _ in normalized if i is not None]
     # Codex passthrough items sit outside the OpenAI input union.
     return kept, rewritten_types  # pyright: ignore[reportReturnType]  # see above
 

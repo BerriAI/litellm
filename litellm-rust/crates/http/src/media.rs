@@ -12,7 +12,7 @@ use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
 };
 
-use crate::{ClientVariant, HttpClientConfig, HttpClientPool};
+use crate::{Client, ClientVariant, HttpClientConfig, HttpClientPool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -93,8 +93,8 @@ type ProxyMatch = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub struct MediaFetcher {
-    pinned: reqwest::Client,
-    unpinned: reqwest::Client,
+    pinned: Client,
+    unpinned: Client,
     uses_proxy: ProxyMatch,
     address_resolver: Arc<dyn AddressResolver>,
     url_policy: UrlPolicy,
@@ -154,7 +154,7 @@ impl MediaFetcher {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(client: reqwest::Client) -> Self {
+    pub fn for_test(client: Client) -> Self {
         Self {
             pinned: client.clone(),
             unpinned: client,
@@ -230,7 +230,7 @@ impl MediaFetcher {
         }
     }
 
-    async fn client_for(&self, url: &Url) -> Result<&reqwest::Client, Error> {
+    async fn client_for(&self, url: &Url) -> Result<&Client, Error> {
         if !self.url_policy.validate {
             return Ok(&self.unpinned);
         }
@@ -487,30 +487,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blocks_non_public_addresses() {
-        for address in [
-            "0.0.0.1",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.1.1",
-            "172.16.0.1",
-            "192.168.0.1",
-            "198.18.0.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "::1",
-            "fc00::1",
-            "fe80::1",
-            "2001:db8::1",
-            "::ffff:127.0.0.1",
-        ] {
-            assert!(is_blocked_ip(address.parse().expect("valid test address")));
-        }
+    #[rstest::rstest]
+    #[case::unspecified_v4("0.0.0.1")]
+    #[case::private_v4("10.0.0.1")]
+    #[case::carrier_grade_nat("100.64.0.1")]
+    #[case::loopback_v4("127.0.0.1")]
+    #[case::link_local_v4("169.254.1.1")]
+    #[case::private_v4_second_range("172.16.0.1")]
+    #[case::private_v4_third_range("192.168.0.1")]
+    #[case::benchmarking_v4("198.18.0.1")]
+    #[case::documentation_v4_first_range("198.51.100.1")]
+    #[case::documentation_v4_second_range("203.0.113.1")]
+    #[case::multicast_v4("224.0.0.1")]
+    #[case::loopback_v6("::1")]
+    #[case::unique_local_v6("fc00::1")]
+    #[case::link_local_v6("fe80::1")]
+    #[case::documentation_v6("2001:db8::1")]
+    #[case::mapped_loopback_v6("::ffff:127.0.0.1")]
+    fn blocks_non_public_addresses(#[case] address: &str) {
+        assert!(is_blocked_ip(address.parse().expect("valid test address")));
+    }
+
+    #[rstest::rstest]
+    #[case::public("8.8.8.8")]
+    fn allows_a_public_address(#[case] address: &str) {
         assert!(!is_blocked_ip(
-            "8.8.8.8".parse().expect("valid public address")
+            address.parse().expect("valid public address")
         ));
     }
 
@@ -520,10 +522,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf; charset=binary\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let media = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await
@@ -539,10 +538,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(2, 0))
             .await
@@ -557,10 +553,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await

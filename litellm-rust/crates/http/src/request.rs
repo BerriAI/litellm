@@ -87,6 +87,50 @@ pub fn has_header(headers: &[(String, String)], name: &str) -> bool {
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
+pub fn header_values<'a>(
+    headers: &'a [(String, String)],
+    name: &str,
+) -> impl Iterator<Item = &'a str> {
+    headers
+        .iter()
+        .filter(move |(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    header_values(headers, name).next()
+}
+
+pub fn without_headers(headers: Vec<(String, String)>, names: &[&str]) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .filter(|(key, _)| !names.iter().any(|name| key.eq_ignore_ascii_case(name)))
+        .collect()
+}
+
+pub fn with_header(
+    headers: Vec<(String, String)>,
+    name: &str,
+    value: String,
+) -> Vec<(String, String)> {
+    without_headers(headers, &[name])
+        .into_iter()
+        .chain([(name.to_ascii_lowercase(), value)])
+        .collect()
+}
+
+pub fn with_default_headers(
+    headers: Vec<(String, String)>,
+    defaults: &[(&str, &str)],
+) -> Vec<(String, String)> {
+    let missing: Vec<(String, String)> = defaults
+        .iter()
+        .filter(|(name, _)| !has_header(&headers, name))
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    headers.into_iter().chain(missing).collect()
+}
+
 pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, value)| {
         if !name.eq_ignore_ascii_case("authorization") {
@@ -94,7 +138,9 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
         }
         let value = value.trim();
         value.len() > 7
-            && value[..7].eq_ignore_ascii_case("bearer ")
+            && value
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
             && !value[7..].trim().is_empty()
     })
 }
@@ -195,6 +241,30 @@ mod tests {
     }
 
     #[test]
+    fn header_value_reads_the_first_match_in_any_case() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "first".to_string()),
+            ("x-api-key".to_string(), "second".to_string()),
+        ];
+        assert_eq!(header_value(&headers, "x-API-key"), Some("first"));
+        assert_eq!(header_value(&headers, "authorization"), None);
+    }
+
+    #[test]
+    fn without_headers_drops_every_casing_of_the_named_headers_and_keeps_order() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "k".to_string()),
+            ("anthropic-version".to_string(), "v".to_string()),
+            ("AUTHORIZATION".to_string(), "Bearer t".to_string()),
+            ("x-api-key".to_string(), "k2".to_string()),
+        ];
+        assert_eq!(
+            without_headers(headers, &["x-api-key", "authorization"]),
+            vec![("anthropic-version".to_string(), "v".to_string())]
+        );
+    }
+
+    #[test]
     fn auth_header_detection_is_case_insensitive() {
         let headers = vec![
             ("x-trace-id".to_string(), "trace-1".to_string()),
@@ -211,19 +281,19 @@ mod tests {
         assert!(!has_header(&headers, "authorization"));
     }
 
-    #[test]
-    fn bearer_detection_requires_a_non_empty_token() {
-        assert!(has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer abc".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer    ".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Basic abc".to_string()
-        )]));
+    #[rstest::rstest]
+    #[case::bearer("Authorization", "Bearer abc", true)]
+    #[case::lowercase("authorization", "bearer abc", true)]
+    #[case::blank_token("Authorization", "Bearer    ", false)]
+    #[case::empty("authorization", "", false)]
+    #[case::basic("Authorization", "Basic abc", false)]
+    #[case::different_header("x-api-key", "abc", false)]
+    #[case::non_ascii("authorization", "invali\u{00e9}auth", false)]
+    fn bearer_detection_requires_a_non_empty_token(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(has_bearer_auth(&[(name.into(), value.into())]), expected);
     }
 }

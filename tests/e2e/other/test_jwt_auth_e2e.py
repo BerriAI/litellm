@@ -12,9 +12,10 @@ from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import UnauthorizedError, UnknownApiError, unwrap
 from idp import SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, TeamNewBody
+from models import ChatBody, ChatMessage, TeamNewBody, UserNewBody
 from other_client import OtherClient
 from pydantic import BaseModel
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -78,9 +79,35 @@ def bound_team(client: OtherClient, resources: ResourceManager) -> BoundTeam:
     return BoundTeam(identity=provisioned, team_id=provisioned.group, team_alias=team_alias)
 
 
-def _ping() -> ChatBody:
+@dataclass(frozen=True, slots=True)
+class AliasedTeam:
+    identity: Identity
+    alias: str
+    target: str
+
+
+@pytest.fixture
+def aliased_team(client: OtherClient, resources: ResourceManager) -> AliasedTeam:
+    """An identity whose team carries a model_aliases entry, the name a managed
+    client such as Claude Code sends and the team rewrites to a real model group."""
+    marker: Final = unique_marker()
+    provisioned: Final = _provision(client, resources, marker=marker)
+    alias: Final = f"e2e-jwt-model-alias-{marker}"
+    team_id: Final = client.proxy.create_team(
+        TeamNewBody(
+            team_alias=f"e2e-jwt-aliased-{marker}",
+            team_id=provisioned.group,
+            models=[CHEAP_OPENAI_MODEL],
+            model_aliases={alias: CHEAP_OPENAI_MODEL},
+        )
+    )
+    resources.defer(lambda: client.proxy.delete_team(team_id))
+    return AliasedTeam(identity=provisioned, alias=alias, target=CHEAP_OPENAI_MODEL)
+
+
+def _ping(model: str = CHEAP_OPENAI_MODEL) -> ChatBody:
     return ChatBody(
-        model=CHEAP_OPENAI_MODEL,
+        model=model,
         messages=[ChatMessage(role="user", content=f"Reply with the single word pong. {unique_marker()}")],
         max_tokens=16,
     )
@@ -94,6 +121,14 @@ def _corrupt_signature(token: str) -> str:
 
 class TestJwtAuth:
     @pytest.mark.covers("other.auth.jwt.valid_token_allows", "other.auth.jwt.spend_attributed_to_claims")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_valid_token_for_an_existing_team_is_accepted_and_attributed(
         self, client: OtherClient, identity: Identity
     ) -> None:
@@ -115,7 +150,46 @@ class TestJwtAuth:
             f"spend row must carry the user from the JWT sub claim {identity.user_id!r}, got {row.user!r}"
         )
 
+    @pytest.mark.covers("other.auth.jwt.proxy_admin_personal_budget_enforced")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_proxy_admin_token_is_blocked_once_its_personal_budget_is_spent(
+        self, client: OtherClient, resources: ResourceManager
+    ) -> None:
+        identity: Final = client.idp.provision_user(
+            marker=unique_marker(), groups=(), group_ids=(), defer=resources.defer
+        )
+        resources.defer(lambda: client.proxy.delete_user(identity.user_id))
+        unwrap(
+            client.user_new(
+                UserNewBody(
+                    user_id=identity.user_id,
+                    user_email=f"{identity.username}@example.com",
+                    user_role="proxy_admin",
+                    auto_create_key=False,
+                    max_budget=0.0,
+                )
+            )
+        )
+
+        blocked: Final = client.proxy.chat(client.idp.access_token(identity), _ping())
+        assert isinstance(blocked, UnknownApiError), f"proxy_admin JWT must be stopped by its max_budget, got {blocked}"
+        assert (blocked.status_code, "ExceededBudget" in blocked.body) == (422, True), blocked
+        assert f"User={identity.user_id}" in blocked.body, f"budget denial must name the JWT's user: {blocked.body}"
+
     @pytest.mark.covers("other.auth.jwt.invalid_signature_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tampered_signature_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         tampered: Final = _corrupt_signature(client.idp.access_token(identity))
 
@@ -128,6 +202,13 @@ class TestJwtAuth:
         )
 
     @pytest.mark.covers("other.auth.jwt.expired_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_expired_token_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         expiring: Final = client.idp.access_token(identity, client_id=SHORT_LIVED_CLIENT_ID)
         delay: Final = _claims(expiring).exp - time.time() + 1
@@ -141,6 +222,13 @@ class TestJwtAuth:
         assert "expired" in result.body.lower(), f"the 401 must say the token expired, got {result.body[:300]}"
 
     @pytest.mark.covers("other.auth.jwt.wrong_issuer_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_signed_token_from_the_wrong_issuer_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         token: Final = client.idp.access_token(identity, issuer_host="unexpected-issuer.invalid")
         claims: Final = _claims(token)
@@ -151,6 +239,13 @@ class TestJwtAuth:
         assert "issuer" in result.body.lower(), f"expected issuer validation to reject the token: {result}"
 
     @pytest.mark.covers("other.auth.jwt.wrong_audience_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_signed_token_for_another_application_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         token: Final = client.idp.access_token(identity, client_id=WRONG_AUDIENCE_CLIENT_ID)
         claims: Final = _claims(token)
@@ -163,6 +258,13 @@ class TestJwtAuth:
         assert "audience" in result.body.lower(), f"expected audience validation to reject the token: {result}"
 
     @pytest.mark.covers("other.auth.jwt.unknown_team_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_token_naming_a_team_that_does_not_exist_is_rejected(
         self, client: OtherClient, resources: ResourceManager
     ) -> None:
@@ -178,6 +280,14 @@ class TestJwtAuth:
         )
 
     @pytest.mark.covers("other.auth.jwt.virtual_key_unaffected")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_plain_virtual_key_still_works_with_jwt_auth_enabled(self, client: OtherClient, scoped_key: str) -> None:
         response: Final = unwrap(client.proxy.chat(scoped_key, _ping()))
         assert response.choices, f"an sk- key must keep working on a proxy with enable_jwt_auth, got {response}"
@@ -204,6 +314,14 @@ def _denial(client: OtherClient, token: str, team: str) -> str:
 
 class TestJwtTeamHeader:
     @pytest.mark.covers("other.auth.jwt.team_header_alias_binds_team")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_header_with_the_team_alias_binds_the_same_team_as_the_team_id(
         self, client: OtherClient, bound_team: BoundTeam
     ) -> None:
@@ -221,7 +339,39 @@ class TestJwtTeamHeader:
             f"{bound_team.team_id!r}, got {by_alias!r}"
         )
 
+    @pytest.mark.covers("other.auth.jwt.team_model_alias_listed_and_routes")
+    @pytest.mark.parametrize("anthropic", [False, True], ids=["openai_shape", "anthropic_shape"])
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_team_model_alias_is_listed_by_v1_models_under_the_same_token_that_routes_it(
+        self, client: OtherClient, aliased_team: AliasedTeam, anthropic: bool
+    ) -> None:
+        token: Final = client.idp.access_token(aliased_team.identity)
+
+        routed: Final = unwrap(client.proxy.chat(token, _ping(model=aliased_team.alias)))
+        assert routed.choices, f"precondition: /chat/completions must route the team alias, got {routed}"
+
+        listed: Final = tuple(entry.id for entry in unwrap(client.list_models_as(token, anthropic=anthropic)).data)
+        assert aliased_team.alias in listed, (
+            f"/v1/models must list team alias {aliased_team.alias!r} that the same token routes on "
+            f"/chat/completions, got {listed}"
+        )
+        assert aliased_team.target in listed, f"the alias target {aliased_team.target!r} must stay listed, got {listed}"
+
     @pytest.mark.covers("other.auth.jwt.team_header_non_member_alias_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_header_with_the_alias_of_a_team_the_caller_is_not_in_is_rejected_like_an_unknown_value(
         self, client: OtherClient, resources: ResourceManager, bound_team: BoundTeam
     ) -> None:

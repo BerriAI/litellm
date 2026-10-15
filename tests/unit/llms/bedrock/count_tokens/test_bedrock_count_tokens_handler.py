@@ -1,4 +1,5 @@
 import asyncio
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -6,8 +7,9 @@ import pytest
 from botocore.credentials import RefreshableCredentials
 
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 class _ProbedCountTokensHandler(BedrockCountTokensHandler):
@@ -52,3 +54,67 @@ async def test_handle_count_tokens_request_signs_off_the_event_loop(monkeypatch)
     assert result == {"input_tokens": 7}
     assert client.post.call_args.kwargs["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert probe.served_during_refresh is True
+
+
+class TestBedrockCountTokensEndpoint:
+    def _make_handler(self) -> BedrockCountTokensConfig:
+        return BedrockCountTokensConfig()
+
+    def test_default_endpoint(self):
+        handler = self._make_handler()
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="amazon.nova-lite-v1:0",
+            aws_region_name="us-east-1",
+        )
+        assert (
+            url
+            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
+        )
+
+    def test_api_base_overrides_default(self):
+        handler = self._make_handler()
+        custom_base = "https://vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com"
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="amazon.nova-lite-v1:0",
+            aws_region_name="us-east-1",
+            api_base=custom_base,
+        )
+        assert url == f"{custom_base}/model/amazon.nova-lite-v1%3A0/count-tokens"
+
+    def test_aws_bedrock_runtime_endpoint_overrides_default(self):
+        handler = self._make_handler()
+        custom_endpoint = (
+            "https://vpce-yyy.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
+        )
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="amazon.nova-lite-v1:0",
+            aws_region_name="eu-west-1",
+            aws_bedrock_runtime_endpoint=custom_endpoint,
+        )
+        assert url == f"{custom_endpoint}/model/amazon.nova-lite-v1%3A0/count-tokens"
+
+    def test_api_base_takes_priority_over_aws_bedrock_runtime_endpoint(self):
+        handler = self._make_handler()
+        api_base = "https://api-base.example.com"
+        runtime_endpoint = "https://runtime-endpoint.example.com"
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="amazon.nova-lite-v1:0",
+            aws_region_name="us-east-1",
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=runtime_endpoint,
+        )
+        assert url == f"{api_base}/model/amazon.nova-lite-v1%3A0/count-tokens"
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        monkeypatch.setenv(
+            "AWS_BEDROCK_RUNTIME_ENDPOINT",
+            "https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com",
+        )
+        handler = self._make_handler()
+        url = handler.get_bedrock_count_tokens_endpoint(
+            model="amazon.nova-lite-v1:0",
+            aws_region_name="us-west-2",
+        )
+        assert url.startswith(
+            "https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com"
+        )

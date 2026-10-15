@@ -93,16 +93,14 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             raw_messages: Final = request_data.get("messages")
             litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
-                messages=list(raw_messages)
-                if isinstance(raw_messages, list)
-                else [],  # mutable-ok: transform_response wants a list
+                messages=list(raw_messages) if isinstance(raw_messages, list) else [],
                 raw_response=httpx_response,
                 model_response=ModelResponse(),
                 logging_obj=logging_obj,
-                optional_params={},  # mutable-ok: empty dict kwarg for transform_response
-                litellm_params={},  # mutable-ok: empty dict kwarg for transform_response
+                optional_params={},
+                litellm_params={},
                 api_key="",
-                request_data=dict(request_data),  # mutable-ok: transform_response wants a dict
+                request_data=dict(request_data),
                 encoding=encoding,
             )
 
@@ -123,10 +121,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                     raw_response=httpx_response,
                     model_response=EmbeddingResponse(),
                     logging_obj=logging_obj,
-                    optional_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    optional_params={},
                     api_key="",
-                    request_data=dict(request_data),  # mutable-ok: transform_embedding_response wants a dict
-                    litellm_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    request_data=dict(request_data),
+                    litellm_params={},
                 )
             )
 
@@ -148,11 +146,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         3. Return the model_response
         """
 
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
         from litellm.litellm_core_utils.streaming_handler import (
             convert_generic_chunk_to_model_response_stream,
             generic_chunk_has_all_required_fields,
         )
-        from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponseStream
 
         all_translated_chunks: Final[list[object]] = []  # mutable-ok: accumulator

@@ -26,7 +26,7 @@ from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
     ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
-    _generate_gcp_iam_access_token,
+    generate_gcp_iam_access_token,
 )
 from litellm.constants import (
     REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
@@ -36,6 +36,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
+
+_generate_gcp_iam_access_token = generate_gcp_iam_access_token
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
@@ -233,7 +235,7 @@ def _coerce_redis_kwargs_types(
             "socket_keepalive": bool,
         }
     )
-    result: Final = dict(redis_kwargs)  # mutable-ok: per-key try/except coercion below needs to drop individual keys
+    result: Final = dict(redis_kwargs)
     for key, value in redis_kwargs.items():
         if not isinstance(value, str):
             continue
@@ -341,7 +343,7 @@ def create_gcp_iam_redis_connect_func(
 
         self._parser.on_connect(self)
 
-        auth_args: Final = (_generate_gcp_iam_access_token(service_account),)
+        auth_args: Final = (generate_gcp_iam_access_token(service_account),)
         self.send_command("AUTH", *auth_args, check_health=False)
 
         try:
@@ -673,7 +675,10 @@ def _get_redis_client_logic(**env_overrides):
         if redis_kwargs.get("startup_nodes")
         else redis.Redis
     )
-    return _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    coerced_kwargs: Final = _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    if coerced_kwargs.get("socket_timeout") is None:
+        coerced_kwargs["socket_timeout"] = REDIS_SOCKET_TIMEOUT
+    return coerced_kwargs
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
@@ -720,7 +725,6 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
@@ -753,7 +757,6 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
@@ -803,7 +806,7 @@ def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
 
     superseded: Final = frozenset({"redis_connect_func", "username", "password"})
     kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
-    return dict(kept, credential_provider=credential_provider)  # mutable-ok: the branches below mutate these kwargs
+    return dict(kept, credential_provider=credential_provider)
 
 
 def get_redis_client(**env_overrides):

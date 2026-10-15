@@ -24,15 +24,19 @@ class httpxSpecialProvider(str, Enum):
     Search = "search"
     MCP = "mcp"
     RAG = "rag"
+    ProviderBilling = "provider_billing"
     A2AProvider = "a2a_provider"
     AgentHealthCheck = "agent_health_check"
+    AgentKillSwitch = "agent_kill_switch"
     A2A = "a2a"
     PromptManagement = "prompt_management"
     UI = "ui"
+    ROICalculator = "roi_calculator"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
     PasswordBreachCheck = "password_breach_check"
     ASGI = "asgi"
+    AgentHarness = "agent_harness"
 
 
 VerifyTypes = str | bool | ssl.SSLContext

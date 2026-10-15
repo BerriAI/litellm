@@ -4,11 +4,12 @@ Per-session auto-router benchmarks rollup.
 At request time the spend writer builds one AutoRouterTurnTransaction per successful
 auto-routed request (a request whose metadata carries a routing_decision) and queues it
 on the prisma client. The spend-log flush job drains the queue into
-key and user session rollups with one atomic statement per turn: each upsert classifies
+key and user session rollups, plus the per-day router rollup, with one atomic statement
+per turn: each upsert classifies
 the turn (same model, first visit, return to a model the session already used, out of
 order) against the row's own columns, so nothing is read before the write and concurrent
-pods compose. The benchmarks endpoint aggregates these rows and never touches
-LiteLLM_SpendLogs.
+pods compose. The benchmarks endpoint reads session shape from the session rows and money from the
+day rows, so spend and savings count only requests on the selected UTC days.
 """
 
 from __future__ import annotations
@@ -21,12 +22,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -45,20 +48,24 @@ _SESSION_COLUMNS: Final = """
     savings_estimated_baseline_models
 """
 
-AUTOROUTER_BENCHMARKS_SQL: Final = f"""
-WITH windowed AS (
-    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterSession"
+AUTOROUTER_SESSION_WINDOW_SQL: Final = f"""
+windowed AS (
+    SELECT {_SESSION_COLUMNS}, NULL::text AS comparison_user_id FROM "LiteLLM_AutoRouterSession"
     WHERE $4::text IS NULL
       AND last_turn_at >= $1::timestamp
       AND first_turn_at < $2::timestamp
       AND ($3::text IS NULL OR api_key = $3::text)
     UNION ALL
-    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterUserSession"
+    SELECT {_SESSION_COLUMNS}, user_id AS comparison_user_id FROM "LiteLLM_AutoRouterUserSession"
     WHERE (($4::text IS NOT NULL AND user_id = $4::text) OR ($4::text IS NULL AND api_key = ''))
       AND last_turn_at >= $1::timestamp
       AND first_turn_at < $2::timestamp
       AND ($3::text IS NULL OR api_key = $3::text)
-),
+)
+"""
+
+AUTOROUTER_BENCHMARKS_SQL: Final = f"""
+WITH {AUTOROUTER_SESSION_WINDOW_SQL},
 tier_maps AS (
     SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
     FROM (
@@ -67,43 +74,85 @@ tier_maps AS (
         GROUP BY router_name, router_type, kv.key
     ) per_tier
     GROUP BY router_name, router_type
+),
+sessions AS (
+    SELECT
+        router_name,
+        router_type,
+        COUNT(*)::int AS sessions,
+        SUM(turns)::int AS session_turns,
+        SUM(unordered_turns)::int AS unordered_turns,
+        SUM(covered_turns)::int AS covered_turns,
+        SUM(cache_hits)::int AS cache_hits,
+        SUM(same_model_turns)::int AS same_model_turns,
+        SUM(same_model_hits)::int AS same_model_hits,
+        SUM(first_visit_turns)::int AS first_visit_turns,
+        SUM(first_visit_hits)::int AS first_visit_hits,
+        SUM(return_turns)::int AS return_turns,
+        SUM(return_hits)::int AS return_hits,
+        SUM(return_expired_misses)::int AS return_expired_misses,
+        SUM(return_within_ttl_misses)::int AS return_within_ttl_misses,
+        SUM(ttl_5m_turns)::int AS ttl_5m_turns,
+        SUM(ttl_1h_turns)::int AS ttl_1h_turns,
+        SUM(total_tokens)::bigint AS total_tokens,
+        SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at)))::float8 AS session_seconds
+    FROM windowed
+    GROUP BY router_name, router_type
+),
+days AS (
+    SELECT
+        router_name,
+        router_type,
+        SUM(turns)::int AS turns,
+        CASE WHEN SUM(token_recorded_turns) = SUM(turns)
+            THEN SUM(total_tokens)::bigint END AS day_total_tokens,
+        SUM(spend)::float8 AS spend,
+        SUM(saved_spend)::float8 AS saved_spend,
+        SUM(savings_estimated_turns)::int AS savings_estimated_turns,
+        SUM(savings_estimated_actual_spend)::float8 AS savings_estimated_actual_spend,
+        SUM(savings_estimated_saved_spend)::float8 AS savings_estimated_saved_spend,
+        SUM(classifier_cost)::float8 AS classifier_cost,
+        SUM(classifier_cost_recorded_turns)::int AS classifier_cost_recorded_turns
+    FROM "LiteLLM_AutoRouterDailySpend"
+    WHERE date >= $5 AND date <= $6
+      AND ($3::text IS NULL OR api_key = $3::text)
+      AND ($4::text IS NULL OR user_id = $4::text)
+    GROUP BY router_name, router_type
 )
-SELECT
-    agg.*,
-    COALESCE(tier_maps.tier_turns, '{{}}'::jsonb) AS tier_turns
-FROM (
 SELECT
     router_name,
     router_type,
-    COUNT(*)::int AS sessions,
-    COALESCE(SUM(turns), 0)::int AS turns,
-    COALESCE(SUM(unordered_turns), 0)::int AS unordered_turns,
-    COALESCE(SUM(covered_turns), 0)::int AS covered_turns,
-    COALESCE(SUM(cache_hits), 0)::int AS cache_hits,
-    COALESCE(SUM(same_model_turns), 0)::int AS same_model_turns,
-    COALESCE(SUM(same_model_hits), 0)::int AS same_model_hits,
-    COALESCE(SUM(first_visit_turns), 0)::int AS first_visit_turns,
-    COALESCE(SUM(first_visit_hits), 0)::int AS first_visit_hits,
-    COALESCE(SUM(return_turns), 0)::int AS return_turns,
-    COALESCE(SUM(return_hits), 0)::int AS return_hits,
-    COALESCE(SUM(return_expired_misses), 0)::int AS return_expired_misses,
-    COALESCE(SUM(return_within_ttl_misses), 0)::int AS return_within_ttl_misses,
-    COALESCE(SUM(ttl_5m_turns), 0)::int AS ttl_5m_turns,
-    COALESCE(SUM(ttl_1h_turns), 0)::int AS ttl_1h_turns,
-    COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-    COALESCE(SUM(spend), 0)::float8 AS spend,
-    COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
-    COALESCE(SUM(savings_estimated_turns), 0)::int AS savings_estimated_turns,
-    COALESCE(SUM(savings_estimated_actual_spend), 0)::float8 AS savings_estimated_actual_spend,
-    COALESCE(SUM(savings_estimated_saved_spend), 0)::float8 AS savings_estimated_saved_spend,
-    COALESCE(SUM(classifier_cost), 0)::float8 AS classifier_cost,
-    COALESCE(SUM(classifier_cost_recorded_turns), 0)::int AS classifier_cost_recorded_turns,
-    COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
-FROM windowed
-GROUP BY router_name, router_type
-) agg
+    COALESCE(tier_maps.tier_turns, '{{}}'::jsonb) AS tier_turns,
+    COALESCE(sessions.sessions, 0) AS sessions,
+    COALESCE(sessions.session_turns, 0) AS session_turns,
+    COALESCE(sessions.unordered_turns, 0) AS unordered_turns,
+    COALESCE(sessions.covered_turns, 0) AS covered_turns,
+    COALESCE(sessions.cache_hits, 0) AS cache_hits,
+    COALESCE(sessions.same_model_turns, 0) AS same_model_turns,
+    COALESCE(sessions.same_model_hits, 0) AS same_model_hits,
+    COALESCE(sessions.first_visit_turns, 0) AS first_visit_turns,
+    COALESCE(sessions.first_visit_hits, 0) AS first_visit_hits,
+    COALESCE(sessions.return_turns, 0) AS return_turns,
+    COALESCE(sessions.return_hits, 0) AS return_hits,
+    COALESCE(sessions.return_expired_misses, 0) AS return_expired_misses,
+    COALESCE(sessions.return_within_ttl_misses, 0) AS return_within_ttl_misses,
+    COALESCE(sessions.ttl_5m_turns, 0) AS ttl_5m_turns,
+    COALESCE(sessions.ttl_1h_turns, 0) AS ttl_1h_turns,
+    COALESCE(sessions.total_tokens, 0) AS total_tokens,
+    COALESCE(sessions.session_seconds, 0) AS session_seconds,
+    COALESCE(days.turns, 0) AS turns,
+    CASE WHEN days.turns IS NULL THEN 0 ELSE days.day_total_tokens END AS day_total_tokens,
+    COALESCE(days.spend, 0) AS spend,
+    COALESCE(days.saved_spend, 0) AS saved_spend,
+    COALESCE(days.savings_estimated_turns, 0) AS savings_estimated_turns,
+    COALESCE(days.savings_estimated_actual_spend, 0) AS savings_estimated_actual_spend,
+    COALESCE(days.savings_estimated_saved_spend, 0) AS savings_estimated_saved_spend,
+    COALESCE(days.classifier_cost, 0) AS classifier_cost,
+    COALESCE(days.classifier_cost_recorded_turns, 0) AS classifier_cost_recorded_turns
+FROM sessions
+FULL OUTER JOIN days USING (router_name, router_type)
 LEFT JOIN tier_maps USING (router_name, router_type)
-ORDER BY agg.spend DESC
+ORDER BY spend DESC, router_name, router_type
 """
 
 
@@ -129,6 +178,7 @@ class AutoRouterTurnTransaction:
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_saved_spend: float = 0.0
     user_id: str = ""
+    token_counts_recorded: bool = False
 
 
 class TurnCacheFacts(NamedTuple):
@@ -222,7 +272,8 @@ def build_autorouter_turn_transaction(
     the payload's own usage record through the savings owner, never handed in beside it.
     The baseline the turn's saved_spend was priced against travels with the turn, so the
     row can name the counterfactual for the money it holds even after the router is
-    reconfigured or removed.
+    reconfigured or removed. A request with no session id still owns its router-day money,
+    so it becomes a turn with an empty session id that writes the day row and no session row.
     """
     if payload.get("status") != "success":
         return None
@@ -234,9 +285,9 @@ def build_autorouter_turn_transaction(
     router_name: Final = routing_decision.get("router_model_name") or payload.get("model_group")
     api_key: Final = payload.get("api_key") or ""
     user_id: Final = payload.get("user") or ""
-    session_id: Final = payload.get("session_id")
+    session_id: Final = payload.get("session_id") or ""
     model: Final = payload.get("model")
-    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and session_id and model):
+    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and model):
         return None
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
@@ -247,6 +298,11 @@ def build_autorouter_turn_transaction(
     )
 
     usage_object_raw: Final = metadata.get("usage_object")
+    token_counts: Final = (
+        (usage_object_raw.get("prompt_tokens"), usage_object_raw.get("completion_tokens"))
+        if isinstance(usage_object_raw, Mapping)
+        else ()
+    )
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
     baseline_raw: Final = routing_decision.get("savings_baseline_model")
@@ -264,6 +320,8 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
+        token_counts_recorded=len(token_counts) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in token_counts),
         spend=actual_spend,
         saved_spend=saved_spend,
         classifier_cost=classifier_cost or 0.0,
@@ -335,7 +393,7 @@ SELECT
     {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA},
     {_p("savings_estimated_turns")}::int, {_p("savings_estimated_actual_spend")}::float8,
     {_p("savings_estimated_saved_spend")}::float8, {_ESTIMATED_BASELINE_DELTA}
-WHERE {required_identity}::text <> ''
+WHERE {required_identity}::text <> '' AND {_p("session_id")}::text <> ''
 ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,
@@ -385,15 +443,54 @@ ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
 """
 
 
+_DAY_UPSERT_SQL: Final = f"""
+day_rollup AS (
+    INSERT INTO "LiteLLM_AutoRouterDailySpend" AS d (
+        date, api_key, user_id, router_name, router_type, turns, total_tokens, token_recorded_turns,
+        spend, saved_spend, savings_estimated_turns,
+        savings_estimated_actual_spend, savings_estimated_saved_spend, classifier_cost, classifier_cost_recorded_turns
+    )
+    VALUES (
+        ({_TURN_AT}::timestamp)::date::text, {_p("api_key")}::text, {_p("user_id")}::text, {_p("router_name")},
+        {_p("router_type")}, 1, {_p("total_tokens")}::bigint, {_p("token_counts_recorded")}::int,
+        {_p("spend")}::float8, {_p("saved_spend")}::float8, {_p("savings_estimated_turns")}::int,
+        {_p("savings_estimated_actual_spend")}::float8, {_p("savings_estimated_saved_spend")}::float8,
+        {_p("classifier_cost")}::float8, 1
+    )
+    ON CONFLICT (date, api_key, user_id, router_name, router_type) DO UPDATE SET
+        turns = d.turns + 1,
+        total_tokens = d.total_tokens + EXCLUDED.total_tokens,
+        token_recorded_turns = d.token_recorded_turns + EXCLUDED.token_recorded_turns,
+        spend = d.spend + EXCLUDED.spend,
+        saved_spend = d.saved_spend + EXCLUDED.saved_spend,
+        savings_estimated_turns = d.savings_estimated_turns + EXCLUDED.savings_estimated_turns,
+        savings_estimated_actual_spend = d.savings_estimated_actual_spend + EXCLUDED.savings_estimated_actual_spend,
+        savings_estimated_saved_spend = d.savings_estimated_saved_spend + EXCLUDED.savings_estimated_saved_spend,
+        classifier_cost = d.classifier_cost + EXCLUDED.classifier_cost,
+        classifier_cost_recorded_turns = d.classifier_cost_recorded_turns + 1
+    RETURNING 1
+)
+"""
+
 UPSERT_AUTOROUTER_SESSION_SQL: Final = f"""
 WITH key_rollup AS (
     {_session_upsert_sql(user_scoped=False)}
     RETURNING 1
-)
+), {_DAY_UPSERT_SQL}
 {_session_upsert_sql(user_scoped=True)}
 """
 
-UPSERT_AUTOROUTER_USER_SESSION_SQL: Final = _session_upsert_sql(user_scoped=True)
+UPSERT_AUTOROUTER_USER_SESSION_SQL: Final = f"""
+WITH {_DAY_UPSERT_SQL}
+{_session_upsert_sql(user_scoped=True)}
+"""
+
+_SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        UPSERT_AUTOROUTER_SESSION_SQL: "LiteLLM_AutoRouterSession",
+        UPSERT_AUTOROUTER_USER_SESSION_SQL: "LiteLLM_AutoRouterUserSession",
+    }
+)
 
 
 def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
@@ -413,7 +510,8 @@ async def write_autorouter_turn(
     transaction: AutoRouterTurnTransaction,
     statement: str = UPSERT_AUTOROUTER_SESSION_SQL,
 ) -> None:
-    await db.execute_raw(statement, *_upsert_params(transaction))
+    async with db_span("write_autorouter_turn", _SESSION_TABLE_BY_STATEMENT.get(statement)):
+        await db.execute_raw(statement, *_upsert_params(transaction))
 
 
 async def _upsert_turn_with_retry(
