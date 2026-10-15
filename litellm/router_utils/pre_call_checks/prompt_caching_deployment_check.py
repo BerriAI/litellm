@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.bedrock.common_utils import supports_bedrock_prompt_cache_ttl
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
@@ -46,6 +47,13 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
         ),
         default=DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     )
+
+
+def _honors_one_hour_cache_ttl(standard_logging_object: StandardLoggingPayload) -> bool:
+    if standard_logging_object["custom_llm_provider"] == "bedrock":
+        return supports_bedrock_prompt_cache_ttl(standard_logging_object["model"])
+    model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
+    return model_map_value is not None and (model_map_value.get("cache_creation_input_token_cost_above_1hr") or 0) > 0
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
@@ -146,18 +154,20 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        prompt_messages: Final = cast(list[AllMessageValues], messages)
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=prompt_messages,
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
             await cache.async_add_model_id(
                 model_id=model_id,
-                messages=messages,
+                messages=prompt_messages,
                 tools=None,  # [TODO]: add tools once standard_logging_object supports it
+                honors_one_hour_ttl=_honors_one_hour_cache_ttl(standard_logging_object),
             )
 
         return
