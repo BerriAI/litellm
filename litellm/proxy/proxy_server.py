@@ -5681,6 +5681,7 @@ class ProxyConfig:
         self._environment_before_db: Mapping[str, str] | None = None
         self._db_environment_revision: int | None = None
         self._db_environment_keys: frozenset[str] = frozenset()
+        self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
@@ -8353,7 +8354,7 @@ class ProxyConfig:
         self, value: object, revision: int | None, environment_before_db: Mapping[str, str]
     ) -> None:
         applied_revision: Final = self._db_environment_revision
-        if revision is not None and applied_revision is not None and revision < applied_revision:
+        if applied_revision is not None and (revision is None or revision < applied_revision):
             return
         row: Final = _as_settings_mapping(value)
         decrypted: Final = _ENVIRONMENT_VALUES.validate_python(
@@ -8366,12 +8367,20 @@ class ProxyConfig:
         else:
             stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
             still_stored: Final = stored | frozenset(key.upper() for key in stored)
-            _restore_environment(
-                self._db_environment_keys - still_stored - _SSO_ENVIRONMENT_VARIABLES, environment_before_db
-            )
+            removed: Final = self._db_environment_keys - still_stored
+            _restore_environment(removed - _SSO_ENVIRONMENT_VARIABLES, environment_before_db)
+            self._sso_environment_removals = (
+                self._sso_environment_removals | (removed & _SSO_ENVIRONMENT_VARIABLES)
+            ) - still_stored
             self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
             self._db_environment_revision = revision
         self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+
+    def _restore_sso_environment_removals(self, sso_table_keys: frozenset[str]) -> None:
+        _restore_environment(
+            self._sso_environment_removals - sso_table_keys, self._environment_before_db or MappingProxyType({})
+        )
+        self._sso_environment_removals = frozenset()
 
     def _captured_environment_before_db(self) -> Mapping[str, str]:
         if self._environment_before_db is None:
@@ -8785,6 +8794,11 @@ class ProxyConfig:
                 sso_settings.sso_settings.pop("ui_access_mode", None)
                 uppercase_sso_settings: Final = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
                 self.decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
+            self._restore_sso_environment_removals(
+                frozenset()
+                if sso_settings is None
+                else frozenset(key.upper() for key, value in sso_settings.sso_settings.items() if value)
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - %s", e

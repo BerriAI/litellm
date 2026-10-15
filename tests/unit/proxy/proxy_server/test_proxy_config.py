@@ -5024,6 +5024,7 @@ _REVISION_TEST_KEYS: Final = (
     "revision_test_lower",
     "REVISION_TEST_LOWER",
     "GOOGLE_CLIENT_ID",
+    "PROXY_BASE_URL",
 )
 
 
@@ -5059,6 +5060,16 @@ async def _sync_environment_variables_row(
     await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
 
 
+async def _sync_sso_settings_row(pc: ProxyConfig, values: Mapping[str, str] | None) -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=None
+        if values is None
+        else SimpleNamespace(sso_settings={key: encrypt_value_helper(value) for key, value in values.items()})
+    )
+    await pc._init_sso_settings_in_db(prisma_client=prisma_client)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("revision_test_environment")
 async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_stores(monkeypatch):
@@ -5085,6 +5096,7 @@ async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_st
         "revision_test_lower": "lower",
         "REVISION_TEST_LOWER": "lower",
         "GOOGLE_CLIENT_ID": None,
+        "PROXY_BASE_URL": None,
     }
 
     await _sync_environment_variables_row(
@@ -5098,6 +5110,7 @@ async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_st
         "revision_test_lower": None,
         "REVISION_TEST_LOWER": None,
         "GOOGLE_CLIENT_ID": None,
+        "PROXY_BASE_URL": None,
     }
 
 
@@ -5120,22 +5133,28 @@ async def test_environment_variables_row_without_a_revision_only_sets_keys_a_lat
     pc: Final = ProxyConfig()
 
     await _sync_environment_variables_row(
-        monkeypatch, pc, {"REVISION_TEST_KEPT": "kept", "REVISION_TEST_DB_ONLY": "db-only"}, revision=2
-    )
-    await _sync_environment_variables_row(
         monkeypatch, pc, {"REVISION_TEST_KEPT": "kept", "REVISION_TEST_NULLED": "from-an-older-pod"}, revision=None
     )
-    assert (
-        os.environ.get("REVISION_TEST_DB_ONLY"),
-        os.environ.get("REVISION_TEST_NULLED"),
-    ) == ("db-only", "from-an-older-pod")
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_NULLED")) == (
+        "kept",
+        "from-an-older-pod",
+    )
 
     await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "kept"}, revision=3)
-    assert (
-        os.environ.get("REVISION_TEST_KEPT"),
-        os.environ.get("REVISION_TEST_DB_ONLY"),
-        os.environ.get("REVISION_TEST_NULLED"),
-    ) == ("kept", None, None)
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_NULLED")) == ("kept", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_stale_environment_variables_row_without_a_revision_cannot_bring_back_a_removed_key(monkeypatch):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": "db-only"}, revision=1)
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": "db-only"}, revision=None)
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+
+    assert os.environ.get("REVISION_TEST_DB_ONLY") is None
 
 
 @pytest.mark.asyncio
@@ -5154,15 +5173,31 @@ async def test_removed_key_does_not_come_back_with_a_value_set_after_the_first_s
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("revision_test_environment")
-async def test_newer_environment_variables_row_leaves_sso_settings_it_no_longer_stores(monkeypatch):
+async def test_sso_key_only_the_environment_variables_row_stored_is_unset_by_the_next_sso_sync(monkeypatch):
     pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, {"PROXY_BASE_URL": "https://from-the-row"}, revision=1)
+    await _sync_sso_settings_row(pc, None)
 
-    await _sync_environment_variables_row(
-        monkeypatch, pc, {"GOOGLE_CLIENT_ID": "sso-client-id", "REVISION_TEST_DB_ONLY": "db-only"}, revision=1
-    )
+    await _sync_environment_variables_row(monkeypatch, pc, {"PROXY_BASE_URL": None}, revision=2)
+    await _sync_sso_settings_row(pc, None)
+
+    assert os.environ.get("PROXY_BASE_URL") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_sso_key_the_sso_settings_table_holds_stays_set_while_the_environment_variables_row_drops_it(
+    monkeypatch,
+):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "from-the-row"}, revision=1)
+    await _sync_sso_settings_row(pc, {"google_client_id": "from-the-row"})
+
     await _sync_environment_variables_row(monkeypatch, pc, {}, revision=2)
+    set_between_the_two_syncs: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    await _sync_sso_settings_row(pc, {"google_client_id": "from-the-row"})
 
-    assert (os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("sso-client-id", None)
+    assert (set_between_the_two_syncs, os.environ.get("GOOGLE_CLIENT_ID")) == ("from-the-row", "from-the-row")
 
 
 # ---------------------------------------------------------------------------

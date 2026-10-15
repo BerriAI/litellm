@@ -9,9 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import psycopg
 import pytest
+from psycopg import sql
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
@@ -1228,3 +1232,64 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
                     "OPENAI_BASE_URL": None,
                 }
                 eventually(answers, lambda values: values == (from_process_and_config_file,) * 2, seconds=30)
+
+
+_TABLE_ONLY_ROLE_PASSWORD: Final = "integration-table-only-password"
+
+
+@contextmanager
+def _login_role_with_no_sequence_grants() -> Iterator[str]:
+    role: Final = f"integration_table_only_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOINHERIT").format(
+                sql.Identifier(role), sql.Literal(_TABLE_ONLY_ROLE_PASSWORD)
+            )
+        )
+        try:
+            yield role
+        finally:
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def _save_environment_variables_as(database_url: str, values: dict[str, str]) -> None:
+    with psycopg.connect(database_url, autocommit=True) as writer:
+        writer.execute(
+            'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s) '
+            "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value",
+            ("environment_variables", Jsonb(values)),
+        )
+
+
+def test_a_database_role_with_no_sequence_grants_can_still_save_db_environment_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _login_role_with_no_sequence_grants() as role, scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        with psycopg.connect(database_url, autocommit=True) as owner:
+            owner.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
+            owner.execute(
+                sql.SQL("GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+        parsed: Final = urlsplit(database_url)
+        role_url: Final = urlunsplit(
+            parsed._replace(netloc=f"{role}:{_TABLE_ONLY_ROLE_PASSWORD}@{parsed.netloc.rpartition('@')[2]}")
+        )
+
+        def revision() -> JsonValue:
+            return read_rows(
+                'SELECT reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
+                ("environment_variables",),
+                database_url=database_url,
+            )[0]["reload_revision"]
+
+        _save_environment_variables_as(role_url, {"TABLE_ONLY_ROLE_KEY": "stored"})
+        first: Final = revision()
+        _save_environment_variables_as(role_url, {})
+        second: Final = revision()
+
+        assert isinstance(first, int) and isinstance(second, int)
+        assert 0 < first < second
