@@ -1353,6 +1353,8 @@ def test_d3_management_treats_an_empty_scope_as_unset(rig: MatrixRig, operation:
     finally:
         for row in read_rows('SELECT guardrail_id FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (name,)):
             assert rig.candidate.request("DELETE", f"/guardrails/{row['guardrail_id']}").status_code == 200, row
+
+
 def test_d3_management_normalizes_uppercase_scope(rig: MatrixRig) -> None:
     name: Final = f"d3-uppercase-{uuid.uuid4().hex}"
     identity: Final = _create_management_rail(rig, name, _management_params(name, rig, scope="STREAMING"))
