@@ -425,7 +425,7 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
 
 def _reset_sentry_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
-    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
+    litellm_logging.start_sentry.cache_clear()
     monkeypatch.setattr(litellm_logging, "capture_exception", None)
     monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
 

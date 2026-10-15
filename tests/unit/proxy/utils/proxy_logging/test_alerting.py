@@ -212,7 +212,7 @@ async def test_alerting_handler_sentry_without_sdk_error_raises(proxy_logging, m
     proxy_logging.alerting = ["sentry"]
     monkeypatch.delenv("SENTRY_DSN", raising=False)
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
-    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
+    litellm_logging.start_sentry.cache_clear()
     with pytest.raises(Exception, match="SENTRY_DSN"):
         await proxy_logging.alerting_handler(message="x", level="Low", alert_type=AlertType.db_exceptions)
 
@@ -238,7 +238,7 @@ async def test_alerting_handler_starts_sentry_when_the_alert_was_not_configured_
     monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
     monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
-    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
+    litellm_logging.start_sentry.cache_clear()
     monkeypatch.setattr(litellm_logging, "capture_exception", None)
     monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
 

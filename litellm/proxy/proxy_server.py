@@ -4965,13 +4965,12 @@ def _is_remote_module_url(value: object) -> bool:
 
 def sentry_is_configured(general_settings: Mapping[str, object]) -> bool:
     alerting: Final = general_settings.get("alerting")
-    configured: Final = (
-        *litellm.input_callback,
-        *litellm.success_callback,
-        *litellm.failure_callback,
-        *(alerting if isinstance(alerting, list) else ()),
+    return (
+        "sentry" in litellm.input_callback
+        or "sentry" in litellm.success_callback
+        or "sentry" in litellm.failure_callback
+        or (isinstance(alerting, list) and "sentry" in alerting)
     )
-    return any(item == "sentry" for item in configured if isinstance(item, str))
 
 
 def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:

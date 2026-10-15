@@ -187,7 +187,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 
 
 @pytest.mark.asyncio
-async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(monkeypatch, caplog) -> None:
+async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.proxy.tracing_runtime import manage_tracing
 
     monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
@@ -217,7 +219,9 @@ async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured
     ),
     ids=("failure_callback", "success_callback", "input_callback", "alerting"),
 )
-async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(tmp_path, monkeypatch, config_text) -> None:
+async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_text: str
+) -> None:
     import sentry_sdk
 
     from litellm.litellm_core_utils import litellm_logging
@@ -226,7 +230,7 @@ async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(tmp_pat
     monkeypatch.setattr(sentry_sdk, "init", init)
     monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
-    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
+    litellm_logging.start_sentry.cache_clear()
     monkeypatch.setattr(litellm_logging, "capture_exception", None)
     monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
     monkeypatch.setattr(litellm, "input_callback", [])
