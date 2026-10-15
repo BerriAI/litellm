@@ -21,12 +21,23 @@ pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 @pytest.mark.parametrize("model,usage", [
     (None, {"cache_read_input_tokens": 100}),
-    ("claude-sonnet-5", None),
-    ("claude-sonnet-5", {"prompt_tokens": "invalid"}),
+    ("totally-made-up-model-xyz", {"cache_read_input_tokens": 100}),
 ])
 def test_prompt_cache_estimate_distinguishes_unknown_from_zero(model: str | None, usage: dict[str, object] | None) -> None:
     assert prompt_caching_savings_for_request(model, "anthropic", usage) is None
-    assert compute_savings_spend(model, "anthropic", 0, False, usage_object=usage).prompt_caching == 0
+    # The rollup now carries the unknown forward instead of recording a measured zero:
+    # a request whose price cannot be resolved has no dollar figure to write.
+    assert compute_savings_spend(model, "anthropic", 0, False, usage_object=usage).prompt_caching is None
+    assert compute_savings_spend(model, "anthropic", 500, False, usage_object=usage).compression is None
+
+
+def test_priced_request_with_missing_or_unusable_usage_records_zero() -> None:
+    # The estimate reports unknown; the rollup has a price but no usage it can
+    # apply it to, so the savings are zero, not unpriced.
+    assert prompt_caching_savings_for_request("claude-sonnet-5", "anthropic", None) is None
+    assert prompt_caching_savings_for_request("claude-sonnet-5", "anthropic", {"prompt_tokens": "invalid"}) is None
+    assert compute_savings_spend("claude-sonnet-5", "anthropic", 0, False, usage_object=None).prompt_caching == 0
+    assert compute_savings_spend("claude-sonnet-5", "anthropic", 0, False, usage_object={"prompt_tokens": "invalid"}).prompt_caching == 0
     assert prompt_caching_savings_for_request("claude-sonnet-5", "anthropic", {"prompt_tokens": 100}) == 0
 
 
@@ -406,7 +417,10 @@ def test_negative_cache_write_count_clamps_to_zero():
     assert result.prompt_caching == pytest.approx(1000 * (input_cost - cache_read_cost))
 
 
-def test_unknown_model_fails_open_to_zero():
+def test_unknown_model_reports_unpriced_savings():
+    # Cost-map removals (#45665-#45669) made "unknown model" a whole provider's
+    # steady state, not a typo: a flat $0.00 there reads as "saved nothing"
+    # while the token counters keep climbing (#46677).
     result = compute_savings_spend(
         model="totally-made-up-model-xyz",
         custom_llm_provider="anthropic",
@@ -414,11 +428,12 @@ def test_unknown_model_fails_open_to_zero():
         gateway_injected_cache=True,
         usage_object={"cache_read_input_tokens": 1000},
     )
-    assert result.compression == 0.0
-    assert result.prompt_caching == 0.0
+    assert result.compression is None
+    assert result.prompt_caching is None
+    assert result.gateway_injected_caching is None
 
 
-def test_missing_model_fails_open_to_zero():
+def test_missing_model_reports_unpriced_savings():
     result = compute_savings_spend(
         model=None,
         custom_llm_provider=None,
@@ -426,8 +441,60 @@ def test_missing_model_fails_open_to_zero():
         gateway_injected_cache=True,
         usage_object={"cache_read_input_tokens": 1000},
     )
+    assert result.compression is None
+    assert result.prompt_caching is None
+    assert result.gateway_injected_caching is None
+
+
+def test_unmapped_provider_model_savings_are_unpriced_not_zero():
+    """Regression for #46677: openrouter/* left the cost map, so every
+    openrouter deployment's savings dashboard flatlined at $0.00."""
+    result = compute_savings_spend(
+        model="openrouter/z-ai/glm-5.3-flash",
+        custom_llm_provider="openrouter",
+        compression_saved_tokens=5000,
+        gateway_injected_cache=False,
+        usage_object={
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+            "prompt_tokens_details": {"cached_tokens": 80, "text_tokens": 20},
+        },
+    )
+    assert result.compression is None
+    assert result.prompt_caching is None
+    # not gateway-injected: the attributed figure stays a priced zero
+    assert result.gateway_injected_caching == 0.0
+
+
+def test_zero_saved_tokens_stay_a_priced_zero_on_an_unpriced_model():
+    # Nothing was saved: the dollar figure is a measured zero even when the
+    # model itself cannot be priced.
+    result = compute_savings_spend(
+        model="openrouter/z-ai/glm-5.3-flash",
+        custom_llm_provider="openrouter",
+        compression_saved_tokens=0,
+        gateway_injected_cache=False,
+    )
     assert result.compression == 0.0
-    assert result.prompt_caching == 0.0
+    assert result.gateway_injected_caching == 0.0
+
+
+@pytest.mark.parametrize("tokens,rate,expected", [
+    (100, 0.0, 0.0),  # an explicit zero rate is a price, not an unknown
+    (0, None, 0.0),  # nothing saved is a priced zero
+    (-5, None, 0.0),  # negative counts clamp, and stay zero
+    (100, None, None),  # tokens saved against no resolvable rate are unpriced
+    (100, 2e-06, 2e-04),
+])
+def test_priced_tokens_distinguishes_a_zero_rate_from_no_rate(tokens: int, rate: float | None, expected: float | None) -> None:
+    from litellm.proxy.spend_tracking.savings import _priced_tokens
+
+    result = _priced_tokens(tokens, rate)
+    if expected is None:
+        assert result is None
+    else:
+        assert result == pytest.approx(expected)
 
 
 def test_negative_token_counts_clamp_to_zero():
