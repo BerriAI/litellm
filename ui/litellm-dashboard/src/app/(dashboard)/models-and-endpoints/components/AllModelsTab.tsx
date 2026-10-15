@@ -20,7 +20,7 @@ import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQ
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
-import { routingStatusToBlocked } from "../utils/routingStatus";
+import { ROUTING_STATUS_FILTER_ID, routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
 import {
   ALL_MODEL_GROUPS_VALUE,
@@ -34,7 +34,6 @@ import {
   isModelTableSortColumnId,
   MODEL_NAME_COLUMN_ID,
   MODEL_TABLE_SORT_COLUMN_IDS,
-  ROUTING_STATUS_COLUMN_ID,
   toServerSortField,
 } from "./ModelsTableColumns";
 
@@ -184,7 +183,7 @@ const AllModelsTab = ({
           ? { id: MODEL_NAME_COLUMN_ID, value: selectedModelGroup }
           : null,
         selectedModelAccessGroupFilter ? { id: ACCESS_GROUPS_COLUMN_ID, value: selectedModelAccessGroupFilter } : null,
-        routingStatusFilter ? { id: ROUTING_STATUS_COLUMN_ID, value: routingStatusFilter } : null,
+        routingStatusFilter ? { id: ROUTING_STATUS_FILTER_ID, value: routingStatusFilter } : null,
       ].filter((entry) => entry !== null),
     [selectedModelGroup, selectedModelAccessGroupFilter, routingStatusFilter],
   );
@@ -200,7 +199,7 @@ const AllModelsTab = ({
     const next = functionalUpdate(updater, columnFilters);
     const modelGroup = next.find((entry) => entry.id === MODEL_NAME_COLUMN_ID)?.value;
     const accessGroup = next.find((entry) => entry.id === ACCESS_GROUPS_COLUMN_ID)?.value;
-    const status = next.find((entry) => entry.id === ROUTING_STATUS_COLUMN_ID)?.value;
+    const status = next.find((entry) => entry.id === ROUTING_STATUS_FILTER_ID)?.value;
     setSelectedModelGroup(typeof modelGroup === "string" ? modelGroup : ALL_MODEL_GROUPS_VALUE);
     void setTableState({
       access_group: typeof accessGroup === "string" ? accessGroup : null,

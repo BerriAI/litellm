@@ -1,3 +1,5 @@
+export const ROUTING_STATUS_FILTER_ID = "model_info_blocked";
+
 export type RoutingStatusFilter = "active" | "paused" | null;
 
 /**

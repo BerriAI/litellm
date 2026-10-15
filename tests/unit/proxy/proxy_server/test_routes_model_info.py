@@ -804,7 +804,7 @@ def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(clie
 
 
 # ---------------------------------------------------------------------------
-# GET /v2/model/info?blocked / ?sortBy=blocked
+# GET /v2/model/info?blocked
 # ---------------------------------------------------------------------------
 
 
@@ -873,14 +873,6 @@ def test_v2_model_info_blocked_filter_returns_only_active(client, auth_as, routi
     payload = response.json()
     assert _model_names(payload) == ["active-model", "another-active"]
     assert payload["total_count"] == 2
-
-
-def test_v2_model_info_sort_by_blocked_puts_active_first(client, auth_as, routing_status_router):
-    """`sortBy=blocked&sortOrder=asc` surfaces the active deployments first."""
-    with auth_as():
-        response = client.get("/v2/model/info", params={"sortBy": "blocked", "sortOrder": "asc"})
-    assert response.status_code == 200
-    assert _model_names(response.json()) == ["active-model", "another-active", "paused-model"]
 
 
 def test_v2_model_info_search_and_blocked_filter_combine(client, auth_as, routing_status_router):

@@ -24,7 +24,6 @@ export const COSTS_COLUMN_ID = "input_cost";
 export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
 export const STATUS_COLUMN_ID = "model_info_db_model";
-export const ROUTING_STATUS_COLUMN_ID = "model_info_blocked";
 
 export const MODEL_TABLE_SORT_COLUMN_IDS = [
   MODEL_NAME_COLUMN_ID,
@@ -32,7 +31,6 @@ export const MODEL_TABLE_SORT_COLUMN_IDS = [
   UPDATED_AT_COLUMN_ID,
   COSTS_COLUMN_ID,
   STATUS_COLUMN_ID,
-  ROUTING_STATUS_COLUMN_ID,
 ] as const;
 
 export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
@@ -45,7 +43,6 @@ const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [STATUS_COLUMN_ID]: "status",
   [CREATED_BY_COLUMN_ID]: "created_at",
   [UPDATED_AT_COLUMN_ID]: "updated_at",
-  [ROUTING_STATUS_COLUMN_ID]: "blocked",
 };
 
 export const toServerSortField = (columnId: string): string => COLUMN_ID_TO_SERVER_SORT_FIELD[columnId] ?? columnId;
@@ -265,14 +262,6 @@ function AccessGroupsCell({ accessGroups }: { accessGroups: string[] | null }) {
   );
 }
 
-function RoutingStatusCell({ blocked }: { blocked: boolean | null | undefined }) {
-  return blocked === true ? (
-    <StatusBadge tone="neutral" label="Paused" />
-  ) : (
-    <StatusBadge tone="success" label="Active" />
-  );
-}
-
 interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
@@ -469,16 +458,6 @@ export const getModelsTableColumns = ({
     cell: ({ row }) => <CostsCell model={row.original} />,
   },
   {
-    id: ROUTING_STATUS_COLUMN_ID,
-    accessorFn: (row) => row.model_info?.blocked === true,
-    meta: { title: "Status", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
-    enableSorting: true,
-    size: 90,
-    minSize: 70,
-    cell: ({ row }) => <RoutingStatusCell blocked={row.original.model_info?.blocked} />,
-  },
-  {
     id: TEAM_ID_COLUMN_ID,
     accessorFn: (row) => row.model_info.team_id ?? "",
     meta: { title: "Team ID" },
@@ -521,7 +500,7 @@ export const getModelsTableColumns = ({
   },
   {
     id: "actions",
-    meta: { title: "Actions", className: "text-right", headerClassName: "text-right", pinned: "right" },
+    meta: { title: "Actions", className: "text-right", headerClassName: "text-right" },
     header: "Actions",
     enableSorting: false,
     enableHiding: false,

@@ -15439,11 +15439,6 @@ def _sort_models(
             db_model: Final = model_info.get("db_model", False)
             return db_model
 
-        elif sort_by == "blocked":
-            # Routing status: False (active) comes before True (paused) for asc,
-            # so `sortBy=blocked&sortOrder=asc` surfaces the active deployments.
-            return bool(model_info.get("blocked", False))
-
         return None
 
     try:
@@ -15845,7 +15840,7 @@ async def model_info_v2(
         search: Case-insensitive partial match on model name or team public name.
         modelId: Return a single deployment by LiteLLM model id.
         teamId: Filter to models with direct access or team membership for this team id.
-        sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, status, or blocked.
+        sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
         blocked: Filter by routing status (false = active, true = paused).
         access_group: Only return deployments in this model access group.
         wildcard_only: Only return deployments whose `model_name` contains `*`.

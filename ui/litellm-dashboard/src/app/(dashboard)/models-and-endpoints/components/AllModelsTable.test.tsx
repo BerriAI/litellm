@@ -76,14 +76,13 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
-  it("renders the ten design columns and hides Source behind the Columns menu", async () => {
+  it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);
 
     for (const header of [
       "Model ID",
       "Model Information",
-      "Status",
       "Credentials",
       "Created By",
       "Updated At",
@@ -95,6 +94,7 @@ describe("AllModelsTable", () => {
       expect(screen.getByRole("columnheader", { name: new RegExp(header, "i") })).toBeInTheDocument();
     }
 
+    expect(screen.queryByRole("columnheader", { name: /^status$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
     expect(screen.queryByText("DB Model")).not.toBeInTheDocument();
 
@@ -112,6 +112,8 @@ describe("AllModelsTable", () => {
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
     await user.click(screen.getByRole("combobox", { name: /filter by status/i }));
+    expect(await screen.findByRole("option", { name: "All", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "All Statuses" })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("option", { name: "Paused" }));
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
