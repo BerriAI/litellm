@@ -1,0 +1,387 @@
+[
+  {
+    "name": "baseline",
+    "request": {
+      "model": "beta-prototype",
+      "messages": []
+    },
+    "expected": []
+  },
+  {
+    "name": "adaptive_updates",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "adaptive",
+        "display": "updates"
+      }
+    },
+    "expected": [
+      "thinking-display-updates-2026-08-18"
+    ]
+  },
+  {
+    "name": "enabled_updates",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "display": "updates"
+      }
+    },
+    "expected": [
+      "thinking-display-updates-2026-08-18"
+    ]
+  },
+  {
+    "name": "disabled_updates",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "disabled",
+        "display": "updates"
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "summarized_thinking",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized"
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "omitted_thinking",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "enabled",
+        "display": "omitted"
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "missing_display",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "adaptive"
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "unknown_thinking",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "future",
+        "display": "updates"
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "null_thinking",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": null
+    },
+    "expected": []
+  },
+  {
+    "name": "scalar_thinking",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": "updates"
+    },
+    "expected": []
+  },
+  {
+    "name": "wrong_display_type",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [],
+      "thinking": {
+        "type": "adaptive",
+        "display": [
+          "updates"
+        ]
+      }
+    },
+    "expected": []
+  },
+  {
+    "name": "tool_addition",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "mid-conversation-tool-changes-2026-07-01"
+    ]
+  },
+  {
+    "name": "tool_removal",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_removal",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "mid-conversation-tool-changes-2026-07-01"
+    ]
+  },
+  {
+    "name": "user_tool_change",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "wrong_target",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": {
+                "type": "tool_definition",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "wrong_action",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_use",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "split_messages",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": []
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "split_blocks",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_addition"
+            },
+            {
+              "type": "text",
+              "tool": {
+                "type": "tool_reference"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "text_content",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": "tool_addition"
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "null_target",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": null
+            }
+          ]
+        }
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "combined",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "tool_addition",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            },
+            {
+              "type": "tool_removal",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "updates"
+      },
+      "future_extension": {
+        "preserve": true
+      }
+    },
+    "expected": [
+      "thinking-display-updates-2026-08-18",
+      "mid-conversation-tool-changes-2026-07-01"
+    ]
+  },
+  {
+    "name": "later_tool_change",
+    "request": {
+      "model": "beta-prototype",
+      "messages": [
+        {
+          "role": "user",
+          "content": "start"
+        },
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "tools changed"
+            },
+            {
+              "type": "tool_removal",
+              "tool": {
+                "type": "tool_reference",
+                "name": "lookup"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      "mid-conversation-tool-changes-2026-07-01"
+    ]
+  }
+]

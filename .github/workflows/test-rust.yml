@@ -6,6 +6,10 @@ on:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
+      - "scripts/generate_anthropic_beta_detection.py"
+      - "litellm/llms/anthropic/beta_detection*"
+      - "tests/fixtures/anthropic_beta_detection.json"
+      - "tests/unit/llms/anthropic/test_beta_detection_generated.py"
       - "scripts/trace_codegen/**"
       - "scripts/lens_assets/**"
       - "litellm/tracing/**"
@@ -36,6 +40,10 @@ on:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
+      - "scripts/generate_anthropic_beta_detection.py"
+      - "litellm/llms/anthropic/beta_detection*"
+      - "tests/fixtures/anthropic_beta_detection.json"
+      - "tests/unit/llms/anthropic/test_beta_detection_generated.py"
       - "scripts/trace_codegen/**"
       - "scripts/lens_assets/**"
       - "litellm/tracing/**"
@@ -136,6 +144,10 @@ jobs:
       - name: Check generated trace contracts
         working-directory: .
         run: uv run scripts/generate_trace_types.py --check
+
+      - name: Check generated Anthropic beta detection
+        working-directory: .
+        run: uv run --no-sync python scripts/generate_anthropic_beta_detection.py --check
 
       - run: cargo nextest run --workspace --locked
 

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "feature": "thinking_display_updates",
+      "beta": "thinking-display-updates-2026-08-18",
+      "when": {
+        "op": "all",
+        "conditions": [
+          {"op": "in", "field": "thinking.type", "values": ["enabled", "adaptive"]},
+          {"op": "in", "field": "thinking.display", "values": ["updates"]}
+        ]
+      }
+    },
+    {
+      "feature": "mid_conversation_tool_changes",
+      "beta": "mid-conversation-tool-changes-2026-07-01",
+      "when": {
+        "op": "any",
+        "field": "messages",
+        "condition": {
+          "op": "all",
+          "conditions": [
+            {"op": "in", "field": "role", "values": ["system"]},
+            {
+              "op": "any",
+              "field": "content",
+              "condition": {
+                "op": "all",
+                "conditions": [
+                  {"op": "in", "field": "type", "values": ["tool_addition", "tool_removal"]},
+                  {"op": "in", "field": "tool.type", "values": ["tool_reference"]}
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
