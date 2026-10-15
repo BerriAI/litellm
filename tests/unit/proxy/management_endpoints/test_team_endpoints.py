@@ -9395,6 +9395,37 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     assert fresh_cache.get_cache(key="team_alias:doomed-team") is not None
 
 
+class _BroadcastPipeline:
+    def __init__(self, redis: "_BroadcastRecordingRedis") -> None:
+        self._redis = redis
+        self._messages: list[str] = []
+
+    def publish(self, channel: str, message: str) -> "_BroadcastPipeline":
+        self._messages.append(message)
+        return self
+
+    async def execute(self) -> None:
+        for message in self._messages:
+            await self._redis.publish("", message)
+
+
+class _BroadcastRecordingRedis:
+    namespace = None
+
+    def __init__(self) -> None:
+        self.broadcast_keys: list[str] = []
+
+    def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
+        return self
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.broadcast_keys.append(json.loads(message)["cache_key"])
+        return 1
+
+    def pipeline(self, transaction: bool = True) -> _BroadcastPipeline:
+        return _BroadcastPipeline(self)
+
+
 @pytest.mark.asyncio
 async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     monkeypatch,
@@ -9436,12 +9467,11 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
     _wire_team_delete_tx(mock_prisma_client)
 
-    published = []
+    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 
-    async def record_publish(cache_key):
-        published.append(cache_key)
-
-    monkeypatch.setattr("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", record_publish)
+    redis = _BroadcastRecordingRedis()
+    monkeypatch.setattr(pubsub_module, "coordination_redis_cache", lambda: redis)
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
@@ -9458,9 +9488,11 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
         litellm_changed_by="admin-user",
     )
 
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
     # the deleted key first, then both keys `_cache_team_object` writes: miss the alias one and the
     # JWT-by-alias path keeps resolving the team, miss the token and the key still authenticates
-    assert published == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
+    assert redis.broadcast_keys == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
 
 
 @pytest.mark.asyncio
