@@ -51,9 +51,14 @@ class SagemakerConfig(BaseConfig):
         temperature: float | None = None,
         return_full_text: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        for key, value in (
+            ("max_new_tokens", max_new_tokens),
+            ("max_completion_tokens", max_completion_tokens),
+            ("top_p", top_p),
+            ("temperature", temperature),
+            ("return_full_text", return_full_text),
+        ):
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod

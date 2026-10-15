@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -158,6 +158,7 @@ class _DailyUserSpendOwnerRow(LiteLLMBaseModel):
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
 _SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
 _DAILY_USER_SPEND_OWNER_ROWS: Final = TypeAdapter(tuple[_DailyUserSpendOwnerRow, ...])
+_RAW_DB_ROWS: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
 _CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
 _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
     max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
@@ -194,7 +195,15 @@ async def _rows_within_the_statement_timeout(
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
         for setting in planner_settings:
             await transaction.execute_raw(setting)
-        return await transaction.query_raw(sql, *params)
+        return _RAW_DB_ROWS.validate_python(await transaction.query_raw(sql, *params))
+
+
+async def _query_raw_rows(
+    prisma_client: PrismaClient,
+    sql: str,
+    params: Sequence[object],
+) -> Sequence[Mapping[str, object]]:
+    return _RAW_DB_ROWS.validate_python(await prisma_client.db.query_raw(sql, *params))
 
 
 async def _reverse_hash_key_metadata(
@@ -206,7 +215,15 @@ async def _reverse_hash_key_metadata(
     warning: str,
 ) -> Mapping[str, KeyMetadataDict]:
     rows: Final = await _db_or_empty(
-        lambda: db_spanned("recover_key_metadata", table, lambda: prisma_client.db.query_raw(sql, sorted(wanted))),
+        lambda: db_spanned(
+            "recover_key_metadata",
+            table,
+            lambda: _query_raw_rows(
+                prisma_client,
+                sql,
+                (sorted(wanted),),
+            ),
+        ),
         warning,
         len(wanted),
     )

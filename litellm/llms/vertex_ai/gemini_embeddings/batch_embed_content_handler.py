@@ -3,9 +3,12 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,6 +36,37 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiFileReferenceResponse(TypedDict):
+    mimeType: NotRequired[ReadOnly[str]]
+    uri: NotRequired[ReadOnly[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiEmbeddingValues(TypedDict):
+    values: ReadOnly[Sequence[int | float]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiEmbedContentResponse(TypedDict):
+    embedding: NotRequired[ReadOnly[_GeminiEmbeddingValues]]
+    usageMetadata: NotRequired[ReadOnly[object]]
+
+
+_GEMINI_FILE_REFERENCE_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiFileReferenceResponse)
+_GEMINI_EMBED_CONTENT_RESPONSE_ADAPTER: Final = TypeAdapter(_GeminiEmbedContentResponse)
+
+
+def _file_metadata(
+    file_data: _GeminiFileReferenceResponse,
+    reference: str,
+) -> Mapping[str, str]:
+    return {
+        "mime_type": file_data.get("mimeType", ""),
+        "uri": file_data.get("uri", reference),
+    }
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -74,11 +108,12 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
-                resolved_files[element] = {
-                    "mime_type": file_data.get("mimeType", ""),
-                    "uri": file_data.get("uri", element),
-                }
+                resolved_files[element] = dict(
+                    _file_metadata(
+                        _GEMINI_FILE_REFERENCE_RESPONSE_ADAPTER.validate_python(response.json()),
+                        element,
+                    )
+                )
 
         return resolved_files
 
@@ -111,11 +146,12 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
-                resolved_files[element] = {
-                    "mime_type": file_data.get("mimeType", ""),
-                    "uri": file_data.get("uri", element),
-                }
+                resolved_files[element] = dict(
+                    _file_metadata(
+                        _GEMINI_FILE_REFERENCE_RESPONSE_ADAPTER.validate_python(response.json()),
+                        element,
+                    )
+                )
 
         return resolved_files
 
@@ -272,7 +308,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=dict(_GEMINI_EMBED_CONTENT_RESPONSE_ADAPTER.validate_python(_json_response)),
                 resolved_files=resolved_files,
             )
         else:
@@ -379,7 +415,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=dict(_GEMINI_EMBED_CONTENT_RESPONSE_ADAPTER.validate_python(_json_response)),
                 resolved_files=resolved_files,
             )
         else:

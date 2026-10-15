@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.constants import (
     OPEN_SANDBOX_API_BASE_ENV_VAR,
@@ -320,7 +320,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             headers=headers,
             params={"use_server_proxy": use_server_proxy},
         )
-        data: Final = response.json()
+        data: Final = _JSON_OBJECT.validate_python(response.json())
         endpoint: Final = data.get("endpoint")
         if not endpoint:
             raise ValueError(f"OpenSandbox did not return an execd endpoint for {sandbox_id}")
@@ -476,7 +476,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         )
 
     @staticmethod
-    def _parse_sse_line(line: str) -> dict[str, object] | None:
+    def _parse_sse_line(line: str) -> Mapping[str, object] | None:
         stripped: Final = line.strip()
         if not stripped or stripped.startswith(
             (
@@ -491,10 +491,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if not data:
             return None
         try:
-            parsed: Final = json.loads(data)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(parsed, dict):
+            parsed: Final = _JSON_OBJECT.validate_python(json.loads(data))
+        except (json.JSONDecodeError, ValidationError):
             return None
         if "type" not in parsed and "code" in parsed and "message" in parsed:
             return {
@@ -508,14 +506,14 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return parsed
 
     @staticmethod
-    def _normalize_result(message: dict[str, object]) -> dict[str, object]:
+    def _normalize_result(message: Mapping[str, object]) -> dict[str, object]:
         results: Final = message.get("results")
         if isinstance(results, dict):
             return {str(k): v for k, v in results.items()}
         return {str(k): v for k, v in message.items() if k not in {"type", "timestamp", "execution_count"}}
 
     @staticmethod
-    def _normalize_error(message: dict[str, object]) -> dict[str, object]:
+    def _normalize_error(message: Mapping[str, object]) -> dict[str, object]:
         raw_error: Final = message.get("error")
         if isinstance(raw_error, dict):
             name: Final = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "ename", "name", default="")
@@ -544,7 +542,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return None
 
     @staticmethod
-    def _first_non_none_value(values: dict[str, object], *keys: str, default: object) -> object:
+    def _first_non_none_value(values: Mapping[str, object], *keys: str, default: object) -> object:
         return next(
             (values[key] for key in keys if key in values and values[key] is not None),
             default,

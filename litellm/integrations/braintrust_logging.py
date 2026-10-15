@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -22,6 +24,14 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.utils import print_verbose
 
 API_BASE: Final = "https://api.braintrustdata.com/v1"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _BraintrustProjectResponse(TypedDict):
+    id: ReadOnly[str]
+
+
+_BRAINTRUST_PROJECT_RESPONSE: Final = TypeAdapter(_BraintrustProjectResponse)
 
 
 def get_utc_datetime():
@@ -80,7 +90,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
+            project_dict: Final = _BRAINTRUST_PROJECT_RESPONSE.validate_python(response.json())
             project_id: Final = project_dict["id"]
             self._project_id_cache[project_name] = project_id
             return project_id
@@ -100,7 +110,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
+            project_dict: Final = _BRAINTRUST_PROJECT_RESPONSE.validate_python(response.json())
             project_id: Final = project_dict["id"]
             self._project_id_cache[project_name] = project_id
             return project_id
@@ -112,7 +122,7 @@ class BraintrustLogger(CustomLogger):
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
+        project_dict: Final = _BRAINTRUST_PROJECT_RESPONSE.validate_python(project.json())
 
         self.default_project_id = project_dict["id"]
 
@@ -121,7 +131,7 @@ class BraintrustLogger(CustomLogger):
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
+        project_dict: Final = _BRAINTRUST_PROJECT_RESPONSE.validate_python(project.json())
 
         self.default_project_id = project_dict["id"]
 

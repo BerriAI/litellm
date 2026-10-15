@@ -2,12 +2,12 @@ import os
 import uuid
 from collections.abc import Mapping
 from typing import (
-    Any,  # noqa: TID251  # the only type CustomGuardrail.__init__ accepts for its open-ended kwargs
     Final,
     Literal,
 )
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # the factory's params are untyped upstream
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -87,6 +87,29 @@ def _as_object(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance narrows to dict[Unknown, Unknown]; JSON keys are str
 
 
+class _CustomGuardrailKwargs(TypedDict, total=False):
+    """The keyword arguments `CustomGuardrail.__init__` and `CustomLogger.__init__` accept."""
+
+    guardrail_name: ReadOnly[str | None]
+    event_hook: ReadOnly[GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None]
+    default_on: ReadOnly[bool]
+    mask_request_content: ReadOnly[bool]
+    mask_response_content: ReadOnly[bool]
+    violation_message_template: ReadOnly[str | None]
+    end_session_after_n_fails: ReadOnly[int | None]
+    on_violation: ReadOnly[str | None]
+    realtime_violation_message: ReadOnly[str | None]
+    on_sensitive_data: ReadOnly[str | None]
+    sensitive_data_route_to_model: ReadOnly[str | None]
+    sticky_session_routing: ReadOnly[bool]
+    run_in_parallel: ReadOnly[bool]
+    scan_raw_request: ReadOnly[bool]
+    only_scan_new_messages: ReadOnly[bool]
+    stream_scope: ReadOnly[object]
+    turn_off_message_logging: ReadOnly[bool]
+    message_logging: ReadOnly[bool]
+
+
 class AiriaGuardrail(CustomGuardrail):
     """Evaluates prompts and responses against your Airia guardrail policy."""
 
@@ -97,7 +120,7 @@ class AiriaGuardrail(CustomGuardrail):
         timeout: float | None = None,
         supported_event_hooks: list[GuardrailEventHooks] | None = None,  # mutable-ok: matches CustomGuardrail.__init__
         async_handler: AsyncHTTPHandler | None = None,  # dependency-injected in tests; defaults to a real client
-        **kwargs: Any,  # kwargs-ok: passed straight through to CustomGuardrail.__init__
+        **kwargs: Unpack[_CustomGuardrailKwargs],  # kwargs-ok: passed straight through to CustomGuardrail.__init__
     ) -> None:
         resolved_timeout: Final = timeout or float(os.getenv("AIRIA_TIMEOUT", "10"))
 

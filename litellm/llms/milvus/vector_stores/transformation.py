@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly
 
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -39,6 +41,19 @@ MILVUS_OPTIONAL_PARAMS: Final = {
     "searchParams",
     "consistencyLevel",
 }
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MilvusSearchHit(TypedDict, total=False):
+    distance: ReadOnly[int | float]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MilvusSearchPayload(TypedDict, total=False):
+    data: ReadOnly[list[_MilvusSearchHit]]
+
+
+_MILVUS_SEARCH_PAYLOAD: Final = TypeAdapter(_MilvusSearchPayload)
 
 
 class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
@@ -211,7 +226,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final = _MILVUS_SEARCH_PAYLOAD.validate_python(response.json())
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("data", [])

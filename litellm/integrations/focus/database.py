@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Final
 
 import polars as pl
+from pydantic import TypeAdapter
+
+_QUERY_RESULT: Final = TypeAdapter(object)
 
 
 class FocusLiteLLMDatabase:
@@ -123,7 +126,7 @@ class FocusLiteLLMDatabase:
         ORDER BY ordinal_position;
         """
         try:
-            columns_response: Final = await client.db.query_raw(info_query)
+            columns_response: Final = _QUERY_RESULT.validate_python(await client.db.query_raw(info_query))
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

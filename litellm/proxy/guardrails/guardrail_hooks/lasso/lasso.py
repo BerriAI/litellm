@@ -397,13 +397,15 @@ class LassoGuardrail(CustomGuardrail):
             HTTPException: If blocking violations are detected
         """
         raw_messages: Final[list[dict[str, object]]] = data.get("messages") or []
-        messages: list[dict[str, Any]] = self._expand_messages_for_classification(raw_messages) if raw_messages else []
+        messages: list[dict[str, object]] = (
+            self._expand_messages_for_classification(raw_messages) if raw_messages else []
+        )
         messages_count: Final = len(messages)
         if data.get("input") is not None:
             # Responses-API payloads carry text in data["input"]. Inspect it
             # alongside any "messages" array — otherwise a caller can attach
             # benign messages and stash blocked content in input to bypass.
-            messages.extend(build_inspection_messages({"input": data["input"]}))
+            messages.extend(dict(message) for message in build_inspection_messages({"input": data["input"]}))
         if not messages:
             return data
 

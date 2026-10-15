@@ -13,8 +13,8 @@ This module decodes them into float arrays for OpenAI-compatible responses.
 
 import base64
 import struct
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping
+from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -26,8 +26,14 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_INT: Final = TypeAdapter(int)
+_JSON_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Mapping[str, object],
+    config=ConfigDict(hide_input_in_errors=True),
+)
+_INT: Final[TypeAdapter[int]] = TypeAdapter(int)
+_MODEL: Final[TypeAdapter[str | None]] = TypeAdapter(str | None, config=ConfigDict(strict=True))
+_OBJECT: Final[TypeAdapter[Literal["list"]]] = TypeAdapter(Literal["list"], config=ConfigDict(strict=True))
+_DATA: Final[TypeAdapter[Iterable[object]]] = TypeAdapter(Iterable[object], config=ConfigDict(strict=True))
 
 
 class PerplexityEmbeddingError(BaseLLMException):
@@ -155,10 +161,11 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
-        model_response.model = raw_response_json.get("model", model)
-        model_response.object = raw_response_json.get("object", "list")
+        response_fields: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(raw_response_json)
+        model_response.model = _MODEL.validate_python(response_fields.get("model", model))
+        model_response.object = _OBJECT.validate_python(response_fields.get("object", "list"))
 
-        raw_data: Final = raw_response_json.get("data", [])
+        raw_data: Final = _DATA.validate_python(response_fields.get("data", []))
         decoded_data: Final[list[dict[str, object]]] = []
         for item in raw_data:
             decoded_item = dict(_JSON_OBJECT.validate_python(item))
@@ -166,7 +173,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
             decoded_data.append(decoded_item)
         model_response.data = decoded_data
 
-        usage_data: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        usage_data: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(response_fields.get("usage", {}))
         usage: Final = Usage(
             prompt_tokens=_INT.validate_python(
                 usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0) or 0

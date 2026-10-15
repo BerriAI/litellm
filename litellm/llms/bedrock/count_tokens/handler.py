@@ -7,6 +7,7 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,6 +15,8 @@ from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+
+_BEDROCK_COUNT_TOKENS_RESPONSE: Final = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True))
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
@@ -109,7 +112,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                     response=response,
                 )
 
-            bedrock_response: Final = response.json()
+            bedrock_response: Final = _BEDROCK_COUNT_TOKENS_RESPONSE.validate_python(response.json())
 
             verbose_logger.debug("Bedrock response: %s", bedrock_response)
 

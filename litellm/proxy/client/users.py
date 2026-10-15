@@ -2,8 +2,11 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from pydantic import JsonValue, TypeAdapter
 
 from .exceptions import NotFoundError, UnauthorizedError
+
+_JSON_VALUE: Final = TypeAdapter[JsonValue](JsonValue)
 
 
 class UsersManagementClient:
@@ -18,7 +21,7 @@ class UsersManagementClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def list_users(self, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def list_users(self, params: Mapping[str, str | bytes | int | float | None] | None = None) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
@@ -27,7 +30,7 @@ class UsersManagementClient:
         response.raise_for_status()
         return response.json().get("users", response.json())
 
-    def get_user(self, user_id: str | None = None) -> dict[str, Any]:
+    def get_user(self, user_id: str | None = None) -> JsonValue:
         """Get user info (GET /user/info)"""
         url: Final = f"{self.base_url}/user/info"
         params: Final = {"user_id": user_id} if user_id else {}
@@ -37,9 +40,9 @@ class UsersManagementClient:
         if response.status_code == 404:
             raise NotFoundError(response.text)
         response.raise_for_status()
-        return response.json()
+        return _JSON_VALUE.validate_python(response.json())
 
-    def get_user_v2(self, user_id: str | None = None) -> dict[str, Any]:
+    def get_user_v2(self, user_id: str | None = None) -> JsonValue:
         """Get user info v2 - lightweight, returns only user object (GET /v2/user/info)"""
         url: Final = f"{self.base_url}/v2/user/info"
         params: Final = {"user_id": user_id} if user_id else {}
@@ -49,18 +52,18 @@ class UsersManagementClient:
         if response.status_code == 404:
             raise NotFoundError(response.text)
         response.raise_for_status()
-        return response.json()
+        return _JSON_VALUE.validate_python(response.json())
 
-    def create_user(self, user_data: Mapping[str, object]) -> dict[str, Any]:
+    def create_user(self, user_data: Mapping[str, object]) -> JsonValue:
         """Create a new user (POST /user/new)"""
         url: Final = f"{self.base_url}/user/new"
         response: Final = requests.post(url, headers=self._get_headers(), json=user_data, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        return response.json()
+        return _JSON_VALUE.validate_python(response.json())
 
-    def delete_user(self, user_ids: list[str]) -> dict[str, Any]:
+    def delete_user(self, user_ids: list[str]) -> JsonValue:
         """Delete users (POST /user/delete)"""
         url: Final = f"{self.base_url}/user/delete"
         response: Final = requests.post(
@@ -69,4 +72,4 @@ class UsersManagementClient:
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        return response.json()
+        return _JSON_VALUE.validate_python(response.json())

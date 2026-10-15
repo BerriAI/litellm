@@ -329,18 +329,18 @@ async def list_overrides_for_tool(
             },
         )
         for perm in perms:
-            op_id = getattr(perm, "object_permission_id", None) or ""
-            tokens = getattr(perm, "verification_tokens", []) or []
-            teams = getattr(perm, "teams", []) or []
+            op_id = perm.object_permission_id or ""
+            tokens = perm.verification_tokens or []
+            teams = perm.teams or []
             for t in tokens:
                 out.append(
                     ToolPolicyOverrideRow(
                         override_id=op_id,
                         tool_name=tool_name,
                         team_id=None,
-                        key_hash=getattr(t, "token", None),
+                        key_hash=t.token,
                         input_policy="blocked",
-                        key_alias=getattr(t, "key_alias", None),
+                        key_alias=t.key_alias,
                         created_at=None,
                         updated_at=None,
                     )
@@ -350,10 +350,10 @@ async def list_overrides_for_tool(
                     ToolPolicyOverrideRow(
                         override_id=op_id,
                         tool_name=tool_name,
-                        team_id=getattr(team, "team_id", None),
+                        team_id=team.team_id,
                         key_hash=None,
                         input_policy="blocked",
-                        key_alias=getattr(team, "team_alias", None),
+                        key_alias=team.team_alias,
                         created_at=None,
                         updated_at=None,
                     )

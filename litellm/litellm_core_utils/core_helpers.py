@@ -5,7 +5,7 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+
+_ItemT: Final = TypeVar("_ItemT")
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
@@ -275,7 +277,7 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
+def remove_items_at_indices(items: list[_ItemT] | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return

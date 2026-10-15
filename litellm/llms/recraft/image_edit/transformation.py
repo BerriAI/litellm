@@ -1,8 +1,11 @@
+from collections.abc import Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -19,6 +22,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _RecraftImageData(TypedDict):
+    url: ReadOnly[NotRequired[str | None]]
+    b64_json: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _RecraftImageEditResponse(TypedDict):
+    data: ReadOnly[Sequence[_RecraftImageData]]
+
+
+_RECRAFT_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_RecraftImageEditResponse)
 
 
 class RecraftImageEditConfig(BaseImageEditConfig):
@@ -154,13 +171,14 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_data: Final = raw_response.json()
+            raw_response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        response_data: Final = _RECRAFT_IMAGE_EDIT_RESPONSE.validate_python(raw_response_data)
         if not model_response.data:
             model_response.data = []
 

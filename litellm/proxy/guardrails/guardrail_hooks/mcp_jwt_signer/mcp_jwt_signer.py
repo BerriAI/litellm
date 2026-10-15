@@ -81,6 +81,7 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -98,8 +99,19 @@ if TYPE_CHECKING:
     from jwt.types import Options
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _OIDCDiscoveryDocument(TypedDict, total=False):
-    jwks_uri: str
+    jwks_uri: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _JWKSBody(TypedDict):
+    keys: ReadOnly[NotRequired[Sequence[Mapping[str, object]]]]
+
+
+_OIDC_DISCOVERY_DOCUMENT: Final = TypeAdapter(_OIDCDiscoveryDocument)
+_JWKS_BODY: Final = TypeAdapter(_JWKSBody)
+_INTROSPECTION_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _JWTDecodeKwargs(TypedDict):
@@ -195,7 +207,7 @@ async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = Non
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
-    jwks_body: Final[Mapping[str, Sequence[Mapping[str, object]]]] = resp.json()
+    jwks_body: Final = _JWKS_BODY.validate_python(resp.json())
     fetched_keys: Final = jwks_body.get("keys", [])
     _jwks_cache[jwks_uri] = (fetched_keys, now)
     return fetched_keys
@@ -213,7 +225,7 @@ async def _fetch_oidc_discovery(
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     resp: Final = await client.get(discovery_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
-    document: Final[_OIDCDiscoveryDocument] = resp.json()
+    document: Final = _OIDC_DISCOVERY_DOCUMENT.validate_python(resp.json())
     return document
 
 
@@ -517,7 +529,7 @@ class MCPJWTSigner(CustomGuardrail):
             timeout=self.timeout,
         )
         resp.raise_for_status()
-        result: Final[dict[str, object]] = resp.json()
+        result: Final = _INTROSPECTION_RESPONSE.validate_python(resp.json())
         if not result.get("active", False):
             raise jwt.exceptions.ExpiredSignatureError(
                 "MCPJWTSigner: incoming token is inactive (introspection returned active=false)"

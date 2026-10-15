@@ -6,10 +6,12 @@ Why separate file? Make it easy to see how transformation works
 
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,6 +27,22 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankResponseResult,
 )
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _VertexRerankRecord(TypedDict, total=False):
+    """Discovery Engine record; id is read unconditionally, score is ``in``-guarded."""
+
+    id: ReadOnly[Required[str | int | float]]
+    score: ReadOnly[int | float]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _VertexRerankBody(TypedDict, total=False):
+    records: ReadOnly[Sequence[_VertexRerankRecord]]
+
+
+_VERTEX_RERANK_BODY: Final = TypeAdapter(_VertexRerankBody)
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -172,7 +190,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _VERTEX_RERANK_BODY.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 
