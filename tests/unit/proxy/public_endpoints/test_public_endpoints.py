@@ -507,6 +507,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "charity_engine",
         "chutes",
         "darkbloom",
+        "databricks_agent",
         "gdc",
         "helicone",
         "inception",
