@@ -140,9 +140,10 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
-    AudioProviderRoutingHints,
+    BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
+    ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
     is_decisions_model_mode,
@@ -4106,7 +4107,8 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(AudioProviderRoutingHints)
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
 
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -7902,6 +7904,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     file: Final = kwargs.get("file", None)
     try:
         provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+        api_base_hint: Final = provider_hints.get("api_base") or _BASE_URL_HINT.validate_python(kwargs).get("base_url")
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
@@ -7918,7 +7921,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
-            api_base=provider_hints.get("api_base") or provider_hints.get("base_url"),
+            api_base=api_base_hint,
         )
 
         # Await normally
@@ -8240,6 +8243,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
     kwargs["aspeech"] = True
     try:
         provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+        api_base_hint: Final = provider_hints.get("api_base") or _BASE_URL_HINT.validate_python(kwargs).get("base_url")
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
@@ -8256,7 +8260,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
-            api_base=provider_hints.get("api_base") or provider_hints.get("base_url"),
+            api_base=api_base_hint,
         )
 
         # Await normally

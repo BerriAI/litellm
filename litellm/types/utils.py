@@ -4743,5 +4743,5 @@ class ProviderRoutingHints(TypedDict, total=False):
     api_base: ReadOnly[str | None]
 
 
-class AudioProviderRoutingHints(ProviderRoutingHints, total=False):
+class BaseUrlRoutingHint(TypedDict, total=False):
     base_url: ReadOnly[str | None]

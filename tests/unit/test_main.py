@@ -8393,7 +8393,7 @@ async def test_atranscription_routes_a_bare_model_name_to_its_explicit_provider(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base"])
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base", "base_url"])
 async def test_aspeech_answers_a_non_string_provider_hint_with_a_bad_request(
     hint: str, respx_mock: respx.MockRouter
 ) -> None:
@@ -8406,7 +8406,7 @@ async def test_aspeech_answers_a_non_string_provider_hint_with_a_bad_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base"])
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base", "base_url"])
 async def test_atranscription_answers_a_non_string_provider_hint_with_a_bad_request(
     hint: str, respx_mock: respx.MockRouter
 ) -> None:
@@ -8456,6 +8456,51 @@ async def test_atranscription_infers_the_provider_from_base_url(respx_mock: resp
         base_url=base_url,
         api_key="fake_groq_api_key",
         client=AsyncOpenAI(api_key="fake_groq_api_key", base_url=base_url, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.text == "four score"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_ignores_a_non_string_base_url_when_api_base_is_set_like_the_sync_path(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12353/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="tts-1",
+        input="hello",
+        voice="alloy",
+        api_base=api_base,
+        base_url=httpx.URL(api_base),
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set_like_the_sync_path(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12354/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="whisper-1",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        api_base=api_base,
+        base_url=httpx.URL(api_base),
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
     )
 
     assert route.called
