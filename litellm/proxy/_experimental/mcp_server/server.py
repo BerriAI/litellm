@@ -13,7 +13,7 @@ import os
 import time
 import types
 from collections import Counter
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence, Set
 from typing import TYPE_CHECKING, Final, NoReturn, Protocol
 
 import httpx
@@ -557,7 +557,12 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
-    from litellm.proxy._experimental.mcp_server.capabilities import GatewayVersionPolicy, configured_versions
+    from litellm.proxy._experimental.mcp_server.capabilities import (
+        GatewayVersionPolicy,
+        configured_versions,
+        disabled_capabilities,
+        disabled_operations,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -1295,6 +1300,12 @@ if MCP_AVAILABLE:
             return isinstance(data, dict) and data.get("method") == "initialize"
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             return False
+
+    def _jsonrpc_request_method(body: bytes) -> str | None:
+        try:
+            return JSONRPCRequest.model_validate_json(body).method
+        except ValidationError:
+            return None
 
     def _extract_initialize_client_info(body: bytes) -> Implementation | None:
         try:
@@ -2180,6 +2191,87 @@ if MCP_AVAILABLE:
         )
         return None
 
+    async def _preflight_streamable_http_upstream_auth(
+        defer_upstream_probes: bool,
+        targets_disabled_capability: bool,
+        scope: Scope,
+        mcp_servers: Sequence[str] | None,
+        oauth2_headers: Mapping[str, str] | None,
+        mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+        allowed_server_ids: Set[str] | None,
+        raw_headers: Mapping[str, str] | None,
+    ) -> None:
+        if not defer_upstream_probes and not targets_disabled_capability:
+            await _raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=list(mcp_servers) if mcp_servers is not None else None,
+                oauth2_headers=dict(oauth2_headers) if oauth2_headers is not None else None,
+                mcp_server_auth_headers=(
+                    {name: dict(headers) for name, headers in mcp_server_auth_headers.items()}
+                    if mcp_server_auth_headers is not None
+                    else None
+                ),
+                user_api_key_auth=user_api_key_auth,
+                client_ip=client_ip,
+                allowed_server_ids=set(allowed_server_ids) if allowed_server_ids is not None else None,
+                raw_headers=raw_headers,
+            )
+            # Pre-flight auth check for pass-through servers.  Must run after
+            # toolset scoping so the probe list is derived from the fully-authorized
+            # server set, not the raw user-supplied names.
+            await _check_passthrough_upstream_auth(
+                scope,
+                user_api_key_auth,
+                list(mcp_servers) if mcp_servers is not None else None,
+                client_ip,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=(
+                    {name: dict(headers) for name, headers in mcp_server_auth_headers.items()}
+                    if mcp_server_auth_headers is not None
+                    else None
+                ),
+                raw_headers=raw_headers,
+            )
+
+    async def _targets_disabled_capability(peek: _LazyPeekedBody | None) -> bool:
+        if peek is None:
+            return False
+        disabled_ops: Final = disabled_operations(disabled_capabilities())
+        if not disabled_ops:
+            return False
+        return _jsonrpc_request_method(await peek.full_body()) in disabled_ops
+
+    async def _preflight_streamable_http_modern_interaction(
+        peek: _LazyPeekedBody | None,
+        defer_upstream_probes: bool,
+        targets_disabled_capability: bool,
+        scope: Scope,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | None,
+        mcp_servers: Sequence[str] | None,
+        mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        client_ip: str | None,
+    ) -> JSONResponse | None:
+        if peek is None or not defer_upstream_probes or targets_disabled_capability:
+            return None
+        return await _preflight_modern_interaction(
+            scope,
+            await peek.full_body(),
+            OperationContext(
+                _caller=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            ),
+        )
+
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
@@ -2224,6 +2316,7 @@ if MCP_AVAILABLE:
             defer_upstream_probes: Final = request_headers.get(
                 "mcp-protocol-version"
             ) == "2026-07-28" and request_headers.get("mcp-method") in {"tools/call", "prompts/get", "resources/read"}
+            targets_disabled_capability: Final = await _targets_disabled_capability(peek)
 
             # Extract client IP for MCP access control
             _client_ip: Final = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -2252,30 +2345,18 @@ if MCP_AVAILABLE:
             # from the fully-authorized server set: a passthrough server that
             # the active toolset excludes should not trigger an OAuth flow
             # for a server the caller will be 403'd on after authentication.
-            if not defer_upstream_probes:
-                await _raise_preemptive_401_for_unauthenticated_servers(
-                    scope=scope,
-                    mcp_servers=mcp_servers,
-                    oauth2_headers=oauth2_headers,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    user_api_key_auth=user_api_key_auth,
-                    client_ip=_client_ip,
-                    allowed_server_ids=toolset_allowed_server_ids,
-                    raw_headers=raw_headers,
-                )
-
-                # Pre-flight auth check for pass-through servers.  Must run after
-                # toolset scoping so the probe list is derived from the fully-authorized
-                # server set, not the raw user-supplied names.
-                await _check_passthrough_upstream_auth(
-                    scope,
-                    user_api_key_auth,
-                    mcp_servers,
-                    _client_ip,
-                    oauth2_headers=oauth2_headers,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    raw_headers=raw_headers,
-                )
+            await _preflight_streamable_http_upstream_auth(
+                defer_upstream_probes=defer_upstream_probes,
+                targets_disabled_capability=targets_disabled_capability,
+                scope=scope,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_client_ip,
+                allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
+            )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers: Final = MCPDebug.maybe_build_debug_headers(
@@ -2339,23 +2420,22 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            if peek is not None and defer_upstream_probes:
-                rejection: Final = await _preflight_modern_interaction(
-                    scope,
-                    await peek.full_body(),
-                    OperationContext(
-                        _caller=user_api_key_auth,
-                        mcp_auth_header=mcp_auth_header,
-                        mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
-                        mcp_server_auth_headers=mcp_server_auth_headers,
-                        oauth2_headers=oauth2_headers,
-                        raw_headers=raw_headers,
-                        client_ip=_client_ip,
-                    ),
-                )
-                if rejection is not None:
-                    await rejection(scope, receive, send)
-                    return
+            rejection: Final = await _preflight_streamable_http_modern_interaction(
+                peek=peek,
+                defer_upstream_probes=defer_upstream_probes,
+                targets_disabled_capability=targets_disabled_capability,
+                scope=scope,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=_client_ip,
+            )
+            if rejection is not None:
+                await rejection(scope, receive, send)
+                return
 
             scope_response: Final = (
                 OAuthScopeResponse(
