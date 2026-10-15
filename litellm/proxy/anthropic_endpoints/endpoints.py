@@ -16,6 +16,7 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
 )
@@ -27,12 +28,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
-    first_validation_error,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
-    request_drop_policy,
+    resolve_counted_tool_fields,
     resolve_litellm_call_id,
-    resolve_tool_fields,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -118,9 +117,7 @@ def _token_count_fields(
     }
     auto_drop: Final = should_auto_drop_params_for_agentic_cli(user_agent, dict(fields), proxy_config)
     resolving: Final = {**fields, "drop_params": True} if auto_drop else fields
-    return resolve_tool_fields(
-        resolving, lambda: request_drop_policy(resolving, llm_router, team_id, router_may_reroute=False)
-    )
+    return resolve_counted_tool_fields(resolving, llm_router, team_id)
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:

@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -32,8 +33,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
-    request_drop_policy,
-    resolve_tool_fields,
+    resolve_counted_tool_fields,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1196,10 +1196,7 @@ async def responses_input_tokens(
     counted_fields: Final = {
         name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
     }
-    token_fields: Final = resolve_tool_fields(
-        counted_fields,
-        lambda: request_drop_policy(counted_fields, llm_router, user_api_key_dict.team_id, router_may_reroute=False),
-    )
+    token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
     if isinstance(token_fields, ProxyException):
         return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
 
@@ -1213,6 +1210,10 @@ async def responses_input_tokens(
             "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
+    except ValidationError as e:
+        return _responses_invalid_request_response(
+            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        )
     except Exception as e:
         return _responses_invalid_request_response(
             message=f"Invalid request for token counting: {e}", param=None, code=None

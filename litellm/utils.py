@@ -92,6 +92,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
+from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -1492,7 +1493,7 @@ def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
 
-async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str):
+async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -1503,7 +1504,16 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
     except ValueError:
         typed_call_type = None  # unknown call type
 
-    modified_kwargs = kwargs.copy()
+    route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
+    resolved: Final = resolve_deployment_tool_fields(kwargs, route)
+    if isinstance(resolved, MalformedField):
+        raise BadRequestError(
+            message=resolved.message,
+            model=kwargs.get("model"),
+            llm_provider="",
+            body={"type": "invalid_request_error", "param": resolved.field},
+        )
+    modified_kwargs = dict(resolved)
 
     custom_logger_class: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:

@@ -52,6 +52,28 @@ _CLAUDE_CODE_AGENT: Final = "claude-cli/2.1.0 (external, cli)"
 _CODEX_AGENT: Final = "codex_cli_rs/0.50.0 (Linux 6.8; x86_64) xterm-256color"
 _REJECT_MARK: Final = "upstream-401"
 _DOWN: Final = "/down/"
+_REFUSALS: Final = MappingProxyType(
+    {
+        "context_window_fallbacks": (
+            "/context-full/",
+            {
+                "message": "This model's maximum context length is 8192 tokens.",
+                "type": "invalid_request_error",
+                "param": "messages",
+                "code": "context_length_exceeded",
+            },
+        ),
+        "content_policy_fallbacks": (
+            "/content-policy/",
+            {
+                "message": "Your request was rejected as a result of our safety system.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "content_policy_violation",
+            },
+        ),
+    }
+)
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -129,6 +151,9 @@ def _respond(request: Request) -> Reply:
     path: Final = request.target.split("?")[0]
     if path.startswith(_DOWN):
         return _unavailable(path)
+    refusal: Final = next((error for prefix, error in _REFUSALS.values() if path.startswith(prefix)), None)
+    if refusal is not None:
+        return Reply(status=400, body=json.dumps({"error": refusal}).encode())
     if _REJECT_MARK in text:
         return _rejected_by_provider(path)
     stream: Final = bool(text) and _JSON_OBJECT.validate_json(request.body).get("stream") is True
@@ -513,7 +538,7 @@ def _assert_rejected(response: httpx.Response, message: str, param: str = "tools
     assert response.status_code == 400, response.text
     kind, said, named = _rejection(response)
     assert kind == "invalid_request_error", response.text
-    assert said == message, response.text
+    assert message in said, response.text
     assert named in (param, None), response.text
 
 
@@ -1072,14 +1097,20 @@ def test_an_explicit_request_drop_params_overrides_the_deployment_group(rig: _Ri
     assert _delivered(rig, marker) == ()
 
 
-def test_a_group_where_only_some_deployments_drop_rejects_malformed_tools(rig: _Rig) -> None:
-    rejected: Final = _marker()
-    _assert_rejected(_send(rig, CHAT, rejected, False, model=rig.mixed_group, tools=5), _NOT_A_LIST)
-    dropped: Final = _marker()
-    response: Final = _send(rig, CHAT, dropped, False, model=rig.mixed_group, tools=5, drop_params=True)
-    _assert_answered(CHAT, response, dropped)
-    assert "tools" not in _one_delivery(rig, dropped, "/v1/chat/completions")
-    assert _delivered(rig, rejected) == ()
+def test_a_mixed_group_answers_malformed_tools_by_the_drop_params_of_the_deployment_it_picks(rig: _Rig) -> None:
+    markers: Final = tuple(_marker() for _ in range(20))
+    statuses: Final = tuple(
+        _send(rig, CHAT, marker, False, model=rig.mixed_group, tools=5).status_code for marker in markers
+    )
+    sent: Final = tuple(request.body.decode() for request in rig.wire.drain())
+    deliveries: Final = tuple(
+        tuple(_JSON_OBJECT.validate_json(body) for body in sent if marker in body) for marker in markers
+    )
+    assert sorted(set(statuses)) == [200, 400], statuses
+    assert all(
+        (status, len(bodies)) in ((200, 1), (400, 0)) for status, bodies in zip(statuses, deliveries)
+    ), (statuses, deliveries)
+    assert all(all("tools" not in body for body in bodies) for bodies in deliveries), deliveries
 
 
 def test_a_deployment_dropping_tools_drops_every_tool(rig: _Rig) -> None:
@@ -1893,7 +1924,7 @@ _USER_CONFIG_DROPS: Final[Mapping[str, tuple[dict[str, JsonValue], dict[str, Jso
         {
             "deployment_list": ({"additional_drop_params": ["tools"]}, {}, ()),
             "router_default_list": ({}, {"additional_drop_params": ["tools"]}, ()),
-            "router_default_drop_params": ({}, {"drop_params": True}, ("get_weather", "get_weather")),
+            "router_default_drop_params": ({}, {"drop_params": True}, ("get_weather",)),
         }
     )
 )
@@ -1926,7 +1957,6 @@ def test_a_user_config_router_decides_which_malformed_tools_drop(
 class _ById:
     lists_tools: Mapping[str, str]
     drops: str
-    mixed: str
     mixed_drops: str
     mixed_keeps: str
     shadowed: str
@@ -1961,7 +1991,7 @@ def by_id(rig: _Rig) -> Iterator[_ById]:
             (shadowed, 1),
         ):
             wait_for_worker_readiness(rig.gateway, group, deployments, _PROXY_WORKERS)
-        yield _ById(listed, drops, mixed, mixed_drops, mixed_keeps, shadowed)
+        yield _ById(listed, drops, mixed_drops, mixed_keeps, shadowed)
 
 
 @_ENTRY_SHAPES
@@ -2000,16 +2030,9 @@ def test_the_id_of_the_dropping_deployment_in_a_mixed_group_drops_malformed_tool
     _assert_forwarded(rig, checked, response, marker, ())
 
 
-@pytest.mark.parametrize(
-    "pick",
-    [lambda ids: ids.mixed_keeps, lambda ids: ids.mixed],
-    ids=["keeping_id", "group_name"],
-)
-def test_the_keeping_id_or_the_name_of_a_mixed_group_rejects_malformed_tools(
-    rig: _Rig, by_id: _ById, pick: Callable[[_ById], str]
-) -> None:
+def test_the_keeping_id_of_a_mixed_group_rejects_malformed_tools(rig: _Rig, by_id: _ById) -> None:
     marker: Final = _marker()
-    response: Final = _send(rig, CHAT, marker, False, model=pick(by_id), tools=[CHAT.tool, 5])
+    response: Final = _send(rig, CHAT, marker, False, model=by_id.mixed_keeps, tools=[CHAT.tool, 5])
     _assert_held_back(rig, response, marker)
 
 
@@ -2036,7 +2059,7 @@ def test_a_deployment_id_with_a_tools_list_drops_well_formed_tools(rig: _Rig, by
 
 
 def _failed_over(request: Request) -> bool:
-    return request.target.startswith(_DOWN)
+    return request.target.startswith((_DOWN, *(prefix for prefix, _ in _REFUSALS.values())))
 
 
 def _assert_failed_over(
@@ -2063,6 +2086,8 @@ _TOKEN_COUNTS: Final = pytest.mark.parametrize(
 class _Reroute:
     down: Mapping[str, str]
     lists_tools: Mapping[str, str]
+    refusing: Mapping[str, str]
+    fallback_keys: Mapping[str, str]
     team_key: str
     team_models: Mapping[str, str]
 
@@ -2074,6 +2099,13 @@ def reroute(rig: _Rig, field_groups: _FieldGroups) -> Iterator[_Reroute]:
         down: Final = MappingProxyType(
             {provider: scenario.model(**_PROVIDERS[provider](f"{rig.wire.url}/down")) for provider in lists_tools}
         )
+        refusing: Final = MappingProxyType(
+            {
+                chain: scenario.model(**_PROVIDERS["openai"](f"{rig.wire.url}{prefix.rstrip('/')}"))
+                for chain, (prefix, _) in _REFUSALS.items()
+            }
+        )
+        router_settings: Final[dict[str, JsonValue]] = {"fallbacks": [{down["openai"]: [rig.field_group]}]}
         public_team: Final = scenario.team()
         team_models: Final = MappingProxyType(
             {
@@ -2088,10 +2120,17 @@ def reroute(rig: _Rig, field_groups: _FieldGroups) -> Iterator[_Reroute]:
         built: Final = _Reroute(
             down=down,
             lists_tools=lists_tools,
+            refusing=refusing,
+            fallback_keys=MappingProxyType(
+                {
+                    "key": scenario.key(router_settings=router_settings),
+                    "team": scenario.key(team_id=scenario.team(router_settings=router_settings)),
+                }
+            ),
             team_key=scenario.key(team_id=public_team),
             team_models=team_models,
         )
-        for group in (*down.values(), *team_models.values()):
+        for group in (*down.values(), *refusing.values(), *team_models.values()):
             wait_for_worker_readiness(rig.gateway, group, 1, _PROXY_WORKERS)
         yield built
 
@@ -2138,6 +2177,41 @@ def test_a_request_fallback_that_cannot_apply_still_rejects_a_bad_tool_entry(
     _assert_held_back(rig, response, marker)
 
 
+@pytest.mark.parametrize("owner", ["key", "team"])
+def test_router_settings_fallbacks_of_a_key_or_team_answer_a_bad_tool_entry(
+    rig: _Rig, reroute: _Reroute, owner: str
+) -> None:
+    marker: Final = _marker()
+    response: Final = _send(
+        rig,
+        CHAT,
+        marker,
+        False,
+        model=reroute.down["openai"],
+        key=reroute.fallback_keys[owner],
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+    )
+    _assert_failed_over(rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.parametrize("chain", tuple(_REFUSALS))
+def test_an_error_specific_fallback_never_sees_a_bad_tool_entry_the_first_deployment_rejects(
+    rig: _Rig, reroute: _Reroute, chain: str
+) -> None:
+    marker: Final = _marker()
+    refusing: Final = reroute.refusing[chain]
+    response: Final = _send(
+        rig,
+        CHAT,
+        marker,
+        False,
+        model=refusing,
+        tools=[CHAT.tool, 5],
+        **{chain: [{refusing: [rig.field_group]}]},
+    )
+    _assert_held_back(rig, response, marker)
+
+
 def test_a_comma_batch_lets_each_group_decide_on_a_bad_tool_entry(rig: _Rig) -> None:
     marker: Final = _marker()
     response: Final = _send(
@@ -2148,7 +2222,7 @@ def test_a_comma_batch_lets_each_group_decide_on_a_bad_tool_entry(rig: _Rig) -> 
     delivered: Final = sorted(
         (_JSON_OBJECT.validate_json(request.body).get("tools") for request in _delivered(rig, marker)), key=bool
     )
-    assert delivered == [None, [CHAT.tool, _CHAT_BAD_ENTRY]]
+    assert delivered == [None]
 
 
 def test_a_team_public_model_name_answers_a_bad_tool_entry_its_deployment_list_drops(
@@ -2182,7 +2256,7 @@ def test_count_tokens_by_a_team_public_model_name_rejects_a_bad_tool_entry(rig: 
     _assert_held_back(rig, response, marker)
 
 
-def test_a_request_list_drops_malformed_web_search_options_and_forwards_a_bad_tool_entry_on_a_fallback_chain(
+def test_a_request_list_naming_web_search_options_on_a_fallback_chain_still_rejects_a_bad_tool_entry(
     rig: _Rig,
 ) -> None:
     marker: Final = _marker()
@@ -2191,14 +2265,12 @@ def test_a_request_list_drops_malformed_web_search_options_and_forwards_a_bad_to
         CHAT,
         marker,
         False,
-        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+        tools=[CHAT.tool, 5],
         web_search_options=5,
         additional_drop_params=["web_search_options"],
         fallbacks=[{rig.openai: [rig.field_group]}],
     )
-    _assert_answered(CHAT, response, marker)
-    sent: Final = _one_delivery(rig, marker, "/v1/chat/completions")
-    assert (sent["tools"], "web_search_options" in sent) == ([CHAT.tool, _CHAT_BAD_ENTRY], False)
+    _assert_held_back(rig, response, marker)
 
 
 def test_request_drop_params_on_a_fallback_chain_keeps_the_good_entries(rig: _Rig) -> None:
@@ -2473,3 +2545,30 @@ def test_default_fallbacks_to_a_group_listing_tools_answer_a_bad_tool_entry(defa
         tools=[CHAT.tool, _CHAT_BAD_ENTRY],
     )
     _assert_failed_over(default_fallbacks.rig, _CHECKED["chat"], response, marker, ())
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_user_config_model_named_like_a_proxy_group_drops_tools_its_own_list_names(client_side: _Owned) -> None:
+    marker: Final = _marker()
+    name: Final = _owned_name(client_side.suffix, "plain", "openai")
+    user_config: Final[dict[str, JsonValue]] = {
+        "model_list": [
+            {
+                "model_name": name,
+                "litellm_params": {
+                    **_PROVIDERS["openai"](client_side.rig.wire.url),
+                    "additional_drop_params": ["tools"],
+                },
+            }
+        ],
+    }
+    response: Final = _send(
+        client_side.rig,
+        CHAT,
+        marker,
+        False,
+        model=name,
+        tools=[CHAT.tool, _CHAT_BAD_ENTRY],
+        user_config=user_config,
+    )
+    _assert_forwarded(client_side.rig, _CHECKED["chat"], response, marker, ())

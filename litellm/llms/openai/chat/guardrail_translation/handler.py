@@ -157,7 +157,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools and not scan_only_tool_results:
+            if isinstance(tools, list) and tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")

@@ -4245,9 +4245,8 @@ class Router:
             dep_params = dep_params_raw.model_dump(exclude_none=True)
         dep_tools: Final = dep_params.get("tools") or []
         req_tools: Final = kwargs.get("tools") or []
-        if dep_tools or req_tools:
-            merged: Final = list(dep_tools) + list(req_tools)
-            kwargs["tools"] = merged
+        if (dep_tools or req_tools) and isinstance(req_tools, (list, tuple)):
+            kwargs["tools"] = [*dep_tools, *req_tools]
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
