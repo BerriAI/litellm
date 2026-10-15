@@ -5,7 +5,18 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, S
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    cast,
+    get_args,
+    runtime_checkable,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -53,8 +64,6 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
-    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
-
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
@@ -810,10 +819,28 @@ def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ..
     return tags or None
 
 
-def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> "PROXY_LiteLLMManagedFiles | None":
-    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+@runtime_checkable
+class _BackgroundResponseStore(Protocol):
+    async def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: ResponsesAPIResponse,
+        litellm_parent_otel_span: None,
+        model_object_id: str,
+        file_purpose: Literal["response"],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
+        persist_attribution: bool = False,
+    ) -> None: ...
 
-    return cast(PROXY_LiteLLMManagedFiles | None, proxy_logging_obj.get_proxy_hook("managed_files"))
+    async def track_untracked_background_response(
+        self, response_id: str, response: ResponsesAPIResponse, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool: ...
+
+
+def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> _BackgroundResponseStore | None:
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    return hook if isinstance(hook, _BackgroundResponseStore) else None
 
 
 async def _bill_finished_background_response(

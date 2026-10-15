@@ -331,6 +331,7 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
     processor.base_process_llm_request = AsyncMock(return_value=queued)
     managed_files = MagicMock()
     managed_files.store_unified_object_id = AsyncMock()
+    managed_files.track_untracked_background_response = AsyncMock(return_value=False)
     proxy_logging = MagicMock()
     proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
 
@@ -675,6 +676,7 @@ async def test_background_create_the_provider_confirms_is_stored_under_its_provi
     processor.base_process_llm_request = AsyncMock(return_value=queued)
     managed_files = MagicMock()
     managed_files.store_unified_object_id = AsyncMock()
+    managed_files.track_untracked_background_response = AsyncMock(return_value=False)
     proxy_logging = MagicMock()
     proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
 
