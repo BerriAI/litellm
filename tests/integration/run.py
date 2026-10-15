@@ -39,7 +39,7 @@ GITHUB_FILES: Final = frozenset(
 )
 
 
-PEER_GROUPS: Final = frozenset({"management", "mcp"})
+PEER_GROUPS: Final = frozenset({"management", "mcp", "accounting"})
 COST_MAP_GROUPS: Final = frozenset({"cost"})
 
 

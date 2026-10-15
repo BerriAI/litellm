@@ -233,6 +233,7 @@ jobs:
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
               tests/unit/llms/black_forest_labs
+              tests/unit/llms/brave
               tests/unit/llms/bytez
               tests/unit/llms/cerebras
               tests/unit/llms/chat
@@ -268,6 +269,7 @@ jobs:
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
+              tests/unit/llms/google_pse
               tests/unit/llms/github_copilot
               tests/unit/llms/gradient_ai
               tests/unit/llms/groq
@@ -300,6 +302,7 @@ jobs:
               tests/unit/llms/nebius
               tests/unit/llms/neosantara
               tests/unit/llms/nimble
+              tests/unit/llms/nlp_cloud
               tests/unit/llms/novita
               tests/unit/llms/nscale
               tests/unit/llms/nvidia_nim
@@ -310,6 +313,7 @@ jobs:
               tests/unit/llms/oobabooga
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
+              tests/unit/llms/opensandbox
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
@@ -346,6 +350,7 @@ jobs:
               tests/unit/llms/v0
               tests/unit/llms/valkey
               tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/vllm
               tests/unit/llms/volcengine
               tests/unit/llms/voyage
               tests/unit/llms/wandb
@@ -446,6 +451,7 @@ jobs:
               tests/unit/repositories
               tests/unit/secret_managers
               tests/unit/skills/test_skills_main.py
+              tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
             workers: 2

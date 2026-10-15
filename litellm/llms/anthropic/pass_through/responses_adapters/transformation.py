@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
@@ -128,16 +128,92 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return None
 
     @staticmethod
+    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
+            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
+            if isinstance(block, dict)
+        )
+
+    @classmethod
+    def _tool_result_image_parts(
+        cls, blocks: Sequence[Mapping[str, object]]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: json parts
+        """Each image block as an input_image part, keeping a breakpoint the image carries."""
+        sources: Final = tuple(
+            (cls._translate_anthropic_image_source_to_url(block.get("source")), block.get("prompt_cache_breakpoint"))
+            for block in blocks
+            if block.get("type") == "image"
+        )
+        return tuple(
+            with_prompt_cache_breakpoint({"type": "input_image", "image_url": url}, breakpoint)
+            for url, breakpoint in sources
+            if url
+        )
+
+    @classmethod
+    def _tool_result_images_by_breakpoint(
+        cls, block: Mapping[str, object]
+    ) -> tuple[object, tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:  # mutable-ok: json parts
+        """The breakpoint covering a tool_result, its images at or before that breakpoint, and its images after it.
+
+        A mark on the tool_result covers all its images, and a mark on a block inside it covers the images up to that
+        block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
+        the mark covers whole.
+        """
+        inner: Final = cls._content_blocks(block.get("content"))
+        own_breakpoint: Final = block.get("prompt_cache_breakpoint")
+        if own_breakpoint is not None:
+            return own_breakpoint, cls._tool_result_image_parts(inner), ()
+        last_marked: Final = next(
+            (
+                position
+                for position in reversed(range(len(inner)))
+                if inner[position].get("prompt_cache_breakpoint") is not None
+            ),
+            None,
+        )
+        if last_marked is None:
+            return None, (), cls._tool_result_image_parts(inner)
+        return (
+            inner[last_marked].get("prompt_cache_breakpoint"),
+            cls._tool_result_image_parts(inner[: last_marked + 1]),
+            cls._tool_result_image_parts(inner[last_marked + 1 :]),
+        )
+
+    @staticmethod
+    def _tool_result_images_message(
+        image_parts: Sequence[Mapping[str, object]],
+        prompt_cache_breakpoint: object,
+    ) -> dict[str, object]:  # mutable-ok: API message payload
+        """Tool result images as one user message, the tool_result's breakpoint on the last image.
+
+        OpenAI caches only up to a breakpoint, so a marked result's images go right after its output and ahead of any
+        later output, the images Anthropic caches for that mark.
+        """
+        *earlier_images, last_image = image_parts
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+                *earlier_images,
+                with_prompt_cache_breakpoint(last_image, prompt_cache_breakpoint),
+            ],
+        }
+
+    @staticmethod
     def _tool_result_output_value(
         output_text: str,
         file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
-        tool_result: Mapping[str, object],
+        prompt_cache_breakpoint: object,
     ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
         """Plain string output, or a part list when document file parts or a cache breakpoint are present.
 
         OpenAI reads a breakpoint only on a part, so a marked result ends on a part that carries it.
         """
-        prompt_cache_breakpoint: Final = tool_result.get("prompt_cache_breakpoint")
         text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
         parts: Final = [*text_parts, *file_parts]
         if not parts or (not file_parts and prompt_cache_breakpoint is None):
@@ -292,6 +368,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_breakpoint, covered_image_parts, later_image_parts = (
+                                self._tool_result_images_by_breakpoint(
+                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                                )
+                            )
                             document_candidates = (
                                 tuple(
                                     self._translate_anthropic_document_block_to_file_part(c)
@@ -311,43 +392,37 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
-                                image_candidates = tuple(
-                                    self._translate_anthropic_image_source_to_url(c.get("source"))
-                                    for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "image"
-                                )
-                                image_urls = tuple(url for url in image_candidates if url)
-                                if image_urls:
+                                if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
-                                    tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url} for url in image_urls
-                                    )
                             else:
                                 output_text = str(inner)
+                            images_inside_breakpoint = (
+                                (*tool_image_parts, *covered_image_parts) if tool_breakpoint is not None else ()
+                            )
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
-                                    "output": self._tool_result_output_value(output_text, tool_file_parts, block),
+                                    "output": self._tool_result_output_value(
+                                        output_text,
+                                        tool_file_parts,
+                                        None if images_inside_breakpoint else tool_breakpoint,
+                                    ),
                                 }
                             )
+                            if images_inside_breakpoint:
+                                input_items.append(
+                                    self._tool_result_images_message(images_inside_breakpoint, tool_breakpoint)
+                                )
+                                tool_image_parts.clear()
+                            tool_image_parts.extend(later_image_parts)
                     if tool_image_parts:
-                        boundary_part = {
-                            "type": "input_text",
-                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
-                        }
-                        input_items.append(
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [boundary_part, *tool_image_parts],
-                            }
-                        )
+                        input_items.append(self._tool_result_images_message(tool_image_parts, None))
                     if user_parts:
                         input_items.append(
                             {
