@@ -461,3 +461,95 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "system_fingerprint": None,
     },
 )
+
+GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "openai/gpt-6-astra",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/chat/completions",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "authorization": "Bearer synthetic-openai-key",
+    },
+    expected_provider_request={
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "model": "gpt-6-astra",
+        "max_completion_tokens": 64,
+    },
+    mock_provider_response={
+        "id": "chatcmpl-EZ37nFHKO9u4Sc7LwqNWTR0iHbIwn",
+        "object": "chat.completion",
+        "created": 1792022199,
+        "model": "gpt-6-astra",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!", "refusal": None, "annotations": []},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 19,
+            "completion_tokens": 5,
+            "total_tokens": 24,
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+            "completion_tokens_details": {
+                "reasoning_tokens": 0,
+                "audio_tokens": 0,
+                "accepted_prediction_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+        },
+        "service_tier": "default",
+        "system_fingerprint": None,
+    },
+    expected_litellm_response={
+        "id": "chatcmpl-EZ37nFHKO9u4Sc7LwqNWTR0iHbIwn",
+        "created": 1792022199,
+        "model": "openai/gpt-6-astra",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello!",
+                    "role": "assistant",
+                    "refusal": None,
+                    "annotations": [],
+                },
+                "provider_specific_fields": {},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 19,
+            "total_tokens": 24,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {
+                "audio_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+        },
+        "service_tier": "default",
+        "system_fingerprint": None,
+    },
+)
