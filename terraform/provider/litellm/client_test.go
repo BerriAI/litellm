@@ -1,9 +1,28 @@
 package litellm
 
 import (
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestNewClientHonorsProxyEnvironment(t *testing.T) {
+	for _, insecure := range []bool{false, true} {
+		c := NewClient("https://litellm.example.com", "sk-test", insecure)
+
+		tr, ok := c.httpClient.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("transport is %T, want *http.Transport", c.httpClient.Transport)
+		}
+		if tr.Proxy == nil || reflect.ValueOf(tr.Proxy).Pointer() != reflect.ValueOf(http.ProxyFromEnvironment).Pointer() {
+			t.Errorf("insecure=%v: transport does not use http.ProxyFromEnvironment, so HTTP_PROXY/HTTPS_PROXY are ignored", insecure)
+		}
+		if tr.TLSClientConfig == nil || tr.TLSClientConfig.InsecureSkipVerify != insecure {
+			t.Errorf("insecure=%v: TLSClientConfig.InsecureSkipVerify not set from the argument", insecure)
+		}
+	}
+}
 
 func TestRedactSensitiveDataNestedCredentialValues(t *testing.T) {
 	c := NewClient("http://localhost:4000", "sk-test", false)
