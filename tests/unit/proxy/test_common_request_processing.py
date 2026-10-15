@@ -3899,13 +3899,18 @@ class TestStreamingOverheadHeader:
 class TestDDSpanTaggerTagRequest:
     """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
 
-    def _make_user_api_key_dict(self, key_alias=None, token=None):
+    def _make_user_api_key_dict(self, key_alias=None, token=None, user_email=None):
         from litellm.proxy._types import UserAPIKeyAuth
 
         d = UserAPIKeyAuth()
         d.key_alias = key_alias
         d.token = token
+        d.user_email = user_email
         return d
+
+    def _tracer_with_active_span_writing_to(self, tags: dict[str, str]) -> SimpleNamespace:
+        span = SimpleNamespace(set_tag_str=tags.__setitem__)
+        return SimpleNamespace(current_span=lambda: span)
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
@@ -3944,6 +3949,32 @@ class TestDDSpanTaggerTagRequest:
             )
 
         mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+
+    def test_tags_user_email(self):
+        """user_email is tagged so JWT-authenticated requests are traceable per person."""
+        user_key = self._make_user_api_key_dict(user_email="user@example.com")
+        tags: dict[str, str] = {}
+
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model=None,
+            )
+
+        assert tags == {"litellm.user_email": "user@example.com"}
+
+    def test_no_user_email_tag_when_absent(self):
+        """No user email tag when the authenticated identity has no email."""
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", user_email=None)
+        tags: dict[str, str] = {}
+
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="gpt-4o",
+            )
+
+        assert tags == {"litellm.key_alias": "my-prod-key", "litellm.requested_model": "gpt-4o"}
 
 
 class TestHasAttributeErrorInChain:
@@ -8260,10 +8291,10 @@ def _apply_stream_usage_tracking(
     route_type: str,
     supports_stream_options: Callable[[], bool] = lambda: True,
 ) -> None:
-    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
 
     data.update(
-        _stream_usage_tracking_updates(
+        stream_usage_tracking_updates(
             data=data,
             general_settings=general_settings,
             route_type=route_type,
@@ -8408,10 +8439,10 @@ class TestApplyStreamUsageTracking:
 class TestModelDeploymentsSupportStreamOptions:
     def _support(self, model, llm_router=None, team_id=None) -> bool:
         from litellm.proxy.common_request_processing import (
-            _model_deployments_support_stream_options,
+            model_deployments_support_stream_options,
         )
 
-        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+        return model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
 
     def test_openai_compatible_deployment_supports_stream_options(self):
         router = litellm.Router(
@@ -8759,6 +8790,76 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestVideoServedModelPin:
+    """A video id names the group a poll asked for and the group that served the task. The served group may only
+    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias,
+    and only after the pre-call hooks, so a key's rate limits on that name still count the poll, and never over a
+    model a hook picked."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/sora-2", "api_key": "sk-fake"}}
+                for name in ("allowed", "restricted")
+            ],
+            routing_groups=[
+                {"group_name": "videos", "models": ["allowed", "restricted"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_aliases", "router_settings", "hook_rewrite", "hooked", "expected"),
+        [
+            ({}, None, None, "videos", "restricted"),
+            ({"videos": "allowed"}, None, None, "allowed", "allowed"),
+            ({}, {"model_group_alias": {"videos": "allowed"}}, None, "allowed", "allowed"),
+            ({}, None, "allowed", "videos", "allowed"),
+        ],
+        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins", "hook-rewrite-wins"],
+    )
+    async def test_served_group_is_pinned_after_the_hooks_only_when_the_aliased_name_routes_to_it(
+        self, monkeypatch, key_aliases, router_settings, hook_rewrite, hooked, expected
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "videos", "video_id": "video_abc"}, served_model="restricted"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            hooked_data = copy.deepcopy(data)
+            return hooked_data if hook_rewrite is None else {**hooked_data, "model": hook_rewrite}
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=router_settings)
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], aliases=key_aliases),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="avideo_status",
+            llm_router=self._router(),
+        )
+
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == hooked
+        assert returned_data["model"] == expected
 
 
 class TestInjectCostIntoUsageDict:

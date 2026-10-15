@@ -27,7 +27,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -124,6 +124,7 @@ from litellm.proxy.route_llm_request import (
     raise_if_model_not_routable,
     route_request,
 )
+from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -516,7 +517,7 @@ def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     return supported_params is not None and "stream_options" in supported_params
 
 
-def _model_deployments_support_stream_options(
+def model_deployments_support_stream_options(
     model: object,
     llm_router: Router | None,
     team_id: str | None,
@@ -530,7 +531,7 @@ def _model_deployments_support_stream_options(
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
 
 
-def _stream_usage_tracking_updates(
+def stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
@@ -560,6 +561,7 @@ def _stream_usage_tracking_updates(
     }
 
 
+@runtime_checkable
 class _UpstreamHttpResponse(Protocol):
     @property
     def status_code(self) -> int: ...
@@ -572,6 +574,11 @@ class _UpstreamHttpResponse(Protocol):
 
 def _as_upstream_response(response: _UpstreamHttpResponse) -> _UpstreamHttpResponse:
     return response
+
+
+_UPSTREAM_RESPONSE: Final = TypeAdapter(
+    _UpstreamHttpResponse, config=ConfigDict(arbitrary_types_allowed=True, hide_input_in_errors=True)
+)
 
 
 class _ReadsHeaderValues(Protocol):
@@ -1805,8 +1812,9 @@ async def _team_member_within_fallback_model_budget(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, served_model: str | None = None):
         self.data: dict[str, Any] = data  # mutable-ok: the request body every later step mutates in place
+        self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
@@ -2260,7 +2268,11 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        aliased_model: Final = self.data.get("model")
+
+        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        self.data["litellm_call_id"] = litellm_call_id
+        bind_telemetry_call_id(litellm_call_id)
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -2269,11 +2281,11 @@ class ProxyBaseLLMRequestProcessing:
 
         ### AUTO STREAM USAGE TRACKING ###
         self.data.update(
-            _stream_usage_tracking_updates(
+            stream_usage_tracking_updates(
                 data=self.data,
                 general_settings=general_settings,
                 route_type=route_type,
-                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                supports_stream_options=lambda: model_deployments_support_stream_options(
                     model=self.data.get("model"),
                     llm_router=llm_router,
                     team_id=user_api_key_dict.team_id,
@@ -2364,6 +2376,14 @@ class ProxyBaseLLMRequestProcessing:
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
+
+        if (
+            self.served_model is not None
+            and llm_router is not None
+            and isinstance(aliased_model, str)
+            and self.data.get("model") == aliased_model
+        ):
+            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
 
         return self.data, logging_obj
 
@@ -2670,7 +2690,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _response_cost_from_logging_obj(
         *,
-        response: Any,
+        response: object,
         logging_obj: LiteLLMLoggingObj,
     ) -> float | str:
         """
@@ -2726,7 +2746,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
-    ) -> Any:
+    ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
         Everything below this point, the upstream call included, happens before the
@@ -3369,7 +3389,7 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(result, Response):
             return result
 
-        upstream: Final = _as_upstream_response(result)
+        upstream: Final = _UPSTREAM_RESPONSE.validate_python(result)
         content: Final = await upstream.aread()
         return Response(
             content=content,

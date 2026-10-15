@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_DECISION_CATALOG, buildDecisionCatalog, isDecisionMode, isDecisionSelection } from "./decisionModels";
+import {
+  EMPTY_DECISION_CATALOG,
+  buildDecisionCatalog,
+  buildDecisionGarden,
+  displayMode,
+  expandModeFilterValues,
+  isDecisionMode,
+  isDecisionSelection,
+  parseProxyDecisionProviders,
+} from "./decisionModels";
 
 const COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+  "cloudflare/clef": { litellm_provider: "cloudflare", mode: "decisions" },
   "gpt-6-luna": {
     litellm_provider: "openai",
     mode: "chat",
@@ -17,11 +27,136 @@ const COST_MAP = {
 };
 
 describe("isDecisionMode", () => {
-  it("is true only for the evaluation mode", () => {
+  it("is true for both the decisions and evaluation modes", () => {
+    expect(isDecisionMode("decisions")).toBe(true);
     expect(isDecisionMode("evaluation")).toBe(true);
     expect(isDecisionMode("chat")).toBe(false);
     expect(isDecisionMode(null)).toBe(false);
     expect(isDecisionMode(undefined)).toBe(false);
+  });
+});
+
+describe("displayMode", () => {
+  it("shows every decision mode spelling as decisions and leaves other modes alone", () => {
+    expect(displayMode("evaluation")).toBe("decisions");
+    expect(displayMode("decisions")).toBe("decisions");
+    expect(displayMode("chat")).toBe("chat");
+    expect(displayMode("embedding")).toBe("embedding");
+    expect(displayMode(null)).toBeUndefined();
+    expect(displayMode(undefined)).toBeUndefined();
+  });
+});
+
+describe("expandModeFilterValues", () => {
+  it("widens a decisions selection to every mode spelling the route stores", () => {
+    expect(expandModeFilterValues(["decisions"])).toEqual(["evaluation", "decisions"]);
+    expect(expandModeFilterValues(["chat", "decisions"])).toEqual(["chat", "evaluation", "decisions"]);
+    expect(expandModeFilterValues(["chat"])).toEqual(["chat"]);
+  });
+});
+
+describe("buildDecisionGarden", () => {
+  const garden = buildDecisionGarden(COST_MAP, null);
+
+  it("lists each decision model once, one per provider before any provider's second", () => {
+    expect(garden).toEqual([
+      { model: "cloudflare/clef", provider: "cloudflare", route: "decisions" },
+      { model: "gpt-6-luna", provider: "openai", route: "decisions" },
+      { model: "perplexity/pplx-decider-v1-27b", provider: "perplexity", route: "decisions" },
+      { model: "typesafe/jev-latest", provider: "typesafe", route: "decisions" },
+      { model: "typesafe/jev-preview", provider: "typesafe", route: "decisions" },
+      { model: "systemone-only", provider: "somevendor", route: "self-hosted" },
+    ]);
+  });
+
+  it("puts self-hosted models that only serve their own route after every /v1/decisions model", () => {
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "zzz/decider": { litellm_provider: "zzz", mode: "evaluation", supported_endpoints: ["/v1/decisions"] },
+      },
+      null,
+    );
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-latest", "decisions"],
+      ["zzz/decider", "decisions"],
+      ["typesafe/jev-preview", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+    ]);
+  });
+
+  it("shows a provider's shortest model name first, so an alias outranks its long twin", () => {
+    const rows = buildDecisionGarden(
+      {
+        "cloudflare/@cf/cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+        "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+        "databricks/ai_decide": { litellm_provider: "databricks", mode: "evaluation" },
+      },
+      null,
+    );
+    expect(rows.map((row) => row.model)).toEqual([
+      "cloudflare/clef",
+      "databricks/ai_decide",
+      "cloudflare/@cf/cloudflare/clef",
+    ]);
+  });
+
+  it("lists a chat model that answers on /v1/decisions and leaves other chat models out", () => {
+    const models = garden.map((row) => row.model);
+    expect(models).toContain("gpt-6-luna");
+    expect(models).not.toContain("gpt-5.5");
+    expect(models).not.toContain("perplexity/sonar-pro");
+  });
+
+  it("reads a model as answering on /v1/decisions when this proxy serves its provider, whatever endpoints its row lists", () => {
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "typesafe/jev-systemone": {
+          litellm_provider: "typesafe",
+          mode: "evaluation",
+          supported_endpoints: ["/v1/systemone"],
+        },
+      },
+      new Set(["typesafe"]),
+    );
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-systemone", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+    ]);
+  });
+
+  it("marks a model from a provider this proxy cannot serve on /v1/decisions as needing a newer LiteLLM, last", () => {
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "newvendor/decider": { litellm_provider: "newvendor", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      },
+      new Set(["typesafe"]),
+    );
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-latest", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+      ["newvendor/decider", "needs-upgrade"],
+    ]);
+  });
+
+  it("is empty for a missing or malformed cost map", () => {
+    expect(buildDecisionGarden(undefined, null)).toEqual([]);
+    expect(buildDecisionGarden("not a map", null)).toEqual([]);
+  });
+});
+
+describe("parseProxyDecisionProviders", () => {
+  it("reads the decision providers this proxy serves, and nothing from a response without them", () => {
+    expect(parseProxyDecisionProviders({ decision_model_providers: ["typesafe", "cloudflare"] })).toEqual(
+      new Set(["typesafe", "cloudflare"]),
+    );
+    expect(parseProxyDecisionProviders({ supported_modes: ["pre_call"] })).toBeNull();
+    expect(parseProxyDecisionProviders(undefined)).toBeNull();
   });
 });
 
@@ -31,6 +166,7 @@ describe("buildDecisionCatalog", () => {
   it("collects evaluation models and models that list a decision endpoint", () => {
     expect([...catalog.models].sort()).toEqual(
       [
+        "cloudflare/clef",
         "gpt-6-luna",
         "perplexity/pplx-decider-v1-27b",
         "systemone-only",

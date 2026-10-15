@@ -16,10 +16,12 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
+    ListGuardrailsResponse,
     PatchGuardrailRequest,
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_guardrails_list_response,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -68,6 +70,58 @@ MOCK_DB_GUARDRAIL = {
     "created_at": datetime.now(),
     "updated_at": datetime.now(),
 }
+
+
+def test_get_guardrails_list_response() -> None:
+    sample_config: Final = [
+        {
+            "guardrail_name": "test-guard",
+            "litellm_params": {
+                "guardrail": "test-guard",
+                "mode": "pre_call",
+                "api_key": "test-api-key",
+                "api_base": "test-api-base",
+            },
+            "guardrail_info": {
+                "params": [
+                    {
+                        "name": "toxicity_score",
+                        "type": "float",
+                        "description": "Score between 0-1",
+                    }
+                ]
+            },
+        }
+    ]
+
+    response: Final = _get_guardrails_list_response(sample_config)
+    assert isinstance(response, ListGuardrailsResponse)
+    assert response.guardrails[0].guardrail_name == "test-guard"
+    assert response.guardrails[0].guardrail_info == {
+        "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1",
+            }
+        ]
+    }
+
+    empty_response: Final = _get_guardrails_list_response([])
+    assert isinstance(empty_response, ListGuardrailsResponse)
+    assert empty_response.guardrails == []
+
+    minimal_response: Final = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_name": "minimal-guard",
+                "litellm_params": {"guardrail": "minimal-guard", "mode": "pre_call"},
+            }
+        ]
+    )
+    assert isinstance(minimal_response, ListGuardrailsResponse)
+    assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
+    assert minimal_response.guardrails[0].guardrail_info is None
 
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
@@ -1612,6 +1666,31 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
         callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
         assert callback.logging_only_scope is None
         assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_with_blank_value_clears_the_stored_value(mocker, monkeypatch, mock_guardrail_registry):
+    """
+    Regression: blank litellm_params were dropped before validation, so a PATCH that cleared
+    api_base with "" returned 200 but kept the stored value.
+    """
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_blank_value_test",
+        {"mode": "pre_call", "api_base": "https://old.example.com"},
+    )
+    request = PatchGuardrailRequest.model_validate({"litellm_params": {"api_base": ""}})
+
+    try:
+        await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].api_base is None
     finally:
         handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
 

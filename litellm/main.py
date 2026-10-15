@@ -141,6 +141,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
+    is_decisions_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -1086,6 +1087,23 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
         return "claude" in model_lower
     return False
+
+
+def _history_without_unanswered_tool_search_calls(
+    messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
+) -> tuple[object, ...] | None:
+    from litellm.responses.litellm_completion_transformation.tool_search import (
+        chat_messages_without_tool_search_calls,
+        chat_route_rejects_unanswered_tool_calls,
+        unanswered_tool_search_call_ids,
+    )
+
+    if not chat_route_rejects_unanswered_tool_calls(custom_llm_provider, provider_config):
+        return None
+    unanswered_search_call_ids: Final = unanswered_tool_search_call_ids(messages)
+    if not unanswered_search_call_ids:
+        return None
+    return chat_messages_without_tool_search_calls(messages, unanswered_search_call_ids)
 
 
 def _without_anthropic_only_tool_keys(tool: dict[str, object]) -> dict[str, object]:
@@ -5555,7 +5573,13 @@ def completion(
             )
 
         if provider_config is not None:
-            messages = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            history_for_route: Final = _history_without_unanswered_tool_search_calls(
+                translated_messages, custom_llm_provider, provider_config
+            )
+            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
+                translated_messages if history_for_route is None else list(history_for_route)
+            )
 
         if (
             supports_system_message is not None
@@ -8821,8 +8845,9 @@ async def ahealth_check(
             input=input,
         )
 
-        if mode in mode_handlers:
-            _response: Final = await mode_handlers[mode]()
+        handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
+        if handler_mode in mode_handlers:
+            _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )

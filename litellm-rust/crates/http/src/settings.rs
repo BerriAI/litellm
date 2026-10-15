@@ -140,7 +140,7 @@ impl Default for HttpSettings {
             proxies: EnvironmentProxies::default(),
             connect_timeout: Duration::from_secs(10),
             tcp_keepalive: None,
-            pool_idle_timeout: Duration::from_secs(120),
+            pool_idle_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -330,7 +330,7 @@ mod tests {
             &[("AIOHTTP_TCP_KEEPIDLE", "45")],
         ))]);
         assert_eq!(settings.tcp_keepalive, None);
-        assert_eq!(settings.pool_idle_timeout, Duration::from_secs(120));
+        assert_eq!(settings.pool_idle_timeout, Duration::from_secs(15));
     }
 
     fn proxy_flags(
