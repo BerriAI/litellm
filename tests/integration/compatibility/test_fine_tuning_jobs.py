@@ -346,6 +346,30 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
     assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files", "file-abc"), raw.text
 
 
+@pytest.mark.parametrize(
+    ("provider", "target", "provider_defaults"),
+    [
+        ("openai", "/v1/fine_tuning/jobs", {}),
+        ("azure", f"/openai/fine_tuning/jobs?api-version={AZURE_API_VERSION}", {"trainingType": 1}),
+    ],
+)
+def test_create_sends_the_model_without_its_provider_prefix(
+    rig: Rig, provider: str, target: str, provider_defaults: Mapping[str, JsonValue]
+) -> None:
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.create(
+            model=f"{provider}/gpt-4o-mini", training_file="file-abc123", extra_body={"custom_llm_provider": provider}
+        )
+    sent: Final = _only(_drained(rig), "POST", target)
+    assert JSON_OBJECT.validate_json(sent.body) == {
+        "model": "gpt-4o-mini",
+        "training_file": "file-abc123",
+        "hyperparameters": {},
+        **provider_defaults,
+    }, sent.body
+    assert raw.status_code == 200, raw.text
+
+
 def test_azure_cancel_merges_finetune_settings(rig: Rig) -> None:
     with rig.sdk("/v1") as client:
         raw: Final = client.fine_tuning.jobs.with_raw_response.cancel(
