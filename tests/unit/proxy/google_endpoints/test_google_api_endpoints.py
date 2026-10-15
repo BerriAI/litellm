@@ -4,10 +4,11 @@ Test to verify the Google GenAI proxy API endpoints
 """
 
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from litellm.types.utils import TokenCountResponse
 
 
 def _build_test_client():
@@ -88,9 +89,7 @@ def test_google_stream_generate_content_endpoint():
         assert init_kwargs["data"]["_litellm_raw_sse_stream"] is True
         assert init_kwargs["data"]["_litellm_skip_openai_stream_done"] is True
         assert init_kwargs["data"]["model"] == "test-model"
-        assert init_kwargs["data"]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
+        assert init_kwargs["data"]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
 
 
 def test_google_generate_content_data_flows_through_processor():
@@ -123,9 +122,7 @@ def test_google_generate_content_data_flows_through_processor():
         data = mock_init.call_args.kwargs["data"]
         assert data["model"] == "test-model"
         assert data["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
-        assert data["systemInstruction"] == {
-            "parts": [{"text": "Your name is Doodle."}]
-        }
+        assert data["systemInstruction"] == {"parts": [{"text": "Your name is Doodle."}]}
         # generationConfig arrives intact here; the rename to `config` is
         # done downstream in route_request (see test_route_llm_request).
         assert data["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
@@ -160,12 +157,17 @@ def test_google_count_tokens_unchanged():
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-    fake_response = MagicMock()
-    fake_response.original_response = {
-        "totalTokens": 7,
-        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 7}],
-    }
-    fake_response.total_tokens = 7
+    fake_response = TokenCountResponse(
+        total_tokens=7,
+        request_model="test-model",
+        model_used="test-model",
+        tokenizer_type="gemini_api",
+        original_response={
+            "totalTokens": 7,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 7}],
+        },
+        count_source="provider",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.token_counter",
@@ -180,6 +182,7 @@ def test_google_count_tokens_unchanged():
         assert response.status_code == 200
         body = response.json()
         assert body["totalTokens"] == 7
+        assert body["litellm_count_source"] == "provider"
 
 
 def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs():
@@ -189,9 +192,14 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-    fake_response: Final = MagicMock()
-    fake_response.original_response = {"input_tokens": 2167}
-    fake_response.total_tokens = 2167
+    fake_response: Final = TokenCountResponse(
+        total_tokens=2167,
+        request_model="claude-opus-4-8",
+        model_used="us.anthropic.claude-opus-5-5",
+        tokenizer_type="bedrock_api",
+        original_response={"input_tokens": 2167},
+        count_source="fallback_model",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.token_counter",
@@ -207,3 +215,5 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         body: Final = response.json()
         assert body["totalTokens"] == 2167
         assert body["promptTokensDetails"] == []
+        assert body["litellm_count_source"] == "fallback_model"
+        assert body["litellm_count_fallback_model"] == "us.anthropic.claude-opus-5-5"
