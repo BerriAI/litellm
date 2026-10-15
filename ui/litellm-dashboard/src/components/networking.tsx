@@ -156,6 +156,7 @@ import {
   registerBaseUrlGetter,
   registerErrorHandler,
 } from "@/lib/http/runtime";
+import { withServerRoot } from "@/lib/assetPaths";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -566,10 +567,9 @@ export const getUiConfig = async () => {
     : await (async (): Promise<string | null> => {
         try {
           // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
-          const response = await fetch(
-            `${serverRootPath === "/" ? "" : serverRootPath}/ui/litellm-runtime-config.json`,
-            { cache: "no-store" },
-          );
+          const response = await fetch(withServerRoot("/ui/litellm-runtime-config.json", serverRootPath), {
+            cache: "no-store",
+          });
           if (!response.ok) return null;
           const runtimeConfig: unknown = await response.json();
           if (

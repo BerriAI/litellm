@@ -1038,33 +1038,34 @@ describe("getUiConfig runtime backend discovery", () => {
     return { networking, mockFetch };
   };
 
-  it.each(["https://backend.example.com", "https://backend.example.com/api-prefix"])(
-    "loads prefixed static configuration independently of the selected worker and API base %s",
-    async (backendBase) => {
-      const mockFetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ backend_url: backendBase }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ ...discoveryConfig(), server_root_path: "/services/llm" }),
-        } as Response);
-      vi.stubGlobal("fetch", mockFetch);
-      const networking = await loadFreshNetworking();
-      const { setServerRootPath } = await import("@/lib/serverRootPath");
-      setServerRootPath("/services/llm");
-      networking.switchToWorkerUrl("https://worker.example.com/worker-mount");
+  it.each([
+    ["https://backend.example.com", "/services/llm"],
+    ["https://backend.example.com/api-prefix", "/services/llm"],
+    ["https://backend.example.com", "/services/llm/"],
+  ])("loads static configuration from backend %s under normalized UI prefix %s", async (backendBase, uiPrefix) => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ backend_url: backendBase }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ...discoveryConfig(), server_root_path: "/services/llm" }),
+      } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+    const { setServerRootPath } = await import("@/lib/serverRootPath");
+    setServerRootPath(uiPrefix);
+    networking.switchToWorkerUrl("https://worker.example.com/worker-mount");
 
-      await networking.getUiConfig();
+    await networking.getUiConfig();
 
-      expect(mockFetch).toHaveBeenNthCalledWith(1, "/services/llm/ui/litellm-runtime-config.json", {
-        cache: "no-store",
-      });
-      expect(mockFetch.mock.calls[1][0]).toBe(`${backendBase}/litellm/.well-known/litellm-ui-config`);
-    },
-  );
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/services/llm/ui/litellm-runtime-config.json", {
+      cache: "no-store",
+    });
+    expect(mockFetch.mock.calls[1][0]).toBe(`${backendBase}/litellm/.well-known/litellm-ui-config`);
+  });
 
   it("discovers the control plane under the UI prefix when no static backend is configured", async () => {
     const mockFetch = vi
