@@ -4252,11 +4252,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self.bridged_model_response = response
 
     def billable_result(self, result: object) -> object:
-        """The response the cost calculator prices: a served /v1/messages body is replaced by
-        the ModelResponse its spend row is built from, anything else is priced as is."""
-        if self.call_type == CallTypes.anthropic_messages.value and isinstance(result, dict):
-            return self._anthropic_messages_logged_response(result=result)
-        return result
+        """The response the cost calculator prices: a /v1/messages body served through the chat
+        bridge is replaced by the ModelResponse its spend row is built from, anything else is
+        priced as is."""
+        served: Final[object] = result
+        if self.bridged_model_response is None or not isinstance(result, dict):
+            return result
+        return self._anthropic_messages_logged_response(result=served)
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """

@@ -10927,7 +10927,7 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
     the provider reported (LIT-9666)."""
 
     @staticmethod
-    def _logging_obj(model):
+    def _logging_obj(model: str):
         from litellm.litellm_core_utils.litellm_logging import Logging
 
         logging_obj = Logging(
@@ -10947,8 +10947,12 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
         model = "dashscope/qwen-turbo"
-        pricing = litellm.model_cost[model]
-        assert pricing["output_cost_per_reasoning_token"] != pricing["output_cost_per_token"]
+        pricing = litellm.get_model_info(model)
+        input_rate = pricing["input_cost_per_token"]
+        output_rate = pricing["output_cost_per_token"]
+        reasoning_rate = pricing["output_cost_per_reasoning_token"]
+        assert input_rate is not None and output_rate is not None and reasoning_rate is not None
+        assert reasoning_rate != output_rate
         chat_completion = ModelResponse(
             id="chatcmpl-upstream",
             model="qwen-turbo",
@@ -10969,9 +10973,9 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
             response=dict(served), logging_obj=logging_obj
         )
 
-        expected_reasoning = 3480 * pricing["output_cost_per_reasoning_token"]
-        expected_output = expected_reasoning + (4040 - 3480) * pricing["output_cost_per_token"]
-        assert cost == pytest.approx(1240 * pricing["input_cost_per_token"] + expected_output)
+        expected_reasoning = 3480 * reasoning_rate
+        expected_output = expected_reasoning + (4040 - 3480) * output_rate
+        assert cost == pytest.approx(1240 * input_rate + expected_output)
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
