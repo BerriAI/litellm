@@ -185,7 +185,7 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
     is another call, not the answer. The loop sends one function_call_output per call
     then a single response.create, and stops at the first call-free response.done."""
     all_events: list[ReceivedEvent] = []
-    for _ in range(max_rounds):
+    for round_index in range(max_rounds):
         events = session.collect_until("response.done", timeout=60)
         all_events.extend(events)
         done = parse_last(events, "response.done", ResponseDone)
@@ -194,6 +194,7 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
             item for item in done.response.output or () if item.type == "function_call"
         )
         if not calls:
+            assert round_index > 0, "model did not emit a function call"
             return tuple(all_events)
         done_args = tuple(
             FunctionCallArgumentsDone.model_validate_json(event.payload)

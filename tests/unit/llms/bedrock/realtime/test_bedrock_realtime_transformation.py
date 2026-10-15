@@ -8,7 +8,6 @@ import pytest
 import base64
 
 from litellm.llms.bedrock.realtime.transformation import (
-    DEFAULT_SYSTEM_PROMPT,
     TRIGGER_LEADING_SILENCE,
     TRIGGER_TRAILING_SILENCE,
     BedrockRealtimeConfig,
@@ -197,7 +196,7 @@ class TestBedrockRealtimeConfig:
         session_start = json.loads(messages[0])
         assert session_start["event"]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.9
 
-    def test_session_update_without_instructions_sends_default_system_prompt(self):
+    def test_session_update_without_instructions_sends_empty_system_prompt(self):
         config = BedrockRealtimeConfig()
         session_update = {
             "type": "session.update",
@@ -221,10 +220,10 @@ class TestBedrockRealtimeConfig:
         system_content_start = json.loads(messages[2])["event"]["contentStart"]
         assert system_content_start["role"] == "SYSTEM"
         text_input = json.loads(messages[3])["event"]["textInput"]
-        assert text_input["content"] == DEFAULT_SYSTEM_PROMPT
+        assert text_input["content"] == ""
         assert json.loads(messages[4])["event"]["contentEnd"]["contentName"] == system_content_start["contentName"]
 
-    def test_session_update_instructions_override_default_system_prompt(self):
+    def test_session_update_instructions_become_system_prompt(self):
         config = BedrockRealtimeConfig()
         session_update = {"type": "session.update", "session": {"instructions": "Answer tersely."}}
 
@@ -659,13 +658,20 @@ class TestBedrockRealtimeResponseTransformation:
         assert [e["type"] for e in result["response"]] == [
             "response.created",
             "response.output_item.added",
+            "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
             "response.output_item.done",
         ]
         response_created = result["response"][0]
         assert response_created["response"]["id"] == result["current_response_id"]
 
-        function_call = result["response"][2]
+        arguments_delta = result["response"][2]
+        assert arguments_delta["delta"] == '{"location":"New York"}'
+        assert arguments_delta["call_id"] == "tool_call_123"
+        assert arguments_delta["item_id"] == result["response"][1]["item"]["id"]
+        assert arguments_delta["response_id"] == result["current_response_id"]
+
+        function_call = result["response"][3]
         assert function_call["call_id"] == "tool_call_123"
         assert function_call["name"] == "get_weather"
         assert function_call["arguments"] == '{"location":"New York"}'
@@ -674,7 +680,7 @@ class TestBedrockRealtimeResponseTransformation:
         assert function_call["item_id"] == result["response"][1]["item"]["id"]
         assert result["response"][1]["item"]["type"] == "function_call"
 
-        done_item = result["response"][3]["item"]
+        done_item = result["response"][4]["item"]
         assert done_item["type"] == "function_call"
         assert done_item["status"] == "completed"
         assert done_item["call_id"] == "tool_call_123"
@@ -714,6 +720,7 @@ class TestBedrockRealtimeResponseTransformation:
 
         assert [e["type"] for e in result["response"]] == [
             "response.output_item.added",
+            "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
             "response.output_item.done",
         ]
@@ -1515,9 +1522,9 @@ class TestBedrockRealtimeUserEventsAndUsage:
             {"type": "audio", "transcript": ""},
         ]
 
-    def test_session_update_conflict_before_prompt_start(self):
+    def test_session_update_rejection_before_prompt_start(self):
         assert (
-            BedrockRealtimeConfig().session_update_conflict(
+            BedrockRealtimeConfig().session_update_rejection(
                 {"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}}
             )
             is None
@@ -1532,7 +1539,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"tools": [{"type": "function", "name": "get_time", "parameters": OBJECT_PARAMETERS}]}, True),
             ({"tools": []}, True),
             ({"instructions": "Be brief."}, True),
-            ({"instructions": DEFAULT_SYSTEM_PROMPT}, False),
+            ({"instructions": None}, False),
             ({"instructions": ""}, False),
             ({"voice": "amy"}, True),
             ({"output_audio_format": "g711_ulaw"}, True),
@@ -1543,13 +1550,13 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"input_audio_format": "g711_alaw"}, False),
         ],
     )
-    def test_session_update_conflict_locked_settings(self, session, expects_conflict):
+    def test_session_update_rejection_locked_settings(self, session, expects_conflict):
         config: Final = BedrockRealtimeConfig()
         config.transform_session_update_event({"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}})
         assert config.prompt_started
 
-        conflict: Final = config.session_update_conflict({"type": "session.update", "session": session})
-        assert (conflict is not None) == expects_conflict
+        conflict: Final = config.session_update_rejection({"type": "session.update", "session": session})
+        assert (conflict.code if conflict else None) == ("session_update_not_applied" if expects_conflict else None)
 
     def test_session_update_with_inf_max_tokens_omits_max_tokens_from_session_start(self):
         config: Final = BedrockRealtimeConfig()
@@ -1569,12 +1576,12 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"max_response_output_tokens": "inf"}, {"max_response_output_tokens": 2048}, True),
         ],
     )
-    def test_session_update_conflict_inf_max_tokens(self, first_session, later_session, expects_conflict):
+    def test_session_update_rejection_inf_max_tokens(self, first_session, later_session, expects_conflict):
         config: Final = BedrockRealtimeConfig()
         config.transform_session_update_event({"type": "session.update", "session": first_session})
         assert config.prompt_started
 
-        conflict: Final = config.session_update_conflict({"type": "session.update", "session": later_session})
+        conflict: Final = config.session_update_rejection({"type": "session.update", "session": later_session})
         assert (conflict is not None) == expects_conflict
 
     def test_session_update_after_start_leaves_locked_attributes_unchanged(self):
@@ -1614,13 +1621,76 @@ class TestBedrockRealtimeUserEventsAndUsage:
         ]
         assert len(message_item_dones) == 1
 
+    @staticmethod
+    def _inference_configuration(config: BedrockRealtimeConfig, session: dict[str, object]) -> dict[str, object]:
+        messages: Final = config.transform_session_update_event({"type": "session.update", "session": session})
+        return json.loads(messages[0])["event"]["sessionStart"]["inferenceConfiguration"]
+
+    def test_integral_float_max_tokens_reaches_session_start_as_an_integer(self):
+        inference: Final = self._inference_configuration(
+            BedrockRealtimeConfig(), {"max_response_output_tokens": 4096.0, "temperature": 1}
+        )
+        assert inference["maxTokens"] == 4096
+        assert isinstance(inference["maxTokens"], int)
+        assert inference["temperature"] == 1.0
+
+    @pytest.mark.parametrize(
+        "session,param",
+        [
+            ({"temperature": "0.2"}, "session.temperature"),
+            ({"temperature": True}, "session.temperature"),
+            ({"max_response_output_tokens": "4096"}, "session.max_response_output_tokens"),
+            ({"max_response_output_tokens": 4096.5}, "session.max_response_output_tokens"),
+            ({"max_response_output_tokens": True}, "session.max_response_output_tokens"),
+        ],
+    )
+    def test_malformed_number_setting_is_rejected_without_drop_params(self, session, param):
+        rejection: Final = BedrockRealtimeConfig().session_update_rejection(
+            {"type": "session.update", "session": session}
+        )
+        assert rejection is not None
+        assert (rejection.code, rejection.param) == ("invalid_type", param)
+
+    @pytest.mark.parametrize(
+        "session",
+        [
+            {"temperature": "0.2", "max_response_output_tokens": "4096"},
+            {"temperature": True, "max_response_output_tokens": 4096.5},
+        ],
+    )
+    def test_malformed_number_setting_is_dropped_with_drop_params(self, session):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        inference: Final = self._inference_configuration(config, session)
+        assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    def test_null_number_settings_count_as_unset(self):
+        session: Final = {"temperature": None, "max_response_output_tokens": None}
+        config: Final = BedrockRealtimeConfig()
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        inference: Final = self._inference_configuration(config, session)
+        assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    def test_tool_use_without_tool_use_id_is_forwarded_with_empty_call_id(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            [{"event": {"toolUse": {"content": '{"city":"Paris"}', "toolName": "get_weather"}}}],
+        )
+        (function_call,) = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert (function_call["call_id"], function_call["arguments"]) == ("", '{"city":"Paris"}')
+
     def test_tool_call_without_assistant_message_stays_output_index_zero(self):
         events: Final = self._run(BedrockRealtimeConfig(), self._tool_block("tooluse_A"))
         call_events: Final = [
             e
             for e in events
             if e["type"]
-            in ("response.output_item.added", "response.output_item.done", "response.function_call_arguments.done")
+            in (
+                "response.output_item.added",
+                "response.output_item.done",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            )
         ]
         assert call_events and all(e["output_index"] == 0 for e in call_events)
 

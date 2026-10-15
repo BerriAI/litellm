@@ -37,7 +37,7 @@ from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
-from .transformation import BedrockRealtimeConfig
+from .transformation import BedrockRealtimeConfig, BedrockSessionUpdateRejection
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -237,7 +237,7 @@ async def _ack_session_update(
 async def _reject_session_update(
     client_ws: RealtimeClientWebSocket,
     parsed_client_message: Mapping[str, JsonValue],
-    error_message: str,
+    rejection: BedrockSessionUpdateRejection,
 ) -> bool:
     """Send an error event for a session.update Bedrock cannot apply; False means the client is gone."""
     client_event_id: Final = parsed_client_message.get("event_id")
@@ -246,9 +246,9 @@ async def _reject_session_update(
         "event_id": f"event_{uuid.uuid4()}",
         "error": {
             "type": "invalid_request_error",
-            "code": "session_update_not_applied",
-            "message": error_message,
-            "param": "session",
+            "code": rejection.code,
+            "message": rejection.message,
+            "param": rejection.param,
             "event_id": client_event_id if isinstance(client_event_id, str) else None,
         },
     }
@@ -292,6 +292,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
         aws_session_tags: object = None,
+        drop_params: bool = False,
         **kwargs: object,
     ):
         """
@@ -374,7 +375,9 @@ class BedrockRealtime(BaseAWSLLM):
             )
 
         try:
-            await self._run_session(websocket, open_bidirectional_stream, model, logging_obj, pending_session_update)
+            await self._run_session(
+                websocket, open_bidirectional_stream, model, logging_obj, pending_session_update, drop_params
+            )
         finally:
             await _close_bedrock_client(bedrock_client)
 
@@ -385,8 +388,9 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         pending_session_update: str | None,
+        drop_params: bool = False,
     ) -> None:
-        transformation_config: Final = BedrockRealtimeConfig()
+        transformation_config: Final = BedrockRealtimeConfig(drop_params=drop_params)
 
         bedrock_stream: Final = await open_bidirectional_stream()
 
@@ -522,9 +526,9 @@ class BedrockRealtime(BaseAWSLLM):
                 parsed_client_message = _parse_client_message(message)
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
-                    conflict = transformation_config.session_update_conflict(parsed_client_message)
-                    if conflict is not None:
-                        if not await _reject_session_update(client_ws, parsed_client_message, conflict):
+                    rejection = transformation_config.session_update_rejection(parsed_client_message)
+                    if rejection is not None:
+                        if not await _reject_session_update(client_ws, parsed_client_message, rejection):
                             break
                         continue
                     client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message

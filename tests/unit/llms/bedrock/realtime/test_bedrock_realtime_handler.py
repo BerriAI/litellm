@@ -677,6 +677,40 @@ class TestBedrockRealtimeSessionLifecycle:
         assert len(prompt_starts) == 1
 
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "drop_params,expected_errors,expected_temperatures",
+        [(False, [("invalid_type", "session.temperature")], []), (True, [], [0.7])],
+    )
+    async def test_malformed_number_setting_is_rejected_or_dropped_per_drop_params(
+        self, stub_aws_sdk_client, drop_params, expected_errors, expected_temperatures
+    ):
+        stream: Final = ScriptedBedrockStream([])
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket: Final = ConnectedClientWS(
+            [json.dumps({"type": "session.update", "session": {"temperature": "0.2", "modalities": ["text"]}})]
+        )
+
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+            drop_params=drop_params,
+        )
+
+        client_events: Final = [json.loads(message) for message in websocket.sent_to_client]
+        errors: Final = [event["error"] for event in client_events if event["type"] == "error"]
+        sent_to_bedrock: Final = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
+        session_starts: Final = [
+            payload["event"]["sessionStart"] for payload in sent_to_bedrock if "sessionStart" in payload["event"]
+        ]
+        assert [(error["code"], error["param"]) for error in errors] == expected_errors
+        assert [start["inferenceConfiguration"]["temperature"] for start in session_starts] == expected_temperatures
+
+
 class TestBedrockRealtimeProviderFailurePropagation:
     """Deferred Nova Sonic failures must escape async_realtime so the router can fall back / cool down (LIT-6484)"""
 

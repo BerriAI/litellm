@@ -10,7 +10,7 @@ import json
 import uuid as uuid_lib
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, JsonValue, TypeAdapter
@@ -26,6 +26,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
+    OpenAIRealtimeFunctionCallArgumentsDelta,
     OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeInputAudioBufferSpeechEvent,
     OpenAIRealtimeInputAudioTranscriptionCompleted,
@@ -63,7 +64,7 @@ class BedrockContentEnd(LiteLLMBaseModel):
 class BedrockToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    toolUseId: str
+    toolUseId: str = ""
     toolName: str
     content: str = "{}"
 
@@ -95,7 +96,38 @@ TRIGGER_LEADING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND // 2)
 TRIGGER_TRAILING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
 TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 
-DEFAULT_SYSTEM_PROMPT: Final = "You are a helpful assistant."
+
+def _number_setting(value: JsonValue) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _whole_number_setting(value: JsonValue) -> int | None:
+    number: Final = _number_setting(value)
+    return int(number) if number is not None and number.is_integer() else None
+
+
+def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    temperature: Final = session_config.get("temperature")
+    max_output_tokens: Final = session_config.get("max_response_output_tokens")
+    malformed: Final = (
+        ("temperature", temperature is not None and _number_setting(temperature) is None),
+        (
+            "max_response_output_tokens",
+            max_output_tokens is not None
+            and max_output_tokens != "inf"
+            and _whole_number_setting(max_output_tokens) is None,
+        ),
+    )
+    return tuple(name for name, is_malformed in malformed if is_malformed)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BedrockSessionUpdateRejection:
+    code: Literal["invalid_type", "session_update_not_applied"]
+    message: str
+    param: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -113,7 +145,8 @@ class BedrockLockedSessionSettings:
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
 
-    def __init__(self):
+    def __init__(self, drop_params: bool = False):
+        self.drop_params = drop_params
         # Track session state
         self.prompt_name = str(uuid_lib.uuid4())
         self.content_name = str(uuid_lib.uuid4())
@@ -163,7 +196,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._response_done_pending = False
         self._started_settings = BedrockLockedSessionSettings(
             tools=[],
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            system_prompt="",
             voice_id=self.voice_id,
             output_sample_rate_hertz=self.output_sample_rate_hertz,
             temperature=self.temperature,
@@ -399,9 +432,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         max_output_tokens: Final = session_config.get("max_response_output_tokens")
         tools: Final = (session_config["tools"] or []) if "tools" in session_config else base.tools
         system_prompt: Final = (
-            str(session_config["instructions"] or DEFAULT_SYSTEM_PROMPT)
-            if "instructions" in session_config
-            else base.system_prompt
+            str(session_config["instructions"] or "") if "instructions" in session_config else base.system_prompt
         )
         voice_id: Final = str(session_config["voice"]) if "voice" in session_config else base.voice_id
         format_sample_rate: Final = (
@@ -412,8 +443,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         output_sample_rate_hertz: Final = (
             output_rate_hertz if isinstance(output_rate_hertz, int) else format_sample_rate
         )
-        locked_temperature: Final = float(temperature) if isinstance(temperature, (int, float)) else base.temperature
-        explicit_max_tokens: Final = max_output_tokens if isinstance(max_output_tokens, int) else base.max_tokens
+        requested_temperature: Final = _number_setting(temperature)
+        requested_max_tokens: Final = _whole_number_setting(max_output_tokens)
+        locked_temperature: Final = requested_temperature if requested_temperature is not None else base.temperature
+        explicit_max_tokens: Final = requested_max_tokens if requested_max_tokens is not None else base.max_tokens
         max_tokens: Final = None if max_output_tokens == "inf" else explicit_max_tokens
         return dataclasses.replace(
             base,
@@ -425,15 +458,29 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             max_tokens=max_tokens,
         )
 
-    def session_update_conflict(self, json_message: Mapping[str, JsonValue]) -> str | None:
-        """Error message when a session.update changes what Bedrock locked at prompt start."""
-        if not self.prompt_started:
-            return None
+    def session_update_rejection(self, json_message: Mapping[str, JsonValue]) -> BedrockSessionUpdateRejection | None:
+        """The error for a session.update this session cannot apply, or None when it applies."""
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
             return None
+        malformed: Final = () if self.drop_params else _malformed_number_settings(session_config)
+        if malformed:
+            return BedrockSessionUpdateRejection(
+                code="invalid_type",
+                message=(
+                    f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a number for temperature "
+                    "and an integer or 'inf' for max_response_output_tokens. Set drop_params to drop it instead"
+                ),
+                param=f"session.{malformed[0]}",
+            )
+        if not self.prompt_started:
+            return None
         if self._apply_locked_settings(session_config, self._started_settings) != self._started_settings:
-            return "Bedrock Nova Sonic cannot change tools, instructions, voice, output audio format, temperature or max output tokens after the session has started, so this session.update was not applied"
+            return BedrockSessionUpdateRejection(
+                code="session_update_not_applied",
+                message="Bedrock Nova Sonic cannot change tools, instructions, voice, output audio format, temperature or max output tokens after the session has started, so this session.update was not applied",
+                param="session",
+            )
         return None
 
     def transform_input_audio_buffer_append_event(self, json_message: dict) -> list[str]:
@@ -1329,6 +1376,16 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             },
         )
 
+        arguments_delta: Final = OpenAIRealtimeFunctionCallArgumentsDelta(
+            type="response.function_call_arguments.delta",
+            event_id=f"event_{uuid.uuid4()}",
+            response_id=response_id,
+            item_id=item_id,
+            output_index=output_index,
+            call_id=tool_use.toolUseId,
+            delta=tool_use.content,
+        )
+
         function_call_event: Final = OpenAIRealtimeFunctionCallArgumentsDone(
             type="response.function_call_arguments.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -1363,6 +1420,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             [
                 *response_created_events,
                 output_item_added,
+                arguments_delta,
                 function_call_event,
                 output_item_done,
             ],
