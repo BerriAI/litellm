@@ -60,7 +60,7 @@ def configure_gc_thresholds():
 configure_gc_thresholds()
 
 
-def freeze_gc_after_startup(enabled: bool = LITELLM_GC_FREEZE_AFTER_STARTUP) -> None:
+def freeze_gc_after_startup() -> None:
     """Freeze the objects that exist once startup is done (LITELLM_GC_FREEZE_AFTER_STARTUP).
 
     Full collections are stop-the-world and walk every tracked object; the startup heap
@@ -68,7 +68,7 @@ def freeze_gc_after_startup(enabled: bool = LITELLM_GC_FREEZE_AFTER_STARTUP) -> 
     it to the permanent generation shortens those pauses. Startup garbage is collected first
     so it is not frozen with the rest.
     """
-    if not enabled:
+    if not LITELLM_GC_FREEZE_AFTER_STARTUP:
         return
     gc.collect()
     gc.freeze()
