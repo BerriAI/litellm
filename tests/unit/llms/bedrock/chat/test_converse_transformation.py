@@ -564,6 +564,95 @@ def test_bedrock_application_profile_model_and_model_id_use_same_route(respx_moc
     assert route.call_count == 2
 
 
+_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
+_PROFILE_ARN_CONVERSE_URL: Final = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+    "arn%3Aaws%3Abedrock%3Aus-east-1%3A000000000000%3Aapplication-inference-profile%2Fprofile-id/converse"
+)
+
+
+def _routed_profile_request_fields(
+    respx_mock: respx.Router, litellm_params: dict, model_info: dict, thinking: dict
+) -> dict:
+    route: Final = respx_mock.post(_PROFILE_ARN_CONVERSE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": f"bedrock/{_PROFILE_ARN}",
+                    "aws_access_key_id": "AKIAPROFILEKEY",
+                    "aws_secret_access_key": "profile-secret",
+                    "aws_region_name": "us-east-1",
+                    **litellm_params,
+                },
+                "model_info": model_info,
+            }
+        ]
+    )
+    router.completion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16000,
+        thinking=thinking,
+        drop_params=True,
+        client=HTTPHandler(),
+    )
+    return json.loads(route.calls[0].request.content).get("additionalModelRequestFields", {})
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({}, {"base_model": "us.anthropic.claude-opus-4-8"}),
+        ({"base_model": "bedrock/us.anthropic.claude-opus-4-8"}, {}),
+    ],
+    ids=["model_info", "litellm_params"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_keeps_adaptive_thinking_when_base_model_is_adaptive(
+    litellm_params: dict, model_info: dict, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    thinking: Final = {"type": "adaptive", "display": "summarized"}
+
+    fields: Final = _routed_profile_request_fields(respx_mock, litellm_params, model_info, thinking)
+
+    assert fields["thinking"] == thinking
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_drops_disabled_thinking_when_base_model_always_thinks(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    fields: Final = _routed_profile_request_fields(
+        respx_mock, {}, {"base_model": "us.anthropic.claude-fable-5"}, {"type": "disabled"}
+    )
+
+    assert "thinking" not in fields
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_without_base_model_warns_when_adaptive_thinking_becomes_a_budget(
+    respx_mock: respx.Router, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        fields: Final = _routed_profile_request_fields(respx_mock, {}, {}, {"type": "adaptive"})
+
+    assert fields["thinking"]["type"] == "enabled"
+    assert any(
+        _PROFILE_ARN in record.getMessage() and "`base_model`" in record.getMessage() for record in caplog.records
+    )
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_cross_region_inference_profile_keeps_prefix_in_converse_url(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(

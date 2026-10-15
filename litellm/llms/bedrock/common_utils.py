@@ -812,6 +812,14 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     return ":application-inference-profile/" in model
 
 
+def bedrock_capability_model(model: str, base_model: object) -> str:
+    """The model id to look capabilities up by: the deployment's ``base_model`` for an
+    application inference profile ARN, since the ARN names no model, else ``model``."""
+    if isinstance(base_model, str) and base_model and is_bedrock_application_inference_profile_arn(model):
+        return strip_bedrock_routing_prefix(base_model)
+    return model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:

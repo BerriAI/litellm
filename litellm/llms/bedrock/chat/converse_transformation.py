@@ -103,6 +103,7 @@ from litellm.utils import (
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
+    bedrock_capability_model,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
@@ -116,6 +117,12 @@ from ..common_utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
+    "Sending adaptive `thinking` as a fixed thinking budget for model=%s: an application inference profile ARN "
+    "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set `base_model` on "
+    "the deployment (for example `us.anthropic.claude-opus-4-8`) to send adaptive thinking as requested."
+)
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -1126,6 +1133,8 @@ class AmazonConverseConfig(BaseConfig):
                     )
                     if capped is not None:
                         optional_params["thinking"] = capped
+                        if is_bedrock_application_inference_profile_arn(model):
+                            litellm.verbose_logger.warning(ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING, model)
                     else:
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
@@ -2020,7 +2029,8 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: dict | None = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages, model=model)
+        capability_model: Final = bedrock_capability_model(model, litellm_params.get("base_model"))
+        messages, system_content_blocks = self._transform_system_message(messages, model=capability_model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -2029,7 +2039,7 @@ class AmazonConverseConfig(BaseConfig):
         ## TRANSFORMATION ##
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
-            model=model,
+            model=capability_model,
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
@@ -2042,11 +2052,11 @@ class AmazonConverseConfig(BaseConfig):
             place_tool_result_images(
                 await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
                     messages=messages,
-                    model=model,
+                    model=capability_model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                 ),
-                model,
+                capability_model,
             )
         )
 
@@ -2088,7 +2098,8 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: dict | None = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages, model=model)
+        capability_model: Final = bedrock_capability_model(model, litellm_params.get("base_model"))
+        messages, system_content_blocks = self._transform_system_message(messages, model=capability_model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -2096,7 +2107,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
-            model=model,
+            model=capability_model,
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
@@ -2110,11 +2121,11 @@ class AmazonConverseConfig(BaseConfig):
             place_tool_result_images(
                 _bedrock_converse_messages_pt(
                     messages=messages,
-                    model=model,
+                    model=capability_model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                 ),
-                model,
+                capability_model,
             )
         )
 
