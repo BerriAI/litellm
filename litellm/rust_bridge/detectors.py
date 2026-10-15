@@ -218,6 +218,18 @@ def cache_control_injection(request: NativeCall) -> bool:
     )
 
 
+_THINKING_BLOCKS: Final = frozenset({"thinking", "redacted_thinking"})
+
+
+def _replays_thinking(message: object) -> bool:
+    content: Final = optional_sequence((optional_mapping(message) or {}).get("content")) or ()
+    return any((optional_mapping(block) or {}).get("type") in _THINKING_BLOCKS for block in content)
+
+
+def thinking_signature_retry(request: NativeCall) -> bool:
+    return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
+
+
 def stream_cost_injection(request: NativeCall) -> bool:
     return streaming(request) and litellm.include_cost_in_streaming_usage is True
 

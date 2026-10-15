@@ -88,6 +88,8 @@ class Feature(str, Enum):
     """Prompt caching injection that Python applies to messages and system."""
     STREAM_COST_INJECTION = "stream_cost_injection"
     """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
+    THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
+    """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +146,7 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.WORKLOAD_IDENTITY,
     Feature.CACHE_CONTROL_INJECTION,
     Feature.STREAM_COST_INJECTION,
+    Feature.THINKING_SIGNATURE_RETRY,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

@@ -26,6 +26,8 @@ MAPPED_FILE: Final = {
 }
 MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}]
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
+REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
 
@@ -86,6 +88,10 @@ def call(**kwargs: object) -> NativeCall:
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
+        (detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
+        (detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": [REDACTED]}]}, True),
+        (detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
+        (detectors.thinking_signature_retry, {"messages": [{"role": "user", "content": [{"type": "text"}]}]}, False),
         (detectors.drop_params, {"drop_params": True}, True),
         (detectors.drop_params, {"drop_params": False}, False),
         (detectors.drop_params, {"drop_params": " True "}, True),

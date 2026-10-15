@@ -425,6 +425,12 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
         ),
         (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
         (
+            Feature.THINKING_SIGNATURE_RETRY,
+            "anthropic/claude-sonnet-4-5",
+            {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
+            {},
+        ),
+        (
             Feature.STREAM_COST_INJECTION,
             "anthropic/claude-sonnet-4-5",
             {"stream": True},
@@ -447,9 +453,10 @@ def test_each_detected_feature_reaches_its_rule(
     native_result: Final = response(model)
 
     def served(call_kwargs: Mapping[str, object]) -> AnthropicMessagesResponse:
+        messages: Final = call_kwargs.get("messages", MESSAGES)
         return _DISPATCH.run(
-            (16, MESSAGES, model),
-            call_kwargs,
+            (16, messages, model),
+            {name: value for name, value in call_kwargs.items() if name != "messages"},
             python=lambda *call_args, **python_kwargs: python_result,
             binding=messages_binding(lambda request: native_result),
             native=lambda hook, request, call_args, native_kwargs: hook(request),
