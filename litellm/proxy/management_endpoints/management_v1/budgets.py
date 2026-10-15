@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -35,6 +35,7 @@ from litellm.proxy.list_api.list_framework import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
     ProblemDetail,
@@ -45,7 +46,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 BUDGET_TABLE: Final = '"LiteLLM_BudgetTable"'
 
 
-class BudgetListItem(BaseModel):
+class BudgetListItem(LiteLLMBaseModel):
     """One budget as the Budgets page reads it, and as it comes back off the table.
 
     Validating the raw row through here is what makes `tpm_limit` / `rpm_limit`
@@ -65,7 +66,7 @@ class BudgetListItem(BaseModel):
     updated_at: datetime
 
 
-class _RowCount(BaseModel):
+class _RowCount(LiteLLMBaseModel):
     count: int
 
 
@@ -85,8 +86,7 @@ class PrismaBudgetListExecutor:
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
         sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params)
-        counted: Final = _ROW_COUNTS.validate_python(rows)
+        counted: Final = _ROW_COUNTS.validate_python(await self.prisma_client.db.query_raw(sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
@@ -97,8 +97,7 @@ class PrismaBudgetListExecutor:
             + f" ORDER BY {order_by_sql(plan.order)}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
-        return _BUDGET_ROWS.validate_python(rows)
+        return _BUDGET_ROWS.validate_python(await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip))
 
 
 def _serialize(row: BudgetListItem) -> BudgetListItem:
@@ -115,7 +114,7 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
 # budget_duration is deliberately absent from `sortable`: the column holds strings
 # like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
 BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
-    {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
+    {
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
         "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),
@@ -165,7 +164,7 @@ async def list_budgets(
     Example curl:
     ```
     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:

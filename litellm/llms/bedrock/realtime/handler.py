@@ -16,7 +16,7 @@ from typing import Final, NoReturn, Protocol, runtime_checkable
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_string, verbose_proxy_logger
 from litellm.constants import (
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
+from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
@@ -191,9 +192,9 @@ def _pending_session_update(scope: Mapping[str, object]) -> str | None:
 
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
     error: Final = _as_bedrock_error(failure)
-    verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", _redact_string(str(error)))
+    verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", redact_string(str(error)))
     if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
-        scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = _redact_string(str(error))
+        scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = redact_string(str(error))
     raise error from failure
 
 
@@ -257,6 +258,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        aws_session_tags: object = None,
         **kwargs: object,
     ):
         """
@@ -297,20 +299,20 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
-        credentials: Final = await run_aws_signing(
-            self.get_credentials,
+        auth_params: Final = AwsAuthParams(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
-        if credentials is None:
+        credentials: Final = await run_aws_signing(self.resolve_credentials, auth_params, aws_region_name)
+        if credentials is None:  # pyright: ignore[reportUnnecessaryComparison]  # boto3.Session() env fallback yields None
             raise BedrockError(
                 status_code=401,
                 message=(
@@ -393,7 +395,7 @@ class BedrockRealtime(BaseAWSLLM):
         if logged_events:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 logging_obj.dispatch_success_handlers(
-                    list(logged_events),  # mutable-ok: realtime spend logging requires a list result
+                    list(logged_events),
                     prefer_async_handlers=True,
                 )
             )
@@ -487,9 +489,7 @@ class BedrockRealtime(BaseAWSLLM):
                 parsed_client_message = _parse_client_message(message)
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
-                    client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = (
-                        message  # rebind-ok: scope outlives the attempt
-                    )
+                    client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message
 
                 transformed_messages = transformation_config.transform_realtime_request(
                     message=message,

@@ -26,7 +26,7 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: G
         try:
             with owned_redis(tmp_path) as cache, monkeypatch.context() as environment:
                 environment.setenv("DATABASE_URL", database_url)
-                with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1"}) as candidate, candidate.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+                with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1"}, remove_environment=("DATABASE_URL_READ_REPLICA",)) as candidate, candidate.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
                     model: Final = scenario.model()
                     key: Final = scenario.key(models=[model])
                     for generation in ("before", "after"):

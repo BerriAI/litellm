@@ -1,4 +1,4 @@
-# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/CLAUDE.md for the grammar.
+# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/AGENTS.md for the grammar.
 - id: mcp.list_tools.api_key.succeeds
   module: mcp
   tier: P0
@@ -39,6 +39,14 @@
   assertions: [denied_without_permission]
   source: "rest_endpoints.py:305-386"
   rationale: Tool-level permission guard; multi-tenant safety
+- id: mcp.tool_search.api_key.oversized_description_omitted
+  module: mcp
+  tier: P0
+  operation: tool_search
+  auth_family: api_key
+  assertions: [oversized_description_omitted]
+  source: "test_mcp_tool_search_e2e.py"
+  rationale: Native semantic search omits tools whose descriptions exceed the embedding input limit
 - id: mcp.list_tools.bearer.succeeds
   module: mcp
   tier: P1
@@ -71,6 +79,14 @@
   assertions: [succeeds]
   source: "db.py user_oauth_credential lookup"
   rationale: OAuth2 token passthrough; per-user credential storage
+- id: mcp.call_tool.oauth.persists_across_processes
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: oauth
+  assertions: [persists_across_processes]
+  source: "outbound_credentials/per_user_oauth_store.py V2PerUserTokenStore"
+  rationale: Stored per-user token survives a verified restart of an owned gateway with no Redis cache
 - id: mcp.list_tools.none.succeeds
   module: mcp
   tier: P1
@@ -127,3 +143,11 @@
   assertions: [toolset_scoped]
   source: "user_api_key_auth_mcp.py:2137"
   rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"
+- id: mcp.list_tools.api_key.semantic_filtered
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [semantic_filtered]
+  source: "litellm/proxy/hooks/mcp_semantic_filter/hook.py"
+  rationale: The semantic tool filter must cut a large MCP catalog to top_k and keep the tool the prompt needs

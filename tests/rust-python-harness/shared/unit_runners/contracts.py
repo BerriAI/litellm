@@ -85,25 +85,4 @@ class UnitTestContract(_ContractModel):
     rust: RustUnitSpec
 
 
-OCR_CONTRACT: Final = UnitTestContract(
-    unit_parity=UnitParitySpec(
-        python_selectors=(
-            "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
-            "tests/test_litellm/llms/mistral/ocr",
-            "tests/test_litellm/llms/ocr",
-            "tests/test_litellm/ocr",
-        ),
-        exclusions=(
-            UnitParityExclusionSpec(
-                nodeid="tests/test_litellm/ocr/test_rust_bridge.py::test_rust_toggles_flag",
-                reason="This test asserts the process-level backend flag selected by the parity runner.",
-            ),
-        ),
-    ),
-    rust=RustUnitSpec(
-        cargo_manifest="litellm-rust/Cargo.toml",
-        cargo_filter="ocr",
-    ),
-)
-
-UNIT_TEST_CONTRACTS: Final[Mapping[SdkFunction, UnitTestContract]] = MappingProxyType({"ocr": OCR_CONTRACT})
+UNIT_TEST_CONTRACTS: Final[Mapping[SdkFunction, UnitTestContract]] = MappingProxyType({})

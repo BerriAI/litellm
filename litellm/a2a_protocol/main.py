@@ -13,7 +13,7 @@ import asyncio
 import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import litellm
@@ -72,9 +72,12 @@ except ImportError:
 
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import (
+    A2A_PROTOCOL_VERSION_PARAM,
+    AGENT_CARD_PATH_PARAM,
     LiteLLMA2ACardResolver,
     get_agent_card_url,
     normalize_agent_card_interfaces,
+    resolve_a2a_protocol_version,
 )
 from litellm.a2a_protocol.exception_mapping_utils import (
     handle_a2a_localhost_retry,
@@ -132,6 +135,30 @@ def _set_agent_id_on_logging_obj(
 _A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
 
 
+def _a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    """Only the agent's pricing keys reach the logging object; its credentials never do."""
+    return MappingProxyType(
+        {
+            key: litellm_params[key]
+            for key in _A2A_COST_PARAM_KEYS
+            if litellm_params is not None and litellm_params.get(key) is not None
+        }
+    )
+
+
+def _card_http_kwargs(extra_headers: dict[str, str] | None) -> dict[str, object] | None:
+    return {"headers": extra_headers} if extra_headers else None
+
+
+def _agent_card_path(litellm_params: Mapping[str, object]) -> str | None:
+    configured_path: Final = litellm_params.get(AGENT_CARD_PATH_PARAM)
+    return configured_path if isinstance(configured_path, str) and configured_path else None
+
+
+def _agent_protocol_version(litellm_params: Mapping[str, object]) -> str | None:
+    return resolve_a2a_protocol_version(litellm_params.get(A2A_PROTOCOL_VERSION_PARAM))
+
+
 def _set_litellm_params_on_logging_obj(
     kwargs: Mapping[str, object],
     litellm_params: Mapping[str, object],
@@ -148,9 +175,7 @@ def _set_litellm_params_on_logging_obj(
     if not isinstance(logging_obj, Logging):
         return
 
-    cost_params: Final = {
-        key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None
-    }
+    cost_params: Final = _a2a_cost_params(litellm_params)
     if not cost_params:
         return
 
@@ -475,7 +500,12 @@ async def asend_message(
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
         if agent_extra_headers:
             extra_headers.update(agent_extra_headers)
-        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=api_base,
+            extra_headers=extra_headers,
+            relative_card_path=_agent_card_path(litellm_params),
+            protocol_version=_agent_protocol_version(litellm_params),
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -588,11 +618,10 @@ def _build_streaming_logging_obj(
     if agent_id:
         logging_obj.model_call_details["agent_id"] = agent_id
 
-    _litellm_params: Final = litellm_params.copy() if litellm_params else {}
-    if metadata:
-        _litellm_params["metadata"] = metadata
-    if proxy_server_request:
-        _litellm_params["proxy_server_request"] = proxy_server_request
+    _request_context: Final = (("metadata", metadata), ("proxy_server_request", proxy_server_request))
+    _litellm_params: Final = dict(
+        (*_a2a_cost_params(litellm_params).items(), *((key, value) for key, value in _request_context if value))
+    )
 
     logging_obj.litellm_params = _litellm_params
     logging_obj.optional_params = _litellm_params
@@ -612,7 +641,7 @@ async def asend_message_streaming(
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
     **kwargs: object,
-) -> AsyncIterator[Any]:
+) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
     """
     Async: Send a streaming message to an A2A agent.
 
@@ -700,6 +729,8 @@ async def asend_message_streaming(
             base_url=api_base,
             extra_headers=extra_headers,
             streaming=True,
+            relative_card_path=_agent_card_path(litellm_params),
+            protocol_version=_agent_protocol_version(litellm_params),
         )
 
     assert a2a_client is not None
@@ -746,6 +777,8 @@ async def create_a2a_client(
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: dict[str, str] | None = None,
     streaming: bool = False,
+    relative_card_path: str | None = None,
+    protocol_version: str | None = None,
 ) -> "A2AClientType":
     """
     Create an A2A client for the given agent URL.
@@ -757,6 +790,9 @@ async def create_a2a_client(
         base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
         timeout: Request timeout in seconds (default: ``DEFAULT_A2A_AGENT_TIMEOUT`` / env ``DEFAULT_A2A_AGENT_TIMEOUT``)
         extra_headers: Optional additional headers to include in requests
+        relative_card_path: Optional card path relative to ``base_url`` (e.g. ``agentCard/v1.0`` for a
+            Microsoft Foundry agent); when None the well-known paths are probed in order
+        protocol_version: Optional per-agent protocol version override for supported interfaces
 
     Returns:
         An initialized a2a.client.A2AClient instance
@@ -790,7 +826,11 @@ async def create_a2a_client(
 
     resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
     agent_card: Final = normalize_agent_card_interfaces(
-        await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
+        await resolver.get_agent_card(
+            relative_card_path=relative_card_path,
+            http_kwargs=_card_http_kwargs(extra_headers),
+        ),
+        protocol_version=protocol_version,
     )
 
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
@@ -820,6 +860,7 @@ async def aget_agent_card(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: dict[str, str] | None = None,
+    relative_card_path: str | None = None,
 ) -> "AgentCard":
     """
     Fetch the agent card from an A2A agent.
@@ -828,6 +869,7 @@ async def aget_agent_card(
         base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
         timeout: Request timeout in seconds (default: ``DEFAULT_A2A_AGENT_TIMEOUT`` / env ``DEFAULT_A2A_AGENT_TIMEOUT``)
         extra_headers: Optional additional headers to include in requests
+        relative_card_path: Optional card path relative to ``base_url``; when None the well-known paths are probed
 
     Returns:
         AgentCard from the A2A agent
@@ -850,7 +892,10 @@ async def aget_agent_card(
         httpx_client=httpx_client,
         base_url=base_url,
     )
-    agent_card: Final = await resolver.get_agent_card()
+    agent_card: Final = await resolver.get_agent_card(
+        relative_card_path=relative_card_path,
+        http_kwargs=_card_http_kwargs(extra_headers),
+    )
 
     verbose_logger.info("Fetched agent card: %s", agent_card.name if hasattr(agent_card, "name") else "unknown")
     return agent_card

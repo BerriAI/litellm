@@ -5,7 +5,12 @@ import { tierOrderFor } from "./tier_rows";
 
 const probability = z.number().finite().min(0).max(1);
 const version = z.string().trim().min(1).max(512);
-const profile = z.string().trim().min(1).max(4000);
+const profile = z
+  .string()
+  .max(4000)
+  .refine((text) => text.trim().length > 0);
+export const fuseProfileFields = ["efficient_profile", "capable_profile", "harness"] as const;
+export type FuseProfileField = (typeof fuseProfileFields)[number];
 const transport = {
   max_output_tokens: z.number().int().positive().optional(),
   response_format: z.enum(["json_schema", "json_object"]).optional(),
@@ -42,17 +47,35 @@ const fuseCalibrationShape = {
 const fuseShape = {
   efficient_tier: z.string().min(1).optional(),
   capable_tier: z.string().min(1).optional(),
-  efficient_profile: profile,
-  capable_profile: profile,
-  harness: profile,
+  efficient_profile: profile.nullish(),
+  capable_profile: profile.nullish(),
+  harness: profile.nullish(),
+  efficient_profile_preset: z.string().min(1).nullish(),
+  capable_profile_preset: z.string().min(1).nullish(),
+  harness_preset: z.string().min(1).nullish(),
   max_quality_gap: probability,
   ...transport,
   calibration: z.object(fuseCalibrationShape).nullable().optional(),
 };
-export const fuseSettingsSchema = z.object(fuseShape);
+export const fuseSettingsSchema = z
+  .object(fuseShape)
+  .refine((settings) =>
+    fuseProfileFields.every((field) => settings[field] != null || settings[`${field}_preset`] != null),
+  );
 
 export type CapabilitySettings = z.infer<typeof capabilitySettingsSchema>;
 export type FuseSettings = z.infer<typeof fuseSettingsSchema>;
+
+export const selectFuseProfile = (
+  value: FuseSettings,
+  field: FuseProfileField,
+  presetId: string | undefined,
+  effectiveText: string,
+): FuseSettings => ({
+  ...value,
+  [field]: presetId === undefined ? effectiveText : undefined,
+  [`${field}_preset`]: presetId,
+});
 
 export const isForecastClassifier = (type: ClassifierType): boolean => type === "capability" || type === "llm_v2";
 
