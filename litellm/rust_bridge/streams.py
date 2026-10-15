@@ -10,8 +10,8 @@ from litellm.rust_bridge.lifecycle import Execution
 
 Await: Final = lifecycle.Await
 Complete: Final = lifecycle.Complete
-Open: Final = lifecycle.Open
-Yield: Final = lifecycle.Yield
+StreamOpen: Final = lifecycle.StreamOpen
+StreamChunk: Final = lifecycle.StreamChunk
 
 _HEADERS: Final = TypeAdapter(Mapping[str, object])
 
