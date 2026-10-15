@@ -6,6 +6,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
@@ -106,3 +107,39 @@ def test_aiand_calls_are_billed_from_their_cost_rows():
         assert prompt_cost == pytest.approx(1000 * row["input_cost_per_token"])
         assert completion_cost == pytest.approx(500 * row["output_cost_per_token"])
         assert prompt_cost > 0 and completion_cost > 0
+
+
+@pytest.mark.asyncio
+async def test_aiand_anthropic_messages_reach_ai_and_with_the_thinking_budget(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024}
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{AIAND_API_BASE}/messages").respond(
+            200,
+            json={
+                "id": "msg_aiand",
+                "type": "message",
+                "role": "assistant",
+                "model": "zai-org/glm-5.3",
+                "content": [{"type": "thinking", "thinking": "A greeting", "signature": ""}, {"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 4, "output_tokens": 3},
+            },
+        )
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="aiand/zai-org/glm-5.3",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=2048,
+            thinking=thinking,
+            api_key="aiand-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert body["model"] == "zai-org/glm-5.3"
+    assert body["thinking"] == thinking
+    assert "reasoning_effort" not in body
+    assert [block["type"] for block in response["content"]] == ["thinking", "text"]
