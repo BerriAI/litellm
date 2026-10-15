@@ -7,7 +7,6 @@ from typing import Final
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.served import assert_served_natively
 
@@ -18,8 +17,7 @@ CALL_ID: Final = "callback-contract"
 
 @contextmanager
 def native_route(*routes: Route) -> Generator[None]:
-    rules: tuple[RouteRule, ...] = tuple(RouteRule(route, Rollout.RUST_REQUIRED) for route in routes)
-    with rebound(catalog, "RULES", (*rules, *catalog.RULES)):
+    with catalog.scoped_rules((*(RouteRule(route, Rollout.RUST_REQUIRED) for route in routes), *catalog.RULES)):
         yield
 
 
@@ -44,5 +42,4 @@ async def call_natively(
         if asynchronous:
             return await acreate(**arguments)
         return await asyncio.to_thread(create, **arguments)
-
 
