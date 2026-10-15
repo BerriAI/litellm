@@ -10,7 +10,6 @@ import {
   classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
-  isAnthropicModel,
   localIsoDay,
   savingsSeriesOf,
   toCumulative,
@@ -57,10 +56,10 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
   date,
   metrics: metrics({}),
   breakdown: {
-    models: Object.fromEntries(
+    models: {},
+    model_groups: Object.fromEntries(
       Object.entries(models).map(([name, m]) => [name, { metrics: metrics(m), metadata: {}, api_key_breakdown: {} }]),
     ),
-    model_groups: {},
     mcp_servers: {},
     providers: {},
     entities: {},
@@ -209,20 +208,21 @@ describe("computeCacheLeakage", () => {
 });
 
 describe("computeCacheLeakage by model", () => {
-  it("aggregates only Anthropic models and ignores other providers", () => {
+  it("lists every provider's models, not only Anthropic", () => {
     const models: Record<string, Partial<SpendMetrics>> = {
       "claude-sonnet-5": { prompt_tokens: 10000, cache_read_input_tokens: 0 },
-      "anthropic/claude-haiku-4-5": { prompt_tokens: 4000, cache_read_input_tokens: 0 },
-      "bedrock/anthropic.claude-3-5-sonnet": { prompt_tokens: 2000, cache_read_input_tokens: 0 },
-      "gpt-4o": { prompt_tokens: 9000, cache_read_input_tokens: 0 },
-      "deepseek-chat": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+      "vertex_ai/gemini-2.5-pro": { prompt_tokens: 9000, cache_read_input_tokens: 3000 },
+      "bedrock/openai.gpt-5.6-luna": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+      "deepseek-chat": { prompt_tokens: 4000, cache_read_input_tokens: 0 },
     };
     const { rows } = computeCacheLeakage([modelDay("2026-07-01", models)], "model");
     expect(rows.map((r) => r.id)).toEqual([
       "claude-sonnet-5",
-      "anthropic/claude-haiku-4-5",
-      "bedrock/anthropic.claude-3-5-sonnet",
+      "bedrock/openai.gpt-5.6-luna",
+      "vertex_ai/gemini-2.5-pro",
+      "deepseek-chat",
     ]);
+    expect(rows.find((r) => r.id === "vertex_ai/gemini-2.5-pro")?.cacheHitRatio).toBeCloseTo(1 / 3, 6);
   });
 
   it("labels model rows by model name with no sublabel", () => {
@@ -232,31 +232,65 @@ describe("computeCacheLeakage by model", () => {
     expect(rows[0].sublabel).toBeNull();
   });
 
-  it("prices model leakage at the Anthropic realized cache-read discount", () => {
+  it("prices model leakage at the realized cache-read discount across providers", () => {
     const results = [
       modelDay("2026-07-01", {
         "claude-sonnet-5": { prompt_tokens: 1000, cache_read_input_tokens: 1000, prompt_caching_savings_spend: 2.0 },
-        "claude-haiku-4-5": { prompt_tokens: 500 },
+        "gemini-2.5-flash": { prompt_tokens: 500 },
       }),
     ];
     const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results, "model");
     expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
-    expect(rows.map((r) => r.id)).toEqual(["claude-haiku-4-5"]);
+    expect(rows.map((r) => r.id)).toEqual(["gemini-2.5-flash"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
   });
-});
 
-describe("isAnthropicModel", () => {
-  it("matches Claude-family models across providers and rejects others", () => {
-    const anthropic = [
-      "claude-sonnet-5",
-      "anthropic/claude-haiku-4-5",
-      "bedrock/anthropic.claude-3-5-sonnet",
-      "vertex_ai/claude-opus-4-8",
+  it("merges rows logged under a deployment's resolved and requested names into one model group row", () => {
+    const day: DailyData = {
+      date: "2026-07-01",
+      metrics: metrics({}),
+      breakdown: {
+        models: {
+          "bedrock/global.anthropic.claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 270000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+          "bedrock/claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 5000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        model_groups: {
+          "bedrock/claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 275000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        mcp_servers: {},
+        providers: {},
+        entities: {},
+        api_keys: {},
+      },
+    };
+    const { rows } = computeCacheLeakage([day], "model");
+    expect(rows.map((r) => r.id)).toEqual(["bedrock/claude-sonnet-4-6"]);
+    expect(rows[0].uncachedPromptTokens).toBe(275000);
+  });
+
+  it("sums a model group across days", () => {
+    const results = [
+      modelDay("2026-07-01", { "bedrock/claude-sonnet-4-6": { prompt_tokens: 1000 } }),
+      modelDay("2026-07-02", {
+        "bedrock/claude-sonnet-4-6": { prompt_tokens: 2500, cache_read_input_tokens: 500 },
+      }),
     ];
-    const others = ["gpt-4o", "deepseek-chat", "gemini-2.5-pro", "mistral-large"];
-    expect(anthropic.every(isAnthropicModel)).toBe(true);
-    expect(others.some(isAnthropicModel)).toBe(false);
+    const { rows } = computeCacheLeakage(results, "model");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].uncachedPromptTokens).toBe(3000);
+    expect(rows[0].cacheHitRatio).toBeCloseTo(500 / 3500, 6);
   });
 });
 

@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Awaitable
 from functools import partial
 from typing import Any, Final, Literal
 
@@ -40,13 +40,11 @@ async def arerank(
     return_documents: bool | None = None,
     max_chunks_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
-    _custom_llm_provider: str | None = (
-        None  # rebind-ok: set by the declared-provider guard or the get_llm_provider unpack; read in the except
-    )
+    _custom_llm_provider: str | None = None
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
@@ -117,7 +115,7 @@ def rerank(
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
     """
