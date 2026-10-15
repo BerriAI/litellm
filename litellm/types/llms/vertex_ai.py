@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -14,8 +14,8 @@ from litellm.types.llms.openai import ChatCompletionFileObject, ChatCompletionTe
 # "text": ...} block embeds its text verbatim with no media-prefix detection,
 # while file blocks carry media — provider-specific extensions of the
 # OpenAI-faithful EmbeddingInput shape.
-GeminiEmbeddingElement = str | ChatCompletionFileObject | ChatCompletionTextObject
-GeminiEmbeddingInput = (
+GeminiEmbeddingElement: TypeAlias = str | ChatCompletionFileObject | ChatCompletionTextObject
+GeminiEmbeddingInput: TypeAlias = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
 

@@ -227,8 +227,9 @@ def _is_text_block(element: object) -> bool:
     runs on it, no matter that its text starts with data:, gs:// or files/.
     """
     return (
-        isinstance(element, Mapping) and cast(Mapping[str, object], element).get("type") == "text"
-    )  # cast-ok: isinstance leaves the Mapping key/value types unknown
+        isinstance(element, Mapping)
+        and cast(Mapping[str, object], element).get("type") == "text"  # cast-ok: isinstance leaves value type unknown
+    )
 
 
 def _parse_text_block(element: object, drop_params: bool) -> _EmbeddingTextBlock:
@@ -599,30 +600,29 @@ def _text_substituted_input(input: GeminiEmbeddingInput) -> GeminiEmbeddingInput
     if not isinstance(input, list):
         return input
 
-    result: list[object] = []
-    stack: list[tuple[list[object], list[object]]] = [
-        (list(cast(list[object], input)), result)
-    ]  # cast-ok: read-only widening; the walker never writes into input
+    result: Final[list[object]] = []  # mutable-ok: the walker accumulates into it; the name is never rebound
+    stack: Final[list[tuple[list[object], list[object]]]] = [  # mutable-ok: pop/append walker state; never rebound
+        (list(cast(list[object], input)), result)  # cast-ok: read-only widening; the walker never writes into input
+    ]
     while stack:
         source, sink = stack[-1]
         if not source:
             stack.pop()
             if stack:
-                sink_parent: list[object] = stack[-1][1]
-                sink_parent.append(sink)
+                stack[-1][1].append(sink)
             continue
         item: object = source.pop(0)
         if isinstance(item, list):
             stack.append(
-                (list(cast(list[object], item)), [])
-            )  # cast-ok: isinstance leaves the list element type unknown
+                (list(cast(list[object], item)), [])  # cast-ok: isinstance leaves the list element type unknown
+            )
         elif _is_text_block(item):
             sink.append(_parse_text_block(item, drop_params=True).text)
         else:
             sink.append(item)
     # Shape-preserving substitution: a valid GeminiEmbeddingInput with its text
     # blocks read as their text is still a valid GeminiEmbeddingInput.
-    return cast(GeminiEmbeddingInput, result)
+    return cast(GeminiEmbeddingInput, result)  # cast-ok: shape-preserving substitution; see the note above
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
