@@ -193,3 +193,39 @@ async def test_continuation_output_drops_only_a_full_echo_of_the_prefill(
     released = [chunk async for chunk in output.splice(fallback_stream())]
 
     assert tuple(chunk.choices[0].delta.content for chunk in released) == expected_texts
+
+
+@pytest.mark.parametrize(
+    "emitted_text,prefill_content,fallback_texts,expected_texts",
+    [
+        ("Transformers use ", "Transformers use", ("self-attention",), ("self-attention",)),
+        ("Hello ", "Hello", ("Hello", " world"), ("", "world")),
+        ("Hello \n", "Hello", ("\nworld",), ("\nworld",)),
+        ("A.\n\n", "A.", ("\n Hi", "\nthere"), (" Hi", "\nthere")),
+        ("\n\n", "\n\n", ("\nHi",), ("\nHi",)),
+        ("\nHello\n", "\nHello", ("\n",), ("",)),
+    ],
+    ids=[
+        "continuation_without_whitespace_passes_through",
+        "echo_then_re_emitted_space_are_both_dropped",
+        "different_whitespace_is_kept",
+        "seam_ends_at_the_first_divergence",
+        "whitespace_only_prefill_has_no_seam",
+        "re_emitted_whitespace_at_stream_end_is_dropped",
+    ],
+)
+@pytest.mark.asyncio
+async def test_continuation_output_drops_only_whitespace_the_client_already_has(
+    emitted_text, prefill_content, fallback_texts, expected_texts
+):
+    output = ContinuationOutput(
+        emitted_text, {"role": "assistant", "content": prefill_content, "prefix": True}, "group", ()
+    )
+
+    async def fallback_stream():
+        for text in fallback_texts:
+            yield _text_chunk(text)
+
+    released = [chunk async for chunk in output.splice(fallback_stream())]
+
+    assert tuple(chunk.choices[0].delta.content for chunk in released) == expected_texts

@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
 from itertools import accumulate
+from os.path import commonprefix
 from types import MappingProxyType
 from typing import Final
 
@@ -89,6 +90,10 @@ def without_prefill_echo(prefill_message: Mapping[str, object], generated_conten
     return generated_content[len(prefill) :] if prefill and generated_content.startswith(prefill) else generated_content
 
 
+def _trailing_whitespace(text: str) -> str:
+    return text[len(text.rstrip()) :]
+
+
 def _with_first_delta(chunk: ModelResponseStream, update: Mapping[str, object]) -> ModelResponseStream:
     choice: Final = chunk.choices[0]
     delta: Final = choice.delta.model_copy(update=update)
@@ -124,9 +129,9 @@ def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> t
 
 class ContinuationOutput:
     """Splices a fallback's continuation onto the stream the client already received. Drops a leading echo of the
-    prefill, since some providers (Mistral) return the prefix inside the completion, keeps the primary's chunk id,
-    created time and single role delta, and runs litellm.post_call_rules over the joined text, since each stream
-    wrapper only sees its own fragment."""
+    prefill, since some providers (Mistral) return the prefix inside the completion, and the re-emitted part of the
+    trailing whitespace the prefill left out, keeps the primary's chunk id, created time and single role delta, and
+    runs litellm.post_call_rules over the joined text, since each stream wrapper only sees its own fragment."""
 
     def __init__(
         self,
@@ -142,15 +147,18 @@ class ContinuationOutput:
         self._rules: Final = Rules()
         self._held: tuple[ModelResponseStream, ...] = ()
         self._echo_settled = not self._prefill_text
+        self._seam = (
+            _trailing_whitespace(emitted_text) if self._prefill_text and not self._prefill_text[-1].isspace() else ""
+        )
 
     async def splice(self, stream: AsyncIterable[object]) -> AsyncIterator[object]:
         async for item in stream:
             if not isinstance(item, ModelResponseStream):
                 yield item
                 continue
-            for released in self._observed(self._released(item)):
+            for released in self._observed(self._past_seam(self._released(item))):
                 yield self._in_primary_stream(released)
-        for released in self._observed(self._flushed()):
+        for released in self._observed(self._past_seam(self._flushed())):
             yield self._in_primary_stream(released)
 
     def _in_primary_stream(self, chunk: ModelResponseStream) -> ModelResponseStream:
@@ -175,6 +183,15 @@ class ContinuationOutput:
         if not text.startswith(self._prefill_text):
             return held
         return _drop_leading_text(held, len(self._prefill_text))
+
+    def _past_seam(self, chunks: tuple[ModelResponseStream, ...]) -> tuple[ModelResponseStream, ...]:
+        return tuple(self._without_seam(chunk) for chunk in chunks)
+
+    def _without_seam(self, chunk: ModelResponseStream) -> ModelResponseStream:
+        text: Final = _delta_text(chunk)
+        matched: Final = len(commonprefix((text, self._seam)))
+        self._seam = self._seam[matched:] if matched == len(text) else ""
+        return _without_leading_text(chunk, matched)
 
     def _observed(self, chunks: tuple[ModelResponseStream, ...]) -> tuple[ModelResponseStream, ...]:
         if not litellm.post_call_rules:

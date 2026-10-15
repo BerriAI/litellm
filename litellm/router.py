@@ -528,12 +528,16 @@ _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"ty
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
+def _prefill_stem(text: str) -> str:
+    return text.rstrip() or text
+
+
 def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
-    """Continue the last text block in place so the prefill reads exactly as the text the caller already received."""
+    """Continue the last text block in place so the prefill reads as the text the caller already received."""
     last: Final = blocks[-1] if blocks else None
     if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
-        return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
-    return [*blocks, {"type": "text", "text": text}]
+        return [*blocks[:-1], {**last, "text": _prefill_stem(f"{last_text}{text}")}]
+    return [*blocks, {"type": "text", "text": _prefill_stem(text)}]
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -3250,7 +3254,9 @@ class Router:
 
                 from litellm.main import stream_chunk_builder
 
-                complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
+                complete_response_object: Final = stream_chunk_builder(
+                    chunks=model_response.chunks, messages=messages if continue_after_content else None
+                )
                 complete_response_object_usage: Final = cast(
                     Usage | None,
                     getattr(complete_response_object, "usage", None),
@@ -3332,7 +3338,10 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                self._combine_fallback_usage(
+                                    fallback_item,
+                                    complete_response_object_usage if continuation_output is not None else None,
+                                )
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -3546,7 +3555,7 @@ class Router:
         turn, or in a prefill turn whose content has a shape this cannot extend."""
         last: Final = messages[-1] if messages else None
         if last is None or last.get("role") != "assistant":
-            return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
+            return [*messages, {"role": "assistant", "content": _prefill_stem(generated_content), "prefix": True}]
         if last.get("prefix") is not True:
             return None
         from litellm.router_utils.pre_call_checks.continuation_prefill_check import without_prefill_echo
@@ -3554,7 +3563,7 @@ class Router:
         new_text: Final = without_prefill_echo(last, generated_content)
         content: Final = last.get("content")
         if content is None or isinstance(content, str):
-            return [*messages[:-1], {**last, "content": f"{content or ''}{new_text}", "prefix": True}]
+            return [*messages[:-1], {**last, "content": _prefill_stem(f"{content or ''}{new_text}"), "prefix": True}]
         try:
             blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
         except ValidationError:
@@ -3963,13 +3972,6 @@ class Router:
                         raise e.original_exception from e
                     raise
 
-                from litellm.main import stream_chunk_builder
-
-                complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
-                complete_response_object_usage: Final = cast(
-                    Usage | None,
-                    getattr(complete_response_object, "usage", None),
-                )
                 try:
                     model_group: Final = cast(str, initial_kwargs.get("model"))
                     fallbacks: Final[list | None] = initial_kwargs.get("fallbacks", router_self.fallbacks)
@@ -4015,7 +4017,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                router_self._combine_fallback_usage(fallback_item, None)
                             yield fallback_item
                     else:
                         yield None

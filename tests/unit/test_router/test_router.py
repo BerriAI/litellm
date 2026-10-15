@@ -3159,6 +3159,131 @@ async def test_acompletion_streaming_iterator_continuation_stays_in_the_primary_
     assert "".join(chunk.choices[0].delta.content for chunk in continuation) == " world"
 
 
+def _continuation_router():
+    return litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+
+
+def _usage_chunk(prompt_tokens, completion_tokens):
+    from litellm.types.utils import Usage
+
+    return litellm.ModelResponseStream(
+        model="gpt-4",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
+async def _drain_with_fallback(router, error, primary_chunks, messages, fallback_items):
+    from unittest.mock import AsyncMock, patch
+
+    async def fallback_stream():
+        for item in fallback_items:
+            yield item
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", new=AsyncMock(return_value=fallback_stream())
+    ) as mock_fallback:
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error, chunks=primary_chunks),
+            messages=messages,
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        collected = [chunk async for chunk in result]
+    streamed = [chunk for chunk in collected if isinstance(chunk, litellm.ModelResponseStream)]
+    return mock_fallback.await_args.kwargs["kwargs"], streamed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_reports_usage", [True, False], ids=["usage_reported", "usage_not_reported"])
+async def test_acompletion_streaming_iterator_continuation_usage_sums_both_legs(primary_reports_usage):
+    from litellm.exceptions import MidStreamFallbackError
+
+    messages = [{"role": "user", "content": "Explain transformers in one paragraph."}]
+    partial = "Transformers use "
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="openai", generated_content=partial,
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    content_chunk = litellm.ModelResponseStream(
+        model="gpt-4", choices=[{"index": 0, "delta": {"role": "assistant", "content": partial}}]
+    )
+    primary_chunks = [content_chunk, _usage_chunk(21, 3)] if primary_reports_usage else [content_chunk]
+    primary_usage = litellm.stream_chunk_builder(chunks=list(primary_chunks), messages=messages).usage
+
+    _, streamed = await _drain_with_fallback(
+        _continuation_router(), error, primary_chunks, messages, [_usage_chunk(91, 5)]
+    )
+
+    assert primary_usage.prompt_tokens > 0
+    assert streamed[-1].usage.prompt_tokens == primary_usage.prompt_tokens + 91
+    assert streamed[-1].usage.completion_tokens == primary_usage.completion_tokens + 5
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_plain_fallback_keeps_the_fallback_usage():
+    from litellm.exceptions import MidStreamFallbackError
+
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="anthropic", generated_content="",
+        is_pre_first_chunk=True,
+    )
+    role_chunk = litellm.ModelResponseStream(
+        model="gpt-4", choices=[{"index": 0, "delta": {"role": "assistant", "content": ""}}]
+    )
+
+    _, streamed = await _drain_with_fallback(
+        _continuation_router(),
+        error,
+        [role_chunk, _usage_chunk(21, 0)],
+        [{"role": "user", "content": "Hi"}],
+        [_usage_chunk(91, 5)],
+    )
+
+    assert (streamed[-1].usage.prompt_tokens, streamed[-1].usage.completion_tokens) == (91, 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "partial,fallback_texts,expected_prefill,expected_answer",
+    [
+        ("Transformers use ", (" self", "-attention"), "Transformers use", "Transformers use self-attention"),
+        ("def f():\n  ", ("\n", "    return 1"), "def f():", "def f():\n    return 1"),
+        ("First.\n", ("\n\nSecond",), "First.", "First.\n\nSecond"),
+    ],
+    ids=["space", "indentation", "paragraph_break"],
+)
+async def test_acompletion_streaming_iterator_continuation_does_not_double_trailing_whitespace(
+    partial, fallback_texts, expected_prefill, expected_answer
+):
+    from litellm.exceptions import MidStreamFallbackError
+
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="openai", generated_content=partial,
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    fallback_items = [
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": text}}]) for text in fallback_texts
+    ]
+
+    passed_kwargs, streamed = await _drain_with_fallback(
+        _continuation_router(), error, [], [{"role": "user", "content": "Hi"}], fallback_items
+    )
+
+    assert passed_kwargs["messages"][-1]["content"] == expected_prefill
+    assert partial + "".join(chunk.choices[0].delta.content for chunk in streamed) == expected_answer
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [True, "true", " True "])
 async def test_update_settings_turns_on_mid_stream_continuation(monkeypatch, enabled):
@@ -3331,7 +3456,8 @@ def test_build_completion_continuation_input_folds_into_existing_prefill():
     """A nested break must not leave two trailing assistant turns: the new partial
     folds into the prior prefill so a non-merging provider still gets one."""
     once = litellm.Router._build_completion_continuation_input([{"role": "user", "content": "hi"}], "part one ")
-    twice = litellm.Router._build_completion_continuation_input(list(once), "part two")
+    twice = litellm.Router._build_completion_continuation_input(list(once), " part two ")
+    assert once[-1]["content"] == "part one"
     assert [m["role"] for m in twice] == ["user", "assistant"]
     assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
 
