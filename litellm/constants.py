@@ -478,6 +478,7 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT: Final = (
     else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 )
 PROMPT_CACHE_LOOKBACK_POSITIONS: Final = 20
+PROMPT_CACHE_PIN_CACHE_MAX_SIZE: Final = 10_000
 DEFAULT_TRIM_RATIO: Final = get_env_float(
     "DEFAULT_TRIM_RATIO", 0.75
 )  # default ratio of tokens to trim from the end of a prompt
