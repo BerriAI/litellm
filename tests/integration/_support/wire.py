@@ -70,12 +70,16 @@ class Wire:
     received: SimpleQueue[Request]
     disconnected: SimpleQueue[str]
     connected: SimpleQueue[str]
+    closed: SimpleQueue[str]
 
     def drain(self) -> tuple[Request, ...]:
         return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
 
     def connections(self) -> int:
         return self.connected.qsize()
+
+    def open_connections(self) -> int:
+        return self.connected.qsize() - self.closed.qsize()
 
 
 def _await_release(gate: threading.Event, closing: threading.Event) -> bool:
@@ -98,6 +102,7 @@ def wire_server(
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
     connected: Final[SimpleQueue[str]] = SimpleQueue()
+    closed: Final[SimpleQueue[str]] = SimpleQueue()
     closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
@@ -107,6 +112,10 @@ def wire_server(
         def setup(self) -> None:
             super().setup()
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
+
+        def finish(self) -> None:
+            super().finish()
+            closed.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def respond(self) -> None:
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
@@ -194,6 +203,7 @@ def wire_server(
                 received,
                 disconnected,
                 connected,
+                closed,
             )
         finally:
             closing.set()

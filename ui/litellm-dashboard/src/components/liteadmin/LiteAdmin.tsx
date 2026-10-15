@@ -8,12 +8,13 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { Plus, Sparkles, X } from "lucide-react";
+import { History, Plus, Sparkles, X } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
 import { useProxySettingsQuery } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
@@ -32,6 +33,7 @@ import { cn } from "@/lib/cva.config";
 import { isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
 import { LiteAdminConversation } from "./LiteAdminConversation";
+import { LiteAdminHomeComposer } from "./LiteAdminHomeComposer";
 import { useLiteAdmin, type ConversationEntry, type LiteAdminSession } from "./useLiteAdmin";
 
 type ManagementSession = Omit<LiteAdminSession, "inferenceBaseUrl">;
@@ -100,17 +102,18 @@ export function LiteAdminHome() {
   if (!state) return null;
   const { open, show, setHomeContainer } = state;
   return (
-    <section aria-label="Ask LiteAdmin" hidden={open} className="rounded-2xl border bg-card">
-      <div className="flex items-center justify-between gap-3 p-4">
-        <div>
-          <h2 className="flex items-center gap-2 text-sm font-medium">
+    <section aria-label="Ask LiteAdmin" hidden={open} className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Sparkles className="size-4 text-info" />
             LiteAdmin
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">Ask about your gateway. Review changes in chat.</p>
+          <p className="border-l pl-3 text-sm text-muted-foreground">Control your entire gateway.</p>
         </div>
-        <Button variant="ghost" size="sm" onClick={show}>
-          Open chat
+        <Button variant="ghost" size="sm" onClick={show} className="text-muted-foreground">
+          <History className="size-3.5" />
+          Recent chats
         </Button>
       </div>
       <div ref={setHomeContainer} />
@@ -417,22 +420,24 @@ function LiteAdminChat({
   };
   if (!active) return null;
   const homeContainer = !open ? state?.homeContainer : null;
+  const composerProps = {
+    value: input,
+    onChange: setInput,
+    onSubmit: send,
+    onCancel: chat.phase === "applying" ? undefined : chat.stop,
+    disabled: busy || !selectedModel,
+    isLoading: busy,
+    submitDisabled,
+  };
   const composer = (
-    <div className="space-y-3 border-t p-3">
-      <ModelPicker models={models} value={selectedModel} onChange={setModel} disabled={busy} />
-      {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
-      <ChatComposer
-        value={input}
-        onChange={setInput}
-        onSubmit={send}
-        onCancel={chat.phase === "applying" ? undefined : chat.stop}
-        placeholder="Ask LiteAdmin…"
-        disabled={busy || !selectedModel}
-        isLoading={busy}
-        submitDisabled={submitDisabled}
-      />
-      <p className="text-xs text-muted-foreground">Use a model you trust with your gateway data.</p>
-    </div>
+    <LiteAdminComposer
+      {...composerProps}
+      models={models}
+      model={selectedModel}
+      onModelChange={setModel}
+      home={Boolean(homeContainer)}
+      tooLong={tooLong}
+    />
   );
   return (
     <TabsContent value={id} className="flex min-h-0 flex-1 flex-col">
@@ -448,32 +453,73 @@ function LiteAdminChat({
   );
 }
 
+function LiteAdminComposer({
+  models,
+  model,
+  onModelChange,
+  home,
+  tooLong,
+  ...props
+}: Omit<ComponentProps<typeof LiteAdminHomeComposer>, "modelPicker"> & {
+  models: UseQueryResult<ModelGroup[]>;
+  model: string | null;
+  onModelChange: (value: string | null) => void;
+  home: boolean;
+  tooLong: boolean;
+}) {
+  return (
+    <div className={cn("space-y-3", !home && "border-t p-3")}>
+      {!home && <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} />}
+      <ModelStatus models={models} />
+      {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
+      {home ? (
+        <LiteAdminHomeComposer
+          {...props}
+          modelPicker={
+            <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} compact />
+          }
+        />
+      ) : (
+        <>
+          <ChatComposer {...props} placeholder="Ask LiteAdmin…" />
+          <p className="text-xs text-muted-foreground">Use a model you trust with your gateway data.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ModelPicker({
   models,
   value,
   onChange,
   disabled,
+  compact = false,
 }: {
   models: UseQueryResult<ModelGroup[]>;
   value: string | null;
   onChange: (value: string | null) => void;
   disabled: boolean;
+  compact?: boolean;
 }) {
+  if (models.isPending) return <Skeleton className="h-8 w-full" aria-label="Loading models" />;
+  return (
+    <SearchSelect
+      aria-label="LiteAdmin model"
+      options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
+      value={value}
+      onValueChange={onChange}
+      placeholder="Choose a chat model"
+      disabled={disabled}
+      allowClear={false}
+      className={compact ? "border-transparent shadow-none dark:bg-transparent" : undefined}
+    />
+  );
+}
+
+function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
   return (
     <>
-      {models.isPending ? (
-        <Skeleton className="h-8" aria-label="Loading models" />
-      ) : (
-        <SearchSelect
-          aria-label="LiteAdmin model"
-          options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
-          value={value}
-          onValueChange={onChange}
-          placeholder="Choose a chat model"
-          disabled={disabled}
-          allowClear={false}
-        />
-      )}
       {models.isError && (
         <Alert variant="destructive">
           <AlertDescription>
