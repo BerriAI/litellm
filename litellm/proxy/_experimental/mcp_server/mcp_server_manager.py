@@ -69,6 +69,7 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_TOOL_CALL_TEARDOWN_GRACE,
     MCP_TOOL_LISTING_TIMEOUT,
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
@@ -1824,6 +1825,55 @@ def _mcp_discovery_cache_ttl() -> float:
         verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
         return 60.0
     return ttl
+
+
+async def _await_mcp_tool_call_tasks(
+    during_hook_tasks: Sequence[asyncio.Task[object]],
+    tool_call: Callable[[], Awaitable[object]],
+    timeout: float,
+) -> list[object]:
+    """Run one MCP tool call beside the during-call hook tasks and await both.
+
+    A cancelled asyncio.gather (or wait_for) re-delivers a native Task.cancel into its children
+    on every event loop iteration, which bypasses the AnyIO shields the MCP SDK's stdio shutdown
+    relies on: the child process stop gets interrupted mid-flight, the stdout drain then waits
+    for an EOF that never arrives, and the abandoned request handler and the tool task spin on
+    each other forever (#46657). asyncio.wait never cancels what it waits on, so the timeout and
+    a cancelled caller instead cancel the tool call's own AnyIO cancel scope, a cancellation
+    level the SDK's shielded shutdown honours, and the tool task gets a bounded window to finish
+    that shutdown before the caller's exception is raised. A tool task still unwinding past that
+    window is left to finish detached rather than cancelled natively.
+    """
+    tool_cancel_scopes: Final[list[anyio.CancelScope]] = []
+
+    async def _run_tool_call() -> object:
+        with anyio.CancelScope() as scope:
+            tool_cancel_scopes.append(scope)
+            return await tool_call()
+
+    tool_task: Final = asyncio.create_task(_run_tool_call())
+
+    async def _abandon_tool_call() -> None:
+        for scope in tool_cancel_scopes:
+            scope.cancel()
+        if not tool_cancel_scopes:
+            tool_task.cancel()
+        for hook_task in during_hook_tasks:
+            hook_task.cancel()
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait({tool_task}, timeout=MCP_TOOL_CALL_TEARDOWN_GRACE)
+        if tool_task.done() and not tool_task.cancelled():
+            tool_task.exception()
+
+    try:
+        _, pending = await asyncio.wait([*during_hook_tasks, tool_task], timeout=timeout)
+    except asyncio.CancelledError:
+        await _abandon_tool_call()
+        raise
+    if pending:
+        await _abandon_tool_call()
+        raise asyncio.TimeoutError
+    return [task.result() for task in (*during_hook_tasks, tool_task)]
 
 
 class MCPServerManager:
@@ -6602,11 +6652,13 @@ class MCPServerManager:
 
             tool_call_coro = _call_tool_via_client(client, call_tool_params)
 
-        tasks.append(asyncio.create_task(tool_call_coro))
-
         _timeout: Final = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
-            mcp_responses: Final = await asyncio.wait_for(asyncio.gather(*tasks), timeout=_timeout)
+            mcp_responses: Final = await _await_mcp_tool_call_tasks(
+                during_hook_tasks=tuple(cast("list[asyncio.Task[object]]", tasks)),
+                tool_call=lambda: tool_call_coro,
+                timeout=_timeout,
+            )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,

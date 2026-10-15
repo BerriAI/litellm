@@ -4,11 +4,13 @@ import contextlib
 import contextvars
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -18,6 +20,7 @@ from mcp.types import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
     BlobResourceContents,
+    CallToolRequestParams as MCPCallToolRequestParams,
     CallToolResult,
     Prompt,
     ResourceTemplate,
@@ -30,6 +33,7 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERS
 from pydantic import JsonValue, TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
+from litellm.experimental_mcp_client.client import MCPClient, PersistentMCPSession
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._types import (
@@ -860,6 +864,99 @@ async def test_call_tool_m2m_skips_authorization_headers():
     extra_headers = create_kwargs["extra_headers"] or {}
     assert "Authorization" not in extra_headers
     assert extra_headers.get("X-Custom") == "trace"
+
+
+class _ShieldedTeardownStdioClient(MCPClient):
+    """Stands in for the SDK's stdio session: the tool call parks on the server reply, and the
+    transport teardown is an anyio-shielded block that stops the child process and only then
+    returns. A native Task.cancel thrown into that block interrupts the stop mid-flight, so the
+    caller must deliver cancellation at anyio level instead (#46657)"""
+
+    def __init__(self) -> None:
+        super().__init__(server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        self.call_in_flight = asyncio.Event()
+        self.child_stopped = False
+        self._server_reply = asyncio.Event()
+        self._teardown_unblocked = False
+
+    def release(self) -> None:
+        self._teardown_unblocked = True
+
+    async def call_tool(
+        self,
+        call_tool_request_params: MCPCallToolRequestParams,
+        host_progress_callback: Callable | None = None,
+        raise_on_error: bool = False,
+        allow_input_required: bool = False,
+        persistent_session: PersistentMCPSession | None = None,
+    ) -> CallToolResult:
+        del call_tool_request_params, host_progress_callback, raise_on_error, allow_input_required, persistent_session
+        try:
+            self.call_in_flight.set()
+            await self._server_reply.wait()
+            return CallToolResult(content=[], isError=False)
+        finally:
+            with anyio.CancelScope(shield=True):
+                while not self.child_stopped and not self._teardown_unblocked:
+                    try:
+                        await asyncio.sleep(0.05)
+                        self.child_stopped = True
+                    except asyncio.CancelledError:
+                        continue
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stdio_tool_call_stops_the_child_and_releases_the_caller():
+    """A cancelled tools/call handler must cancel the in-flight call at a cancellation level the
+    SDK's shielded stdio teardown honours, so the child process is stopped and the cancelled
+    handler is released instead of the two spinning on each other forever (#46657)"""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="slow-stdio",
+        name="slow-stdio",
+        server_name="slow-stdio",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+    client: Final = _ShieldedTeardownStdioClient()
+
+    with patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=client)):
+
+        async def abandoned_call() -> None:
+            async with anyio.create_task_group() as tg:
+
+                async def handler() -> None:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="execute_sql",
+                        arguments={},
+                        tasks=[],
+                        mcp_auth_header=None,
+                        mcp_server_auth_headers=None,
+                        oauth2_headers=None,
+                        raw_headers=None,
+                        proxy_logging_obj=None,
+                    )
+
+                tg.start_soon(handler)
+                await client.call_in_flight.wait()
+                tg.cancel_scope.cancel()
+
+        scenario: Final = asyncio.create_task(abandoned_call())
+        _, pending = await asyncio.wait({scenario}, timeout=10)
+        try:
+            assert not pending, "the abandoned tools/call never released the cancelled request handler"
+            assert client.child_stopped, "the abandoned tools/call never stopped the stdio child process"
+        finally:
+            client.release()
+            await asyncio.wait({scenario}, timeout=5)
 
 
 @pytest.mark.asyncio
