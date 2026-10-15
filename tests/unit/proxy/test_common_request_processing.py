@@ -10979,3 +10979,57 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+class TestRefreshResponsesInputLoggingSnapshot:
+    def test_rewritten_string_input_restamps_snapshot_wrapped_like_function_setup(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.common_request_processing import (
+            refresh_responses_input_logging_snapshot,
+        )
+
+        logging_obj = Logging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "sensitive-value"}],
+            stream=False,
+            call_type="aresponses",
+            start_time=datetime.datetime.now(),
+            function_id="",
+            litellm_call_id="unit-test-call",
+        )
+        # function_setup snapshotted the raw string; the guardrail rewrote it.
+        logging_obj.model_call_details["input"] = "sensitive-value"
+
+        refresh_responses_input_logging_snapshot(logging_obj, "sensitive-value [MASKED]")
+
+        assert logging_obj.messages == [{"role": "user", "content": "sensitive-value [MASKED]"}]
+        assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": "sensitive-value [MASKED]"}]
+
+    def test_rewritten_list_input_keeps_the_responses_shape(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.common_request_processing import (
+            refresh_responses_input_logging_snapshot,
+        )
+
+        sanitized = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "sensitive-value [MASKED]"}],
+            }
+        ]
+        logging_obj = Logging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": [{"type": "input_text", "text": "sensitive-value"}]}],
+            stream=False,
+            call_type="aresponses",
+            start_time=datetime.datetime.now(),
+            function_id="",
+            litellm_call_id="unit-test-call-2",
+        )
+
+        refresh_responses_input_logging_snapshot(logging_obj, sanitized)
+
+        assert logging_obj.messages == sanitized
+        assert logging_obj.model_call_details["messages"] == sanitized
+        # the Responses part type survives: no chat-completions conversion
+        assert logging_obj.messages[0]["content"][0]["type"] == "input_text"

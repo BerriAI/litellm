@@ -257,6 +257,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
+    AllMessageValues,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -418,6 +419,25 @@ def _assembled_model_is_the_name_the_client_asked_for(
         client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
     )
     return isinstance(stamped_model, str) and assembled_model == stamped_model
+
+
+def refresh_responses_input_logging_snapshot(
+    logging_obj: LiteLLMLoggingObj,
+    input_value: object,
+) -> None:
+    """Restamp the logging snapshot from the post-guardrail /v1/responses input.
+
+    ``function_setup`` snapshots the raw input before pre-call guardrails run, so a
+    guardrail that rewrote the input leaves the logging object pointing at the
+    pre-rewrite objects. Mirrors the ``update_messages`` refresh the messages-shaped
+    endpoints get: the value is restamped in the request's own Responses shape (no
+    chat-completions conversion), with a bare string wrapped the way
+    ``Logging.__init__`` wraps it so guarded and unguarded calls log the same schema.
+    """
+    if isinstance(input_value, str):
+        logging_obj.update_messages([{"role": "user", "content": input_value}])
+    else:
+        logging_obj.update_messages(cast("list[AllMessageValues]", input_value))  # cast-ok: input list passed verbatim
 
 
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
@@ -2356,6 +2376,14 @@ class ProxyBaseLLMRequestProcessing:
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
+        elif route_type == "aresponses" and self.data.get("input") is not None:
+            # Same contract as the messages branch above, for the Responses API's
+            # input-shaped body: pre-call guardrails may have rewritten
+            # self.data["input"] (in place or by rebinding a new list), while the
+            # snapshot taken in function_setup still points at the pre-guardrail
+            # objects. Refresh it in the request's own Responses shape so guarded
+            # and unguarded calls log the same schema.
+            refresh_responses_input_logging_snapshot(logging_obj, self.data["input"])
 
         if (
             self.served_model is not None
