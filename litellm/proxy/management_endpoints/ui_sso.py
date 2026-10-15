@@ -1061,7 +1061,9 @@ async def _verify_generic_sso_or_fall_back_to_id_token(
         )
 
 
-async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
+async def _raise_if_sso_exceeds_free_user_limit(
+    premium_user: bool, prisma_client: PrismaClient | None, *, adding_user: bool = False
+) -> None:
     """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
     if premium_user is True:
         return
@@ -1073,7 +1075,7 @@ async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_clien
             code=status.HTTP_403_FORBIDDEN,
         )
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-    if billable_users and billable_users > 5:
+    if billable_users + int(adding_user) > 5:
         raise ProxyException(
             message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You configured SSO (one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML) in your env. Please unset it",
             type=ProxyErrorTypes.auth_error,
@@ -1917,6 +1919,11 @@ async def get_user_info_from_db(
             if user_info is not None:
                 break
 
+        if user_info is None:
+            from litellm.proxy.proxy_server import premium_user
+
+            await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client, adding_user=True)
+
         verbose_proxy_logger.debug(
             "user_info: %s; litellm.default_internal_user_params: %s", user_info, litellm.default_internal_user_params
         )
@@ -1937,6 +1944,8 @@ async def get_user_info_from_db(
         )
 
         return user_info
+    except ProxyException:
+        raise
     except Exception as e:
         if resolved_by_database_only and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             verbose_proxy_logger.exception("SSO login failed: the database could not resolve the account: %s", e)
