@@ -225,7 +225,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
 
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
-        from litellm.types.llms.base import PromptTokensDetailsWrapper
+        from litellm.types.utils import PromptTokensDetailsWrapper
 
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(response=response, model=model, model_response=model_response)
@@ -248,9 +248,10 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        
+
         # Extract billable character count from metadata if present
-        billable_character_count: Final = response.get("metadata", {}).get("billableCharacterCount")
+        metadata: Final = response.get("metadata") or {}
+        billable_character_count: Final = metadata.get("billableCharacterCount")
         if billable_character_count is not None:
             prompt_tokens_details: Final = PromptTokensDetailsWrapper(character_count=billable_character_count)
             usage: Final = Usage(
