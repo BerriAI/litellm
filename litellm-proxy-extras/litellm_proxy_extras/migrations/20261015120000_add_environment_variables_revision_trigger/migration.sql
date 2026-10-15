@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE SEQUENCE IF NOT EXISTS "litellm_environment_variables_revision_seq";
 
 CREATE OR REPLACE FUNCTION litellm_bump_environment_variables_revision() RETURNS TRIGGER AS $$

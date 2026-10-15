@@ -1117,7 +1117,7 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = (
     "litellm-proxy-extras/litellm_proxy_extras/migrations/"
-    "20261015000000_add_environment_variables_revision_trigger/migration.sql"
+    "20261015120000_add_environment_variables_revision_trigger/migration.sql"
 )
 
 
