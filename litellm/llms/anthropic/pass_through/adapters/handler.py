@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -596,6 +597,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            drop_params=litellm.drop_params is True or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
         )
 
         if openai_request is None:

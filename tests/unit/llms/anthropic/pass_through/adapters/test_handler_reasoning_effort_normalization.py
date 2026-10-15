@@ -264,6 +264,24 @@ _SELF_HOSTED: Final = {
     "api_key": "fake-key",
 }
 _VLLM_CHAT_URL: Final = r"https://vllm\.example\.test/v1/chat/completions"
+_MALFORMED_BUDGET_TARGETS: Final = [
+    pytest.param(_SELF_HOSTED, _KIMI_LEVELS, _VLLM_CHAT_URL, _CHAT_COMPLETION, id="declaring-hosted_vllm"),
+    pytest.param(_SELF_HOSTED, {}, _VLLM_CHAT_URL, _CHAT_COMPLETION, id="hosted_vllm"),
+    pytest.param(
+        {"model": "fireworks_ai/accounts/fireworks/models/kimi-k3", "api_key": "fake-key"},
+        {},
+        r"https://api\.fireworks\.ai/inference/v1/chat/completions",
+        _CHAT_COMPLETION,
+        id="fireworks_ai",
+    ),
+    pytest.param(
+        {"model": "openai/gpt-5.5-pro", "api_key": "fake-key"},
+        {},
+        r"https://api\.openai\.com/v1/responses",
+        _RESPONSE,
+        id="openai-responses-bridge",
+    ),
+]
 
 
 async def _body_sent_upstream(
@@ -331,38 +349,53 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
         assert claude_named["reasoning_effort"] == kimi_named["reasoning_effort"]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_info", [_KIMI_LEVELS, {}])
+    @pytest.mark.parametrize("budget", ["2048", True])
+    @pytest.mark.parametrize("litellm_params, model_info, upstream_url, upstream_body", _MALFORMED_BUDGET_TARGETS)
     async def test_a_non_numeric_budget_is_rejected_with_a_400(
-        self, respx_mock: respx.MockRouter, model_info: Mapping[str, object]
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object],
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        budget: object,
     ) -> None:
         with pytest.raises(litellm.BadRequestError, match=r"thinking\.budget_tokens must be a number") as rejected:
             await _body_sent_upstream(
                 respx_mock,
-                _SELF_HOSTED,
+                litellm_params,
                 model_info,
-                _VLLM_CHAT_URL,
-                _CHAT_COMPLETION,
-                thinking={"type": "enabled", "budget_tokens": "2048"},
+                upstream_url,
+                upstream_body,
+                thinking={"type": "enabled", "budget_tokens": budget},
             )
 
         assert rejected.value.status_code == 400
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model_info", [_KIMI_LEVELS, {}])
+    @pytest.mark.parametrize("budget", ["2048", True])
+    @pytest.mark.parametrize("litellm_params, model_info, upstream_url, upstream_body", _MALFORMED_BUDGET_TARGETS)
     async def test_drop_params_drops_a_non_numeric_budget(
-        self, respx_mock: respx.MockRouter, model_info: Mapping[str, object]
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object],
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        budget: object,
     ) -> None:
         sent: Final = await _body_sent_upstream(
             respx_mock,
-            {**_SELF_HOSTED, "drop_params": True},
+            {**litellm_params, "drop_params": True},
             model_info,
-            _VLLM_CHAT_URL,
-            _CHAT_COMPLETION,
-            thinking={"type": "enabled", "budget_tokens": "2048"},
+            upstream_url,
+            upstream_body,
+            thinking={"type": "enabled", "budget_tokens": budget},
         )
 
-        assert "reasoning_effort" not in sent
-        assert "thinking" not in sent
+        assert not {"reasoning_effort", "reasoning", "thinking"} & sent.keys()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

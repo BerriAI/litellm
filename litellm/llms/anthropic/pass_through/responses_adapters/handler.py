@@ -82,6 +82,10 @@ def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str
     return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
 
 
+def _drops_unsupported_params(forwarded_kwargs: Mapping[str, object]) -> bool:
+    return normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True
+
+
 def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, object]) -> BlockRewrite | None:
     """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
     drops raw ones under drop_params."""
@@ -89,7 +93,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
         return cache_control_as_prompt_cache_breakpoint
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
-    if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
+    if _drops_unsupported_params(forwarded_kwargs):
         return _without_prompt_cache_breakpoint
     return None
 
@@ -182,6 +186,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        drop_params=_drops_unsupported_params(forwarded_kwargs),
     )
 
     # Normalize reasoning effort based on model capabilities

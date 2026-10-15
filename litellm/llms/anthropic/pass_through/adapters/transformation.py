@@ -246,7 +246,7 @@ class AnthropicAdapter:
         return result
 
     def translate_completion_input_params_with_tool_mapping(
-        self, kwargs, *, custom_llm_provider: str | None = None
+        self, kwargs, *, custom_llm_provider: str | None = None, drop_params: bool = True
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -280,6 +280,7 @@ class AnthropicAdapter:
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
         )
 
         return translated_body, tool_name_mapping
@@ -646,6 +647,8 @@ class LiteLLMAnthropicMessagesAdapter:
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
         thinking: AnthropicThinkingParam,
+        *,
+        drop_params: bool = True,
     ) -> str | None:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -664,7 +667,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if thinking_type == "disabled":
             return "none"
         elif thinking_type == "enabled":
-            return reasoning_effort_from_thinking(thinking, drop_params=True)
+            return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
         elif thinking_type == "adaptive":
             # Adaptive thinking: effort is controlled by output_config.effort,
             # not budget_tokens. Return a default; caller should override with
@@ -1109,6 +1112,7 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs: ChatCompletionRequest,
         *,
         custom_llm_provider: str | None = None,
+        drop_params: bool = True,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1147,16 +1151,8 @@ class LiteLLMAnthropicMessagesAdapter:
         is_claude_target: Final = self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
         output_config: Final = anthropic_message_request.get("output_config")
 
-        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
-        budget_effort: Final = (
-            None
-            if is_claude_target
-            else self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
-        )
-        if is_claude_target or (thinking_type == "enabled" and budget_effort is None):
-            new_kwargs["thinking"] = thinking
-
         if is_claude_target:
+            new_kwargs["thinking"] = thinking
             if is_bedrock_target:
                 if isinstance(output_config, dict):
                     effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
@@ -1166,13 +1162,16 @@ class LiteLLMAnthropicMessagesAdapter:
             if not self._target_declares_reasoning_effort(model, custom_llm_provider):
                 return
 
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         declared_effort: Final = (
             output_config.get("effort") if thinking_type == "adaptive" and isinstance(output_config, dict) else None
         )
         if is_claude_target and not declared_effort:
             return
 
-        reasoning_effort: Final = declared_effort or budget_effort
+        reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
+            cast(AnthropicThinkingParam, thinking), drop_params=drop_params
+        )
         if not reasoning_effort:
             return
 
@@ -1227,6 +1226,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
+        drop_params: bool = True,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1279,6 +1279,7 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
