@@ -212,6 +212,16 @@ def _bare_bedrock_invoke(model: str, wire: Wire) -> dict[str, object]:
     }
 
 
+def _bare_anthropic(model: str, wire: Wire) -> dict[str, object]:
+    return {
+        "model": model,
+        "custom_llm_provider": "anthropic",
+        "api_base": wire.url,
+        "api_key": PROVIDER_KEY,
+        "num_retries": 0,
+    }
+
+
 def _litellm_completion(deployment: dict[str, object], messages: list[JsonValue]) -> object:
     return litellm.completion(**deployment, messages=messages, max_tokens=64, cache_control_injection_points=POINTS)  # pyright: ignore[reportArgumentType]  # the dict shapes a caller passes, unvalidated
 
@@ -235,24 +245,26 @@ def _expected_marks(keeps_mid_conversation_system: bool, marker: str) -> list[st
     ],
 )
 @pytest.mark.parametrize(
-    ("model", "keeps_mid_conversation_system"),
+    ("deployment", "model", "keeps_mid_conversation_system"),
     [
-        pytest.param("us.anthropic.claude-opus-5-5", True, id="keeps-mid-conversation-system"),
-        pytest.param("us.anthropic.claude-sonnet-4-6", False, id="converts-mid-conversation-system"),
+        pytest.param(_bare_bedrock_invoke, "us.anthropic.claude-opus-5-5", True, id="keeps-mid-conversation-system"),
+        pytest.param(
+            _bare_bedrock_invoke, "us.anthropic.claude-sonnet-4-6", False, id="converts-mid-conversation-system"
+        ),
+        pytest.param(_bare_anthropic, "unmapped-claude-alias", False, id="unmapped-model"),
     ],
 )
 def test_bare_model_with_custom_llm_provider_fills_the_cache_mark_budget_like_the_request_builder(
     monkeypatch: pytest.MonkeyPatch,
     complete: Callable[[dict[str, object], list[JsonValue]], object],
+    deployment: Callable[[str, Wire], dict[str, object]],
     model: str,
     keeps_mid_conversation_system: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "modify_params", True)
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire:
-        response: Final = complete(
-            _bare_bedrock_invoke(model, wire), _client_answer_to_one_of_two_marked_searches(marker)
-        )
+        response: Final = complete(deployment(model, wire), _client_answer_to_one_of_two_marked_searches(marker))
         received: Final = wire.drain()
     assert isinstance(response, ModelResponse), type(response)
     assert response.choices[0].message.content == "sunny", response  # pyright: ignore[reportAttributeAccessIssue]  # choices are Choices for a non-stream response
