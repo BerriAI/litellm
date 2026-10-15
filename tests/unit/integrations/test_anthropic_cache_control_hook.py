@@ -4530,3 +4530,30 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_capping_thousands_of_marks_on_one_tool_result_counts_the_request_a_logarithmic_number_of_times():
+    def marked_parts(prefix: str, count: int) -> list[dict]:
+        return [
+            {"type": "text", "text": f"{prefix} {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+            for index in range(count)
+        ]
+
+    messages: Final = [
+        {"role": "user", "content": marked_parts("part", 4)},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": marked_parts("result", 2000)},
+    ]
+    sent_breakpoints: Final = MagicMock(side_effect=AnthropicCacheControlHook.count_converse_cache_points)
+
+    capped: Final = AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+        cast(List[AllMessageValues], messages), True, sent_breakpoints, lambda: 0
+    )
+
+    assert [part.get("cache_control") for part in capped[0]["content"]] == [{"type": "ephemeral"}] * 4
+    assert not any("cache_control" in part for part in capped[2]["content"])
+    assert sent_breakpoints.call_count < 3 * 20
