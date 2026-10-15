@@ -1574,3 +1574,78 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_does_not_run_priced_tool_calls_the_budget_refuses(monkeypatch):
+    """A priced tool call the budget refuses is never sent to the MCP server. Each executed call carries its own
+    reservation to the cost callback instead of the parent request's, and one nobody settled is released."""
+    import json
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.spend_tracking import budget_reservation as budget_reservation_module
+
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    _setup_proxy_logging(monkeypatch)
+    sys.modules["litellm.proxy.proxy_server"].proxy_logging_obj.post_mcp_call_hook = AsyncMock(
+        side_effect=lambda response, **_kwargs: response
+    )
+    priced_server = types.SimpleNamespace(
+        alias=None,
+        server_name="price_server",
+        server_id="price-server-id",
+        short_prefix=None,
+        tool_name_to_display_name=None,
+        mcp_info={"mcp_server_cost_info": {"tool_name_to_cost_per_query": {"lookup_price": 0.10}}},
+    )
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+
+    _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=priced_server)
+
+    captured_metadata: list[dict] = []
+
+    def fake_function_setup(*_args, **kwargs):
+        captured_metadata.append(dict(kwargs["metadata"]))
+        raise RuntimeError("no logging object in this test")
+
+    monkeypatch.setattr(mcp_handler_module, "function_setup", fake_function_setup)
+
+    reserved_costs: list[float] = []
+    tool_reservations: list[dict] = []
+
+    async def fake_reserve(parent_reservation, tool_cost, valid_token):
+        assert parent_reservation is parent
+        if len(reserved_costs) == 2:
+            raise litellm.BudgetExceededError(current_cost=1.0, max_budget=1.0, message="Budget has been exceeded!")
+        reserved_costs.append(tool_cost)
+        tool_reservations.append({"reserved_cost": tool_cost, "entries": [], "finalized": False})
+        return tool_reservations[-1]
+
+    monkeypatch.setattr(budget_reservation_module, "reserve_budget_for_tool_call", fake_reserve, raising=False)
+
+    parent: Final = {"reserved_cost": 0.01, "entries": [], "finalized": False}
+    auth: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed", max_budget=1.0, spend=0.75)
+    auth.budget_reservation = parent
+    tool_name = "price_server-lookup_price"
+    tool_calls = [
+        {"id": f"call-{i}", "function": {"name": tool_name, "arguments": json.dumps({"sku": f"SKU-{i}"})}}
+        for i in range(5)
+    ]
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "price_server"},
+        tool_calls=tool_calls,
+        user_api_key_auth=auth,
+    )
+
+    assert call_tool_mock.await_count == 2
+    assert reserved_costs == [0.10, 0.10]
+    assert [reservation["finalized"] for reservation in tool_reservations] == [True, True]
+    assert len(results) == 5
+    assert [r["result"] for r in results[:2]] == ["Tool executed successfully"] * 2
+    assert all("Budget has been exceeded" in str(r["result"]) for r in results[2:])
+    for metadata in captured_metadata:
+        assert metadata.get("user_api_key_budget_reservation") is not parent
+        nested_auth = metadata.get("user_api_key_auth")
+        assert getattr(nested_auth, "budget_reservation", None) is None

@@ -756,6 +756,7 @@ class LiteLLM_Proxy_MCP_Handler:
         for tool_call in tool_calls:
             logging_request_data: dict[str, object] = {}
             tool_name: str | None = None
+            tool_budget_reservation: dict | None = None
             try:
                 (
                     tool_name,
@@ -841,6 +842,14 @@ class LiteLLM_Proxy_MCP_Handler:
                     )
                     if user_identifier:
                         logging_request_data["user"] = user_identifier
+
+                # the parent reservation only covers the model call, so each priced tool call reserves its own
+                tool_budget_reservation = await LiteLLM_Proxy_MCP_Handler._reserve_tool_call_budget(
+                    user_api_key_auth=typed_user_api_key_auth,
+                    logging_metadata=logging_metadata,
+                    mcp_server=mcp_server,
+                    tool_name=sanitized_tool_name,
+                )
 
                 litellm_logging_obj: LiteLLMLoggingObj | None = None
                 try:
@@ -1017,10 +1026,44 @@ class LiteLLM_Proxy_MCP_Handler:
                         "name": tool_name,
                     }
                 )
+            finally:
+                await LiteLLM_Proxy_MCP_Handler._release_tool_call_budget(tool_budget_reservation)
 
         return tool_results
 
     _execute_tool_calls = execute_tool_calls
+
+    @staticmethod
+    async def _reserve_tool_call_budget(
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        logging_metadata: dict[str, object],
+        mcp_server: MCPServer | None,
+        tool_name: str,
+    ) -> dict | None:
+        from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
+        from litellm.proxy._experimental.mcp_server.cost_calculator import MCPCostCalculator
+        from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_tool_call
+
+        logging_metadata.pop("user_api_key_budget_reservation", None)
+        if "user_api_key_auth" in logging_metadata:
+            logging_metadata["user_api_key_auth"] = sanitize_user_api_key_auth(logging_metadata["user_api_key_auth"])
+        mcp_info: Final = (mcp_server.mcp_info if mcp_server is not None else None) or {}
+        tool_reservation: Final = await reserve_budget_for_tool_call(
+            parent_reservation=getattr(user_api_key_auth, "budget_reservation", None),
+            tool_cost=MCPCostCalculator.configured_cost_per_query(
+                mcp_server_cost_info=mcp_info.get("mcp_server_cost_info"), tool_name=tool_name
+            ),
+            valid_token=user_api_key_auth,
+        )
+        if tool_reservation is not None:
+            logging_metadata["user_api_key_budget_reservation"] = tool_reservation
+        return tool_reservation
+
+    @staticmethod
+    async def _release_tool_call_budget(tool_reservation: dict | None) -> None:
+        from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+
+        await release_or_invalidate_budget_reservation(budget_reservation=tool_reservation)
 
     @staticmethod
     def create_follow_up_messages_for_chat(

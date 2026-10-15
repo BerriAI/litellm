@@ -345,12 +345,108 @@ async def reserve_budget_for_request(
         "callback_bound": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
+        "fail_closed_budget_enforcement": fail_closed_budget_enforcement,
+        "counter_limits": _counter_limits(counters=counters, entries=applied_entries),
     }
     _start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
         counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
     )
     return budget_reservation
+
+
+def _counter_limits(
+    counters: Sequence[_BudgetCounter], entries: Sequence[Mapping[str, object]]
+) -> list[dict[str, float | str | None]]:
+    reserved: Final = {entry.get("counter_key") for entry in entries}
+    return [
+        {
+            "counter_key": counter.counter_key,
+            "max_budget": counter.max_budget,
+            "fallback_spend": counter.fallback_spend,
+            "entity_type": counter.entity_type,
+            "entity_id": counter.entity_id,
+            "source_cache_key": counter.source_cache_key,
+            "spend_log_entity_id": counter.spend_log_entity_id,
+            "window_duration": counter.window_duration,
+            "window_start": counter.window_start.isoformat() if counter.window_start is not None else None,
+        }
+        for counter in counters
+        if counter.counter_key in reserved
+    ]
+
+
+def _counter_from_limit(limit: object) -> _BudgetCounter | None:
+    if not isinstance(limit, Mapping):
+        return None
+    counter_key: Final = limit.get("counter_key")
+    max_budget: Final = _to_float(limit.get("max_budget"))
+    if not isinstance(counter_key, str) or max_budget is None:
+        return None
+    return _BudgetCounter(
+        counter_key=counter_key,
+        max_budget=max_budget,
+        fallback_spend=_to_float(limit.get("fallback_spend")) or 0.0,
+        entity_type=str(limit.get("entity_type") or ""),
+        entity_id=str(limit.get("entity_id") or ""),
+        source_cache_key=_optional_str(limit.get("source_cache_key")),
+        spend_log_entity_id=_optional_str(limit.get("spend_log_entity_id")),
+        window_duration=_optional_str(limit.get("window_duration")),
+        window_start=_coerce_datetime(limit.get("window_start")),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+async def reserve_budget_for_tool_call(
+    parent_reservation: Mapping[str, object] | None,
+    tool_cost: float,
+    valid_token: UserAPIKeyAuth | None,
+) -> dict | None:
+    """Reserves the price of one tool call the gateway runs for an admitted request, against the counters the
+    request was admitted on and under the same over-budget policy as the request itself."""
+    if not parent_reservation or tool_cost <= 0:
+        return None
+    limits: Final = parent_reservation.get("counter_limits")
+    counters: Final = tuple(
+        counter
+        for counter in map(_counter_from_limit, limits if isinstance(limits, list) else ())
+        if counter is not None
+    )
+    if not counters:
+        return None
+    fail_closed: Final = parent_reservation.get("fail_closed_budget_enforcement") is True
+    applied_entries: Final[list[dict[str, float | str]]] = []
+    reservation_cost = tool_cost
+    try:
+        with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
+            reservable: Final = await _initialize_reservation_counters(
+                counters=counters,
+                fail_closed_budget_enforcement=fail_closed,
+            )
+            reservation_cost = await _reserve_reservable_counters(
+                reservable=reservable,
+                valid_token=valid_token,
+                applied_entries=applied_entries,
+                reservation_cost=reservation_cost,
+                fail_closed_budget_enforcement=fail_closed,
+            )
+    except Exception:
+        await _release_applied_entries_best_effort(entries=applied_entries, default_reserved_cost=reservation_cost)
+        raise
+    if not applied_entries:
+        return None
+    return {
+        "reserved_cost": reservation_cost,
+        "entries": applied_entries,
+        "finalized": False,
+        "callback_bound": False,
+        "input_cost": 0.0,
+        "input_tokens": None,
+        "fail_closed_budget_enforcement": fail_closed,
+    }
 
 
 async def reconcile_budget_reservation(

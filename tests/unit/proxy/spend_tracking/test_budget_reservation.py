@@ -27,8 +27,10 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     estimate_request_max_cost,
     get_budget_window_start,
+    reconcile_budget_reservation,
     release_unbound_budget_reservation,
     reserve_budget_for_request,
+    reserve_budget_for_tool_call,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -426,3 +428,85 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.parametrize("fail_closed", [True, False])
+async def test_auto_executed_tool_calls_are_each_admitted_against_the_request_budget(
+    spend_counter_cache: DualCache, fail_closed: bool
+):
+    """One admitted request cannot carry any number of priced tool calls past its budget. Under strict enforcement a
+    call that does not fit is refused, otherwise the budget is exhausted after at most one partially fitting call."""
+    token: Final = UserAPIKeyAuth(token="hashed-fanout-key", max_budget=1.0, spend=0.95)
+    counter_key: Final = "spend:key:hashed-fanout-key"
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.95)
+    parent: Final = await reserve_budget_for_request(
+        request_body={"model": "gpt-4o", "max_tokens": 16, "messages": [{"role": "user", "content": "price 40 SKUs"}]},
+        route="/v1/chat/completions",
+        llm_router=None,
+        valid_token=token,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        fail_closed_budget_enforcement=fail_closed,
+    )
+    assert parent is not None
+    model_cost: Final = float(parent["reserved_cost"])
+    await reconcile_budget_reservation(budget_reservation=parent, actual_cost=model_cost)
+
+    admitted = 0
+    for _ in range(40):
+        try:
+            tool_reservation = await reserve_budget_for_tool_call(
+                parent_reservation=parent, tool_cost=0.10, valid_token=token
+            )
+        except litellm.BudgetExceededError:
+            continue
+        assert tool_reservation is not None
+        admitted += 1
+        await reconcile_budget_reservation(budget_reservation=tool_reservation, actual_cost=0.10)
+
+    counter: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    if fail_closed:
+        assert admitted == 0
+        assert counter == pytest.approx(0.95 + model_cost)
+    else:
+        assert admitted == 1
+        assert counter == pytest.approx(0.95 + model_cost + 0.10)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_reservation_admits_calls_that_fit(spend_counter_cache: DualCache):
+    token: Final = UserAPIKeyAuth(token="hashed-roomy-key", max_budget=1.0, spend=0.5)
+    counter_key: Final = "spend:key:hashed-roomy-key"
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.5)
+    parent: Final = {
+        "reserved_cost": 0.0,
+        "entries": [],
+        "counter_limits": [
+            {
+                "counter_key": counter_key,
+                "max_budget": 1.0,
+                "fallback_spend": 0.5,
+                "entity_type": "Key",
+                "entity_id": "hashed-roomy-key",
+            }
+        ],
+        "finalized": True,
+        "fail_closed_budget_enforcement": True,
+    }
+    admitted = 0
+    for _ in range(10):
+        try:
+            tool_reservation = await reserve_budget_for_tool_call(
+                parent_reservation=parent, tool_cost=0.10, valid_token=token
+            )
+        except litellm.BudgetExceededError:
+            break
+        assert tool_reservation is not None
+        await reconcile_budget_reservation(budget_reservation=tool_reservation, actual_cost=0.10)
+        admitted += 1
+
+    assert admitted == 5
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(1.0)
