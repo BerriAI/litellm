@@ -10558,9 +10558,9 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict[str, object]] = deployment.model_info.model_dump(
+        model_info: Final[dict[str, object]] = deployment.model_info.model_dump(  # mutable-ok: built in place
             exclude_none=True
-        )  # mutable-ok: built in place
+        )
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
