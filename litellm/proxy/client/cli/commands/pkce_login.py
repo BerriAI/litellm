@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.cli_token_utils import CLI_TOKEN_FRESHNESS_BUFFER_SECONDS
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from .auth import CliTokenData
@@ -35,7 +36,7 @@ _HTTP_TIMEOUT_SECONDS: Final = 15
 _CLIENT_NAME: Final = "litellm-cli"
 
 
-class CliAuthContract(BaseModel):
+class CliAuthContract(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     contract_version: Literal[1]
@@ -48,13 +49,13 @@ class CliAuthContract(BaseModel):
     code_challenge_methods_supported: tuple[str, ...]
 
 
-class _RegisteredClient(BaseModel):
+class _RegisteredClient(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     client_id: str = Field(min_length=1)
 
 
-class _TokenResponse(BaseModel):
+class _TokenResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     access_token: str = Field(min_length=1)

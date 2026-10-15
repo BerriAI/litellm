@@ -3,7 +3,7 @@ Arize Phoenix API client for fetching prompt versions from Arize Phoenix.
 """
 
 import urllib.parse
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -53,7 +53,7 @@ class ArizePhoenixClient:
         # Initialize HTTPHandler
         self.http_handler = HTTPHandler(disable_default_headers=True)
 
-    def get_prompt_version(self, prompt_version_id: str) -> dict[str, Any] | None:
+    def get_prompt_version(self, prompt_version_id: str) -> dict[str, object] | None:
         """
         Fetch a prompt version from Arize Phoenix.
 

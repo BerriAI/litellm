@@ -1,9 +1,10 @@
+import builtins
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
-from pydantic import PrivateAttr
+from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Any, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -132,6 +133,17 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: Literal["in_progress", "completed", "incomplete"] | None = None
 
 
+class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
+
+    id: str
+    arguments: object
+    call_id: str | None = None
+    execution: Literal["server", "client"]
+    status: Literal["in_progress", "completed", "incomplete"]
+    type: Literal["tool_search_call"]
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item
@@ -163,6 +175,14 @@ class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class DecodedResponseId(TypedDict, total=False):
