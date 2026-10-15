@@ -35,8 +35,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_r
     sso_client_config,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    with_login_refresh_token,
     AssertionStoreUnavailable,
     SSOIdentityAssertion,
+    assertion_from_saml_login,
 )
 
 SIGNING_KEY = "test-idp-signing-key-32-bytes-long-xxxx"
@@ -316,6 +318,53 @@ async def test_a_missing_refresh_token_names_the_scope_the_operator_has_to_set(c
     assert transport.calls == []
     assert "GENERIC_SCOPE" in caplog.text
     assert "offline_access" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_expired_saml_assertion_is_never_redeemed_and_names_the_re_login(caplog: pytest.LogCaptureFixture):
+    """SAML has no refresh grant. Even a row that somehow carries a refresh token must not be posted
+    to the generic OIDC client, and the operator hint about GENERIC_SCOPE does not apply."""
+    saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) - 1, "https://idp.example.com")
+    with_refresh_token = saml.model_copy(update={"refresh_token": SecretStr("rt_saml")})
+    rows = _FakeRows({"alice": with_refresh_token})
+    transport = _FakeTransport(_renewal(_id_token()))
+
+    served = await _store(rows, transport).fetch("alice")
+    refresher = SSOAssertionRefresher(transport, client_config=lambda: _CLIENT, read=rows.fetch, write=rows.write)
+    with caplog.at_level(logging.WARNING):
+        outcome = await refresher.refresh("alice", with_refresh_token)
+
+    assert served == with_refresh_token
+    assert transport.calls == []
+    assert rows.writes == []
+    match outcome:
+        case Error(failure):
+            assert failure.kind == "rejected"
+            assert "sign in" in failure.detail
+        case Ok(_):
+            pytest.fail("a SAML assertion must not be renewable")
+    assert "sign in" in caplog.text
+    assert "GENERIC_SCOPE" not in caplog.text
+
+
+class _ForbiddenCoordinator:
+    async def run(self, user_id: str, key: str, *, refresh: object, reread: object) -> None:
+        raise AssertionError(f"a SAML assertion must never enter the refresh path (user_id={user_id}, key={key})")
+
+
+@pytest.mark.asyncio
+async def test_a_saml_assertion_inside_the_expiry_skew_is_served_as_is_without_electing_a_renewal():
+    """SAML cannot be renewed, so a still-valid assertion near its NotOnOrAfter is handed out untouched
+    instead of running the single-flight election that would 503 the losers."""
+    saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) + 30, "https://idp.example.com")
+    rows = _FakeRows({"alice": saml})
+    transport = _FakeTransport(_renewal(_id_token()))
+
+    served = await _store(rows, transport, coordinator_factory=_ForbiddenCoordinator).fetch("alice")
+
+    assert served == saml
+    assert transport.calls == []
+    assert rows.writes == []
 
 
 @pytest.mark.asyncio
@@ -853,3 +902,43 @@ async def test_a_successful_grant_is_handed_back_as_the_parsed_body():
 
     assert isinstance(outcome, Ok)
     assert outcome.ok["id_token"] == "idt"
+
+
+@pytest.mark.asyncio
+async def test_a_renewal_keeps_the_refresh_token_exchanged_at_login_in_the_stored_row():
+    """Renewal replaces the id_token and the SSO refresh token. The refresh token the ID-JAG client
+    exchanged at login is unrelated to either and must still be in the row the next MCP call reads."""
+    stale, fresh = _id_token(exp_offset=-1), _id_token()
+    row = with_login_refresh_token(
+        _stored(stale, expires_in=-1),
+        "rt-from-login",
+        3600,
+        datetime.now(timezone.utc),
+        endpoint="https://idp.example.com/token",
+        client_id="agent",
+    )
+    rows = _FakeRows({"alice": row})
+
+    served = await _store(rows, _FakeTransport(_renewal(fresh, "rt_2"))).fetch("alice")
+
+    stored = rows.rows["alice"]
+    assert stored.id_token.get_secret_value() == fresh
+    assert stored.refresh_token is not None and stored.refresh_token.get_secret_value() == "rt_2"
+    assert stored.exchanged_refresh_token is not None
+    assert stored.exchanged_refresh_token.get_secret_value() == "rt-from-login"
+    assert stored.exchanged_refresh_token_client_id == "agent"
+    assert served is not None and served.exchanged_refresh_token is not None
+
+
+@pytest.mark.asyncio
+async def test_fetch_stored_hands_back_the_row_without_renewing_it():
+    """The read a refresh-token server uses: the row as stored, no IdP round trip even when the SSO
+    id_token is about to expire."""
+    rows = _FakeRows({"alice": _stored(_id_token(exp_offset=-1), expires_in=-1)})
+    transport = _FakeTransport(_renewal(_id_token()))
+
+    served = await _store(rows, transport).fetch_stored("alice")
+
+    assert served is not None
+    assert served.id_token.get_secret_value() == rows.rows["alice"].id_token.get_secret_value()
+    assert transport.calls == []
