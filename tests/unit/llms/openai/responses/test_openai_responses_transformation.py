@@ -1434,11 +1434,11 @@ class TestAzureResponsesAPIConfig:
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
-            litellm_params={"api_version": "2025-01-01"},
+            litellm_params={"api_version": "2025-04-01-preview"},
         )
         assert (
             result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
         )
 
     def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):

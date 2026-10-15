@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from types import MappingProxyType
@@ -7,6 +8,7 @@ import httpx
 from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
+from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -24,11 +26,32 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _with_responses_api_version(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    responses_api_version: Final = litellm_params.get("responses_api_version")
-    if not responses_api_version:
-        return litellm_params
-    return MappingProxyType({**litellm_params, "api_version": responses_api_version})
+_DATED_GA_API_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> str | None:
+    """
+    Dated GA api_versions (e.g. 2024-10-21) predate the Responses API on Azure and 404 there, so a deployment
+    pinned to one for chat gets the default Responses version unless it sets responses_api_version.
+    """
+    api_version: Final = _str_param(litellm_params, "api_version")
+    if api_base is not None and "api-version" in httpx.URL(api_base).params:
+        return api_version
+    responses_api_version: Final = _str_param(litellm_params, "responses_api_version")
+    if responses_api_version is not None:
+        return responses_api_version
+    if api_version is None or _DATED_GA_API_VERSION.fullmatch(api_version):
+        return AZURE_DEFAULT_RESPONSES_API_VERSION
+    return api_version
+
+
+def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -176,11 +199,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
-        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
-
+        resolved_api_base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
         return BaseAzureLLM.get_base_azure_url(
-            api_base=api_base,
-            litellm_params=_with_responses_api_version(litellm_params),
+            api_base=resolved_api_base,
+            litellm_params=_with_responses_api_version(resolved_api_base, litellm_params),
             route="/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
