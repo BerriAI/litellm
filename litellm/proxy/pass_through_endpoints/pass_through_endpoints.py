@@ -6,6 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, count, groupby
@@ -62,7 +63,6 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -70,6 +70,7 @@ from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
+from litellm.llms.chatgpt.common_utils import is_chatgpt_codex_responses_url
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
@@ -118,7 +119,9 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    redact_credential_headers,
 )
+from litellm.proxy.pass_through_endpoints.common_utils import passthrough_logging_headers
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
@@ -417,7 +420,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         elif is_anthropic_messages_url(url):
             return EndpointType.ANTHROPIC
         elif (
-            parsed_url.hostname == "api.openai.com"
+            is_chatgpt_codex_responses_url(url)
+            or parsed_url.hostname == "api.openai.com"
             or parsed_url.hostname == "openai.azure.com"
             or (parsed_url.hostname and "openai.com" in parsed_url.hostname)
         ):
@@ -706,7 +710,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
+                    "headers": passthrough_logging_headers(request, user_api_key_dict),
                 },
             },
             "call_type": "pass_through_endpoint",
@@ -1090,19 +1094,22 @@ from litellm.passthrough.timeout_utils import (
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: dict[str, str],
     user_api_key_dict: UserAPIKeyAuth,
-    custom_body: dict | None = None,
+    custom_body: dict[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
-    query_params: dict | None = None,
+    query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
     stream: bool | None = None,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
-):
+    follow_redirects: bool | None = None,
+    use_custom_headers_only: bool = False,
+    response_owner: AsyncExitStack | None = None,
+) -> Response:
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
 
@@ -1149,11 +1156,14 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        headers = custom_headers
-        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=safe_get_request_headers(request).copy(),
-            headers=headers,
-            forward_headers=forward_headers,
+        headers = (
+            custom_headers
+            if use_custom_headers_only
+            else HttpPassThroughEndpointHelpers.forward_headers_from_request(
+                request_headers=safe_get_request_headers(request).copy(),
+                headers=custom_headers,
+                forward_headers=forward_headers,
+            )
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
@@ -1191,7 +1201,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            get_masked_values(upstream_headers),
+            redact_credential_headers(upstream_headers),
             _parsed_body,
         )
 
@@ -1285,7 +1295,10 @@ async def pass_through_request(
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": resolved_timeout},
+            params={
+                "timeout": resolved_timeout,
+                **({"follow_redirects": follow_redirects} if follow_redirects is not None else {}),
+            },
         )
         async_client: Final = async_client_obj.client
         passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
@@ -1465,7 +1478,7 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": upstream_headers,
+                "headers": redact_credential_headers(upstream_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1509,6 +1522,9 @@ async def pass_through_request(
 
                 response = await async_client.send(req, stream=stream)
 
+            if response_owner is not None:
+                response_owner.push_async_callback(response.aclose)
+
             upstream_usage = apply_upstream_reported_usage(
                 logging_obj=logging_obj,
                 headers=response.headers,
@@ -1536,7 +1552,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(passthrough_logging_headers(request, user_api_key_dict)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1595,6 +1611,8 @@ async def pass_through_request(
                 _parsed_body=_parsed_body,
                 forward_multipart=is_multipart,
             )
+        if response_owner is not None:
+            response_owner.push_async_callback(response.aclose)
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         upstream_usage = apply_upstream_reported_usage(
@@ -1628,7 +1646,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=detected_relay_response,
-                request_headers=dict(request.headers),
+                request_headers=dict(passthrough_logging_headers(request, user_api_key_dict)),
             )
             if callback_headers:
                 _response_headers.update(callback_headers)
@@ -1678,7 +1696,7 @@ async def pass_through_request(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
-                request_headers=dict(request.headers),
+                request_headers=dict(passthrough_logging_headers(request, user_api_key_dict)),
             )
             if relay_callback_headers:
                 relay_custom_headers.update(relay_callback_headers)
@@ -1853,7 +1871,7 @@ async def pass_through_request(
             data=_parsed_body or {},
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(passthrough_logging_headers(request, user_api_key_dict)),
         )
         if callback_headers:
             custom_headers.update(callback_headers)
@@ -2232,7 +2250,7 @@ def create_pass_through_route(
                     return await pass_through_request(
                         request=request,
                         target=full_target,
-                        custom_headers=headers_dict,
+                        custom_headers=TypeAdapter(dict[str, str]).validate_python(headers_dict),
                         user_api_key_dict=user_api_key_dict,
                         forward_headers=cast(bool | None, param_forward_headers),
                         merge_query_params=cast(bool | None, param_merge_query_params),

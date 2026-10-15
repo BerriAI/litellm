@@ -2138,7 +2138,11 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
 
 def request_dispatched_to_provider_pass_through(request: Request) -> bool:
     """Built-in provider pass-through handlers (``/anthropic/{endpoint:path}``, ...) bind ``endpoint``."""
-    return "endpoint" in request.path_params
+    return (
+        "endpoint" in request.path_params
+        or getattr(request.scope.get("endpoint"), "__module__", "")
+        == "litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints"
+    )
 
 
 def get_model_from_request(

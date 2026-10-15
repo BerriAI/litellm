@@ -8049,6 +8049,34 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     })
 
 
+def test_codex_passthrough_snapshot_redacts_credentials_and_keeps_gateway_attribution() -> None:
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import codex_responses
+
+    request: Final = Request(
+        {
+            "type": "http", "method": "POST", "path": "/backend-api/codex/responses", "query_string": b"",
+            "endpoint": codex_responses,
+            "headers": [(b"authorization", b"Bearer synthetic-subscription"), (b"x-litellm-api-key", b"synthetic-gateway")],
+        }
+    )
+    start: Final = datetime.now()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="synthetic-native", messages=[], stream=False, call_type="pass_through_endpoint", start_time=start,
+        litellm_call_id="codex-snapshot", function_id="codex-snapshot", kwargs={},
+    )
+    payload: Final = {"url": "https://chatgpt.com/backend-api/codex/responses", "request_method": "POST", "request_body": {"model": "synthetic-native"}}
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request, user_api_key_dict=UserAPIKeyAuth(user_id="synthetic-user", team_id="synthetic-team"),
+        passthrough_logging_payload=payload, logging_obj=logging_obj, _parsed_body={"model": "synthetic-native"},
+    )
+    snapshot: Final = kwargs["litellm_params"]["proxy_server_request"]
+    assert "synthetic-subscription" not in repr(snapshot)
+    assert "synthetic-gateway" not in repr(snapshot)
+    assert kwargs["litellm_params"]["metadata"]["user_api_key_user_id"] == "synthetic-user"
+    assert kwargs["litellm_params"]["metadata"]["user_api_key_team_id"] == "synthetic-team"
+    assert request.headers["authorization"] == "Bearer synthetic-subscription"
+
+
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
     request: Final = Request({

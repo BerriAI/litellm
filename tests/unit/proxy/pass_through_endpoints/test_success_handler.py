@@ -587,6 +587,46 @@ _FIRST_TURN_USAGE: Final = {"promptTokenCount": 10, "candidatesTokenCount": 4, "
 _SECOND_TURN_USAGE: Final = {"promptTokenCount": 30, "candidatesTokenCount": 6, "totalTokenCount": 36}
 
 
+def test_codex_native_responses_normalize_provider_usage_instead_of_falling_through() -> None:
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    body: Final = {
+        "id": "resp_litellm_native_usage",
+        "object": "response",
+        "created_at": 1786374786,
+        "model": "litellm-test-native-unpriced",
+        "status": "completed",
+        "output": [],
+        "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+    }
+    url: Final = "https://chatgpt.com/backend-api/codex/responses"
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="litellm-test-native-unpriced",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=_START,
+        litellm_call_id="native-usage",
+        function_id="native-usage",
+    )
+    normalized: Final = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=httpx.Response(200, request=httpx.Request("POST", url), json=body),
+        response_body=body,
+        request_body={"model": body["model"]},
+        logging_obj=logging_obj,
+        url_route=url,
+        result=json.dumps(body),
+        start_time=_START,
+        end_time=_END,
+        cache_hit=False,
+    )
+    response: Final = TypeAdapter(ResponsesAPIResponse).validate_python(normalized["standard_logging_response_object"])
+    assert response.id == body["id"]
+    assert response.usage is not None
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (11, 4, 15)
+    assert logging_obj.model_call_details["response_cost"] == 0.0
+
+
 def _logging_obj() -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="unknown",

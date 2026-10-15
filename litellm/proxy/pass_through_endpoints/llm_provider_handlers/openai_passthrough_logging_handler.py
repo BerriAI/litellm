@@ -10,6 +10,7 @@ from typing import Final
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
+from litellm.llms.chatgpt.common_utils import is_chatgpt_codex_responses_url
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -88,6 +90,8 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
     """
     if not url_route:
         return False
+    if is_chatgpt_codex_responses_url(url_route):
+        return True
     parsed_url: Final = urlparse(url_route)
     hostname: Final = parsed_url.hostname
     if not hostname:
@@ -139,6 +143,18 @@ def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, obje
     )
 
 
+def _responses_cost(
+    response: ResponsesAPIResponse | ModelResponse | TextCompletionResponse, model: str, provider: str
+) -> float:
+    try:
+        return litellm.completion_cost(
+            completion_response=response, model=model, custom_llm_provider=provider, call_type="responses"
+        )
+    except Exception as exc:  # noqa: BLE001  # missing prices must not discard provider-reported usage
+        verbose_proxy_logger.warning("Could not price Responses usage for %s: %s", model, exc)
+        return 0.0
+
+
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     """
     OpenAI-specific passthrough logging handler that provides cost tracking for /chat/completions endpoints.
@@ -182,8 +198,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url: Final = urlparse(url_route)
-        return _is_openai_compatible_host(parsed_url.hostname) and (
-            "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
+        return is_chatgpt_codex_responses_url(url_route) or (
+            _is_openai_compatible_host(parsed_url.hostname)
+            and ("/v1/responses" in parsed_url.path or "/responses" in parsed_url.path)
         )
 
     @staticmethod
@@ -319,12 +336,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             raw_response=httpx_response,
             logging_obj=logging_obj,
         )
-        response_cost: Final = litellm.completion_cost(
-            completion_response=litellm_model_response,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            call_type="responses",
-        )
+        response_cost: Final = _responses_cost(litellm_model_response, model, custom_llm_provider)
         return litellm_model_response, response_cost
 
     @staticmethod
@@ -626,7 +638,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         try:
             # Extract model from request body
-            model: Final = request_body.get("model", "gpt-4o")
+            model: Final = TypeAdapter(str).validate_python(request_body.get("model", "gpt-4o"))
 
             is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
 
@@ -653,12 +665,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = (
-                litellm.completion_cost(
-                    completion_response=complete_response,
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    call_type="responses",
-                )
+                _responses_cost(complete_response, model, custom_llm_provider)
                 if is_responses
                 else litellm.completion_cost(
                     completion_response=complete_response,
@@ -667,31 +674,36 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
             )
 
-            # Preserve existing litellm_params to maintain metadata tags
-            existing_litellm_params: Final = litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
-
-            # Prepare kwargs for logging
+            existing_litellm_params: Final = TypeAdapter(dict[str, object]).validate_python(
+                litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
+            )
+            passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = (
+                litellm_logging_obj.model_call_details.get("passthrough_logging_payload")
+            )
+            user: Final = (
+                handler_instance._get_user_from_metadata(passthrough_logging_payload=passthrough_logging_payload)
+                if passthrough_logging_payload
+                else None
+            )
+            proxy_request: Final = TypeAdapter(dict[str, object]).validate_python(
+                existing_litellm_params.get("proxy_server_request", {})
+            )
+            proxy_body: Final = TypeAdapter(dict[str, object]).validate_python(proxy_request.get("body", {}))
             kwargs: Final = {
                 "response_cost": response_cost,
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
                 "call_type": litellm_logging_obj.call_type,
                 "messages": litellm_logging_obj.model_call_details.get("messages"),
-                "litellm_params": existing_litellm_params.copy(),
+                "litellm_params": {
+                    **existing_litellm_params,
+                    **(
+                        {"proxy_server_request": {**proxy_request, "body": {**proxy_body, "user": user}}}
+                        if user
+                        else {}
+                    ),
+                },
             }
-
-            # Extract user information for tracking
-            passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = (
-                litellm_logging_obj.model_call_details.get("passthrough_logging_payload")
-            )
-            if passthrough_logging_payload:
-                user: Final = handler_instance._get_user_from_metadata(
-                    passthrough_logging_payload=passthrough_logging_payload,
-                )
-                if user:
-                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = (
-                        user
-                    )
 
             # Attach the payload to kwargs so the success handler adopts it;
             # its later rebuild runs on a copy whose Responses usage was
