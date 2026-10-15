@@ -236,6 +236,7 @@ async def _remove_members_from_team(
     prisma_client: PrismaClient,
     tx: "Prisma",
     team_id: str,
+    team_alias: str | None,
     members: Sequence[MemberDeleteRequest],
     user_api_key_dict: UserAPIKeyAuth,
     locked_user_ids: frozenset[str],
@@ -298,6 +299,7 @@ async def _remove_members_from_team(
     return _TeamRemoval(
         team=LiteLLM_TeamTable(
             team_id=team_id,
+            team_alias=team_alias,
             members_with_roles=kept_members,  # pyright: ignore[reportArgumentType]  # pydantic coerces the tuple into the list field
         ),
         removed=cleanup_ids,
@@ -352,7 +354,7 @@ async def bulk_remove_team_members(
     members: Final = tuple(data.members[i] for i in kept_indexes)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         removal: Final = await _remove_members_from_team(
-            prisma_client, tx, team_id, members, user_api_key_dict, frozenset()
+            prisma_client, tx, team_id, team.team_alias, members, user_api_key_dict, frozenset()
         )
     if removal.deleted_keys:
         KeyManagementEventHooks.create_key_deleted_audit_logs(
@@ -492,6 +494,7 @@ async def _delete_users_tx(
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         team_rows: Final = await _team_tx_db(tx).find_many(where=_in_filter("team_id", _all_teams(teams_of)))
         team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
+        alias_of: Final = MappingProxyType({t.team_id: t.team_alias for t in team_rows})
         for team_id in team_ids:
             _ = await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         _ = await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(user_ids))
@@ -507,6 +510,7 @@ async def _delete_users_tx(
                     prisma_client,
                     tx,
                     tid,
+                    alias_of[tid],
                     tuple(
                         MemberDeleteRequest(user_id=u.user_id, user_email=u.user_email)
                         for u in users

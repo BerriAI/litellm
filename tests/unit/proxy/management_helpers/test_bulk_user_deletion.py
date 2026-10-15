@@ -9,6 +9,8 @@ from typing import Final, cast
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmTableNames, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -226,9 +228,10 @@ class _FakePrisma:
         self.user_locks.extend(tx.user_locks)
 
 
-def _team(team_id: str, *members: str, org: str | None = None) -> LiteLLM_TeamTable:
+def _team(team_id: str, *members: str, org: str | None = None, alias: str | None = None) -> LiteLLM_TeamTable:
     return LiteLLM_TeamTable(
         team_id=team_id,
+        team_alias=alias,
         organization_id=org,
         members_with_roles=[Member(user_id=m, user_email=f"{m}@example.com", role="user") for m in members],
     )
@@ -616,6 +619,40 @@ async def test_bulk_delete_evicts_deleted_keys_and_users_from_the_auth_cache():
     assert cache.get_cache(key="team-key") is None and cache.get_cache(key="personal-key") is None
     assert cache.get_cache(key="u1") is None
     assert cache.get_cache(key="keep-key") is not None
+
+
+class _TeamMembersGauge(PrometheusLogger):
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, str | None, tuple[str | None, ...]]] = []
+
+    def set_team_members_metric(self, team: LiteLLM_TeamTable) -> None:
+        self.emitted.append((team.team_id, team.team_alias, tuple(m.user_id for m in team.members_with_roles)))
+
+
+@pytest.fixture
+def team_members_gauge() -> _TeamMembersGauge:
+    gauge: Final = _TeamMembersGauge()
+    litellm.logging_callback_manager.add_litellm_callback(gauge)
+    return gauge
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "remove",
+    [
+        lambda prisma: _delete(prisma, ["u1"]),
+        lambda prisma: _remove(prisma, "t1", [{"user_id": "u1"}]),
+    ],
+    ids=["user_delete", "member_bulk_delete"],
+)
+async def test_team_members_gauge_keeps_the_team_alias_label_after_a_removal(team_members_gauge, remove):
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1"), _user("keep", "t1")], teams=[_team("t1", "u1", "keep", alias="Alpha")]
+    )
+
+    await remove(prisma)
+
+    assert team_members_gauge.emitted == [("t1", "Alpha", ("keep",))]
 
 
 @pytest.mark.asyncio
