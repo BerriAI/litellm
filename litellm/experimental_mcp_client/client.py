@@ -5,6 +5,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -1094,7 +1095,7 @@ class MCPClient:
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         raise_on_error: bool = False,
         allow_input_required: bool = False,
         persistent_session: "PersistentMCPSession | None" = None,
@@ -1126,7 +1127,12 @@ class MCPClient:
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
-                    await host_progress_callback(progress, total)
+                    try:
+                        inspect.signature(host_progress_callback).bind(progress, total, message)
+                    except (TypeError, ValueError):
+                        await host_progress_callback(progress, total)
+                    else:
+                        await host_progress_callback(progress, total, message)
                 except Exception as e:
                     verbose_logger.warning("Failed to forward to Host: %s", e)
 
@@ -1579,6 +1585,20 @@ def _deliver_persistent_outcome(
     )
 
 
+async def _await_persistent_operation(operation: Awaitable[object], result: asyncio.Future[object]) -> object:
+    running: Final = asyncio.ensure_future(operation)
+
+    def cancel_operation(_: asyncio.Future[object]) -> None:
+        running.cancel()
+
+    result.add_done_callback(cancel_operation)
+    try:
+        (outcome,) = await asyncio.gather(running, return_exceptions=True)
+        return outcome
+    finally:
+        result.remove_done_callback(cancel_operation)
+
+
 class UpstreamSessionClosedError(RuntimeError):
     def __init__(self) -> None:
         super().__init__("upstream MCP session closed")
@@ -1707,12 +1727,14 @@ class PersistentMCPSession:
                     if callbacks is not None:
                         self._current_callbacks = callbacks
                     async with self._admission() if self._admission is not None else nullcontext():
-                        if not future.done():
-                            (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
-                            if _deliver_persistent_outcome(future, outcome, self._stream_error):
-                                self._active = None
-                                self._ended = True
-                                return
+                        if not future.done() and _deliver_persistent_outcome(
+                            future,
+                            await _await_persistent_operation(operation(session), future),
+                            self._stream_error,
+                        ):
+                            self._active = None
+                            self._ended = True
+                            return
                     self._active = None
                 if self._retiring and self._queue.empty():
                     return

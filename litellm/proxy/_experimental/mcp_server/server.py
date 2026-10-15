@@ -895,14 +895,10 @@ if MCP_AVAILABLE:
             return None
         host_session: Final = host_ctx.session
 
-        async def forward_progress(progress: float, total: float | None):
+        async def forward_progress(progress: float, total: float | None, message: str | None = None):
             """Forward progress notifications from external MCP to Host"""
             try:
-                await host_session.send_progress_notification(
-                    progress_token=host_token,
-                    progress=progress,
-                    total=total,
-                )
+                await host_session.report_progress(progress=progress, total=total, message=message)
                 verbose_logger.debug("Forwarded progress %s/%s to Host", progress, total)
             except Exception as e:
                 verbose_logger.error("Failed to forward progress to Host: %s", e)
@@ -2449,9 +2445,10 @@ if MCP_AVAILABLE:
                             "top-level key scan, skipping session lock to avoid deadlock"
                         )
 
-            session_lock: asyncio.Lock | None = None
-            if use_stateful and session_id and request_method in ("POST", "DELETE") and not is_jsonrpc_response:
-                session_lock = _stateful_session_locks.setdefault(session_id, asyncio.Lock())
+            is_cancellation: Final = request_method == "POST" and _is_cancellation_notification(body)
+            session_lock: Final = _stateful_request_lock(
+                use_stateful, session_id, request_method, is_jsonrpc_response, is_cancellation
+            )
 
             active_request_session_ids: Final[list[str]] = []
 
@@ -2484,7 +2481,7 @@ if MCP_AVAILABLE:
                     client_ip=_client_ip,
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
-                    copy_existing_session_auth_context=is_initialize,
+                    copy_existing_session_auth_context=is_initialize or is_cancellation,
                 )
                 local_send = scope_response or send
                 if use_stateful and is_initialize:
@@ -2810,6 +2807,29 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
         return auth_user
+
+    def _stateful_request_lock(
+        use_stateful: bool,
+        session_id: str | None,
+        method: str,
+        is_response: bool,
+        is_cancellation: bool,
+    ) -> asyncio.Lock | None:
+        if not use_stateful or not session_id or method not in ("POST", "DELETE") or is_response or is_cancellation:
+            return None
+        return _stateful_session_locks.setdefault(session_id, asyncio.Lock())
+
+    def _is_cancellation_notification(body: bytes) -> bool:
+        try:
+            payload: Final = TypeAdapter(dict[str, object]).validate_json(body)
+            if payload.get("jsonrpc") != "2.0" or payload.get("method") != "notifications/cancelled" or "id" in payload:
+                return False
+            from mcp.types import CancelledNotification
+
+            CancelledNotification.model_validate(payload, strict=True)
+        except (ValueError, TypeError):
+            return False
+        return True
 
     def _set_or_update_auth_context(
         user_api_key_auth: UserAPIKeyAuth | None,
