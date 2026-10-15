@@ -68,6 +68,29 @@ func secretFromResource(d *schema.ResourceData, attr string) string {
 	return d.Get(attr).(string)
 }
 
+func coerceAdditionalParamValue(strValue string) interface{} {
+	trimmedValue := strings.TrimSpace(strValue)
+	if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
+		var parsedValue interface{}
+		if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
+			return parsedValue
+		}
+	}
+	switch strValue {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if intValue, err := strconv.Atoi(strValue); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
+		return floatValue
+	}
+	return strValue
+}
+
 func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) error {
 	client, ok := m.(*Client)
 	if !ok {
@@ -175,76 +198,9 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		litellmParams["thinking"] = thinking
 	}
 
-	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		var dropParams []string
-
 		for key, value := range additionalParams.(map[string]interface{}) {
-			// Convert string values to appropriate types where possible
-			if strValue, ok := value.(string); ok {
-				// Check if it's JSON (starts with [ or {)
-				trimmedValue := strings.TrimSpace(strValue)
-				if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
-					var parsedValue interface{}
-					if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
-						// Successfully parsed JSON
-						if key == "additional_drop_params" {
-							// Handle drop params specially
-							if dropList, ok := parsedValue.([]interface{}); ok {
-								for _, item := range dropList {
-									if paramStr, ok := item.(string); ok {
-										dropParams = append(dropParams, paramStr)
-									}
-								}
-							}
-							continue // Don't add to litellmParams
-						} else {
-							litellmParams[key] = parsedValue
-						}
-					} else {
-						// Not valid JSON, apply existing conversion logic
-						if strValue == "true" {
-							litellmParams[key] = true
-						} else if strValue == "false" {
-							litellmParams[key] = false
-						} else {
-							// Try to convert numeric strings
-							if intValue, err := strconv.Atoi(strValue); err == nil {
-								litellmParams[key] = intValue
-							} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-								litellmParams[key] = floatValue
-							} else {
-								// Keep as string
-								litellmParams[key] = strValue
-							}
-						}
-					}
-				} else {
-					// Apply existing conversion logic for non-JSON strings
-					if strValue == "true" {
-						litellmParams[key] = true
-					} else if strValue == "false" {
-						litellmParams[key] = false
-					} else {
-						// Try to convert numeric strings
-						if intValue, err := strconv.Atoi(strValue); err == nil {
-							litellmParams[key] = intValue
-						} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-							litellmParams[key] = floatValue
-						} else {
-							// Keep as string
-							litellmParams[key] = strValue
-						}
-					}
-				}
-			} else {
-				litellmParams[key] = value
-			}
-		}
-
-		// Apply drop params at the end
-		for _, paramToDrop := range dropParams {
-			delete(litellmParams, paramToDrop)
+			litellmParams[key] = coerceAdditionalParamValue(value.(string))
 		}
 	}
 

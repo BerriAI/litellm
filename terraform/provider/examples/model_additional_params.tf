@@ -9,8 +9,7 @@ provider "litellm" {
 # - Numeric strings will be parsed to integer (if possible) otherwise float.
 # - JSON strings (starting with [ or {) will be parsed as JSON objects/arrays.
 # - Non-convertible strings remain strings.
-# - Non-string map values are passed through unchanged.
-# - Use "additional_drop_params" as a JSON array to remove parameters from the final request.
+# - "additional_drop_params" takes a JSON array of request parameters the proxy drops before calling the model provider.
 
 resource "litellm_model" "with_additional" {
   model_name          = "custom-model"
@@ -21,14 +20,12 @@ resource "litellm_model" "with_additional" {
 
   # Additional parameters not exposed as first-class arguments
   additional_litellm_params = {
-    "use_fine_tune"          = "true"                           # becomes boolean true
-    "max_context"            = "16384"                          # becomes integer 16384
-    "temperature_scale"      = "0.75"                           # becomes float 0.75
-    "experimental_feature"   = "enabled"                        # stays string "enabled"
-    "complex_config"         = "{\"nested\": {\"value\": 42}}"  # parsed as JSON object
-    "additional_drop_params" = "[\"reasoningEffort\"]"          # removes reasoningEffort parameter
-    # You may also pass non-string values (they will be passed through unchanged)
-    # "raw_flag" = true
+    "use_fine_tune"          = "true"                          # becomes boolean true
+    "max_context"            = "16384"                         # becomes integer 16384
+    "temperature_scale"      = "0.75"                          # becomes float 0.75
+    "experimental_feature"   = "enabled"                       # stays string "enabled"
+    "complex_config"         = "{\"nested\": {\"value\": 42}}" # parsed as JSON object
+    "additional_drop_params" = "[\"reasoning_effort\"]"        # proxy drops reasoning_effort from requests
   }
 
   # Cost configuration (optional)
@@ -47,9 +44,9 @@ resource "litellm_model" "azure_with_drop_params" {
   tier                = "paid"
   mode                = "completion"
 
-  # Drop the reasoningEffort parameter that might be automatically added
+  # Have the proxy drop reasoning_effort from requests before they reach Azure
   additional_litellm_params = {
-    "additional_drop_params" = "[\"reasoningEffort\"]"
+    "additional_drop_params" = "[\"reasoning_effort\"]"
   }
 
   input_cost_per_million_tokens  = 0.25

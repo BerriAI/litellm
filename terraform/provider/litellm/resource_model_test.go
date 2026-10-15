@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/go-cty/cty"
@@ -113,6 +114,69 @@ func TestResourceLiteLLMModelCreateOmitsUnsetDisplayName(t *testing.T) {
 	}
 	if got := d.Get("display_name").(string); got != "" {
 		t.Errorf("expected empty state display_name, got %q", got)
+	}
+}
+
+func TestResourceLiteLLMModelCreateSendsAdditionalLiteLLMParams(t *testing.T) {
+	var createPayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/model/new":
+			if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+				t.Errorf("failed to decode create payload: %v", err)
+			}
+			w.Write([]byte(modelInfoBody("")))
+		case "/model/info":
+			w.Write([]byte(modelInfoBody("")))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]interface{}{
+		"model_name":          "vertex-claude-haiku",
+		"custom_llm_provider": "vertex_ai",
+		"base_model":          "claude-haiku-4-5",
+		"vertex_project":      "test-project",
+		"vertex_location":     "eu",
+		"additional_litellm_params": map[string]interface{}{
+			"additional_drop_params":             `["store", "vertex_location"]`,
+			"tags":                               ` ["prod", "eu"]`,
+			"headers":                            `{"x-team": "search"}`,
+			"use_in_pass_through":                "true",
+			"merge_reasoning_content_in_choices": "false",
+			"max_parallel_requests":              "8",
+			"input_cost_per_token":               "0.5",
+			"description":                        "[draft] haiku",
+		},
+	})
+
+	if err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	litellmParams, ok := createPayload["litellm_params"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected litellm_params object in create payload, got %v", createPayload["litellm_params"])
+	}
+	want := map[string]interface{}{
+		"additional_drop_params":             []interface{}{"store", "vertex_location"},
+		"vertex_project":                     "test-project",
+		"vertex_location":                    "eu",
+		"tags":                               []interface{}{"prod", "eu"},
+		"headers":                            map[string]interface{}{"x-team": "search"},
+		"use_in_pass_through":                true,
+		"merge_reasoning_content_in_choices": false,
+		"max_parallel_requests":              float64(8),
+		"input_cost_per_token":               0.5,
+		"description":                        "[draft] haiku",
+	}
+	for key, wantValue := range want {
+		if got := litellmParams[key]; !reflect.DeepEqual(got, wantValue) {
+			t.Errorf("litellm_params[%q] = %#v, want %#v", key, got, wantValue)
+		}
 	}
 }
 
