@@ -6793,7 +6793,7 @@ def test_settings_store_uppercases_db_env_vars(monkeypatch):
 
     proxy_config = ProxyConfig()
     proxy_config._apply_db_environment_variables(
-        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}
+        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}, read=1
     )
 
     env_vars = proxy_config.environment_variables.resolved()

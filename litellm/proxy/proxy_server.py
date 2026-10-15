@@ -4,6 +4,7 @@ import enum
 import importlib
 import inspect
 import io
+import itertools
 import os
 import random
 import re
@@ -5680,6 +5681,8 @@ class ProxyConfig:
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
         self._environment_before_db: Mapping[str, str] | None = None
         self._db_environment_revision: int | None = None
+        self._environment_read_numbers: Final = itertools.count(1)
+        self._latest_applied_environment_read: int = 0
         self._db_environment_keys: frozenset[str] = frozenset()
         self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
@@ -8312,6 +8315,7 @@ class ProxyConfig:
             return config
 
         environment_before_db: Final = self._captured_environment_before_db()
+        environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(
             *(self._config_section_row(prisma_client, section) for section in sections)
@@ -8328,7 +8332,9 @@ class ProxyConfig:
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
             elif section == "environment_variables":
-                self._apply_db_environment_variables(param_value, _config_row_revision(response), environment_before_db)
+                self._apply_db_environment_variables(
+                    param_value, _config_row_revision(response), environment_before_db, environment_read
+                )
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
@@ -8370,8 +8376,11 @@ class ProxyConfig:
         return _as_settings_mapping(scrubbed)
 
     def _apply_db_environment_variables(
-        self, value: object, revision: int | None, environment_before_db: Mapping[str, str]
+        self, value: object, revision: int | None, environment_before_db: Mapping[str, str], read: int
     ) -> None:
+        if read < self._latest_applied_environment_read:
+            return
+        self._latest_applied_environment_read = read
         applied_revision: Final = self._db_environment_revision
         row: Final = _as_settings_mapping(value)
         decrypted: Final = _ENVIRONMENT_VALUES.validate_python(

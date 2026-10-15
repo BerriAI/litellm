@@ -5145,6 +5145,38 @@ async def test_cached_environment_variables_row_older_than_the_stored_one_change
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_read_before_an_overlapping_newer_sync_is_not_applied_after_it(monkeypatch):
+    pc: Final = ProxyConfig()
+    older_values: Final = {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "removed-by-the-newer-row"}
+    await _sync_environment_variables_row(monkeypatch, pc, older_values, revision=5)
+    older_row: Final = _environment_variables_row(older_values, revision=5)
+    newer_row: Final = _environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=6)
+    older_sync_client: Final = MagicMock()
+    newer_sync_client: Final = MagicMock()
+    older_environment_row_read: Final = asyncio.Event()
+    newer_sync_finished: Final = asyncio.Event()
+
+    async def get_config_param(prisma_client: object, param_name: str) -> SimpleNamespace | None:
+        if prisma_client is not older_sync_client:
+            return newer_row if param_name == "environment_variables" else None
+        if param_name == "environment_variables":
+            older_environment_row_read.set()
+            return older_row
+        await newer_sync_finished.wait()
+        return None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    older_sync: Final = asyncio.create_task(pc._update_config_from_db(older_sync_client, {}, store_model_in_db=True))
+    await older_environment_row_read.wait()
+    await pc._update_config_from_db(newer_sync_client, {}, store_model_in_db=True)
+    newer_sync_finished.set()
+    await older_sync
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
 async def test_environment_variables_row_whose_stored_revision_went_backwards_is_applied(monkeypatch):
     pc: Final = ProxyConfig()
     await _sync_environment_variables_row(
