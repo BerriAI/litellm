@@ -4,7 +4,7 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Any, Final
 
@@ -22,6 +22,11 @@ from litellm.utils import ProviderConfigManager, client, filter_out_litellm_para
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _search_pricing_params(kwargs: Mapping[str, object]) -> dict[str, object]:
+    cost_per_query: Final = kwargs.get("input_cost_per_query")
+    return {} if cost_per_query is None else {"input_cost_per_query": cost_per_query}
 
 
 def _build_search_optional_params(
@@ -290,6 +295,7 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "api_base": complete_url,
+                **_search_pricing_params(kwargs),
             },
             custom_llm_provider=search_provider,
         )
