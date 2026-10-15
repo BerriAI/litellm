@@ -461,6 +461,7 @@ async def _arealtime(
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
     )

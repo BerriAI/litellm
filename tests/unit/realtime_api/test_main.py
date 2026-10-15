@@ -83,7 +83,7 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -180,7 +180,7 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("meta/"), "meta", None, api_base
 
     async def mock_async_realtime(**kwargs):
@@ -210,7 +210,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     async def hanging_token_refresh(**kwargs):
         await asyncio.sleep(30)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "vertex_ai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -252,6 +252,7 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -315,6 +316,7 @@ async def test_arealtime_live_session_rejects_matching_guardrail_before_dispatch
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -358,6 +360,7 @@ async def test_arealtime_live_session_rejects_streaming_only_pre_call_guardrail(
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -383,6 +386,7 @@ async def test_arealtime_live_session_rejects_non_openai_provider(monkeypatch: p
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "claude-live", "anthropic", None, None
 
@@ -407,6 +411,7 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-realtime", "openai", "resolved-key", "https://realtime-gateway.example/v1"
 
@@ -652,6 +657,22 @@ async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai
     assert connect.url == "wss://my-project.services.ai.azure.com/openai/v1/realtime?model=gpt-realtime-mini"
 
 
+@pytest.mark.asyncio
+async def test_arealtime_routes_a_bare_model_name_to_its_explicit_provider():
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="my-realtime",
+            websocket=MagicMock(close=AsyncMock()),
+            custom_llm_provider="openai",
+            api_base="https://realtime-gateway.example/v1",
+            api_key="fake-key",
+            query_params={"model": "my-realtime"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=my-realtime"
+
+
 class _ClientWebSocketWithHeaders:
     def __init__(self, headers: tuple[tuple[bytes, bytes], ...]) -> None:
         self.scope: Final = {"headers": headers}
@@ -714,7 +735,7 @@ async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: 
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("vertex_ai/"), "vertex_ai", None, api_base
 
     async def mock_token_resolver(**kwargs):

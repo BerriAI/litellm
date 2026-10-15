@@ -8390,3 +8390,34 @@ async def test_atranscription_routes_a_bare_model_name_to_its_explicit_provider(
     assert route.called
     assert b'name="model"\r\n\r\nmy-whisper' in route.calls[0].request.content
     assert response.text == "four score"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base"])
+async def test_aspeech_answers_a_non_string_provider_hint_with_a_bad_request(
+    hint: str, respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.aspeech(model="kokoro", input="hello", voice="alloy", api_key="fake_openai_api_key", **{hint: 123})
+
+    assert raised.value.status_code == 400
+    assert f"Invalid {hint}" in raised.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base"])
+async def test_atranscription_answers_a_non_string_provider_hint_with_a_bad_request(
+    hint: str, respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.atranscription(
+            model="my-whisper",
+            file=("speech.wav", b"RIFF-audio", "audio/wav"),
+            api_key="fake_openai_api_key",
+            **{hint: 123},
+        )
+
+    assert raised.value.status_code == 400
+    assert f"Invalid {hint}" in raised.value.message
+    assert not respx_mock.calls
