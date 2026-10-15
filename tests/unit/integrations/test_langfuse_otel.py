@@ -1137,6 +1137,24 @@ class TestLangfuseOtelTraceIdentity:
         identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_user_id": "internal-1"}))
         assert identity == {"user.id": None, "session.id": None}
 
+    def test_non_string_caller_trace_user_id_keeps_its_metadata_form(self):
+        listed, _ = self._identity(
+            self._kwargs(
+                slp_metadata={"user_api_key_end_user_id": "end-1"},
+                request_metadata={"trace_user_id": ["caller-1"]},
+            )
+        )
+        numbered, _ = self._identity(
+            self._kwargs(
+                slp_metadata={"user_api_key_end_user_id": "end-1"},
+                request_metadata={"trace_user_id": 123},
+            )
+        )
+        assert (listed, numbered) == (
+            {"user.id": '["caller-1"]', "session.id": None},
+            {"user.id": 123, "session.id": None},
+        )
+
     def test_logged_end_user_lands_in_user_id_without_a_metadata_copy(self):
         identity, _ = self._identity(self._kwargs(slp_extra={"end_user": "end-1"}))
         assert identity == {"user.id": "end-1", "session.id": None}

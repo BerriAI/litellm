@@ -150,7 +150,7 @@ def test_langfuse_otel_list_body_user_does_not_crash(gateway: Gateway, tmp_path:
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-def test_langfuse_otel_integer_trace_user_id_does_not_crash(gateway: Gateway, tmp_path: Path) -> None:
+def test_langfuse_otel_integer_trace_user_id_keeps_its_integer_form(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
@@ -163,9 +163,24 @@ def test_langfuse_otel_integer_trace_user_id_does_not_crash(gateway: Gateway, tm
         assert response.status_code == 200, response.text
         batches: Final[list[bytes]] = []
         attributes: Final = _await_generation(collector, batches, marker)
-        assert attributes.get("user.id") in ("123", f"end-user-{marker}"), attributes
-        assert attributes.get("session.id") is None, attributes
+        assert _identity(attributes) == {"user.id": 123, "session.id": None}, attributes
         _subsequent_request_still_lands(candidate, collector, batches, model)
+
+
+def test_langfuse_otel_list_trace_user_id_keeps_its_json_form(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = uuid.uuid4().hex
+    with (
+        wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
+        wire_server(_sink) as collector,
+        _langfuse_proxy(gateway, tmp_path, collector.url) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=provider.url + "/v1")
+        response: Final = _end_user_request(candidate, model, marker, metadata={"trace_user_id": ["caller-1"]})
+        assert response.status_code == 200, response.text
+        batches: Final[list[bytes]] = []
+        attributes: Final = _await_generation(collector, batches, marker)
+        assert _identity(attributes) == {"user.id": '["caller-1"]', "session.id": None}, attributes
 
 
 def test_langfuse_otel_null_metadata_still_maps_the_end_user(gateway: Gateway, tmp_path: Path) -> None:

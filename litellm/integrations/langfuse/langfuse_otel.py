@@ -267,7 +267,8 @@ class LangfuseOtelLogger(OpenTelemetry):
     def _set_trace_user_attribute(span: Span, kwargs: Mapping[str, object]) -> None:
         caller: Final = caller_trace_controls(kwargs).user_id
         if caller is not None:
-            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
+            if caller != LangfuseOtelLogger._mapped_caller_trace_user_id(kwargs):
+                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
             return
         slp: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("standard_logging_object")) or MappingProxyType({})
         slp_metadata: Final[Mapping[str, object]] = as_str_mapping(slp.get("metadata")) or MappingProxyType({})
@@ -278,6 +279,13 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
         if end_user:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))
+
+    @staticmethod
+    def _mapped_caller_trace_user_id(kwargs: Mapping[str, object]) -> str | None:
+        """The caller trace user that `_set_metadata_attributes` already wrote from the header or `metadata`."""
+        request: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+        mapped_sources: Final = {key: request.get(key) for key in ("metadata", "proxy_server_request")}
+        return caller_trace_controls({"litellm_params": mapped_sources}).user_id
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:
