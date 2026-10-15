@@ -113,7 +113,7 @@ _PLAIN_TOOL: Final = MappingProxyType(
         pytest.param({"input": "hi", "tools": [dict(_PLAIN_TOOL)]}, None, id="valid_tool_schema"),
         pytest.param(
             {"input": "hi", "tools": [dict(_PATTERNED_TOOL)]},
-            "native Responses does not implement tool schema repair",
+            "native Responses does not implement tool schema validation and repair",
             id="python_incompatible_pattern",
         ),
         pytest.param(
