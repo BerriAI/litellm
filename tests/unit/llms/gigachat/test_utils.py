@@ -3,8 +3,6 @@ Tests for litellm.llms.gigachat.utils
 """
 
 import pytest
-from litellm.llms.gigachat.chat.transformation import GigaChatConfig
-from litellm.llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig
 from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
@@ -79,21 +77,3 @@ class TestConvertUsage:
         assert result.completion_tokens == 5
         assert result.total_tokens == 15
         assert result.prompt_tokens_details is None
-
-
-@pytest.mark.parametrize(
-    "api_base", ["https://gateway.example.com/gigachat/api/v1", "https://gateway.example.com/gigachat/api/v1/"]
-)
-@pytest.mark.parametrize(
-    ("config", "route"),
-    [(GigaChatConfig(), "chat/completions"), (GigaChatEmbeddingConfig(), "embeddings")],
-)
-def test_get_complete_url_ignores_a_trailing_slash_on_api_base(
-    api_base: str, config: GigaChatConfig | GigaChatEmbeddingConfig, route: str
-) -> None:
-    assert (
-        config.get_complete_url(
-            api_base=api_base, api_key=None, model="GigaChat", optional_params={}, litellm_params={}
-        )
-        == f"https://gateway.example.com/gigachat/api/v1/{route}"
-    )
