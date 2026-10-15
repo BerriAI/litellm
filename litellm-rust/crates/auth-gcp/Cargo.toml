@@ -11,6 +11,7 @@ google-sdk = ["dep:google-cloud-auth", "dep:http"]
 [dependencies]
 litellm-auth-types.workspace = true
 
+base64.workspace = true
 moka.workspace = true
 serde.workspace = true
 serde_json.workspace = true

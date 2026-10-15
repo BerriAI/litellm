@@ -3406,6 +3406,7 @@ dependencies = [
 name = "litellm-auth-gcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "gcp_auth",
  "google-cloud-auth",
  "http 1.4.2",
