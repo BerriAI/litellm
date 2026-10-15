@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import re
 import threading
@@ -3273,6 +3274,43 @@ async def test_a_deployment_flag_that_is_not_a_boolean_leaves_the_cost_map_in_ch
         )
 
     assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_an_unflagged_deployment_keeps_box_questions_a_same_model_deployment_advertises(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    backend: Final = "perplexity/pplx-decider-v1-27b"
+    monkeypatch.setitem(litellm.model_cost, backend, copy.deepcopy(litellm.model_cost[backend]))
+    for deployment_id in ("box-flagged", "box-sibling"):
+        monkeypatch.setitem(litellm.model_cost, deployment_id, {})
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(
+        json={
+            "model": "pplx-decider-v1-27b",
+            "answers": {"crack": {k: v for k, v in _CRACK_BOX_ANSWER.items() if k != "name"}},
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
+        }
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flagged",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-flagged", "supports_box_questions": True},
+            },
+            {
+                "model_name": "sibling",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-sibling"},
+            },
+        ]
+    )
+
+    response: Final = await router.adecisions(model="sibling", input="review", questions=[_CRACK_BOX_QUESTION])
+
+    assert "crack" in json.loads(route.calls.last.request.content)["questions"]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
 
 
 @pytest.mark.asyncio
