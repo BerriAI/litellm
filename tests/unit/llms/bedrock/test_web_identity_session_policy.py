@@ -178,23 +178,24 @@ class TestClaudePlatformActionsCovered:
 
 class TestClaudePlatformOutboundIdentityCovered:
     """Claude Platform on AWS calls ``sts:GetWebIdentityToken`` with the
-    caller's session before serving inference. Without it in the ceiling,
+    caller's session before serving inference, and tags the token it
+    requests (``sts:TagGetWebIdentityToken``). Without either in the ceiling,
     every claude_platform request via OIDC auth denies with "no session
-    policy allows the sts:GetWebIdentityToken action" even when the role's
-    identity policy grants it."""
+    policy allows the sts:<action> action" even when the role's identity
+    policy grants it."""
 
-    def test_get_web_identity_token_present(self):
-        assert "sts:GetWebIdentityToken" in _granted_actions(_captured_policy()), (
-            "sts:GetWebIdentityToken missing from session policy — "
-            "bedrock/claude_platform/* requests will 403 on OIDC auth"
+    @pytest.mark.parametrize("action", ["sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"])
+    def test_outbound_identity_action_present(self, action: str):
+        assert action in _granted_actions(_captured_policy()), (
+            f"{action} missing from session policy — bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
 
     def test_outbound_identity_statement_is_scoped(self):
         policy = _captured_policy()
         stmt = _statement_by_sid(policy, "ClaudePlatformOutboundIdentityLiteLLM")
         assert stmt["Effect"] == "Allow"
-        assert tuple(stmt["Action"]) == ("sts:GetWebIdentityToken",), (
-            "the outbound identity statement must grant only sts:GetWebIdentityToken"
+        assert tuple(stmt["Action"]) == ("sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"), (
+            "the outbound identity statement must grant only the two outbound identity actions"
         )
 
     def test_no_sts_wildcard(self):

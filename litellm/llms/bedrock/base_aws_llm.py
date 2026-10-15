@@ -148,10 +148,14 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
             "aws-external-anthropic:List*",
         ),
         # Claude Platform on AWS calls STS GetWebIdentityToken (outbound identity
-        # federation) with the caller's session before serving inference, so the
-        # ceiling must grant it or every claude_platform request via OIDC auth
-        # 403s with "no session policy allows the sts:GetWebIdentityToken action".
-        "ClaudePlatformOutboundIdentityLiteLLM": ("sts:GetWebIdentityToken",),
+        # federation) with the caller's session before serving inference, and tags
+        # the token it requests (TagGetWebIdentityToken), so the ceiling must grant
+        # both or every claude_platform request via OIDC auth 403s with "no session
+        # policy allows the sts:<action> action".
+        "ClaudePlatformOutboundIdentityLiteLLM": (
+            "sts:GetWebIdentityToken",
+            "sts:TagGetWebIdentityToken",
+        ),
         "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
     }
 )
