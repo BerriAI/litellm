@@ -7,6 +7,7 @@ from typing import Any, Final, cast
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.main import stream_chunk_builder
+from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
@@ -82,6 +83,11 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     )
 
 
+def _streams_compaction(chunk: ModelResponseStream) -> bool:
+    delta_fields: Final = chunk.choices[0].delta.provider_specific_fields if chunk.choices else None
+    return delta_fields is not None and "compaction_blocks" in delta_fields
+
+
 def _delta_has_signed_thinking_block(delta: object) -> bool:
     blocks: Final = getattr(delta, "thinking_blocks", None) or ()
     return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
@@ -140,6 +146,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._cached_item_id: str | None = None
         self._message_output_index: int | None = None
         self._reasoning_output_index: int | None = None
+        self._compaction_output_index: int | None = None
+        self._compaction_item_id: str | None = None
         self._cached_response_id: str | None = None
         self._buffered_chunk: ModelResponseStream | None = None
         self._upstream_exhausted: bool = False
@@ -180,7 +188,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_call_ids = self._tool_search_call_ids | {call_id}
         return True
 
-    def _queue_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> None:
+    def _next_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> OutputItemAddedEvent:
         self._sequence_number += 1
         added: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -188,7 +196,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item=item,
         )
         added.__dict__["sequence_number"] = self._sequence_number
-        self._pending_tool_events.append(added)
+        return added
+
+    def _queue_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> None:
+        self._pending_tool_events.append(self._next_output_item_added(output_index, item))
 
     def _queue_tool_search_call_added(self, call_id: str, output_index: int, args_delta: str) -> None:
         if call_id not in self._tool_args_by_call_id:
@@ -242,6 +253,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._message_output_index
             case "reasoning":
                 return self._reasoning_output_index
+            case "compaction":
+                return self._compaction_output_index
             case _:
                 call_id: Final = getattr(item, "call_id", None) or str(getattr(item, "id", "")).removeprefix("ws_")
                 return self._tool_output_index_by_call_id.get(str(call_id))
@@ -249,6 +262,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _streamed_output_position(self, item: object) -> tuple[bool, int]:
         index: Final = self._streamed_output_index(item)
         return (index is None, index or 0)
+
+    def _queue_compaction_item_events(self) -> None:
+        if (
+            self._compaction_output_index is not None
+            or "compaction_blocks" not in self._accumulated_provider_specific_fields
+        ):
+            return
+        item: Final = compaction_output_item(self._accumulated_provider_specific_fields)
+        if item is None:
+            return
+        self._compaction_item_id = item.id
+        self._compaction_output_index = self._allocate_output_index()
+        streamed_item: Final = BaseLiteLLMOpenAIResponseObject(**item.model_dump(exclude_none=True))
+        added: Final = self._next_output_item_added(self._compaction_output_index, streamed_item)
+        self._sequence_number += 1
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=self._compaction_output_index,
+            sequence_number=self._sequence_number,
+            item=streamed_item,
+        )
+        self._pending_response_events.extend((added, done))
 
     def _normalize_tool_call_index(self, tool_call: object) -> int | None:
         idx_raw: Final = tool_call.get("index") if isinstance(tool_call, dict) else getattr(tool_call, "index", None)
@@ -978,6 +1013,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:
+            self._queue_compaction_item_events()
+            if self._pending_response_events:
+                return self._pending_response_events.pop(0)
             # If tool calls exist, emit tool events before finishing/response.completed.
             if isinstance(self.litellm_model_response, ModelResponse):
                 self._queue_final_tool_call_done_events(self.litellm_model_response)
@@ -1079,6 +1117,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
+                        if not _streams_compaction(chunk):
+                            self._queue_compaction_item_events()
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1187,6 +1227,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         raise StopIteration
                     else:
                         chunk = self.litellm_custom_stream_wrapper.__next__()
+                    if not _streams_compaction(chunk):
+                        self._queue_compaction_item_events()
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
@@ -1342,7 +1384,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "reasoning",
             self._cached_reasoning_item_id,
         )
-        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, reasoning_aligned)
+        compaction_aligned: Final = _output_items_with_id(reasoning_aligned, "compaction", self._compaction_item_id)
+        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, compaction_aligned)
         return tuple(sorted(streamed_items, key=self._streamed_output_position))
 
     def _is_unstreamed_empty_message(self, item: object) -> bool:

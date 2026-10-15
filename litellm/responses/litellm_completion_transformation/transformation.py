@@ -29,6 +29,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
@@ -115,6 +116,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .compaction_items import compaction_output_item, decode_compaction_item
 from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
@@ -337,6 +339,10 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     return cast(  # cast-ok: the same input items, each minus its own cache_control key
         ResponseInputParam, [_without_cache_control_key(item) for item in input]
     )
+
+
+def _carries_compaction_item(input: str | ResponseInputParam) -> bool:
+    return isinstance(input, list) and any(item.get("type") == "compaction" for item in input)
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
@@ -866,6 +872,8 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
+            native_compaction=_carries_compaction_item(input)
+            and provider_builds_anthropic_request(model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -927,6 +935,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
+        native_compaction: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -948,6 +957,11 @@ class LiteLLMCompletionResponsesConfig:
         guardrail scanning) leave both off, because they need every piece of text
         in the request to stay readable as message ``content``, with no item mark
         a strict message schema could refuse.
+
+        ``native_compaction`` belongs to callers whose target builds an
+        Anthropic request: a ``compaction`` item then goes back as the
+        provider's own compaction block. Everyone else reads its summary as
+        assistant text.
         """
         messages: list[
             AllMessageValues
@@ -967,6 +981,7 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input if item_cache_control else without_item_cache_control(input),
                 replay_reasoning=replay_reasoning,
+                native_compaction=native_compaction,
             )
         )
 
@@ -1097,6 +1112,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_response_input_param_to_chat_completion_message(
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
+        native_compaction: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1122,6 +1138,7 @@ class LiteLLMCompletionResponsesConfig:
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
+                        native_compaction=native_compaction,
                     )
                 )
 
@@ -1821,6 +1838,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_responses_api_input_item_to_chat_completion_message(
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
+        native_compaction: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -1857,6 +1875,12 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=cast(  # cast-ok: callee coerces every field it reads with `or ""` / str()
                     Mapping[str, str], input_item
+                )
+            )
+        elif input_item.get("type") == "compaction":
+            return list(
+                LiteLLMCompletionResponsesConfig._transform_compaction_item_to_chat_completion_messages(
+                    input_item, native_compaction
                 )
             )
         elif input_item.get("type") == "reasoning":
@@ -1909,6 +1933,23 @@ class LiteLLMCompletionResponsesConfig:
             if content is None:
                 return []
             return [LiteLLMCompletionResponsesConfig._transform_responses_api_message_item(input_item, content)]
+
+    @staticmethod
+    def _transform_compaction_item_to_chat_completion_messages(
+        input_item: Mapping[str, object], native_compaction: bool
+    ) -> tuple[GenericChatCompletionMessage | ChatCompletionResponseMessage, ...]:
+        compaction: Final = decode_compaction_item(input_item.get("encrypted_content"))
+        if compaction is None:
+            return ()
+        if native_compaction:
+            return (
+                ChatCompletionResponseMessage(
+                    role="assistant",
+                    content=None,
+                    provider_specific_fields={"compaction_blocks": [dict(compaction.wire_block)]},
+                ),
+            )
+        return (GenericChatCompletionMessage(role="assistant", content=compaction.summary),)
 
     @staticmethod
     def _transform_responses_api_message_item(
@@ -3020,6 +3061,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
         | OutputToolSearchCall
+        | ResponseCompactionItem
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -3030,8 +3072,10 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | ResponseCompactionItem
         ] = []
 
+        responses_output.extend(LiteLLMCompletionResponsesConfig._extract_compaction_output_items(choices))
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
@@ -3096,6 +3140,11 @@ class LiteLLMCompletionResponsesConfig:
                     else:
                         output_items.append(item)
         return output_items
+
+    @staticmethod
+    def _extract_compaction_output_items(choices: Sequence[Choices]) -> tuple[ResponseCompactionItem, ...]:
+        item: Final = compaction_output_item(choices[0].message.provider_specific_fields) if choices else None
+        return () if item is None else (item,)
 
     @staticmethod
     def _encode_thinking_blocks(message: Message) -> str | None:

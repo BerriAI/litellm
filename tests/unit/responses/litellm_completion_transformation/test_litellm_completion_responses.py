@@ -6464,3 +6464,38 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
     )
 
     assert result["service_tier"] == "priority"
+
+
+_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Earlier turns covered the Tokyo trip."}
+
+
+@pytest.mark.parametrize(
+    ("model", "replayed_compaction"),
+    [
+        (
+            "anthropic/claude-sonnet-5-5",
+            {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]}},
+        ),
+        ("gemini/gemini-3.8-flash", {"role": "assistant", "content": _COMPACTION_BLOCK["content"]}),
+    ],
+)
+def test_compaction_input_item_replays_as_a_compaction_block_only_on_anthropic_routes(
+    model: str, replayed_compaction: Mapping[str, object]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=cast(
+            ResponseInputParam,
+            [
+                {"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAAABopaque"},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"role": "user", "content": "And Osaka?"},
+            ],
+        ),
+        responses_api_request={},
+    )
+
+    assert [dict(message) for message in result["messages"]] == [
+        replayed_compaction,
+        {"role": "user", "content": "And Osaka?"},
+    ]
