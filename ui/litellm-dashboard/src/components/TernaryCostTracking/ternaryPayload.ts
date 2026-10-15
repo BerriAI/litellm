@@ -20,7 +20,7 @@ const intervalSecondsField = z.string().refine((value) => value === "" || /^[1-9
 const baseShape = {
   api_key: z.string(),
   connection_id: z.string().trim().min(1, "Enter the connection ID from Ternary"),
-  base_url: z.string().trim().min(1, "Enter the Ternary API base URL"),
+  ternary_base_url: z.string().trim().min(1, "Enter the Ternary API base URL"),
   frequency: z.enum(["daily", "interval"]),
   interval_seconds: intervalSecondsField,
 };
@@ -44,7 +44,7 @@ export type TernaryFormValues = z.input<typeof baseSchema>;
 export const EMPTY_TERNARY_FORM_VALUES: TernaryFormValues = {
   api_key: "",
   connection_id: "",
-  base_url: TERNARY_DEFAULT_BASE_URL,
+  ternary_base_url: TERNARY_DEFAULT_BASE_URL,
   frequency: "daily",
   interval_seconds: "",
 };
@@ -52,7 +52,7 @@ export const EMPTY_TERNARY_FORM_VALUES: TernaryFormValues = {
 export const formValuesFromSettings = (settings: TernarySettingsView): TernaryFormValues => ({
   api_key: "",
   connection_id: settings.connection_id ?? "",
-  base_url: settings.base_url ?? TERNARY_DEFAULT_BASE_URL,
+  ternary_base_url: settings.ternary_base_url ?? TERNARY_DEFAULT_BASE_URL,
   frequency: settings.frequency ?? "daily",
   interval_seconds: settings.interval_seconds ? String(settings.interval_seconds) : "",
 });
@@ -63,14 +63,14 @@ const intervalSeconds = (values: TernaryFormValues): number | null =>
 export const buildCreatePayload = (values: TernaryFormValues): TernarySettingsInput => ({
   api_key: values.api_key.trim(),
   connection_id: values.connection_id.trim(),
-  base_url: values.base_url.trim(),
+  ternary_base_url: values.ternary_base_url.trim(),
   frequency: values.frequency,
   interval_seconds: intervalSeconds(values),
 });
 
 export const buildUpdatePayload = (values: TernaryFormValues): TernarySettingsUpdate => ({
   connection_id: values.connection_id.trim(),
-  base_url: values.base_url.trim(),
+  ternary_base_url: values.ternary_base_url.trim(),
   frequency: values.frequency,
   interval_seconds: intervalSeconds(values),
   ...(values.api_key.trim() && { api_key: values.api_key.trim() }),

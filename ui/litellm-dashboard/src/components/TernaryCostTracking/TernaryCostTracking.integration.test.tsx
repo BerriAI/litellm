@@ -23,7 +23,7 @@ const mockPut = vi.mocked(apiClient.put);
 const EMPTY_VIEW = {
   api_key_masked: null,
   connection_id: null,
-  base_url: null,
+  ternary_base_url: null,
   frequency: null,
   interval_seconds: null,
   status: null,
@@ -32,7 +32,7 @@ const EMPTY_VIEW = {
 const CONFIGURED_VIEW = {
   api_key_masked: "te****ey",
   connection_id: "conn-123",
-  base_url: "https://api.ternary.app",
+  ternary_base_url: "https://api.ternary.app",
   frequency: "daily",
   interval_seconds: null,
   status: "configured",
@@ -72,7 +72,7 @@ describe("TernaryCostTracking", () => {
       body: {
         api_key: "tern-key",
         connection_id: "conn-123",
-        base_url: "https://api.ternary.app",
+        ternary_base_url: "https://api.ternary.app",
         frequency: "daily",
         interval_seconds: null,
       },
@@ -114,7 +114,7 @@ describe("TernaryCostTracking", () => {
       accessToken: "test-token",
       body: {
         connection_id: "conn-456",
-        base_url: "https://api.ternary.app",
+        ternary_base_url: "https://api.ternary.app",
         frequency: "daily",
         interval_seconds: null,
       },

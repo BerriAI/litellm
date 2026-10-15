@@ -16,6 +16,7 @@ from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.ternary.export_engine import FocusFrame
 from litellm.integrations.ternary.ternary_logger import TernaryLogger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.spend_tracking.ternary_endpoints import (
     TERNARY_SETTINGS_PARAM_NAME,
     TernarySettingsStore,
@@ -34,7 +35,7 @@ from litellm.types.proxy.ternary_endpoints import (
 
 API_KEY = "tern_live_secret_key_value"
 _TAGS = TypeAdapter(Mapping[str, str])
-SETTINGS = TernarySettings(api_key=API_KEY, connection_id="conn-123", base_url="https://api.ternary.app")
+SETTINGS = TernarySettings(api_key=API_KEY, connection_id="conn-123", ternary_base_url="https://api.ternary.app")
 
 
 class MemoryConfig:
@@ -167,6 +168,13 @@ async def test_store_round_trips_settings_with_the_api_key_encrypted_at_rest(
     assert await store.get() == SETTINGS
 
 
+@pytest.mark.parametrize("route", ["/ternary/init", "/ternary/settings"])
+def test_settings_bodies_pass_the_proxy_request_body_guard(route: str):
+    body = SETTINGS.model_copy(update={"frequency": "interval", "interval_seconds": 60}).model_dump(mode="json")
+
+    assert is_request_body_safe(request_body=body, general_settings={}, llm_router=None, model="", route=route)
+
+
 def test_init_then_get_shows_masked_settings(client: TestClient):
     init = client.post("/ternary/init", json={"api_key": API_KEY, "connection_id": "conn-123"})
     assert init.status_code == 200, init.text
@@ -174,7 +182,7 @@ def test_init_then_get_shows_masked_settings(client: TestClient):
 
     view = TernarySettingsView.model_validate_json(client.get("/ternary/settings").content)
 
-    assert (view.connection_id, view.base_url, view.frequency, view.status) == (
+    assert (view.connection_id, view.ternary_base_url, view.frequency, view.status) == (
         "conn-123",
         "https://api.ternary.app",
         "daily",
@@ -196,7 +204,7 @@ def test_get_when_not_configured_returns_empty_view(client: TestClient):
     "body",
     [
         {"api_key": API_KEY, "connection_id": "conn/123"},
-        {"api_key": API_KEY, "connection_id": "conn-123", "base_url": "http://api.ternary.app"},
+        {"api_key": API_KEY, "connection_id": "conn-123", "ternary_base_url": "http://api.ternary.app"},
     ],
 )
 def test_init_rejects_settings_the_destination_would_reject(
@@ -240,7 +248,7 @@ async def test_update_validates_the_merged_settings(client: TestClient, store: T
     await store.save(SETTINGS)
 
     to_interval_without_seconds = client.put("/ternary/settings", json={"frequency": "interval"})
-    to_insecure_url = client.put("/ternary/settings", json={"base_url": "http://example.com"})
+    to_insecure_url = client.put("/ternary/settings", json={"ternary_base_url": "http://example.com"})
 
     assert to_interval_without_seconds.status_code == 400
     assert to_insecure_url.status_code == 400

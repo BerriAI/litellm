@@ -694,8 +694,6 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     report.add(
         await _migrate_config_settings_row(prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run=True)
     )
-    report.add(
-        await _migrate_config_settings_row(prisma_client, "ternary_settings", _TERNARY_SENSITIVE, dry_run=True)
-    )
+    report.add(await _migrate_config_settings_row(prisma_client, "ternary_settings", _TERNARY_SENSITIVE, dry_run=True))
     report.add(await _migrate_sso_config(prisma_client, dry_run=True))
     return report
