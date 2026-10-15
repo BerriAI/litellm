@@ -488,7 +488,7 @@ class BaseConfig(ABC):
         """
         return True
 
-    def post_stream_processing(self, stream: Any) -> Any:
+    def post_stream_processing(self, stream: object) -> object:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
 

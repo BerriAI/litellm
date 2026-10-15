@@ -7,6 +7,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -132,8 +134,8 @@ def _trigger_cooldown_for_failed_deployment(
             if deployment_dict is not None
             else None
         )
-        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
-            original_exception=exception
+        exception_headers: Final[httpx.Headers | None] = (
+            litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(original_exception=exception)
         )
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py

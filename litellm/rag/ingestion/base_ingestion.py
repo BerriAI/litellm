@@ -56,10 +56,7 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy: dict[str, Any] = cast(
-            dict[str, Any],
-            ingest_options.get("chunking_strategy") or {"type": "auto"},
-        )
+        self.chunking_strategy = ingest_options.get("chunking_strategy") or {"type": "auto"}
         self.embedding_config = ingest_options.get("embedding")
         self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
