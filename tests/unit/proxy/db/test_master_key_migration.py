@@ -940,3 +940,75 @@ async def test_cache_settings_structured_fields_do_not_block_a_pynacl_free_migra
     )
     assert control_outcome == Migrated(migrated=0, remaining=1, unreadable=1)
     assert "You may now delete" not in describe_outcome(control_outcome)
+
+
+@pytest.mark.asyncio
+async def test_roi_calculator_config_rows_count_their_encrypted_fields(monkeypatch):
+    """roi_calculator_settings and roi_oauth_state_* config rows hold writer-encrypted
+    tokens (github/gitlab/estimator/oauth-refresh tokens, per-connection tokens, OAuth
+    state payloads) next to plaintext metadata; the count must see them so a master-key
+    rotation never declares itself finished while ROI tokens stay under the old key."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {
+                "param_name": "roi_calculator_settings",
+                "param_value": {
+                    "github_token": _encrypted("gh-token"),
+                    "estimator_key": _encrypted("estimator-key"),
+                    "oauth_refresh_token": _encrypted("refresh-token"),
+                    "gitlab_token": "",
+                    "github_api_url": "https://api.github.com",
+                    "repos": ["owner/repo"],
+                    "estimator_prompt": "estimate the cost",
+                    "connections": [
+                        {
+                            "source_provider": "github",
+                            "api_url": "https://api.github.com",
+                            "token": _encrypted("gh-token"),
+                            "oauth_refresh_token": _encrypted("refresh-token"),
+                            "repos": ["owner/repo"],
+                        }
+                    ],
+                },
+            },
+            {
+                "param_name": "roi_oauth_state_" + "a" * 64,
+                "param_value": {"payload": _encrypted("oauth-state-payload")},
+            },
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    # 3 non-empty top-level tokens + 2 connection secrets + the state payload
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 6
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=6, remaining=0, unreadable=0)
+    settings = tables["LiteLLM_Config"][0]["param_value"]
+    assert settings["github_api_url"] == "https://api.github.com"  # plaintext metadata untouched
+    assert settings["repos"] == ["owner/repo"]
+    assert settings["estimator_prompt"] == "estimate the cost"
+    assert settings["gitlab_token"] == ""
+    assert decrypt_if_encrypted_with(settings["github_token"], NEW_KEY) == "gh-token"
+    assert decrypt_if_encrypted_with(settings["estimator_key"], NEW_KEY) == "estimator-key"
+    assert decrypt_if_encrypted_with(settings["oauth_refresh_token"], NEW_KEY) == "refresh-token"
+    connection = settings["connections"][0]
+    assert connection["source_provider"] == "github"
+    assert connection["repos"] == ["owner/repo"]
+    assert decrypt_if_encrypted_with(connection["token"], NEW_KEY) == "gh-token"
+    assert decrypt_if_encrypted_with(connection["oauth_refresh_token"], NEW_KEY) == "refresh-token"
+    assert (
+        decrypt_if_encrypted_with(tables["LiteLLM_Config"][1]["param_value"]["payload"], NEW_KEY)
+        == "oauth-state-payload"
+    )

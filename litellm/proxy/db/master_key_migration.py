@@ -134,6 +134,13 @@ _LITELLM_PARAMS_SECRET_COLUMNS: Final = frozenset(
     )
 )
 _ENV_VARS_CONFIG_ROW: Final = "environment_variables"
+_ROI_SETTINGS_PARAM: Final = "roi_calculator_settings"
+_ROI_STATE_PARAM_PREFIX: Final = "roi_oauth_state_"
+# The ROI settings writer stores four encrypted token fields at the top level and
+# encrypted token/refresh-token fields on each saved connection; URLs, repo lists and
+# estimator metadata next to them are plaintext by construction.
+_ROI_SETTINGS_SECRET_FIELDS: Final = ("estimator_key", "gitlab_token", "github_token", "oauth_refresh_token")
+_ROI_CONNECTION_SECRET_FIELDS: Final = ("oauth_refresh_token", "token")
 _MCP_CREDENTIAL_TABLES: Final = frozenset(("LiteLLM_MCPServerTable", "LiteLLM_MCPServerOAuthClient"))
 # Config rows whose writers encrypt selected top-level fields (the same fields the
 # credential-migration walkers re-encrypt); the rows' other fields are plaintext metadata.
@@ -201,6 +208,12 @@ def _config_row_leaves(primary_key: object, stored: JsonValue) -> Iterator[str]:
     if param_name == _ENV_VARS_CONFIG_ROW:
         yield from _string_leaves(stored)
         return
+    if param_name == _ROI_SETTINGS_PARAM:
+        yield from _roi_settings_leaves(stored)
+        return
+    if param_name.startswith(_ROI_STATE_PARAM_PREFIX):
+        yield from _roi_state_leaves(stored)
+        return
     sensitive_fields: Final[tuple[str, ...] | None] = _CONFIG_ROW_SENSITIVE_FIELDS.get(param_name)
     if sensitive_fields is None:
         # Every other config row (general_settings, …) stores plaintext by
@@ -212,6 +225,35 @@ def _config_row_leaves(primary_key: object, stored: JsonValue) -> Iterator[str]:
         value = stored.get(field)
         if isinstance(value, str):
             yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _roi_settings_leaves(stored: JsonValue) -> Iterator[str]:
+    if not isinstance(stored, dict):
+        return
+    for field in _ROI_SETTINGS_SECRET_FIELDS:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    connections: Final[JsonValue] = stored.get("connections")
+    if not isinstance(connections, list):
+        return
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        for field in _ROI_CONNECTION_SECRET_FIELDS:
+            value = connection.get(field)
+            if isinstance(value, str):
+                yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _roi_state_leaves(stored: JsonValue) -> Iterator[str]:
+    # Each OAuth-state row wraps a single encrypted payload string; the state rows are
+    # short-lived, but a rotation mid-flow must still see and move the sealed verifier.
+    if not isinstance(stored, dict):
+        return
+    payload: Final = stored.get("payload")
+    if isinstance(payload, str):
+        yield payload.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
 
 
 def _mcp_credential_leaves(stored: JsonValue) -> Iterator[str]:
