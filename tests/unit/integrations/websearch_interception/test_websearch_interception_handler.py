@@ -670,6 +670,34 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_deployment_hook_intercepts_bare_web_search_type_and_keeps_user_web_search_function(provider: str):
+    user_web_search_function: Final = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search a private index",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    }
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[provider])
+
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "some-model",
+            "messages": [{"role": "user", "content": "Who won the latest Nobel Prize in Physics?"}],
+            "tools": [{"type": "web_search"}, user_web_search_function],
+            "custom_llm_provider": provider,
+        },
+        call_type=CallTypes.acompletion,
+    )
+
+    assert result is not None
+    assert [t.get("function", {}).get("name") for t in result["tools"]] == [LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"]
+    assert result["tools"][1] == user_web_search_function
+
+
+@pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_skips_disabled_provider():
     """Test that the hook returns None for providers not in enabled_providers."""
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
