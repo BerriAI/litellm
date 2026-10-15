@@ -28,7 +28,7 @@ from litellm import APIConnectionError, Router
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisCache, RedisClusterCache
 from litellm.caching.caching import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -69,9 +69,10 @@ from litellm.router_utils.fallback_event_handlers import (
     DISABLE_FALLBACKS_METADATA_KEY,
     MID_STREAM_FALLBACK_CONTROLS_KEY,
 )
+from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
-from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -8108,7 +8109,6 @@ async def test_anthropic_messages_call_type_is_cached():
     from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
         PromptCachingDeploymentCheck,
     )
-    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
     from litellm.types.utils import (
         CallTypes,
         StandardLoggingHiddenParams,
@@ -8135,6 +8135,7 @@ async def test_anthropic_messages_call_type_is_cached():
                 model_map_key="gpt-3.5-turbo", model_map_value=None
             ),
             model="gpt-3.5-turbo",
+            custom_llm_provider="anthropic",
             model_id="model-123",
             model_group="openai-gpt",
             api_base="https://api.openai.com",
@@ -26228,6 +26229,124 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_prompt_caching_pins_do_not_evict_router_state():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    router.cache.set_cache("deployment:dep-a:cooldown", True, ttl=5)
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        await pins.async_add_model_id(
+            model_id="dep-a",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": f"policy {index}", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                    ],
+                },
+                {"role": "user", "content": "ok"},
+            ],
+            tools=None,
+        )
+
+    assert router.cache.get_cache("deployment:dep-a:cooldown") is True
+
+
+@pytest.mark.asyncio
+async def test_one_hour_pins_past_the_routers_default_cache_size_keep_fresh_five_minute_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+
+    def policy(index: int, ttl: str) -> list[AllMessageValues]:
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"policy {ttl} {index}",
+                        "cache_control": {"type": "ephemeral", "ttl": ttl},
+                    }
+                ],
+            },
+            {"role": "user", "content": "ok"},
+        ]
+
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        await pins.async_add_model_id(
+            model_id="dep-a", messages=policy(index, "1h"), tools=None, honors_one_hour_ttl=True
+        )
+    for index in range(3):
+        await pins.async_add_model_id(
+            model_id="dep-b", messages=policy(index, "5m"), tools=None, honors_one_hour_ttl=True
+        )
+
+    assert [await pins.async_get_model_id(messages=policy(index, "5m"), tools=None) for index in range(3)] == [
+        {"model_id": "dep-b"}
+    ] * 3
+
+
+@pytest.mark.asyncio
+async def test_flush_cache_drops_prompt_caching_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+    await pins.async_add_model_id(model_id="dep-a", messages=messages, tools=None)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-a"}
+
+    router.flush_cache()
+
+    assert await pins.async_get_model_id(messages=messages, tools=None) is None
 
 
 class _FirstPullStream:
