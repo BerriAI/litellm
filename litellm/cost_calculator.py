@@ -86,6 +86,9 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     video_output_cost_per_second,
 )
+from litellm.llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -323,6 +326,15 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _bills_provider_transcription_seconds(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
+        return False
+    transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
+    )
+    return isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig)
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1743,6 +1755,7 @@ def completion_cost(
                         completion_response.usage.seconds
                         if isinstance(completion_response, TranscriptionResponse)
                         and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
+                        and _bills_provider_transcription_seconds(model, custom_llm_provider)
                         else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
