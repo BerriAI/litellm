@@ -255,8 +255,11 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as OtelSpan
 
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -504,6 +507,12 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
+
+
+def _has_tag_budget(tag: "LiteLLM_TagTable | None") -> bool:
+    if tag is None or tag.litellm_budget_table is None:
+        return False
+    return tag.litellm_budget_table.max_budget is not None
 
 
 def _normalized_metadata_slot(
@@ -1991,7 +2000,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def pre_seed_litellm_metadata_for_route(
-        request_data: dict,
+        request_data: MutableMapping[str, object],  # mutable-ok: seed shared request metadata before admission
         route: str,
     ) -> None:
         """Pre-seed ``litellm_metadata`` for routes that track tags there.
@@ -2009,6 +2018,50 @@ class LiteLLMProxyRequestSetup:
         """
         if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
             request_data.setdefault("litellm_metadata", {})
+
+    @staticmethod
+    async def apply_baggage_tag_mappings_pre_auth(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: enrich the shared request before budget admission
+        general_settings: Mapping[str, object],
+        prisma_client: "PrismaClient | None",
+        user_api_key_cache: "UserApiKeyCache",
+        proxy_logging_obj: "ProxyLogging",
+    ) -> None:
+        """Resolve configured baggage tags before the existing tag-budget gate."""
+        from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+        from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
+        from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+
+        raw_rules: Final = general_settings.get("request_tag_mappings")
+        if not isinstance(raw_rules, list) or not raw_rules:
+            return
+        rules: Final = TypeAdapter(tuple[RequestTagMapping, ...]).validate_python(raw_rules)
+        header: Final = ",".join(request.headers.getlist("baggage"))
+        mapped: Final = resolve_baggage_tag_mappings(header, rules)
+        budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
+        if budgeted_tags:
+            if prisma_client is None:
+                raise HTTPException(503, "Baggage tag mappings require a database to check budgeted tags")
+            tag_objects: Final = await get_tag_objects_batch(
+                tag_names=budgeted_tags,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            unbudgeted_tag: Final = next(
+                (tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None
+            )
+            if unbudgeted_tag is not None:
+                raise HTTPException(400, f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
+        if mapped:
+            metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+            metadata: Final = _normalized_metadata_slot(request_data, metadata_key)
+            existing: Final = metadata.get("tags")
+            existing_tags: Final = (
+                TypeAdapter(tuple[str, ...]).validate_python(existing) if isinstance(existing, list) else ()
+            )
+            metadata["tags"] = list(dict.fromkeys((*existing_tags, *(tag for tag, _ in mapped))))
 
     @staticmethod
     def apply_key_tags_pre_auth(

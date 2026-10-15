@@ -3993,7 +3993,7 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
 async def _authorize_authenticated_request(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     api_key: str,
     *,
@@ -4052,6 +4052,25 @@ async def _authorize_authenticated_request(
                 store,
                 billable=request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+            )
+        if (
+            "request_tag_mappings" in general_settings
+            and request.method == "POST"
+            and RouteChecks.is_llm_api_route(route)
+        ):
+            from pydantic import TypeAdapter
+
+            from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+            typed_settings: Final = TypeAdapter(dict[str, object]).validate_python(general_settings)
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=authorized_data, route=route)
+            await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+                request=request,
+                request_data=authorized_data,
+                general_settings=typed_settings,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
             )
         await run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
