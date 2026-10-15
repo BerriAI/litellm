@@ -183,17 +183,25 @@ class CallerAliases:
 
 @dataclass(frozen=True, slots=True)
 class DeployedModelGroups:
-    """Names the router serves from deployments of their own, directly or as a `model_group_alias`,
-    leaving out the `hidden` names and groups `/v1/models` does not list."""
+    """Names the router serves `team_id` from deployments of their own, directly or as a
+    `model_group_alias`, leaving out the `hidden` names, groups `/v1/models` does not list, and,
+    when a listing callback runs, every name outside `callback_kept`, since it never judged those."""
 
     llm_router: Router | None
     hidden: Container[str] = frozenset[str]()
+    team_id: str | None = None
+    callback_kept: Container[str] | None = None
 
     def __contains__(self, name: object) -> bool:
         if not isinstance(name, str) or self.llm_router is None or name in self.hidden:
             return False
+        if self.callback_kept is not None and name not in self.callback_kept:
+            return False
         group: Final = self.llm_router.routable_model_group(name)
-        return group not in self.hidden and self.llm_router.get_deployment_by_model_group_name(group) is not None
+        return group not in self.hidden and any(
+            self.llm_router.deployment_usable_by_team(deployment, self.team_id)
+            for deployment in self.llm_router.get_all_deployments(model_name=group)
+        )
 
 
 def caller_alias_maps(
@@ -226,6 +234,20 @@ def _router_alias_map(aliases: object) -> Mapping[str, str]:
         return _NO_ALIASES
     targets: Final = ((alias, resolve_model_group_alias(entries, alias)) for alias in entries if isinstance(alias, str))
     return MappingProxyType({alias: target for alias, target in targets if target is not None})
+
+
+def _hidden_aliases(aliases: object) -> frozenset[str]:
+    try:
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+    except ValidationError:
+        return frozenset()
+    return frozenset(
+        alias
+        for alias, entry in entries.items()
+        if isinstance(alias, str)
+        and isinstance(entry, Mapping)
+        and cast(Mapping[str, object], entry).get("hidden") is True  # cast-ok: isinstance-checked alias entry
+    )
 
 
 def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
@@ -320,14 +342,6 @@ def alias_listing_entries(
     return (*retargeted, *added)
 
 
-def unlisted_alias_targets(entries: Sequence[tuple[str, str]], aliases: CallerAliases) -> tuple[str, ...]:
-    layers: Final = _alias_layers(aliases)
-    listed: Final = MappingProxyType(dict(entries))
-    names: Final = chain(listed, _alias_names(tuple(alias_map(raw) for raw in aliases.own)))
-    targets: Final = (_dispatch(name, layers)[0] for name in names)
-    return tuple(dict.fromkeys(target for target in targets if target not in listed))
-
-
 def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """`entries` with every `listed` name read under its own lookup id again, so an alias
     `alias_listing_entries` describes by its target keeps its own display name, the way a
@@ -350,7 +364,7 @@ def alias_target(
     listed_lookup_id: Final = lookup_by_response.get(model_id)
     if listed_lookup_id is None:
         target, _ = _dispatch(model_id, layers)
-        return None if target == model_id else target
+        return None if target == model_id or model_id in _hidden_aliases(aliases.router) else target
     lookup_id: Final = _listed_lookup_id(
         model_id, listed_lookup_id, layers, lookup_by_response, frozenset(lookup_by_response.values()), deployed
     )

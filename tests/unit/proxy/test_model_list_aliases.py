@@ -38,6 +38,17 @@ class _ListingGate(CustomLogger):
         return [name for name in model_names if name not in self.hidden]
 
 
+class _ListingAllowList(CustomLogger):
+    def __init__(self, kept: frozenset[str]) -> None:
+        super().__init__()
+        self.kept = kept
+
+    async def async_filter_listed_models(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> Sequence[str]:
+        return [name for name in model_names if name in self.kept]
+
+
 @pytest.fixture
 def router(monkeypatch: pytest.MonkeyPatch) -> Router:
     router = Router(
@@ -265,9 +276,41 @@ async def test_key_router_settings_alias_the_key_lists_reports_its_target_at_lis
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["paused", "hidden"])
-async def test_alias_to_a_model_the_listing_hides_is_not_described_by_it(router: Router, target: str) -> None:
-    models = ["gpt-4.1-mini", "model_name_team1_abc", "fast"]
+@pytest.mark.parametrize(
+    ("target", "team_id"), [("paused", "team1"), ("hidden", "team1"), ("model_name_team1_abc", "team2")]
+)
+async def test_alias_to_a_model_the_listing_hides_is_not_described_by_it(
+    router: Router, target: str, team_id: str
+) -> None:
+    models = ["gpt-4.1-mini", "fast"]
+    caller = _team_member(team_id=team_id, models=models, team_model_aliases={"fast": target})
+
+    listing = await proxy_server.model_list(user_api_key_dict=caller, request=None, include_metadata=True)
+    unaliased = await proxy_server.model_list(
+        user_api_key_dict=_team_member(team_id=team_id, models=models), request=None, include_metadata=True
+    )
+    assert listing["data"] == unaliased["data"]
+    with pytest.raises(HTTPException) as retrieval:
+        await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
+    assert retrieval.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "gated", "models"),
+    [
+        ("gpt-4.1", "gpt-4.1", ["gpt-4.1-mini", "fast"]),
+        ("gpt-4.1", "gpt-4.1", ["gpt-4.1-mini", "fast", "gpt-4.1"]),
+        ("legacy", "legacy", ["gpt-4.1-mini", "fast"]),
+        ("legacy", "gpt-4.1", ["gpt-4.1-mini", "fast"]),
+        ("model_name_team1_abc", "team-chat", ["gpt-4.1-mini", "fast", "model_name_team1_abc"]),
+    ],
+)
+async def test_alias_to_a_model_a_listing_callback_hides_is_not_described_by_it(
+    router: Router, monkeypatch: pytest.MonkeyPatch, target: str, gated: str, models: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ListingGate(frozenset({gated}))])
+    ProxyLogging._callback_capabilities_cache.clear()
     caller = _team_member(models=models, team_model_aliases={"fast": target})
 
     listing = await proxy_server.model_list(user_api_key_dict=caller, request=None, include_metadata=True)
@@ -281,26 +324,29 @@ async def test_alias_to_a_model_the_listing_hides_is_not_described_by_it(router:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("target", "models"),
-    [
-        ("gpt-4.1", ["gpt-4.1-mini", "fast"]),
-        ("gpt-4.1", ["gpt-4.1-mini", "fast", "gpt-4.1"]),
-        ("legacy", ["gpt-4.1-mini", "fast"]),
-    ],
-)
-async def test_alias_to_a_model_a_listing_callback_hides_is_not_described_by_it(
-    router: Router, monkeypatch: pytest.MonkeyPatch, target: str, models: list[str]
+async def test_allow_list_callback_keeps_every_name_it_allows_when_an_alias_points_past_them(
+    router: Router, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [_ListingGate(frozenset({target}))])
-    ProxyLogging._callback_capabilities_cache.clear()
-    caller = _team_member(models=models, team_model_aliases={"fast": target})
+    caller = _team_member(models=["gpt-4.1-mini", "legacy", "fast"], team_model_aliases={"fast": "gpt-4.1"})
+    listed = await _v1_models(caller)
 
-    listing = await proxy_server.model_list(user_api_key_dict=caller, request=None, include_metadata=True)
-    unaliased = await proxy_server.model_list(
-        user_api_key_dict=_team_member(models=models), request=None, include_metadata=True
+    monkeypatch.setattr(litellm, "callbacks", [_ListingAllowList(frozenset(listed))])
+    ProxyLogging._callback_capabilities_cache.clear()
+    assert await _v1_models(caller) == listed
+
+
+@pytest.mark.asyncio
+async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retrievable(router: Router) -> None:
+    caller = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4.1"],
+        router_settings={"model_group_alias": {"fast": "gpt-4.1", "quiet": {"model": "gpt-4.1", "hidden": True}}},
     )
-    assert listing["data"] == unaliased["data"]
+
+    target = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=caller)
+    assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target, "id": "fast"}
     with pytest.raises(HTTPException) as retrieval:
-        await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
+        await proxy_server.model_info(model_id="quiet", user_api_key_dict=caller)
     assert retrieval.value.status_code == 404

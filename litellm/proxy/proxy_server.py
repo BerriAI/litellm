@@ -475,7 +475,6 @@ from litellm.proxy.common_utils.model_listing_utils import (
     claude_code_view_ids,
     configured_display_names,
     label_entries,
-    unlisted_alias_targets,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -11881,6 +11880,25 @@ async def _names_hidden_by_listing_callbacks(
     )
 
 
+def _describable_model_groups(
+    listed_entries: Sequence[tuple[str, str]],
+    hidden_names: frozenset[str] | set[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str | None,
+) -> DeployedModelGroups:
+    listing_team_id: Final = team_id or user_api_key_dict.team_id
+    return DeployedModelGroups(
+        llm_router,
+        hidden_names | undiscoverable_model_groups(llm_router, user_api_key_dict, listing_team_id),
+        listing_team_id,
+        (
+            frozenset(lookup_id for _, lookup_id in listed_entries)
+            if ProxyLogging.callback_capabilities().listed_models_filters
+            else None
+        ),
+    )
+
+
 async def _entries_kept_by_listing_callbacks(
     entries: Sequence[tuple[str, str]], user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[tuple[str, str], ...]:
@@ -12121,24 +12139,13 @@ async def model_list(
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    translated_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict,
-        (
-            *(response_id for response_id, _ in translated_entries),
-            *unlisted_alias_targets(translated_entries, caller_aliases),
-        ),
+    listed_entries: Final = await _entries_kept_by_listing_callbacks(
+        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
     )
-    listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in callback_hidden_names)
     entries: Final = alias_listing_entries(
         listed_entries,
         caller_aliases,
-        DeployedModelGroups(
-            llm_router,
-            hidden_names
-            | callback_hidden_names
-            | undiscoverable_model_groups(llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id),
-        ),
+        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
     )
     labels: Final = label_entries(listed_entries, entries)
     for response_id, lookup_id in entries:
@@ -12250,14 +12257,13 @@ async def model_info(
         team_id,
         caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
     )
-    visible_entries: Final = TeamModelNameTranslator.listing_entries(
-        tuple(m for m in all_models if m not in hidden_names), llm_router, settings
-    )
     callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
         user_api_key_dict,
-        (
-            *(response_id for response_id, _ in visible_entries),
-            *unlisted_alias_targets(visible_entries, caller_aliases),
+        tuple(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
+            )
         ),
     )
     if hidden_names or callback_hidden_names:
@@ -12275,12 +12281,7 @@ async def model_info(
         model_id,
         caller_aliases,
         listed_entries,
-        DeployedModelGroups(
-            llm_router,
-            hidden_names
-            | callback_hidden_names
-            | undiscoverable_model_groups(llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id),
-        ),
+        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
