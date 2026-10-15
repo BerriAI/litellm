@@ -1046,10 +1046,8 @@ def test_convert_tools_to_responses_format_keeps_defer_loading(tool, expected_de
 
 
 _TOOL_SEARCH: Final = {"type": "tool_search"}
-_CLIENT_TOOL_SEARCH: Final = {"type": "tool_search", "execution": "client"}
 
 
-@pytest.mark.parametrize("tool_search_tool", [_TOOL_SEARCH, _CLIENT_TOOL_SEARCH], ids=["hosted", "client"])
 @pytest.mark.parametrize(
     "deferred_tool",
     [
@@ -1065,9 +1063,9 @@ _CLIENT_TOOL_SEARCH: Final = {"type": "tool_search", "execution": "client"}
     ids=["drop-params-no-search", "drop-params-with-search", "no-drop-params-with-search"],
 )
 def test_transform_request_forwards_defer_loading_only_beside_tool_search(
-    deferred_tool, drop_params, with_tool_search, expected_defer_loading, tool_search_tool
+    deferred_tool, drop_params, with_tool_search, expected_defer_loading
 ):
-    tools: Final = [tool_search_tool, deferred_tool] if with_tool_search else [deferred_tool]
+    tools: Final = [_TOOL_SEARCH, deferred_tool] if with_tool_search else [deferred_tool]
 
     result = LiteLLMResponsesTransformationHandler().transform_request(
         model="gpt-5.5",
@@ -1080,6 +1078,42 @@ def test_transform_request_forwards_defer_loading_only_beside_tool_search(
 
     lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
     assert lookup_tool.get("defer_loading") == expected_defer_loading
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": {"name": "lookup"}, "defer_loading": True},
+        {"type": "function", "function": {"name": "lookup", "defer_loading": True}},
+    ],
+    ids=["tool-level", "function-level"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop-params", "drop-params"])
+@pytest.mark.parametrize(
+    "tool_search_tool",
+    [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
+    ids=["client-only", "hosted-and-client"],
+)
+def test_transform_request_drops_defer_loading_beside_client_tool_search(
+    deferred_tool, drop_params, tool_search_tool
+):
+    tool_search_tools: Final = (
+        [tool_search_tool]
+        if tool_search_tool.get("execution") == "client"
+        else [tool_search_tool, {"type": "tool_search", "execution": "client"}]
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        optional_params={"tools": [*tool_search_tools, deferred_tool]},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    lookup_tool: Final = next(tool for tool in result["tools"] if tool.get("name") == "lookup")
+    assert "defer_loading" not in lookup_tool
 
 
 @pytest.mark.parametrize(
@@ -4093,7 +4127,7 @@ def test_client_search_turn_returns_its_call_and_replays_with_the_client_output(
     request: Final = LiteLLMResponsesTransformationHandler().transform_request(
         model="gpt-5.5",
         messages=[{"role": "user", "content": "weather in Paris"}, answered],
-        optional_params={"tools": [_CLIENT_TOOL_SEARCH]},
+        optional_params={"tools": [{"type": "tool_search", "execution": "client"}]},
         litellm_params={},
         headers={},
         litellm_logging_obj=Mock(),
