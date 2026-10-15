@@ -1800,6 +1800,203 @@ class TestTeamScopedMCPServerAccess:
             assert len(result) == 1
 
 
+class TestUserScopedMCPServerAccess:
+    """``GET /v1/mcp/server?user_id=`` scopes the dropdown to the teams the user belongs to."""
+
+    _MODULE: Final = "litellm.proxy.management_endpoints.mcp_management_endpoints"
+
+    @staticmethod
+    def _user_with_teams(teams: list[str]) -> LiteLLM_UserTable:
+        return LiteLLM_UserTable(user_id="scoped_user", teams=teams)
+
+    @staticmethod
+    def _team_scoped(per_team: Mapping[str, list[str]]):
+        async def _list(team_id: str) -> list[LiteLLM_MCPServerTable]:
+            from litellm.proxy.auth.auth_checks import TeamNotFoundError
+
+            if team_id not in per_team:
+                raise TeamNotFoundError(team_id=team_id)
+            return [generate_mock_mcp_server_db_record(server_id=server_id) for server_id in per_team[team_id]]
+
+        return AsyncMock(side_effect=_list)
+
+    @pytest.mark.asyncio
+    async def test_admin_gets_the_union_of_the_users_teams(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+        per_team: Final = {"team-a": ["server-1", "server-2"], "team-b": ["server-2", "server-3"]}
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                AsyncMock(return_value=self._user_with_teams(["team-a", "team-b"])),
+            ),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped(per_team)),
+            patch(f"{self._MODULE}._resolve_accessible_mcp_servers", AsyncMock()) as unscoped,
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert sorted(server.server_id for server in result) == ["server-1", "server-2", "server-3"]
+        unscoped.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_users_own_grants_stay_listed_next_to_their_teams_servers(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+        own_grant: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-1", mcp_servers=["solo-d"])
+        user: Final = LiteLLM_UserTable(
+            user_id="scoped_user", teams=["team-a"], object_permission_id="op-1", object_permission=own_grant
+        )
+        registry: Final = MagicMock()
+        registry.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda server_id: server_id if server_id == "solo-d" else None
+        )
+        registry.build_mcp_server_table = MagicMock(
+            side_effect=lambda server_id: generate_mock_mcp_server_db_record(server_id=server_id)
+        )
+        registry.resolve_toolset_tool_permissions = AsyncMock(return_value={})
+        resolver: Final = AsyncMock(return_value={"solo-d"})
+
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", AsyncMock(return_value=user)),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({"team-a": ["server-1"]})),
+            patch("litellm.proxy.management_helpers.object_permission_utils._resolve_team_allowed_mcp_servers", resolver),
+            patch(f"{self._MODULE}.global_mcp_server_manager", registry),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert sorted(server.server_id for server in result) == ["server-1", "solo-d"]
+        assert resolver.await_args.kwargs["team_object_permission"] is own_grant
+
+    @pytest.mark.asyncio
+    async def test_a_server_the_user_reaches_only_through_an_own_toolset_stays_listed(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+        own_grant: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-1", mcp_toolsets=["ts-1"])
+        user: Final = LiteLLM_UserTable(
+            user_id="scoped_user", teams=["team-a"], object_permission_id="op-1", object_permission=own_grant
+        )
+        registry: Final = MagicMock()
+        registry.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda server_id: server_id if server_id == "toolset-only" else None
+        )
+        registry.build_mcp_server_table = MagicMock(
+            side_effect=lambda server_id: generate_mock_mcp_server_db_record(server_id=server_id)
+        )
+        registry.resolve_toolset_tool_permissions = AsyncMock(return_value={"toolset-only": ["search"]})
+
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", AsyncMock(return_value=user)),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({"team-a": ["server-1"]})),
+            patch(
+                "litellm.proxy.management_helpers.object_permission_utils._resolve_team_allowed_mcp_servers",
+                AsyncMock(return_value=set()),
+            ),
+            patch(f"{self._MODULE}.global_mcp_server_manager", registry),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert sorted(server.server_id for server in result) == ["server-1", "toolset-only"]
+        registry.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["ts-1"])
+
+    @pytest.mark.asyncio
+    async def test_a_team_the_user_still_lists_but_that_was_deleted_is_skipped(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                AsyncMock(return_value=self._user_with_teams(["team-a", "team-deleted"])),
+            ),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({"team-a": ["server-1"]})),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert [server.server_id for server in result] == ["server-1"]
+
+    @pytest.mark.asyncio
+    async def test_user_whose_only_teams_were_deleted_gets_the_unscoped_list(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+        everything: Final = [generate_mock_mcp_server_db_record(server_id="server-9")]
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                AsyncMock(return_value=self._user_with_teams(["team-deleted"])),
+            ),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({})),
+            patch(f"{self._MODULE}._resolve_accessible_mcp_servers", AsyncMock(return_value=everything)),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert [server.server_id for server in result] == ["server-9"]
+
+    @pytest.mark.asyncio
+    async def test_user_in_no_team_gets_the_unscoped_list(self):
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+        everything: Final = [generate_mock_mcp_server_db_record(server_id="server-9")]
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                AsyncMock(return_value=self._user_with_teams([])),
+            ),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({})) as team_scoped,
+            patch(f"{self._MODULE}._resolve_accessible_mcp_servers", AsyncMock(return_value=everything)),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
+
+        assert [server.server_id for server in result] == ["server-9"]
+        team_scoped.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_may_only_scope_to_themselves(self):
+        member: Final = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER, user_id="scoped_user"
+        )
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                AsyncMock(return_value=self._user_with_teams(["team-a"])),
+            ),
+            patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({"team-a": ["server-1"]})),
+        ):
+            own: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=member, user_id="scoped_user")
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=member, user_id="someone_else")
+
+        assert [server.server_id for server in own] == ["server-1"]
+        assert exc_info.value.status_code == 403
+        assert "permission" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_restricted_virtual_key_cannot_use_user_id_filter(self):
+        restricted: Final = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="scoped_user",
+            api_key="sk-restricted",
+            allowed_routes=["mcp_routes"],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=restricted, user_id="scoped_user")
+
+        assert exc_info.value.status_code == 403
+        assert "Restricted virtual key" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_unknown_user_is_a_404(self):
+        from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            AsyncMock(side_effect=UserNotFoundError(user_id="ghost")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="ghost")
+
+        assert exc_info.value.status_code == 404
+
 class TestFetchAllMCPServersOrdering:
     def test_display_order_is_case_insensitive_name_then_id(self) -> None:
         servers: Final = (
