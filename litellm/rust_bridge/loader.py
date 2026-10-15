@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from types import ModuleType
+from typing import Final
 
-_BRIDGE_SENTINEL = object()
+_BRIDGE_SENTINEL: Final = object()
 _cached_bridge: ModuleType | None | object = _BRIDGE_SENTINEL
 
 
@@ -21,6 +22,12 @@ def get_native_bridge() -> ModuleType | None:
         return None
     _cached_bridge = _native
     return _native
+
+
+def reset_native_bridge_cache() -> None:
+    """Forget the cached extension so the next lookup reimports it from disk."""
+    global _cached_bridge
+    _cached_bridge = _BRIDGE_SENTINEL
 
 
 def native_bridge_available() -> bool:

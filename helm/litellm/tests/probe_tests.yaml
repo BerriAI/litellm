@@ -1,0 +1,133 @@
+suite: test liveness and readiness probe timeouts
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway probes set an explicit timeout that outlasts a saturated event loop
+    template: gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 10
+
+  - it: backend probes set an explicit timeout that outlasts a saturated event loop
+    template: backend/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 10
+
+  - it: no single-event-loop component is left on the kubernetes default 1s probe timeout
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    asserts:
+      - isNotNullOrEmpty:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+      - isNotNullOrEmpty:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 10
+
+  - it: gateway liveness tolerates a longer outage than readiness before acting
+    template: gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 6
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+
+  - it: probe timeouts and thresholds stay overridable per component
+    template: gateway/deployment.yaml
+    set:
+      gateway.readinessProbe.timeoutSeconds: 3
+      gateway.readinessProbe.periodSeconds: 20
+      gateway.livenessProbe.timeoutSeconds: 4
+      gateway.livenessProbe.failureThreshold: 3
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+            timeoutSeconds: 3
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 4
+            failureThreshold: 3
+
+  - it: no startupProbe by default, so existing installs are unchanged
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+
+  - it: startupProbe renders verbatim when configured, gating a slow cold start
+    template: gateway/deployment.yaml
+    set:
+      gateway.startupProbe:
+        httpGet: { path: /health/readiness, port: http }
+        failureThreshold: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe
+          value:
+            httpGet:
+              path: /health/readiness
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5

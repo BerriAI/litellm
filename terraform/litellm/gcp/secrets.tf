@@ -118,3 +118,20 @@ resource "google_secret_manager_secret_version" "billing_metrics_ca_cert" {
   secret      = google_secret_manager_secret.billing_metrics_ca_cert[0].id
   secret_data = var.billing_metrics_ca_cert_pem
 }
+
+resource "google_secret_manager_secret" "metrics_run_monitoring" {
+  count = local.metrics_enabled ? 1 : 0
+
+  secret_id = "${local.name}-gateway-run-monitoring"
+  labels    = local.labels
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "metrics_run_monitoring" {
+  count = local.metrics_enabled ? 1 : 0
+
+  secret      = google_secret_manager_secret.metrics_run_monitoring[0].id
+  secret_data = local.metrics_run_monitoring_yaml
+}

@@ -145,4 +145,34 @@ describe("PolicyTable", () => {
     await user.click(screen.getByRole("button", { name: /grouped/ }));
     expect(defaultProps.onViewClick).toHaveBeenCalledWith("prod-id");
   });
+
+  const sameNamedDbDraft: Partial<Policy> = {
+    policy_name: "config-policy",
+    policy_id: "db-draft-id",
+    version_status: "draft",
+    version_number: 2,
+  };
+  const configTwin: Partial<Policy> = {
+    policy_name: "config-policy",
+    policy_id: "config-policy",
+    version_status: "production",
+    definition_location: "config",
+  };
+
+  it("should render a config policy and a same-named DB draft as separate rows", () => {
+    const policies = [makePolicy(sameNamedDbDraft), makePolicy(configTwin)];
+    renderWithProviders(<PolicyTable {...defaultProps} policies={policies} />);
+    expect(screen.getAllByText("config-policy")).toHaveLength(2);
+    expect(screen.getByText("Config")).toBeInTheDocument();
+  });
+
+  it("should keep a same-named DB draft reachable next to a config policy", async () => {
+    const user = userEvent.setup();
+    const policies = [makePolicy(sameNamedDbDraft), makePolicy(configTwin)];
+    renderWithProviders(<PolicyTable {...defaultProps} policies={policies} />);
+    await user.click(screen.getByRole("button", { name: "config-policy" }));
+    expect(defaultProps.onViewClick).toHaveBeenCalledWith("db-draft-id");
+    await user.click(screen.getByTestId("policy-actions-db-draft-id"));
+    expect(await screen.findByTestId("policy-action-edit")).not.toHaveAttribute("data-disabled");
+  });
 });

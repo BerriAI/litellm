@@ -8,14 +8,17 @@ Usage:
     Set LANGFUSE_MOCK=true in environment variables or config to enable mock mode.
 """
 
+from typing import Final
+
 import httpx
+
 from litellm.integrations.mock_client_factory import (
     MockClientConfig,
     create_mock_client_factory,
 )
 
 # Create mock client using factory
-_config = MockClientConfig(
+_config: Final = MockClientConfig(
     name="LANGFUSE",
     env_var="LANGFUSE_MOCK",
     default_latency_ms=100,

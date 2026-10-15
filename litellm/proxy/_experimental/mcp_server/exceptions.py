@@ -1,8 +1,24 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
-from typing import Optional
+from typing import Final
 
 from fastapi import HTTPException
+
+from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
+
+class MCPServerURLCredentialsError(HTTPException):
+    """A fixed, sanitized URL-credential migration error safe for operator previews."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=500,
+            detail=(
+                "misconfigured: auth_type none cannot be used with credentials embedded in the upstream URL; "
+                "remove them from the URL and configure Basic Auth with auth_type: basic and "
+                "auth_value: username:password"
+            ),
+        )
 
 
 class MCPUpstreamAuthError(Exception):
@@ -21,18 +37,22 @@ class MCPUpstreamAuthError(Exception):
     def __init__(
         self,
         status_code: int,
-        www_authenticate: Optional[str],
+        www_authenticate: str | None,
         server_name: str,
+        required_scope: str | None = None,
+        server_id: str | None = None,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
         self.server_name = server_name
+        self.required_scope = required_scope
+        self.server_id = server_id
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(
         self,
-        base_url: Optional[str] = None,
-        request_path: Optional[str] = None,
+        base_url: str | None = None,
+        request_path: str | None = None,
     ) -> HTTPException:
         """Convert this upstream-auth error into an ``HTTPException`` that
         preserves the upstream status code and any ``WWW-Authenticate``
@@ -57,22 +77,60 @@ class MCPUpstreamAuthError(Exception):
         ``/.well-known/oauth-protected-resource/mcp/{server_name}``. This
         keeps the ``resource_metadata`` URI aligned with the resource pattern
         the client originally targeted, matching the path-aware behaviour of
-        ``_get_passthrough_resource_metadata_url`` in ``server.py``.
+        ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
-        challenge: Optional[str] = self.www_authenticate
-        if challenge is None and self.status_code == 401 and base_url:
-            prefix = base_url.rstrip("/")
-            if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
+        aggregate_step_up: Final = (
+            self.required_scope is not None
+            and request_path is not None
+            and (request_path.rstrip("/") == "/mcp" or request_path.startswith("/toolset/"))
+        )
+        requested_scope: Final = (
+            " ".join(
+                encode_upstream_scope(self.server_id or self.server_name, item) for item in self.required_scope.split()
+            )
+            if aggregate_step_up and self.required_scope
+            else self.required_scope
+        )
+        challenge: str | None = self.www_authenticate
+        if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
+            prefix: Final = base_url.rstrip("/")
+            if aggregate_step_up:
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource"
+            elif request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
-        detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
+        scoped_challenge: Final = (
+            (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')
+            + (f', scope="{requested_scope}"' if requested_scope else "")
+            if self.required_scope is not None
+            else challenge
+        )
+        detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
             detail=detail,
-            headers={"www-authenticate": challenge} if challenge else None,
+            headers={"www-authenticate": scoped_challenge} if scoped_challenge else None,
         )
+
+
+class MCPOpenApiUpstreamError(Exception):
+    """An OpenAPI-backed MCP tool's upstream answered with a non-2xx that is not a 401.
+
+    Carries the status only. The upstream's response body is deliberately dropped rather than served
+    as tool content: it crosses a trust boundary and may hold prose, urls, or an error document that
+    reads as data, which is how these failures came to be reported as successful tool output. This
+    matches ``outcome_wire_value``'s contract for listing faults, category and status and nothing
+    else. A 401 is raised as ``MCPUpstreamAuthError`` instead, so the caller learns to
+    re-authenticate; every other status stays here, mirroring the regular MCP path where a 403
+    deliberately does not produce a challenge.
+    """
+
+    def __init__(self, status_code: int, server_name: str) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        super().__init__(f"upstream returned HTTP {status_code}")
 
 
 class MCPToolResultError(Exception):

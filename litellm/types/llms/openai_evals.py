@@ -2,10 +2,12 @@
 Type definitions for OpenAI Evals API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+import builtins
+from typing import Literal
 
-from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 # Evals API Request Types
@@ -15,10 +17,10 @@ class DataSourceConfigCustom(TypedDict, total=False):
     type: Required[Literal["custom"]]
     """Data source type - custom"""
 
-    item_schema: Required[Dict[str, Any]]
+    item_schema: Required[dict[str, object]]
     """JSON schema describing the structure of each row in the dataset"""
 
-    include_sample_schema: Optional[bool]
+    include_sample_schema: bool | None
     """Whether eval expects sample schema population"""
 
 
@@ -28,7 +30,7 @@ class DataSourceConfigLogs(TypedDict, total=False):
     type: Required[Literal["logs"]]
     """Data source type - logs"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, object] | None
     """Optional metadata for filtering logs"""
 
 
@@ -38,11 +40,11 @@ class DataSourceConfigStoredCompletions(TypedDict, total=False):
     type: Required[Literal["stored_completions"]]
     """Data source type - stored_completions (deprecated)"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, object] | None
     """Optional metadata for filtering stored completions"""
 
 
-DataSourceConfig = Union[DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions]
+DataSourceConfig = DataSourceConfigCustom | DataSourceConfigLogs | DataSourceConfigStoredCompletions
 
 
 class LLMAsJudgeGraderConfig(TypedDict, total=False):
@@ -51,10 +53,10 @@ class LLMAsJudgeGraderConfig(TypedDict, total=False):
     type: Required[Literal["llm_as_judge"]]
     """Grader type - LLM as judge"""
 
-    model: Optional[str]
+    model: str | None
     """Model to use as judge (e.g., 'gpt-4')"""
 
-    prompt: Optional[str]
+    prompt: str | None
     """Custom prompt for the judge model"""
 
 
@@ -64,7 +66,7 @@ class GroundTruthGraderConfig(TypedDict, total=False):
     type: Required[Literal["ground_truth"]]
     """Grader type - ground truth comparison"""
 
-    metric: Optional[Literal["exact_match", "f1_score", "bleu"]]
+    metric: Literal["exact_match", "f1_score", "bleu"] | None
     """Metric to use for comparison"""
 
 
@@ -78,56 +80,56 @@ class CustomGraderConfig(TypedDict, total=False):
     """ID of the custom grading function"""
 
 
-GraderConfig = Union[LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig]
+GraderConfig = LLMAsJudgeGraderConfig | GroundTruthGraderConfig | CustomGraderConfig
 
 
 class CreateEvalRequest(TypedDict, total=False):
     """Request parameters for creating an evaluation"""
 
-    name: Optional[str]
+    name: str | None
     """The name of the evaluation"""
 
     data_source_config: Required[DataSourceConfig]
     """Configuration for the data source"""
 
-    testing_criteria: Required[List[GraderConfig]]
+    testing_criteria: Required[list[GraderConfig]]
     """List of graders for all eval runs"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, object] | None
     """Set of 16 key-value pairs that can be attached to an object (max 64 char keys, 512 char values)"""
 
 
 class UpdateEvalRequest(TypedDict, total=False):
     """Request parameters for updating an evaluation"""
 
-    name: Optional[str]
+    name: str | None
     """Updated name"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, object] | None
     """Updated metadata"""
 
 
 class ListEvalsParams(TypedDict, total=False):
     """Query parameters for listing evaluations"""
 
-    limit: Optional[int]
+    limit: int | None
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    after: Optional[str]
+    after: str | None
     """Cursor for pagination - returns evals after this ID"""
 
-    before: Optional[str]
+    before: str | None
     """Cursor for pagination - returns evals before this ID"""
 
-    order: Optional[Literal["asc", "desc"]]
+    order: Literal["asc", "desc"] | None
     """Sort order for results. Defaults to 'desc'."""
 
-    order_by: Optional[Literal["created_at", "updated_at"]]
+    order_by: Literal["created_at", "updated_at"] | None
     """Field to sort by. Defaults to 'created_at'."""
 
 
 # Evals API Response Types
-class Eval(BaseModel):
+class Eval(LiteLLMBaseModel):
     """Represents an evaluation from the OpenAI Evals API"""
 
     id: str
@@ -139,42 +141,42 @@ class Eval(BaseModel):
     created_at: int
     """Unix timestamp of when the evaluation was created"""
 
-    updated_at: Optional[int] = None
+    updated_at: int | None = None
     """Unix timestamp of when the evaluation was last updated"""
 
-    name: Optional[str] = None
+    name: str | None = None
     """The name of the evaluation"""
 
-    data_source_config: Dict[str, Any]
+    data_source_config: dict[str, builtins.object]
     """Configuration for the data source"""
 
-    testing_criteria: List[Dict[str, Any]]
+    testing_criteria: list[dict[str, builtins.object]]
     """List of graders for the evaluation"""
 
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, builtins.object] | None = None
     """Additional metadata"""
 
 
-class ListEvalsResponse(BaseModel):
+class ListEvalsResponse(LiteLLMBaseModel):
     """Response from listing evaluations"""
 
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: List[Eval]
+    data: list[Eval]
     """List of evaluations"""
 
-    first_id: Optional[str] = None
+    first_id: str | None = None
     """ID of the first evaluation in the list"""
 
-    last_id: Optional[str] = None
+    last_id: str | None = None
     """ID of the last evaluation in the list"""
 
     has_more: bool = False
     """Whether there are more evaluations available"""
 
 
-class DeleteEvalResponse(BaseModel):
+class DeleteEvalResponse(LiteLLMBaseModel):
     """Response from deleting an evaluation"""
 
     eval_id: str
@@ -187,7 +189,7 @@ class DeleteEvalResponse(BaseModel):
     """Whether the evaluation was successfully deleted"""
 
 
-class CancelEvalResponse(BaseModel):
+class CancelEvalResponse(LiteLLMBaseModel):
     """Response from cancelling an evaluation"""
 
     id: str
@@ -227,11 +229,11 @@ class DataSourceInlineConfig(TypedDict, total=False):
     type: Required[Literal["inline"]]
     """Data source type - inline"""
 
-    samples: Required[List[Dict[str, Any]]]
+    samples: Required[list[dict[str, object]]]
     """List of inline samples to use for the run"""
 
 
-RunDataSourceConfig = Union[DataSourceDatasetConfig, DataSourceSampleSetConfig, DataSourceInlineConfig]
+RunDataSourceConfig = DataSourceDatasetConfig | DataSourceSampleSetConfig | DataSourceInlineConfig
 
 
 class CompletionConfig(TypedDict, total=False):
@@ -240,53 +242,53 @@ class CompletionConfig(TypedDict, total=False):
     model: Required[str]
     """Model to use for completions"""
 
-    temperature: Optional[float]
+    temperature: float | None
     """Sampling temperature (0-2)"""
 
-    max_tokens: Optional[int]
+    max_tokens: int | None
     """Maximum tokens to generate"""
 
-    top_p: Optional[float]
+    top_p: float | None
     """Nucleus sampling parameter"""
 
-    frequency_penalty: Optional[float]
+    frequency_penalty: float | None
     """Frequency penalty (-2.0 to 2.0)"""
 
-    presence_penalty: Optional[float]
+    presence_penalty: float | None
     """Presence penalty (-2.0 to 2.0)"""
 
 
 class CreateRunRequest(TypedDict, total=False):
     """Request parameters for creating a run"""
 
-    data_source: Required[Dict[str, Any]]
+    data_source: Required[dict[str, object]]
     """Data source configuration for the run (can be jsonl, completions, or responses type)"""
 
-    name: Optional[str]
+    name: str | None
     """Optional name for the run"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, object] | None
     """Optional metadata for the run"""
 
 
 class ListRunsParams(TypedDict, total=False):
     """Query parameters for listing runs"""
 
-    limit: Optional[int]
+    limit: int | None
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    after: Optional[str]
+    after: str | None
     """Cursor for pagination - returns runs after this ID"""
 
-    before: Optional[str]
+    before: str | None
     """Cursor for pagination - returns runs before this ID"""
 
-    order: Optional[Literal["asc", "desc"]]
+    order: Literal["asc", "desc"] | None
     """Sort order for results. Defaults to 'desc'."""
 
 
 # Run API Response Types
-class ResultCounts(BaseModel):
+class ResultCounts(LiteLLMBaseModel):
     """Result counts for a run"""
 
     total: int
@@ -302,7 +304,7 @@ class ResultCounts(BaseModel):
     """Number of error results"""
 
 
-class PerTestingCriteriaResult(BaseModel):
+class PerTestingCriteriaResult(LiteLLMBaseModel):
     """Results for a specific testing criteria"""
 
     testing_criteria_index: int
@@ -311,11 +313,11 @@ class PerTestingCriteriaResult(BaseModel):
     result_counts: ResultCounts
     """Result counts for this criteria"""
 
-    average_score: Optional[float] = None
+    average_score: float | None = None
     """Average score for this criteria"""
 
 
-class Run(BaseModel):
+class Run(LiteLLMBaseModel):
     """Represents a run from the OpenAI Evals API"""
 
     id: str
@@ -330,66 +332,66 @@ class Run(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     """Current status of the run"""
 
-    data_source: Dict[str, Any]
+    data_source: dict[str, builtins.object]
     """Data source configuration used for the run"""
 
     eval_id: str
     """ID of the evaluation this run belongs to"""
 
-    name: Optional[str] = None
+    name: str | None = None
     """Name of the run"""
 
-    started_at: Optional[int] = None
+    started_at: int | None = None
     """Unix timestamp of when the run started"""
 
-    completed_at: Optional[int] = None
+    completed_at: int | None = None
     """Unix timestamp of when the run completed"""
 
-    model: Optional[str] = None
+    model: str | None = None
     """Model used for the run, if any"""
 
-    per_model_usage: Optional[Any] = None
+    per_model_usage: builtins.object | None = None
     """Model usage details per model, if available"""
 
-    per_testing_criteria_results: Optional[List[PerTestingCriteriaResult]] = None
+    per_testing_criteria_results: list[PerTestingCriteriaResult] | None = None
     """Per-criteria results"""
 
-    report_url: Optional[str] = None
+    report_url: str | None = None
     """URL for the evaluation report"""
 
-    result_counts: Optional[Dict[str, int]] = None
+    result_counts: dict[str, int] | None = None
     """Aggregate result counts (e.g., {"passed": 0, "failed": 0, "errored": 0, "total": 0})"""
 
-    shared_with_openai: Optional[bool] = None
+    shared_with_openai: bool | None = None
     """Whether run is shared with OpenAI"""
 
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, builtins.object] | None = None
     """Additional metadata"""
 
-    error: Optional[Dict[str, Any]] = None
+    error: dict[str, builtins.object] | None = None
     """Error details if the run failed"""
 
 
-class ListRunsResponse(BaseModel):
+class ListRunsResponse(LiteLLMBaseModel):
     """Response from listing runs"""
 
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: List[Run]
+    data: list[Run]
     """List of runs"""
 
-    first_id: Optional[str] = None
+    first_id: str | None = None
     """ID of the first run in the list"""
 
-    last_id: Optional[str] = None
+    last_id: str | None = None
     """ID of the last run in the list"""
 
     has_more: bool = False
     """Whether there are more runs available"""
 
 
-class CancelRunResponse(BaseModel):
+class CancelRunResponse(LiteLLMBaseModel):
     """Response from cancelling a run"""
 
     id: str
@@ -402,14 +404,14 @@ class CancelRunResponse(BaseModel):
     """Status after cancellation, always 'cancelled'"""
 
 
-class RunDeleteResponse(BaseModel):
+class RunDeleteResponse(LiteLLMBaseModel):
     """Response from deleting a run"""
 
     run_id: str
     """The ID of the deleted run"""
 
-    object: Optional[str] = "eval.run.deleted"
+    object: str | None = "eval.run.deleted"
     """Object type, always 'eval.run.deleted'"""
 
-    deleted: Optional[bool] = True
+    deleted: bool | None = True
     """Whether the run was successfully deleted"""

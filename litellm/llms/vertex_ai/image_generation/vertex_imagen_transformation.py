@@ -1,7 +1,9 @@
 import os
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -21,10 +23,17 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -39,7 +48,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Imagen API supported parameters
         """
@@ -52,11 +61,11 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        mapped_params = {}
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped_params: Final = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Imagen format
                     if k == "n":
@@ -73,7 +82,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Map OpenAI size format to Imagen aspect ratio format
         """
-        aspect_ratio_map = {
+        aspect_ratio_map: Final = {
             "1024x1024": "1:1",
             "1792x1024": "16:9",
             "1024x1792": "9:16",
@@ -82,7 +91,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _resolve_vertex_project(self) -> Optional[str]:
+    def _resolve_vertex_project(self) -> str | None:
         return (
             getattr(self, "_vertex_project", None)
             or os.environ.get("VERTEXAI_PROJECT")
@@ -90,7 +99,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
-    def _resolve_vertex_location(self) -> Optional[str]:
+    def _resolve_vertex_location(self) -> str | None:
         return (
             getattr(self, "_vertex_location", None)
             or os.environ.get("VERTEXAI_LOCATION")
@@ -100,7 +109,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEX_LOCATION")
         )
 
-    def _resolve_vertex_credentials(self) -> Optional[str]:
+    def _resolve_vertex_credentials(self) -> str | None:
         return (
             getattr(self, "_vertex_credentials", None)
             or os.environ.get("VERTEXAI_CREDENTIALS")
@@ -111,12 +120,12 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vertex AI Imagen predict API
@@ -133,13 +142,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:predict"
 
@@ -147,23 +156,23 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
 
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
-        _api_base = litellm_params.get("api_base") or api_base
+        _api_base: Final = litellm_params.get("api_base") or api_base
         if _api_base is not None:
             return headers
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
         vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -186,15 +195,15 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Uses predict API with instances and parameters
         """
         # Default parameters
-        default_params = {
+        default_params: Final = {
             "sampleCount": 1,
         }
 
-        labels = pop_vertex_request_labels(optional_params, litellm_params)
+        labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
         # Merge with optional params (after popping labels so they are not sent as Imagen parameters)
-        parameters = {**default_params, **optional_params}
+        parameters: Final = {**default_params, **optional_params}
 
-        request_body: dict = {
+        request_body: Final[dict] = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
@@ -212,15 +221,15 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Imagen image generation response to litellm ImageResponse format
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -232,13 +241,18 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Imagen format - predictions with generated images
-        predictions = response_data.get("predictions", [])
-        for prediction in predictions:
+        predictions: Final = _JSON_CONTAINER.validate_python(
+            _JSON_OBJECT.validate_python(response_data).get("predictions", [])
+        )
+        for raw_prediction in predictions:
+            prediction = (
+                raw_prediction if isinstance(raw_prediction, str) else _JSON_CONTAINER.validate_python(raw_prediction)
+            )
             # Imagen returns images as bytesBase64Encoded
             if "bytesBase64Encoded" in prediction:
                 model_response.data.append(
                     ImageObject(
-                        b64_json=prediction["bytesBase64Encoded"],
+                        b64_json=_JSON_OBJECT.validate_python(prediction)["bytesBase64Encoded"],
                         url=None,
                     )
                 )

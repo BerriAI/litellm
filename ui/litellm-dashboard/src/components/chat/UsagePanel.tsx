@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { userDailyActivityAggregatedCall } from "../networking";
+import { dailyActivityAggregatedCall } from "../networking";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -95,7 +95,15 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
 
   const { data, isLoading } = useQuery({
     queryKey: [USAGE_QUERY_KEY, accessToken, userId, timeRange],
-    queryFn: () => userDailyActivityAggregatedCall(accessToken, start, end, userId),
+    queryFn: () => {
+      const request = {
+        accessToken,
+        startTime: start,
+        endTime: end,
+        entityIds: userId ? [userId] : null,
+      };
+      return dailyActivityAggregatedCall("user", request);
+    },
     enabled: !!accessToken,
   });
 
@@ -173,7 +181,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
                 {card.sub && (
                   <div
                     className={`text-xs mt-0.5 ${
-                      card.subVariant === "error" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                      card.subVariant === "error" ? "text-destructive" : "text-muted-foreground"
                     }`}
                   >
                     {card.sub}

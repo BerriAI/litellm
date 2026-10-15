@@ -1,9 +1,11 @@
 import React, { useState } from "react";
-import { TextInput, Icon, Text } from "@tremor/react";
-import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
+import { Check, SquarePen, Trash2, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { SimpleTable } from "@/components/common_components/simple_table";
 import { DiscountConfig } from "./types";
-import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 interface ProviderDiscountTableProps {
   discountConfig: DiscountConfig;
@@ -12,52 +14,67 @@ interface ProviderDiscountTableProps {
 }
 
 interface ProviderDiscountRow {
+  key: string;
   provider: string;
+  modelPattern: string | null;
   discount: number;
 }
+
+const splitDiscountKey = (key: string): { provider: string; modelPattern: string | null } => {
+  const slashIndex = key.indexOf("/");
+  if (slashIndex < 0) {
+    return { provider: key, modelPattern: null };
+  }
+  return { provider: key.slice(0, slashIndex), modelPattern: key.slice(slashIndex + 1) };
+};
 
 const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   discountConfig,
   onDiscountChange,
   onRemoveProvider,
 }) => {
-  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
 
-  const handleStartEdit = (provider: string, currentDiscount: number) => {
-    setEditingProvider(provider);
+  const handleStartEdit = (key: string, currentDiscount: number) => {
+    setEditingKey(key);
     setEditValue((currentDiscount * 100).toString());
   };
 
-  const handleSaveEdit = (provider: string) => {
+  const handleSaveEdit = (key: string) => {
     const percentValue = parseFloat(editValue);
     if (!isNaN(percentValue) && percentValue >= 0 && percentValue <= 100) {
-      onDiscountChange(provider, (percentValue / 100).toString());
+      onDiscountChange(key, (percentValue / 100).toString());
     }
-    setEditingProvider(null);
+    setEditingKey(null);
     setEditValue("");
   };
 
   const handleCancelEdit = () => {
-    setEditingProvider(null);
+    setEditingKey(null);
     setEditValue("");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
+  const handleKeyDown = (e: React.KeyboardEvent, key: string) => {
     if (e.key === "Enter") {
-      handleSaveEdit(provider);
+      handleSaveEdit(key);
     } else if (e.key === "Escape") {
       handleCancelEdit();
     }
   };
 
+  const rowLabel = (row: ProviderDiscountRow): string => {
+    const { displayName } = getProviderLogoAndName(row.provider);
+    return row.modelPattern ? `${displayName} (${row.modelPattern})` : displayName;
+  };
+
   // Convert discount config to array and sort
   const data: ProviderDiscountRow[] = Object.entries(discountConfig)
-    .map(([provider, discount]) => ({ provider, discount }))
+    .map(([key, discount]) => ({ key, ...splitDiscountKey(key), discount }))
     .sort((a, b) => {
-      const displayA = getProviderDisplayInfo(a.provider).displayName;
-      const displayB = getProviderDisplayInfo(b.provider).displayName;
-      return displayA.localeCompare(displayB);
+      const displayA = getProviderLogoAndName(a.provider).displayName;
+      const displayB = getProviderLogoAndName(b.provider).displayName;
+      return displayA.localeCompare(displayB) || (a.modelPattern ?? "").localeCompare(b.modelPattern ?? "");
     });
 
   return (
@@ -67,82 +84,100 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         {
           header: "Provider",
           cell: (row) => {
-            const { displayName, logo } = getProviderDisplayInfo(row.provider);
+            const { displayName } = getProviderLogoAndName(row.provider);
             return (
               <div className="flex items-center space-x-2">
-                {logo && (
-                  <img
-                    src={logo}
-                    alt={`${displayName} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => handleImageError(e, displayName)}
-                  />
-                )}
+                <Logo provider={row.provider} label={displayName} className="w-5 h-5" />
                 <span className="font-medium">{displayName}</span>
               </div>
             );
           },
         },
         {
+          header: "Models",
+          cell: (row) =>
+            row.modelPattern ? (
+              <span className="font-mono text-sm">{row.modelPattern}</span>
+            ) : (
+              <span className="text-muted-foreground">All models</span>
+            ),
+        },
+        {
           header: "Discount Percentage",
-          cell: (row) => (
-            <div className="flex items-center gap-2">
-              {editingProvider === row.provider ? (
-                <>
-                  <TextInput
-                    value={editValue}
-                    onValueChange={setEditValue}
-                    onKeyDown={(e) => handleKeyDown(e, row.provider)}
-                    placeholder="5"
-                    className="w-20"
-                    autoFocus
-                  />
-                  <span className="text-gray-600">%</span>
-                  <Icon
-                    icon={CheckIcon}
-                    size="sm"
-                    onClick={() => handleSaveEdit(row.provider)}
-                    className="cursor-pointer text-green-600 hover:text-green-700"
-                  />
-                  <Icon
-                    icon={XIcon}
-                    size="sm"
-                    onClick={handleCancelEdit}
-                    className="cursor-pointer text-gray-600 hover:text-gray-700"
-                  />
-                </>
-              ) : (
-                <>
-                  <Text className="font-medium">{(row.discount * 100).toFixed(1)}%</Text>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
-                    onClick={() => handleStartEdit(row.provider, row.discount)}
-                    className="cursor-pointer text-blue-600 hover:text-blue-700"
-                  />
-                </>
-              )}
-            </div>
-          ),
+          numeric: true,
+          cell: (row) => {
+            const label = rowLabel(row);
+            return (
+              <div className="flex items-center justify-end gap-2">
+                {editingKey === row.key ? (
+                  <>
+                    <Input
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(e, row.key)}
+                      placeholder="5"
+                      className="w-20"
+                      autoFocus
+                    />
+                    <span className="text-muted-foreground">%</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Save discount for ${label}`}
+                      onClick={() => handleSaveEdit(row.key)}
+                      className="cursor-pointer text-success hover:text-success/80"
+                    >
+                      <Check className="size-5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Cancel editing discount for ${label}`}
+                      onClick={handleCancelEdit}
+                      className="cursor-pointer text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-5" />
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">{(row.discount * 100).toFixed(1)}%</p>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Edit discount for ${label}`}
+                      onClick={() => handleStartEdit(row.key, row.discount)}
+                      className="cursor-pointer text-info hover:text-info/80"
+                    >
+                      <SquarePen className="size-5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            );
+          },
           width: "250px",
         },
         {
           header: "Actions",
           cell: (row) => {
-            const { displayName } = getProviderDisplayInfo(row.provider);
+            const label = rowLabel(row);
             return (
-              <Icon
-                icon={TrashIcon}
-                size="sm"
-                onClick={() => onRemoveProvider(row.provider, displayName)}
-                className="cursor-pointer hover:text-red-600"
-              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Remove discount for ${label}`}
+                onClick={() => onRemoveProvider(row.key, label)}
+                className="cursor-pointer hover:text-destructive"
+              >
+                <Trash2 className="size-5" />
+              </Button>
             );
           },
           width: "80px",
         },
       ]}
-      getRowKey={(row) => row.provider}
+      getRowKey={(row) => row.key}
       emptyMessage="No provider discounts configured"
     />
   );

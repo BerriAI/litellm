@@ -11,13 +11,18 @@ request/response bodies are co-located here because only this suite speaks MCP.
 
 from __future__ import annotations
 
+import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from e2e_http import Headers, NoBody, Result, unwrap
-from models import KeyGenerateBody, ObjectPermission
+from e2e_config import settle_propagation
+from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
+from e2e_metadata import step
+from models import KeyGenerateBody, McpServerListResponse, McpServerRow, ObjectPermission
 from proxy_client import ProxyClient
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
@@ -36,19 +41,24 @@ class McpServerNewBody(BaseModel):
     auth_type: str | None = None
     static_headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
+    tool_name_to_description: dict[str, str] | None = None
 
 
 class McpServerNewResponse(BaseModel):
     server_id: str
 
 
-class McpServerRow(BaseModel):
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
     server_id: str
-    alias: str | None = None
-    url: str | None = None
+    status: Literal["healthy", "unhealthy", "unknown"] | None
 
 
-class McpServersListResponse(RootModel[list[McpServerRow]]):
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
     pass
 
 
@@ -85,10 +95,69 @@ class McpToolsListResponse(BaseModel):
         return None
 
 
+class BlockedWordSpec(BaseModel):
+    keyword: str
+    action: str = "BLOCK"
+
+
+class ContentFilterMcpParams(BaseModel):
+    """litellm_content_filter params scoped to the MCP tool-call hook. mode is
+    pre_mcp_call because a pre_call config silently no-ops on the tools/call path
+    (the event type is rewritten to pre_mcp_call for call_mcp_tool), and default_on
+    is required there because per-key/request guardrail selection is dropped from
+    the synthetic MCP request the hook sees."""
+
+    guardrail: str = "litellm_content_filter"
+    mode: str = "pre_mcp_call"
+    default_on: bool = True
+    blocked_words: list[BlockedWordSpec]
+
+
+class GuardrailSpecBody(BaseModel):
+    guardrail_name: str
+    litellm_params: ContentFilterMcpParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: GuardrailSpecBody
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class McpCallToolBody(BaseModel):
     name: str
     arguments: dict[str, McpToolArg]
     server_id: str
+
+
+class McpVirtualToolCallBody(BaseModel):
+    name: str
+    arguments: dict[str, McpToolArg]
+
+
+class McpToolsListParams(BaseModel):
+    server_id: str | None = None
+
+
+class McpToolSearchSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding_model: str | None = None
+    top_k: int = 5
+    similarity_threshold: float = 0.0
+    core_tools: tuple[str, ...] = ()
+
+
+class McpToolSearchSettingsResponse(BaseModel):
+    values: McpToolSearchSettings
+
+
+class McpToolSearchSettingsUpdateResponse(BaseModel):
+    message: str
+    status: str
+    settings: McpToolSearchSettings
 
 
 class McpCallContent(BaseModel):
@@ -114,6 +183,7 @@ class McpCallToolResponse(BaseModel):
 class McpClient:
     proxy: ProxyClient
 
+    @step("Register the MCP server {server_name} with the alias {alias}")
     def register_server(
         self,
         *,
@@ -124,6 +194,8 @@ class McpClient:
         auth_type: str | None = None,
         static_headers: dict[str, str] | None = None,
         allowed_tools: list[str] | None = None,
+        mcp_access_groups: list[str] | None = None,
+        tool_name_to_description: Mapping[str, str] | None = None,
     ) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -137,11 +209,16 @@ class McpClient:
                     auth_type=auth_type,
                     static_headers=static_headers,
                     allowed_tools=allowed_tools,
+                    mcp_access_groups=mcp_access_groups,
+                    tool_name_to_description=(
+                        dict(tool_name_to_description) if tool_name_to_description is not None else None
+                    ),
                 ),
                 response_type=McpServerNewResponse,
             )
         ).server_id
 
+    @step("Delete the MCP server")
     def delete_server(self, server_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/v1/mcp/server/{server_id}",
@@ -150,25 +227,72 @@ class McpClient:
             response_type=NoBody,
         )
 
+    @step("List the MCP servers from /v1/mcp/server")
     def registered_servers(self) -> list[McpServerRow]:
         return unwrap(
             self.proxy.transport.get(
                 "/v1/mcp/server",
                 headers=self.proxy.transport.master,
                 params=NoBody(),
-                response_type=McpServersListResponse,
+                response_type=McpServerListResponse,
             )
         ).root
 
+    @step("List the MCP servers the key can see from /v1/mcp/server")
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
+
+    @step("Check the health of the MCP servers the key can see from /v1/mcp/server/health")
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
+
+    @step("Wait for every proxy replica to list the MCP server in /v1/mcp/server")
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(
+            row for response in registered.values() for row in response.root if row.server_id == server_id
+        )
+
+    @step("Generate a virtual key for the user {user_id}")
     def generate_key(
         self,
         *,
         user_id: str,
         mcp_servers: list[str] | None,
+        mcp_access_groups: list[str] | None = None,
+        mcp_toolsets: list[str] | None = None,
         models: list[str] | None = None,
+        mcp_tool_search_enabled: bool | None = None,
     ) -> str:
         object_permission = (
-            ObjectPermission(mcp_servers=mcp_servers) if mcp_servers is not None else None
+            ObjectPermission(
+                mcp_servers=mcp_servers,
+                mcp_access_groups=mcp_access_groups,
+                mcp_toolsets=mcp_toolsets,
+                mcp_tool_search_enabled=mcp_tool_search_enabled,
+            )
+            if (
+                mcp_servers is not None
+                or mcp_access_groups is not None
+                or mcp_toolsets is not None
+                or mcp_tool_search_enabled is not None
+            )
+            else None
         )
         return self.proxy.generate_key(
             KeyGenerateBody(
@@ -178,14 +302,169 @@ class McpClient:
             )
         )
 
-    def list_tools(self, key: str) -> Result[McpToolsListResponse]:
+    @step("List the MCP tools the key can see from /mcp-rest/tools/list")
+    def list_tools(self, key: str, server_id: str | None = None) -> Result[McpToolsListResponse]:
         return self.proxy.transport.get(
             "/mcp-rest/tools/list",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            params=NoBody(),
+            params=McpToolsListParams(server_id=server_id),
             response_type=McpToolsListResponse,
         )
 
+    @step("Read the MCP tool search settings from /get/mcp_tool_search_settings")
+    def get_mcp_tool_search_settings(self) -> McpToolSearchSettings:
+        return unwrap(
+            self.proxy.transport.get(
+                "/get/mcp_tool_search_settings",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=McpToolSearchSettingsResponse,
+            )
+        ).values
+
+    @step("Update the MCP tool search settings with /update/mcp_tool_search_settings")
+    def update_mcp_tool_search_settings(self, settings: McpToolSearchSettings) -> None:
+        _ = unwrap(
+            self.proxy.transport.patch(
+                "/update/mcp_tool_search_settings",
+                headers=self.proxy.transport.master,
+                json=settings,
+                response_type=McpToolSearchSettingsUpdateResponse,
+            )
+        )
+        settle_propagation(time.monotonic())
+
+    @step('Wait for /mcp-rest/tools/list to show the MCP server\'s tool matching "{needle}"')
+    def await_tool(self, key: str, server_id: str, needle: str) -> str:
+        """Poll tools/list until `server_id` serves a tool matching `needle`, and
+        return its fully-qualified name. Fails at poll_timeout.
+
+        /v1/mcp/server returns as soon as the DB row is written, but the gateway
+        runs the initialize + tools/list handshake against the upstream lazily on
+        the first request that needs it, and reports a server it has not
+        discovered yet exactly like a dead one: an empty tool list. Waiting is
+        what separates the two.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.list_tools(key)
+            if isinstance(result, Success):
+                tool_name = result.data.tool_name_containing(server_id, needle)
+                if tool_name is not None:
+                    return tool_name
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"server {server_id} never served a tool matching {needle!r} within "
+                    f"{self.proxy.poll_timeout}s of registration (upstream unreachable, or "
+                    f"the key's grant was not applied); last tools/list: {result}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
+    @step("Wait for /mcp-rest/tools/list to show the key exactly the expected tools on the MCP server")
+    def await_tools(self, key: str, server_id: str, *, expected: frozenset[str]) -> frozenset[str]:
+        """Poll tools/list until `server_id`'s tools as `key` sees them are exactly
+        `expected`, and return the last listing either way, so the caller's equality
+        assertion names the difference. Fails at poll_timeout only when the read
+        itself never succeeded."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.list_tools(key)
+            if isinstance(result, Success) and result.data.tool_names_for_server(server_id) == expected:
+                return expected
+            if time.monotonic() >= deadline:
+                return unwrap(result).tool_names_for_server(server_id)
+            time.sleep(self.proxy.poll_interval)
+
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call")
+    def await_call_tool(
+        self,
+        key: str,
+        *,
+        server_id: str,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> McpCallToolResponse:
+        """Poll tools/call until the result is not a multi-worker registry miss.
+
+        Retries only on the gateway's own cold-worker 500 shapes (Tool <name>
+        not found / server_not_found). Upstream tool errors and other 500s fail
+        immediately so non-idempotent calls are not repeated.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        last: Result[McpCallToolResponse] | None = None
+        while True:
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            if not _is_mcp_not_synced(last, tool_name=name):
+                return unwrap(last)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"tools/call for {name!r} on server {server_id} still missing on the "
+                    f"data plane after {self.proxy.poll_timeout}s (multi-worker registry lag); "
+                    f"last result: {last}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call and wait for a 403")
+    def await_call_tool_denied(
+        self,
+        key: str,
+        *,
+        server_id: str,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> UnknownApiError:
+        """Poll tools/call until a cold-worker miss clears and the call is 403 access_denied."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        last: Result[McpCallToolResponse] | None = None
+        while True:
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            if isinstance(last, UnknownApiError) and last.status_code == 403:
+                return last
+            if not _is_mcp_not_synced(last, tool_name=name):
+                raise AssertionError(
+                    f"ungranted key's tools/call was not 403 access_denied: {last}"
+                )
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; "
+                    f"last result: {last}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
+    @step('Create the guardrail {name} that blocks MCP tool calls containing "{blocked_keyword}"')
+    def register_mcp_content_filter(self, *, name: str, blocked_keyword: str) -> str:
+        """Register a default-on content-filter guardrail that runs on the MCP
+        tool-call hook (pre_mcp_call) and blocks a single keyword. The keyword is
+        unique per test, so default_on only ever intercepts this test's own
+        banned tool call on the shared proxy."""
+        guardrail_id = unwrap(
+            self.proxy.transport.post(
+                "/guardrails",
+                headers=self.proxy.transport.master,
+                json=GuardrailCreateBody(
+                    guardrail=GuardrailSpecBody(
+                        guardrail_name=name,
+                        litellm_params=ContentFilterMcpParams(
+                            blocked_words=[BlockedWordSpec(keyword=blocked_keyword)],
+                        ),
+                    )
+                ),
+                response_type=GuardrailCreateResponse,
+            )
+        ).guardrail_id
+        settle_propagation(time.monotonic())
+        return guardrail_id
+
+    @step("Delete the guardrail")
+    def delete_guardrail(self, guardrail_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/guardrails/{guardrail_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call with {arguments}")
     def call_tool(
         self,
         key: str,
@@ -202,6 +481,55 @@ class McpClient:
             ),
             response_type=McpCallToolResponse,
         )
+
+    @step("Call the MCP virtual tool {name} through /mcp-rest/tools/call")
+    def call_virtual_tool(
+        self,
+        key: str,
+        *,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> Result[McpCallToolResponse]:
+        return self.proxy.transport.post(
+            "/mcp-rest/tools/call",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            json=McpVirtualToolCallBody(name=name, arguments=dict(arguments)),
+            response_type=McpCallToolResponse,
+        )
+
+
+def _is_mcp_not_synced(
+    result: Result[McpCallToolResponse],
+    *,
+    tool_name: str | None = None,
+) -> bool:
+    """True only for gateway multi-worker registry misses, not upstream errors.
+
+    Matches the proxy's own shapes:
+    - ValueError ``Tool <name> not found`` wrapped as HTTP 500 (cold tool map /
+      unresolved server on this process)
+    - REST ``server_not_found`` when this worker has not loaded the MCP server row
+
+    Does not treat arbitrary 500 bodies that merely mention "tool" and "not found"
+    (e.g. upstream MCP payload text) as lag, so await_call_tool does not retry
+    real failures or non-idempotent calls.
+    """
+    if not isinstance(result, UnknownApiError) or result.status_code != 500:
+        return False
+    body = result.body
+    body_l = body.lower()
+
+    if "server_not_found" in body_l:
+        return True
+    if re.search(r"mcp server ['\"][^'\"]+['\"] was not found", body_l):
+        return True
+
+    # Gateway: "Tool search_datadog_logs not found" (optionally inside a longer message)
+    if tool_name is not None:
+        return (
+            re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
+        )
+    return re.search(r"\btool\s+\S+\s+not found\b", body_l) is not None
 
 
 def build_client(proxy: ProxyClient) -> McpClient:

@@ -7,17 +7,20 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_CAP = 3e-6
+ROOMY_CAP = 100.0
 WINDOW = "30s"
 RESET_DEADLINE_SECONDS = 150
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16)
+    return client.chat(key, MODEL, f"reset {unique_marker()}", max_tokens=16)
 
 
 def _drive_to_block(client: BudgetClient, key: str) -> None:
@@ -46,8 +49,16 @@ def _poll_until_serves_again(client: BudgetClient, key: str) -> None:
     pytest.fail(f"budget never reset within {RESET_DEADLINE_SECONDS}s")
 
 
-class TestBudgetResetDiagonal:
+class TestBudgetResetPerLevel:
     @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bare_key_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
         key = client.generate_key(max_budget=TINY_CAP, budget_duration=WINDOW)
         resources.defer(lambda: client.delete_key(key))
@@ -56,6 +67,14 @@ class TestBudgetResetDiagonal:
         _poll_until_serves_again(client, key)
 
     @pytest.mark.covers("quota_management.budget.team.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
         team_id = client.create_team(
             alias=f"e2e-team-reset-{unique_marker()}", max_budget=TINY_CAP, budget_duration=WINDOW
@@ -68,6 +87,14 @@ class TestBudgetResetDiagonal:
         _poll_until_serves_again(client, key)
 
     @pytest.mark.covers("quota_management.budget.organization.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_org_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
         org_id = client.create_org(
             max_budget=TINY_CAP, alias=f"e2e-org-reset-{unique_marker()}", budget_duration=WINDOW
@@ -90,6 +117,14 @@ class TestBudgetResetDiagonal:
         _poll_until_serves_again(client, key)
 
     @pytest.mark.covers("quota_management.budget.internal_user.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_personal_key_user_budget_resets_after_window(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
@@ -101,16 +136,64 @@ class TestBudgetResetDiagonal:
         _drive_to_block(client, key)
         _poll_until_serves_again(client, key)
 
-    @pytest.mark.covers("quota_management.budget.internal_user.resets_after_window")
-    def test_team_member_key_user_budget_resets_after_window(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
-        user_id = client.create_user(max_budget=TINY_CAP, budget_duration=WINDOW)
+
+class TestKeyBudgetResetAcrossKeyKinds:
+    """The tiny max_budget and its 30s window sit on the key itself while the user,
+    team, and membership around it are roomy (100.0), so the key's own budget is
+    the only thing that can block and the only thing that has to reset."""
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_personal_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        user_id = client.create_user(max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
-        team_id = client.create_team(alias=f"e2e-user-team-reset-{unique_marker()}")
+        key = client.generate_key(user_id=user_id, max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_team_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        team_id = client.create_team(alias=f"e2e-key-reset-team-{unique_marker()}", max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_team(team_id))
-        client.add_team_member(team_id, user_id, max_budget_in_team=100.0)
-        key = client.generate_key(team_id=team_id, user_id=user_id)
+        key = client.generate_key(team_id=team_id, max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_team_member_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        team_id = client.create_team(alias=f"e2e-key-reset-team-{unique_marker()}", max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_team(team_id))
+        member_id = client.create_user(max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_user(member_id))
+        client.add_team_member(team_id, member_id, max_budget_in_team=ROOMY_CAP)
+        key = client.generate_key(team_id=team_id, user_id=member_id, max_budget=TINY_CAP, budget_duration=WINDOW)
         resources.defer(lambda: client.delete_key(key))
 
         _drive_to_block(client, key)

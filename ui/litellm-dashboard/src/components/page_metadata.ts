@@ -5,6 +5,7 @@
 
 // Page descriptions for UI Settings configuration
 export const pageDescriptions: Record<string, string> = {
+  home: "Usage at a glance, recent launches and blog updates",
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",
@@ -19,7 +20,10 @@ export const pageDescriptions: Record<string, string> = {
   "tool-policies": "Configure tool use policies and permissions",
   "vector-stores": "Manage vector databases for embeddings",
   new_usage: "View usage analytics and metrics",
+  "cost-optimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
+  "model-insights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
   logs: "Access request and response logs",
+  lens: "Review agent activity and investigate patterns with supporting evidence",
   "guardrails-monitor": "Monitor guardrail performance and view logs",
   users: "Manage internal user accounts and permissions",
   teams: "Create and manage teams for access control",
@@ -39,6 +43,7 @@ export const pageDescriptions: Record<string, string> = {
   skills: "Browse and manage Claude Code skills",
   usage: "View legacy usage dashboard",
   "router-settings": "Configure routing and load balancing settings",
+  telemetry: "Choose which anonymous usage telemetry this proxy collects and see the last report",
   "logging-and-alerts": "Set up logging and alert configurations",
   "admin-panel": "Access admin panel and settings",
 };
