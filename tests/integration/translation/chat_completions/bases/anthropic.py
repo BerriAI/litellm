@@ -86,6 +86,89 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "anthropic/claude-haiku-5-5",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
+        "max_tokens": 64,
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CfoboJTmCCdzhHCYYzodZ",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello."}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "created": ANY,
+        "model": "anthropic/claude-haiku-5-5",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 6,
+            "prompt_tokens": 23,
+            "total_tokens": 29,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 6},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 23,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
 CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",
@@ -403,6 +486,89 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                 "index": 0,
                 "message": {
                     "content": "Hello.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 6,
+            "prompt_tokens": 23,
+            "total_tokens": 29,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 6},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 23,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "anthropic/claude-fable-5-1",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={
+        "model": "claude-fable-5-1",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
+        "max_tokens": 64,
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "model": "claude-fable-5-1",
+        "id": "msg_011Cg33fMNz7YZzvSR7Ycg5X",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "created": ANY,
+        "model": "anthropic/claude-fable-5-1",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello!",
                     "role": "assistant",
                     "provider_specific_fields": {"citations": None, "thinking_blocks": None},
                 },

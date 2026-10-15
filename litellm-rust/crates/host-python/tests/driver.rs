@@ -23,15 +23,15 @@ use pyo3::{
 use rstest::rstest;
 use support::{
     HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
-    failing_machine, hooks, interpreter, lifecycle_binding, open_stream, read_all, run_composed,
-    run_scripted, settled, success_machine,
+    failing_machine, handed, hooks, interpreter, lifecycle_module, open_stream, read_all,
+    run_composed, run_scripted, settled, success_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
     let (sender, mut receiver) = observation_channel(NonZeroUsize::new(capacity).unwrap());
     let options = CallOptions {
         asynchronous: false,
-        lifecycle: lifecycle_binding,
+        steps: lifecycle_module,
         observers: Some(sender),
     };
     (options, move || {
@@ -83,13 +83,17 @@ fn composed_hooks_share_prepared_arguments_and_one_execution(
             .with(hooks(&log, HookScript::ObserveArguments))
             .with(hooks(&log, HookScript::RewriteArguments))
             .with(hooks(&log, HookScript::ReplaceResponse));
-        let result = run_call(
+        let result = handed(
             py,
-            move |_, _, request| Ok(success_machine()(request)),
-            binding(&log, OpScript::Answer),
-            chain,
-            PyDict::new(py).unbind(),
-            call_options(asynchronous),
+            run_call(
+                py,
+                move |_, _, request| Ok(success_machine()(request)),
+                binding(&log, OpScript::Answer),
+                chain,
+                PyDict::new(py).unbind(),
+                call_options(asynchronous),
+            ),
+            asynchronous,
         );
         if asynchronous {
             assert!(log.entries().is_empty());
@@ -148,7 +152,7 @@ fn observation_delivery_preserves_callback_order_and_response(
             std::convert::identity,
             CallOptions {
                 asynchronous,
-                lifecycle: lifecycle_binding,
+                steps: lifecycle_module,
                 observers: Some(sender.clone()),
             },
         );
@@ -389,7 +393,7 @@ fn a_stream_carries_its_head_before_the_first_chunk(
             call_options(asynchronous),
         );
         let hidden: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
-            stream.getattr("head").unwrap().extract().unwrap();
+            stream.getattr("_hidden_params").unwrap().extract().unwrap();
         assert_eq!(
             hidden["additional_headers"],
             std::collections::HashMap::from([("request-id".to_string(), "req_1".to_string())])
@@ -563,23 +567,27 @@ fn resource_setup_uses_prepared_arguments_and_failures_are_terminal(
         let setup_error = error.clone_ref(py);
         let arguments = PyDict::new(py);
         arguments.set_item("api_key", "original").unwrap();
-        let result = run_call(
+        let result = handed(
             py,
-            move |py, prepared, request| {
-                let source: String = prepared.get_item("prepared")?.unwrap().extract()?;
-                let key: String = prepared.get_item("api_key")?.unwrap().extract()?;
-                setup_log.push(format!("setup:{source}:{key}"));
-                if fail_setup {
-                    return Err(PyErr::from_value(setup_error.into_bound(py).into_any()));
-                }
-                Ok(success_machine()(request))
-            },
-            binding(&log, OpScript::Answer),
-            HookChain::new()
-                .with(hooks(&log, HookScript::RewriteArguments))
-                .with(ArgumentPolicy::Inherit),
-            arguments.clone().unbind(),
-            call_options(asynchronous),
+            run_call(
+                py,
+                move |py, prepared, request| {
+                    let source: String = prepared.get_item("prepared")?.unwrap().extract()?;
+                    let key: String = prepared.get_item("api_key")?.unwrap().extract()?;
+                    setup_log.push(format!("setup:{source}:{key}"));
+                    if fail_setup {
+                        return Err(PyErr::from_value(setup_error.into_bound(py).into_any()));
+                    }
+                    Ok(success_machine()(request))
+                },
+                binding(&log, OpScript::Answer),
+                HookChain::new()
+                    .with(hooks(&log, HookScript::RewriteArguments))
+                    .with(ArgumentPolicy::Inherit),
+                arguments.clone().unbind(),
+                call_options(asynchronous),
+            ),
+            asynchronous,
         );
         if asynchronous {
             assert!(log.entries().is_empty());
@@ -630,16 +638,20 @@ fn closing_an_unstarted_call_never_initializes_resources(
     Python::attach(|py| {
         let log = Log::default();
         let setup_log = log.clone();
-        let pending = run_call(
+        let pending = handed(
             py,
-            move |_, _, request| {
-                setup_log.push("setup");
-                Ok(success_machine()(request))
-            },
-            binding(&log, OpScript::Answer),
-            hooks(&log, HookScript::Plain),
-            PyDict::new(py).unbind(),
-            call_options(true),
+            run_call(
+                py,
+                move |_, _, request| {
+                    setup_log.push("setup");
+                    Ok(success_machine()(request))
+                },
+                binding(&log, OpScript::Answer),
+                hooks(&log, HookScript::Plain),
+                PyDict::new(py).unbind(),
+                call_options(true),
+            ),
+            true,
         )
         .unwrap();
         assert!(log.entries().is_empty());

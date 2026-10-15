@@ -517,6 +517,50 @@ def _reasoning_item_to_response_input(
     }
 
 
+def _requested_defer_loading(tool: Mapping[str, object], function_tool: Mapping[str, object]) -> object:
+    tool_level: Final = tool.get("defer_loading")
+    return tool_level if tool_level is not None else function_tool.get("defer_loading")
+
+
+def _defer_loading_field(
+    tool: Mapping[str, object],
+    function_tool: Mapping[str, object],
+    *,
+    tool_search: Literal["hosted", "client", "absent"],
+    drop_params: bool,
+) -> Mapping[str, bool]:
+    defer_loading: Final = _requested_defer_loading(tool, function_tool)
+    if defer_loading is None or (defer_loading is False and tool_search == "absent"):
+        return {}
+    if tool_search == "client":
+        verbose_logger.debug(
+            "Chat provider: dropping defer_loading=%r beside a client-executed tool_search", defer_loading
+        )
+        return {}
+    if isinstance(defer_loading, bool) and tool_search == "hosted":
+        return {"defer_loading": defer_loading}
+    if drop_params:
+        verbose_logger.debug("Chat provider: dropping defer_loading=%r under drop_params", defer_loading)
+        return {}
+    problem: Final = (
+        'defer_loading needs a {"type": "tool_search"} tool in the same request'
+        if isinstance(defer_loading, bool)
+        else f"defer_loading must be a boolean, got {defer_loading!r}"
+    )
+    raise litellm.UnsupportedParamsError(
+        message=f"{problem}. To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
+    )
+
+
+def _without_dropped_defer_loading(
+    tool: Mapping[str, object], *, tool_search: Literal["hosted", "client", "absent"], drop_params: bool
+) -> Mapping[str, object]:
+    if tool.get("type") != "function" or "defer_loading" not in tool:
+        return tool
+    kept: Final = _defer_loading_field(tool, {}, tool_search=tool_search, drop_params=drop_params)
+    return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
+
+
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     """
     Handler for transforming /chat/completions api requests to litellm.responses requests
@@ -747,6 +791,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
+        drop_params: bool = False,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -756,7 +801,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 responses_api_request["tools"] = self._convert_tools_to_responses_format(
-                    cast(list[dict[str, object]], value)
+                    cast(list[dict[str, object]], value), drop_params=drop_params
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -889,7 +934,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if instructions:
             responses_api_request["instructions"] = instructions
 
-        self._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+        self._map_optional_params_to_responses_api_request(
+            optional_params,
+            responses_api_request,
+            drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+        )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)
@@ -1417,14 +1466,21 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return result
 
     def _convert_tools_to_responses_format(
-        self, tools: list[dict[str, object]]
+        self, tools: list[dict[str, object]], drop_params: bool = False
     ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
+        tool_search: Final[Literal["hosted", "client", "absent"]] = (
+            "client"
+            if any(tool.get("type") == "tool_search" and tool.get("execution") == "client" for tool in tools)
+            else "hosted"
+            if any(tool.get("type") == "tool_search" for tool in tools)
+            else "absent"
+        )
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-                function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
+            if tool.get("type") == "function" and isinstance(function_payload := tool.get("function"), dict):
+                function_tool = cast(ChatCompletionToolParamFunctionChunk, function_payload)  # cast-ok: client tool
                 responses_tools.append(
                     FunctionToolParam(
                         name=function_tool["name"],
@@ -1432,6 +1488,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         strict=function_tool.get("strict"),
                         type="function",
                         description=function_tool.get("description"),
+                        **_defer_loading_field(tool, function_tool, tool_search=tool_search, drop_params=drop_params),
                     )
                 )
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
@@ -1446,7 +1503,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     flat_custom["format"] = convert_custom_tool_format_to_responses_shape(custom_payload["format"])
                 responses_tools.append(flat_custom)
             else:
-                responses_tools.append(tool)
+                responses_tools.append(
+                    _without_dropped_defer_loading(tool, tool_search=tool_search, drop_params=drop_params)
+                )
 
         return cast(list["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 

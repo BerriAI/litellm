@@ -766,3 +766,157 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "system_fingerprint": None,
     },
 )
+
+GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "azure/gpt-6-astra",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/openai/deployments/gpt-6-astra/chat/completions?api-version=2025-04-01-preview",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "api-key": "synthetic-azure-key",
+        "authorization": "Bearer synthetic-azure-key",
+    },
+    expected_provider_request={
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "model": "gpt-6-astra",
+        "max_completion_tokens": 64,
+        "stream": False,
+    },
+    mock_provider_response={
+        "choices": [
+            {
+                "content_filter_results": {
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "protected_material_code": {"detected": False, "filtered": False},
+                    "protected_material_text": {"detected": False, "filtered": False},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                },
+                "finish_reason": "stop",
+                "index": 0,
+                "logprobs": None,
+                "message": {"annotations": [], "content": "Hello!", "refusal": None, "role": "assistant"},
+            }
+        ],
+        "created": 1792022229,
+        "id": "chatcmpl-EZ38HKM9wxIe1d1BEJdXW3rW8ceOB",
+        "model": "gpt-6-astra-2026-09-03",
+        "object": "chat.completion",
+        "prompt_filter_results": [
+            {
+                "prompt_index": 0,
+                "content_filter_results": {
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "jailbreak": {"detected": False, "filtered": False},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                },
+            }
+        ],
+        "routing": {"serving_pipereplica": "d20260921004409-52a9ff06-prefill-r12-dp0-prefill"},
+        "service_tier": "default",
+        "system_fingerprint": None,
+        "usage": {
+            "completion_tokens": 5,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "latency_checkpoint": {
+                "engine_tbt_ms": 12,
+                "engine_ttft_ms": 311,
+                "engine_ttlt_ms": 384,
+                "pre_inference_ms": 149,
+                "service_tbt_ms": 6,
+                "service_ttft_ms": 948,
+                "service_ttlt_ms": 977,
+                "user_visible_ttft_ms": 799,
+            },
+            "prompt_tokens": 19,
+            "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+            "total_tokens": 24,
+        },
+    },
+    expected_litellm_response={
+        "id": "chatcmpl-EZ38HKM9wxIe1d1BEJdXW3rW8ceOB",
+        "created": 1792022229,
+        "model": "azure/gpt-6-astra",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "Hello!", "role": "assistant", "annotations": [], "refusal": None},
+                "provider_specific_fields": {
+                    "content_filter_results": {
+                        "hate": {"filtered": False, "severity": "safe"},
+                        "protected_material_code": {"detected": False, "filtered": False},
+                        "protected_material_text": {"detected": False, "filtered": False},
+                        "self_harm": {"filtered": False, "severity": "safe"},
+                        "sexual": {"filtered": False, "severity": "safe"},
+                        "violence": {"filtered": False, "severity": "safe"},
+                    }
+                },
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 19,
+            "total_tokens": 24,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {
+                "audio_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+            },
+            "latency_checkpoint": {
+                "engine_tbt_ms": 12,
+                "engine_ttft_ms": 311,
+                "engine_ttlt_ms": 384,
+                "pre_inference_ms": 149,
+                "service_tbt_ms": 6,
+                "service_ttft_ms": 948,
+                "service_ttlt_ms": 977,
+                "user_visible_ttft_ms": 799,
+            },
+        },
+        "service_tier": "default",
+        "prompt_filter_results": [
+            {
+                "prompt_index": 0,
+                "content_filter_results": {
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "jailbreak": {"detected": False, "filtered": False},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                },
+            }
+        ],
+        "routing": {"serving_pipereplica": "d20260921004409-52a9ff06-prefill-r12-dp0-prefill"},
+        "system_fingerprint": None,
+    },
+)
