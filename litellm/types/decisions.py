@@ -85,7 +85,9 @@ class DecisionsBase64Image(LiteLLMPydanticObjectBase):
 
 
 DecisionsImage: TypeAlias = (
-    Annotated[str, Field(pattern=r"^(?i:data:image/[^;,\s]+(?:;[^;,\s]+)*;base64,.+|https?://\S+)$")]
+    Annotated[
+        str, Field(pattern=r"^(?i:data:image/[^;,\s]+(?:;[^;,\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\S+)$")
+    ]
     | DecisionsBase64Image
 )
 

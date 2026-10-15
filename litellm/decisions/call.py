@@ -33,6 +33,8 @@ from litellm.llms.openai.decisions.transformation import ir_to_openai_response, 
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
+    DecisionsAssetReference,
+    DecisionsAssets,
     DecisionsAudio,
     DecisionsBase64Image,
     DecisionsImage,
@@ -82,6 +84,13 @@ _BASE64_MARKER: Final = ";base64,"
 
 _IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
 _IMAGE_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_ASSETS_ADAPTER: Final[TypeAdapter[DecisionsAssets | None]] = TypeAdapter(
+    DecisionsAssets | None, config=ConfigDict(title="assets")
+)
+_ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, DecisionsAsset]]] = TypeAdapter(
+    tuple[DecisionsAssetReference, DecisionsAsset]
+)
+_ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -106,6 +115,29 @@ def _no_image(_image: DecisionsImage) -> bool:
     return False
 
 
+def _valid_asset(entry: tuple[str, object]) -> tuple[str, DecisionsAsset] | None:
+    try:
+        return _ASSET_ENTRY_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _asset_entries(assets: object) -> Mapping[str, object]:
+    try:
+        return _ASSET_ENTRIES_ADAPTER.validate_python(assets)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _request_assets(assets: object, drops_params: bool) -> Mapping[str, DecisionsAsset] | None:
+    if not drops_params:
+        return _ASSETS_ADAPTER.validate_python(assets)
+    valid: Final = MappingProxyType(
+        dict(entry for entry in map(_valid_asset, _asset_entries(assets).items()) if entry is not None)
+    )
+    return valid or None
+
+
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
     if not drops_params:
         return _IMAGES_ADAPTER.validate_python(images) or ()
@@ -127,7 +159,7 @@ class SystemOneRequestFields:
                 "state": self.state,
                 "questions": self.questions,
                 "images": _request_images(self.images, drops_params) or None,
-                "assets": self.assets,
+                "assets": _request_assets(self.assets, drops_params),
                 "audio": self.audio,
                 "videos": self.videos,
             }
@@ -267,7 +299,7 @@ def _unsupported_params(
     )
     refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not (
-        provider_config.supports_box_questions(model, custom_llm_provider)
+        provider_config.supports_box_questions(model, custom_llm_provider, headers)
     )
     refuses_audio: Final = bool(ir_request.audio) and not provider_config.supports_audio_input(
         model, custom_llm_provider
@@ -311,7 +343,7 @@ def _without_unsupported_params(
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions
-            if provider_config.supports_box_questions(model, custom_llm_provider)
+            if provider_config.supports_box_questions(model, custom_llm_provider, headers)
             else tuple(filter(_is_not_box_question, ir_request.questions))
         ),
     )
@@ -355,13 +387,20 @@ def _provider_ir_request(
     return supported
 
 
+def _provider_specific_header(
+    value: object,
+) -> ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None:
+    try:
+        return _PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def _outbound_headers(
     extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-        provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
-            kwargs.get("provider_specific_header")
-        ),
+        provider_specific_header=_provider_specific_header(kwargs.get("provider_specific_header")),
         custom_llm_provider=custom_llm_provider,
     )
     return MappingProxyType({**(extra_headers or {}), **forwarded})

@@ -22,6 +22,7 @@ _IMAGES_HEADER: Final = f"{TYPESAFE_DANGER_ZONE_HEADER_PREFIX}images"
 _ASSET_FORMATS: Final[Mapping[str, Literal["png", "jpg"]]] = MappingProxyType(
     {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg"}
 )
+_URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
 
 
 def _image_reference(image_url: str) -> str:
@@ -32,7 +33,11 @@ def _image_asset(image_url: str) -> DecisionsAsset | None:
     asset_format: Final = _ASSET_FORMATS.get(image_media_type(image_url) or "")
     if asset_format is None:
         return None
-    return DecisionsAsset(type="image", format=asset_format, data_base64=image_url.partition(",")[2])
+    return DecisionsAsset(
+        type="image",
+        format=asset_format,
+        data_base64=image_url.partition(",")[2].translate(_URL_SAFE_TO_STANDARD_BASE64),
+    )
 
 
 def _part_text(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> str:
@@ -88,6 +93,9 @@ class TypeSafeDecisionsConfig(BaseDecisionsConfig):
         return any(
             name.lower() == _IMAGES_HEADER and value.strip().lower() == "true" for name, value in headers.items()
         )
+
+    def supports_box_questions(self, model: str, custom_llm_provider: str, headers: Mapping[str, str]) -> bool:
+        return self.supports_assets(headers) and super().supports_box_questions(model, custom_llm_provider, headers)
 
     def transform_decisions_request(
         self,

@@ -10889,7 +10889,7 @@
                           "items": {
                             "anyOf": [
                               {
-                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
                                 "type": "string"
                               },
                               {
@@ -11899,7 +11899,7 @@
                           "items": {
                             "anyOf": [
                               {
-                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
                                 "type": "string"
                               },
                               {

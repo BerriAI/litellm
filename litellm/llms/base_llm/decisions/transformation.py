@@ -537,7 +537,7 @@ class BaseDecisionsConfig(ABC):
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return False
 
-    def supports_box_questions(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_box_questions(self, model: str, custom_llm_provider: str, headers: Mapping[str, str]) -> bool:
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_box_questions(
             model=model, custom_llm_provider=custom_llm_provider
         )
