@@ -158,6 +158,13 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
             callback = get_validated_callback_metadata(item=entry, source="team-level read")
             if callback is None:
                 continue
+            # The conversion drops still-marked (unreadable) values so they are never
+            # served as credentials; this admin read still shows the field, masked.
+            for var, value in callback.callback_vars.items():
+                if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+                    if resolved.callback_vars is None:
+                        resolved.callback_vars = {}
+                    resolved.callback_vars.setdefault(var, _CALLBACK_VARS_REDACTED)
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
     else:
         callback_settings: Final = decrypted.get("callback_settings")

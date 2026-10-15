@@ -70,6 +70,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
+    CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
     strip_callback_config,
@@ -988,6 +989,10 @@ def convert_key_logging_metadata_to_callback(
         if var.startswith("newrelic_") and data.callback_name != "newrelic":
             continue
         if var.startswith("signoz_") and data.callback_name != "signoz":
+            continue
+        if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+            # At-rest ciphertext this install cannot read: never coerce the blob into the
+            # credential — the variable reads as unset.
             continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}

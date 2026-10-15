@@ -737,10 +737,11 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
     assert isinstance(litellm.callbacks[0], CustomLogger)
 
 
-def test_decrypt_callback_vars_drops_a_marked_value_it_cannot_read(monkeypatch):
+def test_decrypt_callback_vars_preserves_a_marked_value_it_cannot_read(monkeypatch):
     """A value carrying the encrypted-value marker that does not decrypt (wrong key, or
-    legacy ciphertext without PyNaCl) must read as unset — never be handed to the
-    logging provider as if the ciphertext blob were the credential."""
+    legacy ciphertext without PyNaCl) survives the transform byte-identical — the
+    migration round-trips this decrypt and nulling the field would destroy the only copy
+    of the ciphertext. The serving paths drop still-marked values as unset instead."""
     import sys
 
     monkeypatch.setitem(sys.modules, "nacl", None)
@@ -750,7 +751,26 @@ def test_decrypt_callback_vars_drops_a_marked_value_it_cannot_read(monkeypatch):
 
     decrypted = decrypt_callback_vars({"callback_settings": {"callback_vars": {"langfuse_secret_key": marked}}})
 
-    assert decrypted["callback_settings"]["callback_vars"]["langfuse_secret_key"] is None
+    assert decrypted["callback_settings"]["callback_vars"]["langfuse_secret_key"] == marked
+
+
+def test_key_logging_conversion_drops_a_marked_value_it_cannot_read(monkeypatch):
+    """convert_key_logging_metadata_to_callback must never hand a still-marked
+    (unreadable) ciphertext to the logging provider as if it were the credential — the
+    variable reads as unset. The stored value itself stays byte-identical."""
+    from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-callback-decrypt-salt")
+    marked = "litellm_enc::" + str(encrypt_value_helper("secret", new_encryption_key="sk-another-salt"))
+
+    team_callback = AddTeamCallback(
+        callback_name="langfuse",
+        callback_vars={"langfuse_secret_key": marked, "langfuse_environment": "production"},
+    )
+
+    converted = convert_key_logging_metadata_to_callback(team_callback, TeamCallbackMetadata())
+    assert converted.callback_vars == {"langfuse_environment": "production"}
 
 
 def test_decrypt_callback_vars_round_trips_a_marked_value_under_the_current_key(monkeypatch):

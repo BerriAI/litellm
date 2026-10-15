@@ -728,8 +728,9 @@ def encrypt_callback_vars(metadata: object) -> Any:
 def decrypt_callback_vars(metadata: object) -> Any:
     """Return a deep copy of metadata with callback_vars values decrypted.
 
-    Legacy plaintext rows pass through unchanged; a marked value that cannot be
-    decrypted reads as unset instead of being served as the credential.
+    Legacy plaintext rows and marked-but-undecryptable values pass through unchanged —
+    the migration round-trips this transform, so the stored bytes must survive it;
+    serving paths drop still-marked values instead of using them as credentials.
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
@@ -800,5 +801,7 @@ def _decrypt_or_passthrough(key: str, value: object) -> object:
     if decrypted is not None:
         return decrypted
     # Marked-but-undecryptable (wrong key, or legacy ciphertext PyNaCl is missing for):
-    # hand the provider None — never the ciphertext blob itself as if it were the key.
-    return None
+    # keep the stored value byte-identical — the migration round-trips this transform,
+    # so nulling the field would destroy the only copy of the ciphertext. Consumers
+    # that hand callback vars to a provider drop still-marked values as unset.
+    return value
