@@ -49,7 +49,7 @@ class GuardrailResetResponse(BaseModel):
 
 def marker_of(body: GuardrailRequest, remembered: Mapping[str, str]) -> str | None:
     """The request's marker: in the prompt on the request hook, remembered by `litellm_call_id` on the response
-    hook, since a replayed provider reply does not contain it."""
+    hook, since a generated provider reply does not contain it."""
     texts: Final = body.texts or []
     in_text: Final = next((found for text in texts if (found := marker_in(text)) is not None), None)
     if in_text is not None or body.litellm_call_id is None:

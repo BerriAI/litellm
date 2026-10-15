@@ -1,6 +1,6 @@
-"""The Anthropic-shaped perf mock: /v1/messages, JSON and SSE, replaying what api.anthropic.com answered to
-each request shape (thinking blocks, tool_use, cache usage, the message_start to message_stop event order and
-the chunk boundaries it arrived in)."""
+"""The Anthropic-shaped perf mock: /v1/messages, JSON and SSE, answering each request with a generated reply in
+api.anthropic.com's wire format (thinking blocks, tool_use, cache usage, the message_start to message_stop event
+order and its chunk sizes)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from mock_common import (
     json_reply,
     mount_control,
     parse_json,
+    str_field,
     stream_reply,
 )
 
@@ -30,9 +31,7 @@ def build_app() -> FastAPI:
         body: Final = parse_json(await request.body())
         stream: Final = bool_field(body, "stream")
         decision: Final = log.decide(
-            route="messages",
-            stream=stream,
-            body=body,
+            route="messages", stream=stream, body=body, model=str_field(body, "model", "claude-sonnet-5")
         )
         return stream_reply(decision, SSE) if stream else await json_reply(decision)
 

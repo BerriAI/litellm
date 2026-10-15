@@ -1,10 +1,10 @@
-"""The Bedrock-shaped perf mock: Converse and ConverseStream under /model/{model_id}/..., replaying what bedrock-runtime answered to each request shape. Streams are the
-captured application/vnd.amazon.eventstream bytes verbatim (prelude, headers, CRCs), so the gateway's
-botocore-based decoder runs against the real framing."""
+"""The Bedrock-shaped perf mock: Converse, ConverseStream, InvokeModel and InvokeModelWithResponseStream under
+/model/{model_id}/..., answering each request with a generated reply in bedrock-runtime's wire format. Streams are application/vnd.amazon.eventstream
+frames (prelude, headers, CRCs), so the gateway's botocore-based decoder runs against the real framing."""
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
@@ -25,13 +25,9 @@ def build_app() -> FastAPI:
     log: Final = RequestLog("bedrock")
     mount_control(app, log)
 
-    async def handle(model_id: str, request: Request, route: str, stream: bool) -> Response:
+    async def handle(model_id: str, request: Request, route: Literal["converse", "invoke"], stream: bool) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(
-            route=route,
-            stream=stream,
-            body=body,
-        )
+        decision: Final = log.decide(route=route, stream=stream, body=body, model=model_id)
         return stream_reply(decision, EVENT_STREAM) if stream else await json_reply(decision)
 
     async def converse(model_id: str, request: Request) -> Response:
@@ -40,6 +36,16 @@ def build_app() -> FastAPI:
     async def converse_stream(model_id: str, request: Request) -> Response:
         return await handle(model_id, request, "converse", True)
 
+    async def invoke(model_id: str, request: Request) -> Response:
+        return await handle(model_id, request, "invoke", False)
+
+    async def invoke_with_response_stream(model_id: str, request: Request) -> Response:
+        return await handle(model_id, request, "invoke", True)
+
     app.add_api_route("/model/{model_id:path}/converse", converse, methods=["POST"])
     app.add_api_route("/model/{model_id:path}/converse-stream", converse_stream, methods=["POST"])
+    app.add_api_route("/model/{model_id:path}/invoke", invoke, methods=["POST"])
+    app.add_api_route(
+        "/model/{model_id:path}/invoke-with-response-stream", invoke_with_response_stream, methods=["POST"]
+    )
     return app

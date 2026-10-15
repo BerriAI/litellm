@@ -3,6 +3,7 @@ calls, the workers' memory) into the case's metrics, and the case's limits into 
 
 from __future__ import annotations
 
+import hashlib
 import statistics
 from collections import Counter
 from collections.abc import Iterable
@@ -14,7 +15,7 @@ from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
 
 from setup.datastore import DbCounters, RedisCounters
-from setup.mocks.replay import Capture, Provider, library
+from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
 from setup.wire import WireRecord
 
@@ -24,7 +25,8 @@ class MockRequestSeen(BaseModel):
     marker: str | None
     route: str
     stream: bool
-    shape: str
+    output_tokens: int
+    text_sha1: str
     delay_s: float
 
 
@@ -151,18 +153,18 @@ class Observation:
 
     def time_to_first_token_seconds(self) -> list[float]:
         """Seconds from the client sending each first-attempt streamed request to its first token, mock delay
-        included, comparable across versions because the mocks replay the same captures on the same clock."""
+        included, comparable across versions because the mocks generate the same replies after the same wait."""
         return [record.first_token_s for record, _ in self._clean(stream=True) if record.first_token_s is not None]
 
-    def bodies_off_capture(self) -> int:
-        """Served requests whose text is not the captured reply the mock replayed for them (plus the post-call
-        rewrite for requests in the intervene slice), a translation or streaming fault somewhere in the gateway."""
+    def bodies_off_reply(self) -> int:
+        """Served requests whose text is not the reply the mock generated for them (plus the post-call rewrite
+        for requests in the intervene slice), a translation or streaming fault somewhere in the gateway."""
         seen_by_marker: Final = {seen.marker: seen for seen in self.mock_requests if seen.marker is not None}
         return sum(
             1
             for record in self.served
             if (seen := seen_by_marker.get(record.marker)) is not None
-            and record.text != _expected_text(seen, intervened=record.marker.endswith("-i"))
+            and _text_sha1(record.text, intervened=record.marker.endswith("-i")) != seen.text_sha1
         )
 
     def guardrail_missed(self) -> int:
@@ -172,18 +174,9 @@ class Observation:
         return sum(1 for record in self.served if pre[record.marker] != 1 or post[record.marker] != 1)
 
 
-def _capture_for(seen: MockRequestSeen) -> Capture | None:
-    return next(
-        (c for c in library(seen.provider) if (c.route, c.stream, c.shape) == (seen.route, seen.stream, seen.shape)),
-        None,
-    )
-
-
-def _expected_text(seen: MockRequestSeen, *, intervened: bool) -> str | None:
-    capture: Final = _capture_for(seen)
-    if capture is None:
-        return None
-    return capture.text + " [post]" if intervened else capture.text
+def _text_sha1(text: str, *, intervened: bool) -> str:
+    original: Final = text.removesuffix(" [post]") if intervened else text
+    return hashlib.sha1(original.encode()).hexdigest()
 
 
 def observe(metric: Metric, percentile_rank: int | None, observation: Observation) -> float | None:
@@ -292,7 +285,7 @@ def _diagnostics(observation: Observation) -> list[str]:
     share: Final = observation.spend_logged_share
     return [
         "  diagnostics (not limits):",
-        f"    bodies off capture {observation.bodies_off_capture()}",
+        f"    bodies off reply {observation.bodies_off_reply()}",
         f"    guardrail calls per request {len(observation.guardrail_calls) / count:.3f}",
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",

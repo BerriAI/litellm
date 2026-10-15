@@ -73,8 +73,7 @@ class RequestShape:
     """What one request looks like: a coding-agent session (`setup/corpus/session.py`, the system prompt, the
     Read/Edit/Write/Bash/Grep/Glob tools when `tools` is set, then file-reading turns carrying real source files)
     whose size in input tokens is drawn per request from the `input_tokens` range, and the output cap. The mocks
-    answer with the real provider capture nearest in size and a time to first byte interpolated between the two
-    captures around that size."""
+    answer with a reply generated for the request, sized from that cap, a tool call when `tools` is set."""
 
     name: str
     input_tokens: tuple[int, int]

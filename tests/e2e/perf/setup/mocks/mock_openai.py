@@ -1,10 +1,10 @@
-"""The OpenAI-shaped perf mock: /v1/chat/completions and /v1/responses, JSON and SSE, replaying what
-api.openai.com answered to each request shape, so the gateway's real OpenAI client and stream parsers run
-against the provider's own bodies and chunk boundaries."""
+"""The OpenAI-shaped perf mock: /v1/chat/completions and /v1/responses, JSON and SSE, answering each request
+with a generated reply in api.openai.com's wire format, so the gateway's real OpenAI client and stream parsers
+run against the provider's field set and chunk sizes."""
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
@@ -15,6 +15,7 @@ from mock_common import (
     json_reply,
     mount_control,
     parse_json,
+    str_field,
     stream_reply,
 )
 
@@ -26,13 +27,11 @@ def build_app() -> FastAPI:
     log: Final = RequestLog("openai")
     mount_control(app, log)
 
-    async def handle(request: Request, route: str) -> Response:
+    async def handle(request: Request, route: Literal["chat", "responses"]) -> Response:
         body: Final = parse_json(await request.body())
         stream: Final = bool_field(body, "stream")
         decision: Final = log.decide(
-            route=route,
-            stream=stream,
-            body=body,
+            route=route, stream=stream, body=body, model=str_field(body, "model", "gpt-6-luna")
         )
         return stream_reply(decision, SSE) if stream else await json_reply(decision)
 
