@@ -8,6 +8,7 @@ import socketserver
 import subprocess
 import sys
 import threading
+import traceback
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
@@ -18,6 +19,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from litellm_proxy_extras.migration_lock import migration_lock
+from litellm_proxy_extras.utils import ProxyExtrasDBManager
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
@@ -531,6 +534,77 @@ def test_v2_resolver_unreachable_database_exits_2_and_names_p1001(
         assert completed.returncode == 2, _safe_output(output)
         assert "P1001" in output, _safe_output(output)
         assert error_lines(output) == (), _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_v2_migration_lock_unreachable_database_names_p1001_and_redacts_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port: Final = int(listener.getsockname()[1])
+    database_url: Final = f"postgresql://u:{PASSWORD}@127.0.0.1:{port}/litellm"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    lock_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+    prefix: Final = "Lost or could not establish v2 migration coordination with the database: "
+
+    with pytest.raises(RuntimeError) as error:
+        with migration_lock(lock_url):
+            pytest.fail("the closed database port unexpectedly connected")
+
+    message: Final = str(error.value)
+    assert message.startswith(prefix)
+    assert "P1001" in message
+    assert f"127.0.0.1:{port}" in message
+    assert [fragment for fragment in ("wr ong'pw9", "wr ong", "ong'pw9") if fragment in message] == []
+
+    with pytest.raises(RuntimeError) as raw_error:
+        with migration_lock(database_url):
+            pytest.fail("the raw password URL unexpectedly connected")
+
+    raw_message: Final = str(raw_error.value)
+    assert [fragment for fragment in ("wr ong'pw9", "wr ong", "ong'pw9") if fragment in raw_message] == []
+    raw_traceback: Final = "".join(traceback.format_exception(raw_error.value))
+    assert [fragment for fragment in ("wr ong'pw9", "wr ong", "ong'pw9") if fragment in raw_traceback] == []
+
+
+def test_v2_resolver_applies_migrations_with_an_unencoded_password(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    with owned_database(PASSWORD) as encoded_url:
+        parsed: Final = urlsplit(encoded_url)
+        unencoded_url: Final = _database_url(
+            encoded_url,
+            parsed.username or "",
+            PASSWORD,
+            parsed.path.lstrip("/"),
+            encode_password=False,
+        )
+        completed: Final = run_v1_migrations(unencoded_url, tmp_path, {}, request.node.name, resolver="v2")
+        output: Final = completed.output
+        assert completed.returncode == 0, _safe_output(output)
+        assert error_lines(output) == (), _safe_output(output)
+        assert _applied_migrations(encoded_url) == SHIPPED_MIGRATIONS, _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_v2_resolver_wrong_unencoded_password_exits_2_without_p1001_or_password_fragments(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    correct_password: Final = f"correct-{uuid.uuid4().hex}"
+    with owned_database(correct_password) as encoded_url:
+        parsed: Final = urlsplit(encoded_url)
+        wrong_url: Final = _database_url(
+            encoded_url,
+            parsed.username or "",
+            PASSWORD,
+            parsed.path.lstrip("/"),
+            encode_password=False,
+        )
+        completed: Final = run_v1_migrations(wrong_url, tmp_path, {}, request.node.name, resolver="v2")
+        output: Final = completed.output
+        assert completed.returncode == 2, _safe_output(output)
+        assert "P1001" not in output, _safe_output(output)
         _assert_no_password_fragments(output)
 
 
