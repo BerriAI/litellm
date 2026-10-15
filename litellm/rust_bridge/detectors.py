@@ -144,7 +144,7 @@ def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
 def _mentions(value: object, key: str) -> bool:
     levels: Final = takewhile(bool, accumulate(repeat(None), _next_level, initial=(value,)))
     return any(
-        key in cast("Mapping[object, object]", node)
+        key in cast("Mapping[object, object]", node)  # cast-ok: node passed the Mapping guard
         for node in chain.from_iterable(levels)
         if isinstance(node, Mapping)
     )
