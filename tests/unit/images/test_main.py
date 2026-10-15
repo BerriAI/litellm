@@ -78,6 +78,28 @@ async def test_aimage_generation_answers_a_non_string_provider_hint_with_a_bad_r
     assert not respx_mock.calls
 
 
+@pytest.mark.asyncio
+async def test_aimage_generation_ignores_a_non_string_base_url_like_the_sync_path(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12349/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    response: Final = await litellm.aimage_generation(
+        model="dall-e-3",
+        prompt="a red circle",
+        api_base=api_base,
+        base_url=httpx.URL(api_base),
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert mock_route.called
+    assert response.data[0].b64_json == "aW1n"
+
+
 def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

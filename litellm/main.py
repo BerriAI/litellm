@@ -140,9 +140,9 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AudioProviderRoutingHints,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
-    ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
     is_decisions_model_mode,
@@ -4106,7 +4106,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(AudioProviderRoutingHints)
 
 
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
