@@ -692,18 +692,27 @@ async def test_expired_key_error_log_names_the_key_owner(
 @pytest.mark.parametrize(
     "looked_up, logged_fragment, absent_fragment",
     [
-        pytest.param("d748053a" * 8, "Key Hash (Token): " + "d748053a" * 8, None, id="hash_named_in_log"),
+        pytest.param(
+            "d748053a" * 8,
+            "Exception occured - Authentication Error, Invalid proxy server token passed. key="
+            + "d748053a" * 8
+            + ", not found in db. Create key via `/key/generate` call.",
+            None,
+            id="operator_wording_and_hash_kept_in_log",
+        ),
         pytest.param(
             "abc\nforged log line",
-            "Key Hash (Token): abc\\nforged log line",
+            "key=abc\\nforged log line, not found in db",
             "\nforged log line",
             id="control_chars_in_hash_cannot_forge_log_lines",
         ),
     ],
 )
-async def test_unknown_key_error_log_names_the_hash_the_401_hides(looked_up, logged_fragment, absent_fragment, caplog):
-    """A wrong key gets a generic 401, so the one auth failure log line is where the
-    operator still finds the hash that was looked up, next to the requester IP."""
+async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
+    looked_up, logged_fragment, absent_fragment, caplog
+):
+    """A wrong key gets a generic 401, while the one auth failure log line keeps the
+    operator wording and the hash that was looked up, next to the requester IP."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
     from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 

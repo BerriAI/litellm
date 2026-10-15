@@ -28,7 +28,6 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
-    INVALID_API_KEY_ERROR_MESSAGE,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
@@ -2762,20 +2761,15 @@ async def user_api_key_auth_builder(
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
 
-            try:
-                with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
-                    valid_token = IdentityStore.key_from_principal(
-                        await IdentityStore(
-                            prisma_client,
-                            user_api_key_cache,
-                            parent_otel_span=parent_otel_span,
-                            proxy_logging_obj=proxy_logging_obj,
-                        ).resolve(hashed_token=api_key)
-                    )
-            except ProxyException as e:
-                if e.code == 401 or e.code == "401":
-                    e.message = INVALID_API_KEY_ERROR_MESSAGE
-                raise e
+            with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+                valid_token = IdentityStore.key_from_principal(
+                    await IdentityStore(
+                        prisma_client,
+                        user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ).resolve(hashed_token=api_key)
+                )
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")

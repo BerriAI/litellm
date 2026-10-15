@@ -125,10 +125,13 @@ def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
     return f"\nKey Identity: {known}" if known else ""
 
 
-def _key_hash_log_suffix(e: Exception) -> str:
+def _auth_failure_log_message(e: Exception) -> str:
     if not isinstance(e, KeyNotFoundError):
-        return ""
-    return f"\nKey Hash (Token): {_escape_control_chars(e.hashed_token)}"
+        return str(e)
+    return (
+        "Authentication Error, Invalid proxy server token passed. "
+        f"key={_escape_control_chars(e.hashed_token)}, not found in db. Create key via `/key/generate` call."
+    )
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -203,11 +206,10 @@ class UserAPIKeyAuthExceptionHandler:
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s%s",
-                e,
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
+                _auth_failure_log_message(e),
                 requester_ip,
                 _identity_log_suffix(resolved_identity),
-                _key_hash_log_suffix(e),
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
                 extra=log_extra,
             )
