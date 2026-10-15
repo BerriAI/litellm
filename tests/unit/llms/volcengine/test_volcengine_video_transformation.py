@@ -97,6 +97,7 @@ def test_a_file_input_reference_becomes_a_data_uri_first_frame(input_reference: 
             {"type": "text", "text": "a cat on a roof"},
             {"type": "image_url", "image_url": {"url": PNG_DATA_URL}, "role": "first_frame"},
         ],
+        "resolution": "720p",
         "duration": 4,
     }
 
@@ -160,15 +161,38 @@ def test_a_video_input_is_rejected_because_its_cost_is_not_known_at_create(item:
         _ = _create_body({"content": [item], "duration": 4}, drop_params=True)
 
 
-def test_a_content_value_that_is_not_an_array_of_items_is_rejected():
+@pytest.mark.parametrize(
+    "content",
+    ["a string", [{"type": "image_url", "role": 7}], [{"type": 7}]],
+    ids=["not-an-array", "non-string-role", "non-string-type"],
+)
+def test_a_content_value_that_is_not_an_array_of_items_is_rejected(content: object):
     with pytest.raises(UnsupportedParamsError, match="content must be an array"):
-        _ = _create_body({"content": "a string", "duration": 4})
+        _ = _create_body({"content": content, "duration": 4})
 
 
-def test_an_omitted_duration_is_sent_as_five_seconds_so_ark_cannot_pick_the_length():
+def test_an_omitted_duration_and_tier_are_sent_as_five_seconds_at_720p_so_ark_cannot_pick_what_is_billed():
     body = _create_body({})
 
-    assert body == {"model": SEEDANCE_2_5, "content": [{"type": "text", "text": "a cat on a roof"}], "duration": 5}
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "a cat on a roof"}],
+        "resolution": "720p",
+        "duration": 5,
+    }
+
+
+@pytest.mark.parametrize("field", ["return_last_frame", "frame_count"])
+def test_a_field_ark_video_generation_does_not_take_is_rejected(field: str):
+    with pytest.raises(UnsupportedParamsError, match=f"does not take {field}"):
+        _ = _create_body({"duration": 4, field: True})
+
+
+def test_a_field_ark_video_generation_does_not_take_is_dropped_under_drop_params():
+    body = _create_body({"duration": 4, "return_last_frame": True, "seed": 7}, drop_params=True)
+
+    assert "return_last_frame" not in body
+    assert body["seed"] == 7
 
 
 @pytest.mark.parametrize("duration", [-1, "-1", 0, "abc", 4.5])
@@ -192,7 +216,6 @@ def test_ark_fields_reach_the_body_and_false_flags_are_kept():
             "watermark": False,
             "generate_audio": False,
             "service_tier": "flex",
-            "litellm_internal": "not for ark",
         }
     )
 
@@ -224,6 +247,7 @@ def test_an_unpriced_resolution_is_dropped_under_drop_params():
     assert body == {
         "model": SEEDANCE_2_0_FAST,
         "content": [{"type": "text", "text": "a cat on a roof"}],
+        "resolution": "720p",
         "ratio": "16:9",
         "duration": 4,
     }
@@ -239,8 +263,10 @@ def test_a_model_the_router_registered_without_prices_keeps_its_resolution():
     )
 
     body = _create_body({"duration": 4, "resolution": "480p"}, model=endpoint_id)
+    body_without_a_tier = _create_body({"duration": 4}, model=endpoint_id)
 
     assert body["resolution"] == "480p"
+    assert "resolution" not in body_without_a_tier
 
 
 def test_a_mistyped_ark_field_is_rejected():
@@ -254,6 +280,7 @@ def test_a_mistyped_ark_field_is_dropped_under_drop_params():
     assert body == {
         "model": SEEDANCE_2_5,
         "content": [{"type": "text", "text": "a cat on a roof"}],
+        "resolution": "720p",
         "watermark": False,
         "duration": 4,
     }
@@ -605,6 +632,7 @@ def test_the_list_response_is_an_openai_list_body():
     assert {key: value for key, value in response.items() if key != "data"} == {
         "object": "list",
         "total": 1,
+        "has_more": False,
         "first_id": encoded,
         "last_id": encoded,
     }
@@ -617,7 +645,7 @@ def test_an_empty_list_still_carries_the_object_type():
         logging_obj=Mock(),  # pyright: ignore[reportArgumentType]  # unused by the transform
     )
 
-    assert response == {"object": "list", "data": [], "total": 0}
+    assert response == {"object": "list", "data": [], "total": 0, "has_more": False}
 
 
 @pytest.mark.asyncio
@@ -664,10 +692,15 @@ def test_the_volcengine_api_base_env_var_routes_a_deployment_without_api_base(mo
     assert VolcEngineVideoConfig().get_complete_url("m", f"{API_BASE}/api/v3", {}) == API_BASE
 
 
-def test_a_path_prefix_before_the_api_marker_survives():
-    assert (
-        VolcEngineVideoConfig().get_complete_url("m", "https://gw.internal/ark/api/v3", {}) == "https://gw.internal/ark"
-    )
+@pytest.mark.parametrize(
+    "api_base,expected",
+    [
+        ("https://gw.internal/ark/api/v3", "https://gw.internal/ark"),
+        ("https://gw.internal/api/ark/api/v3", "https://gw.internal/api/ark"),
+    ],
+)
+def test_a_path_prefix_before_the_api_marker_survives(api_base: str, expected: str):
+    assert VolcEngineVideoConfig().get_complete_url("m", api_base, {}) == expected
 
 
 def test_a_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch):

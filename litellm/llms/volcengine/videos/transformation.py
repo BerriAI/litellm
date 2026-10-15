@@ -92,11 +92,11 @@ class _KnownFields(BaseModel, frozen=True):
     camera_fixed: StrictBool | None = None
     watermark: StrictBool | None = None
     generate_audio: StrictBool | None = None
-    return_last_frame: StrictBool | None = None
 
 
 VOLCENGINE_VIDEO_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
 VOLCENGINE_VIDEO_DEFAULT_DURATION_SECONDS: Final = 5
+VOLCENGINE_VIDEO_DEFAULT_RESOLUTION: Final = "720p"
 _VOLCENGINE_API_MARKER: Final = "/api/"
 _VOLCENGINE_COMPAT_SUFFIXES: Final = ("/api", "/v1")
 _FRAMES_FIELD: Final = "volcengine_video_frames"
@@ -132,7 +132,6 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
     "camera_fixed",
     "watermark",
     "generate_audio",
-    "return_last_frame",
     "service_tier",
     "draft",
     "priority",
@@ -143,6 +142,8 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
     "tools",
     "omni_reference_task_type",
 )
+
+_CREATE_HANDLED_KEYS: Final = frozenset({*_CREATE_PASSTHROUGH_KEYS, "content", "input_reference", "frames"})
 
 _REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
 _UNSUPPORTED_BY_VOLCENGINE: Final = frozenset({"characters", "image"})
@@ -189,7 +190,7 @@ def _normalized_api_base(api_base: str) -> str:
     """The Ark credential is shared with the chat, responses and Anthropic surfaces, so its api_base may carry any of
     their paths, and the video paths carry their own version segment."""
     trimmed: Final = api_base.rstrip("/")
-    marker_index: Final = trimmed.find(_VOLCENGINE_API_MARKER)
+    marker_index: Final = trimmed.rfind(_VOLCENGINE_API_MARKER)
     if marker_index != -1:
         return trimmed[:marker_index]
     suffix: Final = next((suffix for suffix in _VOLCENGINE_COMPAT_SUFFIXES if trimmed.endswith(suffix)), None)
@@ -543,6 +544,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         params: Final = video_create_optional_request_params
         try:
             content: Final = _content_items(prompt, params)
+            sends_input_video: Final = _has_input_video(content)
         except ValidationError:
             raise _unsupported(model, "content must be an array of Ark content items") from None
         if any(item.get("type") == "text" for item in content[1:]):
@@ -551,7 +553,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
                 "A text item in content is not supported, put the text in prompt: it is the only text input "
                 "guardrails scan before the request reaches Ark.",
             )
-        if _has_input_video(content):
+        if sends_input_video:
             raise _unsupported(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
         if params.get("frames") is not None:
             raise _unsupported(model, "frames is not supported through litellm, pass seconds instead")
@@ -570,6 +572,11 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             )
 
         drop_params: Final = _drops_params(litellm_params)
+        unknown_fields: Final = tuple(
+            sorted(key for key, value in params.items() if value is not None and key not in _CREATE_HANDLED_KEYS)
+        )
+        if unknown_fields and not drop_params:
+            raise _droppable(model, f"Ark video generation does not take {', '.join(unknown_fields)}")
         requested_fields: Final = MappingProxyType(
             {key: params[key] for key in _CREATE_PASSTHROUGH_KEYS if params.get(key) is not None}
         )
@@ -577,7 +584,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         if malformed and not drop_params:
             raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
         resolution: Final = requested_fields.get("resolution")
-        priced_tiers: Final = _priced_tiers(model) if isinstance(resolution, str) else None
+        priced_tiers: Final = _priced_tiers(model)
         drops_resolution: Final = (
             priced_tiers is not None and isinstance(resolution, str) and resolution.strip().lower() not in priced_tiers
         )
@@ -586,11 +593,22 @@ class VolcEngineVideoConfig(BaseVideoConfig):
                 model, f"{model} is not offered at resolution {resolution!r}, only at {', '.join(priced_tiers or ())}"
             )
         dropped: Final = frozenset({*(field for field, _ in malformed), *(("resolution",) if drops_resolution else ())})
+        kept_fields: Final = MappingProxyType(
+            {key: value for key, value in requested_fields.items() if key not in dropped}
+        )
+        default_tier: Final = (
+            MappingProxyType({"resolution": VOLCENGINE_VIDEO_DEFAULT_RESOLUTION})
+            if "resolution" not in kept_fields
+            and priced_tiers is not None
+            and VOLCENGINE_VIDEO_DEFAULT_RESOLUTION in priced_tiers
+            else _EMPTY_PARAMS
+        )
 
         request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
             "model": model,
             "content": [dict(item) for item in content],
-            **{key: value for key, value in requested_fields.items() if key not in dropped},
+            **default_tier,
+            **kept_fields,
             "duration": duration,
         }
         return request_data, (), f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}"
@@ -773,6 +791,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             "object": "list",
             "data": data,
             "total": list_payload.total if list_payload.total is not None else len(data),
+            "has_more": False,
             **({"first_id": data[0]["id"], "last_id": data[-1]["id"]} if data else {}),
         }
 
