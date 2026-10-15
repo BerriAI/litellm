@@ -504,7 +504,9 @@ impl litellm_host_python::ExecutionBody for Preparing {
                 }
                 HookStep::Await(awaitable, resume) => {
                     self.resume = Some(resume);
-                    Ok(litellm_host_python::ExecutionStep::Await(awaitable))
+                    Ok(litellm_host_python::ExecutionStep::Suspended(
+                        litellm_host_python::Suspension::Await(awaitable),
+                    ))
                 }
             }
         })

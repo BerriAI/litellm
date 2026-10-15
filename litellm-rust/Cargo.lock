@@ -3922,7 +3922,9 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "litellm-coroutine",
  "litellm-host",
+ "parking_lot",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
