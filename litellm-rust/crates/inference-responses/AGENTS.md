@@ -2,3 +2,4 @@
 - This crate owns Responses API call orchestration. Payloads belong in `litellm-llms-types`, transformations in `llms/src/base_llm/responses` and `llms/src/<provider>/responses`
 - The HTTP route returns `litellm_host::call::CallOutput`: a completed response, or a stream head and chunks, cached through `litellm_inference::caching::execute_streaming`
 - WebSocket sessions (`src/websocket.rs`) stay separate from the HTTP call driver because a connection can accept multiple requests while receiving events
+- `src/ids.rs` owns the LiteLLM-managed ids handed back to callers (`resp_`, `encitem_`, `litellm_enc:`, `cntr_`) and must stay byte-compatible with `litellm/responses/utils.py`
