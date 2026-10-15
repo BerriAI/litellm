@@ -645,14 +645,23 @@ def test_a_chat_pin_cannot_pull_xai_web_search_off_the_responses_api() -> None:
     assert (info["mode"], model) == ("responses", "grok-4")
 
 
-def test_a_chat_pin_does_not_override_an_explicit_responses_prefix() -> None:
-    info, model = responses_api_bridge_check(
-        model="responses/my-azure-deployment",
-        custom_llm_provider="azure",
-        api_base="https://example.openai.azure.com",
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, api_base",
+    [
+        ("responses/my-azure-deployment", "azure", "https://example.openai.azure.com"),
+        ("responses/gpt-5.4", "openai", None),
+    ],
+)
+def test_a_chat_pin_does_not_override_an_explicit_responses_prefix(
+    model: str, custom_llm_provider: str, api_base: str | None
+) -> None:
+    info, sent_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
         deployment_model_info=_CHAT,
     )
-    assert (info["mode"], model) == ("responses", "my-azure-deployment")
+    assert (info["mode"], sent_model) == ("responses", model.removeprefix("responses/"))
 
 
 def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> None:

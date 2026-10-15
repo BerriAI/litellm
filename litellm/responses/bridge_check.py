@@ -102,20 +102,21 @@ def responses_api_bridge_check(
         verbose_logger.debug("Error getting model info: %s", e)
         lookup_failed = True
 
-    # A deployment's own mode replaces only the shared-row mode, and only where the backend serves that
-    # endpoint. The capability rules below still run, so a pin cannot send a request Chat Completions
-    # rejects (gpt-5.4+ function tools with reasoning, xAI web search, a ``responses/`` prefix) off the
-    # Responses API.
-    pinned_mode: Final = deployment_routing_mode(deployment_model_info, custom_llm_provider)
-    if pinned_mode == "responses" or (pinned_mode == "chat" and backend_serves_chat_completions(model_info)):
-        model_info["mode"] = pinned_mode
-        if pinned_mode == "responses":
-            model = model.replace("responses/", "")
-
-    # handle azure models - `azure/responses/<deployment-name>`
-    if model.startswith("responses/") and (lookup_failed or model_info.get("mode") is None):
+    # An explicit ``responses/`` prefix (``azure/responses/<deployment-name>``) outranks a deployment's own
+    # mode. That mode replaces only the shared-row mode, and only where the backend serves the endpoint, and
+    # the capability rules below still run, so a pin cannot move a request Chat Completions rejects (gpt-5.4+
+    # function tools with reasoning, xAI web search) off the Responses API.
+    explicit_responses_prefix: Final = model.startswith("responses/") and (
+        lookup_failed or model_info.get("mode") is None
+    )
+    pinned_mode: Final = (
+        None if explicit_responses_prefix else deployment_routing_mode(deployment_model_info, custom_llm_provider)
+    )
+    if explicit_responses_prefix or pinned_mode == "responses":
         model = model.replace("responses/", "")
         model_info["mode"] = "responses"
+    elif pinned_mode == "chat" and backend_serves_chat_completions(model_info):
+        model_info["mode"] = "chat"
 
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"

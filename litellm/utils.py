@@ -3309,6 +3309,23 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     return None if is_generalized_model_info(info) else info
 
 
+def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
+    return provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    )
+
+
+def model_cost_registration_key(key: str, provider: object, custom_llm_provider: str | None) -> str:
+    """The ``litellm.model_cost`` key ``register_model`` writes a ``key`` entry with this ``litellm_provider``
+    to: the built-in entry it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else ``key`` itself."""
+    if _skips_builtin_registration_lookup(key, provider):
+        return key
+    builtin_model_info: Final = _get_builtin_model_info_for_registration(
+        model=key, custom_llm_provider=custom_llm_provider
+    )
+    return key if builtin_model_info is None else builtin_model_info["key"]
+
+
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
@@ -3421,15 +3438,11 @@ def register_model(
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
 
-    _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
-
     for key, value in loaded_model_cost.items():
         ## get model info ##
         provider = value.get("litellm_provider", "")
         _key_str = str(key)
-        if provider in _skip_get_model_info_providers or any(
-            _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
-        ):
+        if _skips_builtin_registration_lookup(_key_str, provider if isinstance(provider, str) else ""):
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:

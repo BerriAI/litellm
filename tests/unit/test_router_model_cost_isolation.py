@@ -2179,6 +2179,39 @@ def test_mantle_chat_deployment_does_not_rewrite_the_shared_responses_row():
         _restore_model_cost_entries(model_keys)
 
 
+@pytest.mark.parametrize("model", ["openai/responses-only-test-model", "responses-only-test-model"])
+def test_a_chat_deployment_leaves_a_bare_named_responses_row_alone(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """Registration merges an ``openai/<name>`` deployment into the bare ``<name>`` row, so the
+    downgrade guard has to read that row too, or a ``mode: chat`` pin rewrites it for every caller."""
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["responses-only-test-model"] = {
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supported_endpoints": ["/v1/responses"],
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 2e-06,
+    }
+    _invalidate_model_cost_lowercase_map()
+
+    Router(
+        model_list=[
+            {
+                "model_name": "chat-pinned",
+                "litellm_params": {"model": model, "custom_llm_provider": "openai", "api_key": "sk-test"},
+                "model_info": {"id": "chat-pinned-id", "mode": "chat"},
+            }
+        ]
+    )
+
+    assert litellm.model_cost["responses-only-test-model"]["mode"] == "responses"
+    shared_info, _ = responses_api_bridge_check(model="responses-only-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == "responses"
+
+
 def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):
     """
     `_route_user_config_request` builds a Router per request from caller-supplied

@@ -361,6 +361,7 @@ from litellm.utils import (
     get_secret,
     get_utc_datetime,
     is_region_allowed,
+    model_cost_registration_key,
     provider_rejectable_params,
     set_live_deployment_replay,
 )
@@ -10636,7 +10637,12 @@ class Router:
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
-        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(backend_key, {})) or {}).get("mode")
+        registration_key: Final = model_cost_registration_key(
+            backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
+        )
+        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(registration_key, {})) or {}).get(
+            "mode"
+        )
         deployment_mode: Final = shared_model_info.get("mode")
         # Keep the built-in bridge mode stable for shared backend keys.
         # Multiple aliases can point at the same provider/model backend,
@@ -10656,7 +10662,7 @@ class Router:
                     "(prevents alias registration from downgrading the "
                     "shared backend mode).",
                     existing_shared_mode,
-                    backend_key,
+                    registration_key,
                     deployment_mode,
                 )
             shared_model_info["mode"] = existing_shared_mode
