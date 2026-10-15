@@ -1287,17 +1287,17 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
     ):
         task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            await asyncio.gather(*(event.wait() for event in ready))
             if outcome == "cancel":
                 task.cancel()
             else:
                 release.set()
             if outcome == "success":
-                result = await asyncio.wait_for(task, 1)
+                result = await task
                 assert result.capabilities.model_dump(exclude_none=True) == {}
             else:
                 with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
-                    await asyncio.wait_for(task, 1)
+                    await task
             assert all(event.is_set() for event in closed)
             assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
         finally:

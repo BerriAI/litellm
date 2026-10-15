@@ -1604,6 +1604,7 @@ export const modelInfoCall = async (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly?: boolean,
+  blocked?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1640,6 +1641,9 @@ export const modelInfoCall = async (
     }
     if (wildcardOnly) {
       params.append("wildcard_only", "true");
+    }
+    if (blocked !== undefined) {
+      params.append("blocked", blocked ? "true" : "false");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
