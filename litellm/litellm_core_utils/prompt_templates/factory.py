@@ -3477,11 +3477,6 @@ def gemini_text_image_pt(messages: list):
         ]
     }
     """
-    try:
-        pass
-    except Exception:
-        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
-
     prompt = ""
     images: Final = []
     for message in messages:

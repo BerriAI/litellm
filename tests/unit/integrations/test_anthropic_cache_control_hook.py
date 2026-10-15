@@ -1299,13 +1299,17 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
         ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
         ("anthropic/claude-sonnet-4-6", "claude-sonnet-4-6"),
         pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
-        pytest.param("my-claude-deployment", "claude-opus-5-5", id="model-the-cost-map-does-not-know"),
+        pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
+        pytest.param(
+            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+        ),
     ],
 )
 def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of_two_marked_search_calls(
     monkeypatch: pytest.MonkeyPatch, hook_model: str, wire_model: str
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setitem(litellm.model_cost, "my-unreadable-claude-alias", [])
     marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
     two_kept_searches: Final = {
         "role": "assistant",
