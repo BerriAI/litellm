@@ -3,8 +3,11 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -23,6 +26,8 @@ if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
+
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
@@ -288,9 +293,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 request_date_str=current_date,
             )
         else:
+            logging_kwargs: Final = _OBJECT_MAPPING.validate_python(kwargs)
             object_name = self._generate_success_object_name(
                 request_date_str=current_date,
-                response_id=get_spend_logs_id(kwargs.get("call_type") or "acompletion", response_obj, kwargs) or "",
+                response_id=get_spend_logs_id(
+                    logging_kwargs.get("call_type") or "acompletion", response_obj, logging_kwargs
+                )
+                or "",
             )
 
         # used for testing

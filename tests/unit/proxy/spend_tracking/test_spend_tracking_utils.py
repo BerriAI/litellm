@@ -4597,13 +4597,17 @@ def test_get_spend_logs_id_stays_unique_when_a_provider_reuses_completion_ids():
     assert ids == ["call-id-0", "call-id-1"]
 
 
-def test_get_spend_logs_id_falls_back_to_the_response_id_without_a_per_call_id():
-    assert get_spend_logs_id("acompletion", {"id": "chatcmpl-from-response"}, {}) == "chatcmpl-from-response"
+@pytest.mark.parametrize(
+    "response_obj",
+    ({"id": "chatcmpl-from-response"}, litellm.ModelResponse(id="chatcmpl-from-response", created=0, choices=[])),
+)
+def test_get_spend_logs_id_falls_back_to_the_response_id_without_a_per_call_id(response_obj: object) -> None:
+    assert get_spend_logs_id("acompletion", response_obj, {}) == "chatcmpl-from-response"
 
 
 @pytest.mark.parametrize("call_type", ("anthropic_messages", "aanthropic_messages"))
-@pytest.mark.parametrize("response_obj", ({"id": "msg_lookup"}, {}))
-def test_messages_spend_logs_keep_response_id_lookup(call_type: str, response_obj: dict[str, str]) -> None:
+@pytest.mark.parametrize("response_obj", ({"id": "msg_lookup"}, litellm.ModelResponse(id="msg_lookup", created=0), {}))
+def test_messages_spend_logs_keep_response_id_lookup(call_type: str, response_obj: object) -> None:
     assert (
         get_spend_logs_id(
             call_type,

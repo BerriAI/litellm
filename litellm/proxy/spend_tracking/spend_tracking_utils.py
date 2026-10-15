@@ -550,7 +550,11 @@ def get_logging_payload(
     if not usage and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
-    id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
+    id = get_spend_logs_id(
+        call_type or "acompletion",
+        _OBJECT_MAPPING.validate_python(response_obj_dict),
+        _OBJECT_MAPPING.validate_python(kwargs),
+    )
     raw_response_id: Final = response_obj_dict.get("id")
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 

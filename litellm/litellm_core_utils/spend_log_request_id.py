@@ -27,7 +27,7 @@ _RESPONSE_ID_KEYED_CALL_TYPES: Final = frozenset(
 Other calls use a per-call id so reused provider ids cannot drop spend rows."""
 
 
-def _standard_logging_id(kwargs: Mapping[str, object]) -> str | None:
+def _standard_logging_id(kwargs: Mapping[object, object]) -> str | None:
     match kwargs.get("standard_logging_object"):
         case {"id": str() as standard_logging_id}:
             return standard_logging_id
@@ -35,7 +35,9 @@ def _standard_logging_id(kwargs: Mapping[str, object]) -> str | None:
             return None
 
 
-def get_spend_logs_id(call_type: str, response_obj: Mapping[str, object], kwargs: Mapping[str, object]) -> str | None:
+def get_spend_logs_id(
+    call_type: object, response_obj: Mapping[object, object], kwargs: Mapping[object, object]
+) -> str | None:
     candidate_ids: Final = (
         (
             response_obj.get("id"),
