@@ -3384,6 +3384,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
         from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.types.utils import CallTypes
 
         pre_calls: list[tuple[str, object]] = []
@@ -3394,10 +3395,21 @@ class TestNativeWebSocketEncryptedContentAffinity:
         def record_pre_call(self, input, api_key, model=None, additional_args=None):
             pre_calls.append((self.litellm_call_id, self.model_call_details["messages"]))
 
+        reservations: dict[str, tuple[object, object]] = {}
+
+        def record_reservation(self):
+            metadata = self.litellm_params["metadata"]
+            reservations[self.litellm_call_id] = (
+                metadata.get("user_api_key_budget_reservation"),
+                metadata["user_api_key_auth"].budget_reservation,
+            )
+
         async def record_success(self, result, **kwargs):
+            record_reservation(self)
             successes.append((self.litellm_call_id, [event["type"] for event in result]))
 
         async def record_failure(self, exception, traceback_exception, **kwargs):
+            record_reservation(self)
             failures.append((self.litellm_call_id, exception))
 
         def record_partial(self, usage, response_cost):
@@ -3417,6 +3429,13 @@ class TestNativeWebSocketEncryptedContentAffinity:
             litellm_call_id="connection-call",
             function_id="connection-call",
         )
+        reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False}
+        connection_logging.litellm_params = {
+            "metadata": {
+                "user_api_key_budget_reservation": reservation,
+                "user_api_key_auth": UserAPIKeyAuth(api_key="sk-hashed", budget_reservation=reservation),
+            }
+        }
 
         websocket = MagicMock()
         websocket.send_text = AsyncMock()
@@ -3458,6 +3477,8 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert "bad turn" in str(exception)
         assert partial_usage == [(second_turn, 0, 0.01)]
         assert connection_logging.litellm_call_id == "connection-call"
+        assert reservations[first_turn] == (reservation, reservation)
+        assert reservations[second_turn] == (None, None)
 
     @pytest.mark.asyncio
     async def test_bidirectional_forward_returns_the_provider_failure(self):

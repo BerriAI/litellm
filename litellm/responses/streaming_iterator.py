@@ -28,6 +28,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -1904,6 +1905,7 @@ _HISTORY_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "respons
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
+_PER_TURN_METADATA_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
@@ -2085,9 +2087,24 @@ class ResponsesWebSocketStreaming:
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
             litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
+        self._detach_budget_reservation()
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
+
+    def _detach_budget_reservation(self) -> None:
+        """Only the first turn settles the connection's admission reservation; later turns charge their cost directly."""
+        litellm_params: Final = _json_object_or_none(
+            self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
+        if litellm_params is None:
+            return
+        self.logging_obj.litellm_params = {
+            key: without_budget_reservation(value)
+            if key in _PER_TURN_METADATA_KEYS and _is_json_object(value)
+            else value
+            for key, value in litellm_params.items()
+        }
 
     def _record_client_frame(self, client_frame: str) -> None:
         frame: Final = _json_object_or_none(client_frame)
