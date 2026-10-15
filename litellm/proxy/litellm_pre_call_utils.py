@@ -201,6 +201,16 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
+def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if isinstance(metadata := request_body.get(metadata_key), dict):
+            metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
+
+
+def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
+
+
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Only proxy-validated keys are stamped, proven by the unforgeable
     via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
@@ -1634,6 +1644,7 @@ class LiteLLMProxyRequestSetup:
 
         metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
         request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
+        _drop_client_caller_session(request_body)
         spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
@@ -2437,7 +2448,7 @@ async def add_litellm_data_to_request(
     # them — from leaking into requester_metadata where guardrails and audit
     # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
+        data[_metadata_variable_name]["requester_metadata"] = _requester_metadata_snapshot(data["metadata"])
         if _metadata_variable_name == "litellm_metadata":
             data[_metadata_variable_name].update(
                 _promoted_trace_control_fields(

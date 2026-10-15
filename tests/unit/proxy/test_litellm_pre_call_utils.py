@@ -3349,6 +3349,53 @@ def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     assert spend_log_session == "hdr-session-1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged_in", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    "headers",
+    [{"x-litellm-session-id": "hdr-session-1"}, {}],
+    ids=["session-header", "no-headers"],
+)
+async def test_client_metadata_cannot_set_the_spend_log_caller_session(
+    monkeypatch: pytest.MonkeyPatch, forged_in: str, headers: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            forged_in: {CALLER_SESSION_ID_METADATA_KEY: "forged-session"},
+        },
+        request=_make_request_mock("/v1/chat/completions", headers),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_session_id": "convo-1",
+            "metadata": {"team_label": "kept"},
+        },
+        request=_make_request_mock("/v1/chat/completions", {"x-litellm-trace-id": "req-trace-1"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["metadata"][CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
+    assert updated["metadata"]["requester_metadata"]["team_label"] == "kept"
+    assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]["requester_metadata"]
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
     """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-session-id": "bar"}
