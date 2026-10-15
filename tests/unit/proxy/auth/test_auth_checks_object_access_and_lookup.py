@@ -1686,6 +1686,39 @@ async def test_vector_store_access_check_with_permissions():
         assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["vs_allowed", ["vs_allowed", 12345], [12345]],
+    ids=["string", "list_with_a_non_string", "only_non_strings"],
+)
+async def test_vector_store_access_check_rejects_malformed_tool_vector_store_ids_with_400(
+    vector_store_ids: object,
+) -> None:
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=LiteLLM_ObjectPermissionTable(object_permission_id="perm-123", vector_stores=["vs_allowed"])
+    )
+
+    with (
+        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", VectorStoreRegistry()
+        ),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await vector_store_access_check(
+            request_body={"tools": [{"type": "file_search", "vector_store_ids": vector_store_ids}]},
+            team_object=None,
+            valid_token=UserAPIKeyAuth(token="test-token", object_permission_id="perm-123"),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "vector_store_ids"
+
 @pytest.mark.asyncio
 async def test_vector_store_access_check_with_team_permissions():
     """Ensure teams restricted to specific vector stores cannot access others."""

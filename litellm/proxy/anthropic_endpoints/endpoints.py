@@ -29,6 +29,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
     first_validation_error,
     log_llm_api_exception,
+    model_group_drops_params,
     proxy_exception_from_http_exception,
     request_drops_params,
     resolve_litellm_call_id,
@@ -354,6 +355,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
+    from litellm.proxy.proxy_server import llm_router
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
@@ -373,7 +375,9 @@ async def count_tokens(
 
         token_request: Final = _token_count_request(
             {"model": model_name, "messages": messages, "tools": data.get("tools"), "system": data.get("system")},
-            drop_params=request_drops_params(data),
+            drop_params=request_drops_params(
+                data, model_group_drops_params(llm_router, model_name, user_api_key_dict.team_id)
+            ),
         )
         if isinstance(token_request, ProxyException):
             return _anthropic_error_json_response(token_request, request)

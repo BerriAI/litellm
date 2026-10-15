@@ -4,7 +4,7 @@ import datetime
 import json
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
+from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, get_args
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -202,6 +202,8 @@ def test_include_guardrail_response_requested_is_false_without_exact_true():
     ) is False
     assert include_guardrail_response_requested({}) is False
 
+
+_ToolRoute = Literal["acompletion", "aresponses", "anthropic_messages", "agenerate_content", "agenerate_content_stream"]
 
 class TestProxyBaseLLMRequestProcessing:
     @pytest.mark.asyncio
@@ -508,74 +510,141 @@ class TestProxyBaseLLMRequestProcessing:
         assert exc_info.value.param == "model"
         add_litellm_data_to_request.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("route_type", ["acompletion", "aresponses", "anthropic_messages"])
-    @pytest.mark.parametrize("tools", [5, "", ["get_weather"]], ids=["int", "string", "list_of_strings"])
-    async def test_common_processing_pre_call_logic_rejects_malformed_tools_with_400(
-        self,
+    @staticmethod
+    async def _run_pre_call(
         monkeypatch: pytest.MonkeyPatch,
-        route_type: Literal["acompletion", "aresponses", "anthropic_messages"],
-        tools: object,
+        processing_obj: ProxyBaseLLMRequestProcessing,
+        route_type: _ToolRoute = "acompletion",
+        added_by_request_setup: Mapping[str, object] = MappingProxyType({}),
+        llm_router: Router | None = None,
+    ) -> dict:
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            AsyncMock(side_effect=lambda **kwargs: {**kwargs["data"], **added_by_request_setup}),
+        )
+        proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: dict(kwargs["data"]))
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=None,
+            route_type=route_type,
+            llm_router=llm_router,
+        )
+        return returned_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_type", get_args(_ToolRoute))
+    @pytest.mark.parametrize("tools", [5, "", {}, ["get_weather"]], ids=["int", "string", "object", "list_of_strings"])
+    async def test_common_processing_pre_call_logic_rejects_malformed_tools_with_400(
+        self, monkeypatch: pytest.MonkeyPatch, route_type: _ToolRoute, tools: object
     ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
         processing_obj: Final = ProxyBaseLLMRequestProcessing(
             data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": tools}
         )
-        mock_request: Final = MagicMock(spec=Request)
-        mock_request.headers = {}
-        add_litellm_data_to_request: Final = AsyncMock()
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_litellm_data_to_request
-        )
 
         with pytest.raises(ProxyException) as exc_info:
-            await processing_obj.common_processing_pre_call_logic(
-                request=mock_request,
-                general_settings={},
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-                proxy_logging_obj=MagicMock(spec=ProxyLogging),
-                proxy_config=MagicMock(spec=ProxyConfig),
-                route_type=route_type,
-            )
+            await self._run_pre_call(monkeypatch, processing_obj, route_type=route_type)
 
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert exc_info.value.type == "invalid_request_error"
         assert exc_info.value.param == "tools"
         assert exc_info.value.message.startswith("tools")
-        add_litellm_data_to_request.assert_not_awaited()
+        assert processing_obj.data["litellm_logging_obj"].call_type == route_type
 
     @pytest.mark.asyncio
-    async def test_common_processing_pre_call_logic_drops_malformed_tools_when_the_request_drops_params(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("global_drop_params", "request_drop_params", "added_by_request_setup"),
+        [
+            (None, {"drop_params": True}, {}),
+            (None, {"drop_params": "true"}, {}),
+            (True, {"drop_params": False}, {}),
+            (None, {}, {"drop_params": True}),
+        ],
+        ids=["request", "request_string", "global_over_request_false", "set_during_request_setup"],
+    )
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_when_drop_params_applies(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        global_drop_params: bool | None,
+        request_drop_params: Mapping[str, object],
+        added_by_request_setup: Mapping[str, object],
     ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
         processing_obj: Final = ProxyBaseLLMRequestProcessing(
             data={
                 "model": "gpt-5.2",
                 "messages": [{"role": "user", "content": "hi"}],
                 "tools": 5,
-                "drop_params": True,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                **request_drop_params,
             }
         )
-        mock_request: Final = MagicMock(spec=Request)
-        mock_request.headers = {}
-        add_litellm_data_to_request: Final = AsyncMock(return_value={})
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_litellm_data_to_request
-        )
-        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: dict(kwargs["data"]))
 
-        await processing_obj.common_processing_pre_call_logic(
-            request=mock_request,
-            general_settings={},
-            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=MagicMock(spec=ProxyConfig),
-            route_type="acompletion",
+        forwarded: Final = await self._run_pre_call(
+            monkeypatch, processing_obj, added_by_request_setup=added_by_request_setup
         )
 
-        forwarded: Final = add_litellm_data_to_request.call_args.kwargs["data"]
-        assert "tools" not in forwarded
+        assert not {"tools", "tool_choice", "parallel_tool_calls"} & forwarded.keys()
         assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
 
+    @staticmethod
+    def _router_with_drop_params(*deployment_drop_params: bool) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.2",
+                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "drop_params": drop_params},
+                }
+                for drop_params in deployment_drop_params
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_when_every_deployment_drops_params(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        forwarded: Final = await self._run_pre_call(
+            monkeypatch, processing_obj, llm_router=self._router_with_drop_params(True, True)
+        )
+
+        assert "tools" not in forwarded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("deployment_drop_params", "request_drop_params"),
+        [((True, False), {}), ((True,), {"drop_params": False})],
+        ids=["one_deployment_keeps", "request_false_over_deployment"],
+    )
+    async def test_common_processing_pre_call_logic_rejects_malformed_tools_unless_the_served_deployment_drops(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        deployment_drop_params: tuple[bool, ...],
+        request_drop_params: Mapping[str, object],
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5, **request_drop_params}
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(
+                monkeypatch, processing_obj, llm_router=self._router_with_drop_params(*deployment_drop_params)
+            )
+
+        assert exc_info.value.param == "tools"
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
     @pytest.mark.parametrize(

@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    normalize_drop_params,
     redact_nested_match_and_regex_keys,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
@@ -631,14 +632,26 @@ def serialize_http_exception_detail(
     return str(detail), None
 
 
-_ROUTES_WITH_TOOLS: Final = frozenset({"acompletion", "aresponses", "anthropic_messages"})
+_ROUTES_WITH_TOOLS: Final = frozenset(
+    {"acompletion", "aresponses", "anthropic_messages", "agenerate_content", "agenerate_content_stream"}
+)
+_TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
 _TOOL_LIST: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
 
 
-def request_drops_params(data: Mapping[object, object]) -> bool:
-    requested: Final = data.get("drop_params")
-    return requested if isinstance(requested, bool) else litellm.drop_params is True
+def model_group_drops_params(llm_router: Router | None, model: object, team_id: str | None) -> bool:
+    if llm_router is None or not isinstance(model, str):
+        return False
+    deployments: Final = llm_router.get_model_list(model_name=model, team_id=team_id) or []
+    return bool(deployments) and all(
+        normalize_drop_params(deployment["litellm_params"].get("drop_params")) is True for deployment in deployments
+    )
+
+
+def request_drops_params(data: Mapping[object, object], model_group_drops: bool = False) -> bool:
+    effective: Final = data.get("drop_params") if "drop_params" in data else model_group_drops
+    return litellm.drop_params is True or normalize_drop_params(effective) is True
 
 
 def first_validation_error(e: ValidationError, prefix: tuple[str, ...] = ()) -> str:
@@ -655,7 +668,7 @@ def malformed_tools_error(data: Mapping[object, object]) -> ProxyException | Non
     except ValidationError as e:
         return ProxyException(
             message=first_validation_error(e, prefix=("tools",)),
-            type=ProxyErrorTypes.bad_request_error,
+            type="invalid_request_error",
             param="tools",
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -2184,12 +2197,6 @@ class ProxyBaseLLMRequestProcessing:
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
             )
-        request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
-        tools_error: Final = malformed_tools_error(request_fields) if route_type in _ROUTES_WITH_TOOLS else None
-        if tools_error is not None and not request_drops_params(request_fields):
-            raise tools_error
-        if tools_error is not None:
-            self.data = {name: value for name, value in self.data.items() if name != "tools"}
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -2337,6 +2344,16 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        tools_error: Final = malformed_tools_error(request_fields) if route_type in _ROUTES_WITH_TOOLS else None
+        if tools_error is not None and not request_drops_params(
+            request_fields,
+            model_group_drops_params(llm_router, request_fields.get("model"), user_api_key_dict.team_id),
+        ):
+            raise tools_error
+        if tools_error is not None:
+            self.data = {name: value for name, value in self.data.items() if name not in _TOOL_FIELDS}
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set

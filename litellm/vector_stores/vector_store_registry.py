@@ -183,7 +183,7 @@ class VectorStoreRegistry:
         tools_to_remove: Final[list[int]] = []
 
         for i, tool in enumerate(tools):
-            tool_vector_store_ids = tool.get("vector_store_ids", [])
+            tool_vector_store_ids = _tool_vector_store_ids(tool)
             if not tool_vector_store_ids:
                 continue
 

@@ -369,3 +369,25 @@ def test_vector_store_ids_to_run_skips_malformed_tools(tools: object, expected: 
 def test_vector_store_ids_to_run_keeps_store_ids_named_in_a_malformed_field(vector_store_ids: object) -> None:
     tools: Final = [{"type": "file_search", "vector_store_ids": vector_store_ids}]
     assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == ["vs_requested"]
+
+
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["vs_allowed", ["vs_allowed", 12345], [12345], ["vs_allowed"]],
+    ids=["string", "list_with_a_non_string", "only_non_strings", "list_of_strings"],
+)
+def test_vector_store_tools_pop_exactly_the_store_ids_the_registry_reports_to_run(vector_store_ids: object) -> None:
+    now: Final = datetime.now(timezone.utc)
+    registry: Final = VectorStoreRegistry(
+        [
+            LiteLLM_ManagedVectorStore(vector_store_id=vector_store_id, created_at=now, updated_at=now)
+            for vector_store_id in ("vs_allowed", 12345)
+        ]
+    )
+    tools: Final = [{"type": "file_search", "vector_store_ids": vector_store_ids}]
+    checked: Final = registry.get_vector_store_ids_to_run(non_default_params={}, tools=tools)
+    ran: Final[list[str]] = []
+
+    registry.get_and_pop_recognised_vector_store_tools(tools=[dict(tool) for tool in tools], vector_store_ids=ran)
+
+    assert ran == checked
