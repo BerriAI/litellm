@@ -18,9 +18,8 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from ..common_utils import PredibaseError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -150,7 +149,7 @@ class PredibaseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -261,7 +260,7 @@ class PredibaseConfig(BaseConfig):
             if k.startswith("x-"):
                 response_headers[f"llm_provider-{k}"] = v
 
-        model_response._hidden_params["additional_headers"] = response_headers
+        model_response.hidden_params["additional_headers"] = response_headers
 
         return model_response
 

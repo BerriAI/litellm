@@ -168,10 +168,9 @@ def _manifest_feature_ids() -> FrozenSet[str]:
     """Return the set of feature_ids declared in `manifest.yaml`.
 
     Used as a positive filter so only directories that correspond to a
-    real matrix row contribute results — utility/support directories
-    (e.g. `_driver_unit_tests`, `_builder_unit_tests`) are dropped
-    regardless of naming convention, and the rate-limit summary stays
-    clean.
+    real matrix row contribute results — a sibling folder that is not a
+    matrix row is dropped regardless of naming convention, and the
+    rate-limit summary stays clean.
 
     Returns an empty set if the manifest is missing or malformed; the
     caller treats that as "no path is a feature path", which is the
@@ -199,11 +198,11 @@ def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
     """Infer (feature_id, provider) from a test file path.
 
     Path shape:  tests/e2e/claude_code/<feature_id>/test_<provider>.py
-    Returns None if the file is not a per-feature test (e.g. unit tests
-    under `_driver_unit_tests/`), so those don't pollute the matrix
-    artifact. We positively filter the parent directory against
-    `manifest.yaml` rather than relying on naming conventions, because
-    non-feature siblings don't all share an underscore prefix.
+    Returns None if the file is not a per-feature test, so a sibling that
+    is not a matrix row never pollutes the matrix artifact. We positively
+    filter the parent directory against `manifest.yaml` rather than
+    relying on naming conventions, because non-feature siblings don't all
+    share an underscore prefix.
     """
     name = node_path.name
     if not name.startswith("test_") or not name.endswith(".py"):
@@ -479,10 +478,9 @@ def pytest_sessionfinish(session, exitstatus):
     the rate-limit summary. Single-process runs (no xdist) take the
     same code path with a single shard, so behavior is consistent.
 
-    Skip when no compat results were collected — this conftest is
-    loaded for every test under `tests/e2e/claude_code/`, including sibling
-    unit-test trees (e.g. `_driver_unit_tests/`). Writing an empty
-    artifact would silently overwrite a real artifact from a prior
+    Skip when no compat results were collected — a `-k` narrowed run
+    under `tests/e2e/claude_code/` still reaches this hook. Writing an
+    empty artifact would silently overwrite a real artifact from a prior
     compat-test run on the same checkout.
 
     The xdist controller hits this hook with `_COLLECTOR.items` empty
@@ -578,8 +576,8 @@ from claude_code._compat_models import (  # noqa: E402
 
 
 def _build_control_plane_client(proxy_config: ProxyConfig):
-    """Local import of the shared harness so the pure-unit-test tree
-    under ``_driver_unit_tests/`` etc. never has to pull it in. The
+    """Local import of the shared harness so collecting this folder never
+    pulls it in (nor the env it reads at import) before a cell runs. The
     control plane transport is what /model/new lives on; SplitTransport
     routes it correctly for both monolithic and split deployments.
 
@@ -595,15 +593,19 @@ def _build_control_plane_client(proxy_config: ProxyConfig):
         master_key=proxy_config.api_key,
         control_plane_base_url=proxy_config.base_url,
         replica_urls=(proxy_config.base_url,),
+        control_replica_urls=(proxy_config.base_url,),
     )
 
 
 def _register_deployment(proxy, deployment: CompatDeployment) -> str:
     """Register one deployment and return its proxy-assigned model_id
-    once it is servable on the data plane."""
+    once it is servable on the data plane. The aliases are shared by every
+    cell and, under xdist, by every worker, so no call to them belongs to
+    one test and none is cached: the matrix exists to reach real providers."""
     return proxy.create_model(
         deployment.model_name,
         deployment.litellm_params,
+        provider_live=True,
     )
 
 

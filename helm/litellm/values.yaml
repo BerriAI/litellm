@@ -23,7 +23,11 @@ ingress:
   #          wildcard pathType, so that rule could never match there.
   controller: alb
   annotations: {}
-  host: ""        # optional; if set, becomes the rule's host
+  host: ""        # optional; if set, becomes the single ingress rule's host
+  componentHosts:
+    ui: ""
+    backend: ""
+    gateway: ""
   tls: []
   # Extra HTTP paths appended to the ingress rule. Additive: every built-in
   # UI / gateway / backend path is still rendered, these entries are placed
@@ -208,6 +212,8 @@ database:
       name: litellm-writer-secret
       usernameKey: username
       passwordKey: password
+      hostKey: "" # Secret key containing the writer database host
+      urlKey: "" # Secret key containing the complete writer database URL
     # libpq sslmode / sslrootcert applied to the writer and reader URLs (Prisma and the
     # in-container PgBouncer); e.g. verify-full with /etc/ssl/certs/ca-certificates.crt for AWS RDS.
     # sslRootCert on its own implies sslMode verify-full
@@ -229,6 +235,8 @@ database:
       name: litellm-reader-secret
       usernameKey: username
       passwordKey: password
+      hostKey: "" # Secret key containing the reader database host
+      urlKey: "" # Secret key containing the complete reader database URL
 
   # In-container connection pool (PgBouncer, transaction mode) shared by every
   # gateway worker in the pod. Without it each of the `gateway.numWorkers`
@@ -274,6 +282,8 @@ redis:
   passwordSecret:
     name: "" # Leave empty for auth-less Redis
     passwordKey: password
+    hostKey: "" # Secret key containing the Redis host
+    urlKey: "" # Secret key containing the complete Redis URL
 
 # ---------- gateway (LLM data plane) ----------
 gateway:
@@ -397,6 +407,11 @@ gateway:
   #   failureThreshold: 30
   #   periodSeconds: 10
   startupProbe: {}
+  # Optional fixed pod count, rendered into the Deployment's spec.replicas only
+  # when hpa.enabled is false. Unset by default so an existing Deployment keeps
+  # its current count; with the HPA on, the autoscaler owns the count, e.g.:
+  #   replicaCount: 3
+  replicaCount:
   hpa:
     enabled: true
     minReplicas: 1
@@ -488,6 +503,7 @@ gateway:
 backend:
   enabled: true
   logLevel: INFO
+  gatewayUrl: ""
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
@@ -524,6 +540,8 @@ backend:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount:
   hpa:
     enabled: true
     minReplicas: 1
@@ -568,9 +586,10 @@ ui:
   service:
     type: ClusterIP
     port: 3000
-  # The dashboard expects to know where to reach the backend API. Set this to
-  # the externally-routable URL (typically the ingress host + /api or similar).
+  # The backend's public origin, passed to the UI only when ingress.componentHosts is configured.
   backendUrl: ""
+  # Public origin of the UI, used for backend and gateway CORS.
+  publicUrl: ""
   resources:
     requests:
       cpu: 500m
@@ -590,6 +609,8 @@ ui:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount:
   hpa:
     enabled: false
     minReplicas: 1
@@ -620,3 +641,72 @@ ui:
   affinity: {}
   # Same shape as gateway.topologySpreadConstraints.
   topologySpreadConstraints: []
+
+lens:
+  library: true
+
+lensWorker:
+  retainResources: false
+  mode: ""
+  externalUrl: ""
+  externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
+  standaloneUrl: ""
+  adminTokenSecret:
+    name: ""
+    key: admin-token
+  extraEnv: []
+  extraEnvFrom: []
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/lens
+    tag: "0.1.0-dev.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  tokenSecret:
+    name: ""
+    key: token
+  serviceTokenSecret:
+    name: ""
+    key: service-token
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
+    storage: 20Gi
+    storageClassName: null
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  clickhouseDatabase: litellm
+  retentionDays: 14
+  clickhouseSecret:
+    name: ""
+    key: url
+  publicUrl: ""
+  service:
+    port: 4318
+    annotations: {}
+  ingress:
+    enabled: false
+    path: /v1/
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
+  url: ""
+  tmpSizeLimit: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

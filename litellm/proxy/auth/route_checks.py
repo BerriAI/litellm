@@ -1,11 +1,13 @@
+import itertools
 import re
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Collection, Iterable, Mapping
+from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
@@ -14,7 +16,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from .auth_checks_organization import _user_is_org_admin
+from .auth_checks_organization import (  # noqa: F401  # legacy module exports
+    _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_is_org_admin,
+)
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -24,10 +29,14 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
     [
         # user
         "/user/new",
+        "/management/v1/users/bulk",
         "/user/delete",
+        "/management/v1/users/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -61,6 +70,16 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
+
+# Method-scoped because the generic credential CRUD handlers share these paths:
+# the route check cannot admit PATCH/DELETE on a name like "user_connections"
+# or "*/user_connection*" without also opening the admin CRUD handlers.
+_INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES: Final = (
+    ("GET", "/credentials/user_connections"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/start"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
+    ("DELETE", "/credentials/{credential_name:path}/user_connection"),
+)
 
 
 class RouteChecks:
@@ -123,7 +142,7 @@ class RouteChecks:
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
                             and RouteChecks.is_auth_enforced_pass_through_route(
                                 route=route,
-                                method=RouteChecks._get_request_method(request=request),
+                                method=RouteChecks.get_request_method(request=request),
                             )
                         ):
                             if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
@@ -136,6 +155,9 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
+                        if route == "/auto_router/session" and RouteChecks.get_request_method(request) == "GET":
+                            return True
+
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
@@ -143,7 +165,7 @@ class RouteChecks:
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
                             if RouteChecks.is_auth_enforced_pass_through_route(
                                 route=route,
-                                method=RouteChecks._get_request_method(request=request),
+                                method=RouteChecks.get_request_method(request=request),
                             ):
                                 if RouteChecks.check_passthrough_route_access(
                                     route=route, user_api_key_dict=valid_token
@@ -221,7 +243,7 @@ class RouteChecks:
         # Use SensitiveDataMasker with custom configuration for user_id
         masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
-        return masker._mask_value(user_id)
+        return masker.mask_value(user_id)
 
     @staticmethod
     def _raise_admin_only_route_exception(
@@ -269,9 +291,13 @@ class RouteChecks:
 
         if RouteChecks.is_auth_enforced_pass_through_route(
             route=route,
-            method=RouteChecks._get_request_method(request=request),
+            method=RouteChecks.get_request_method(request=request),
         ):
-            RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
+            RouteChecks._require_auth_pass_through_access(
+                route=route,
+                valid_token=valid_token,
+                jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
+            )
         elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
@@ -307,6 +333,8 @@ class RouteChecks:
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
             pass
+        elif route == "/lens" or route.startswith("/lens/"):
+            pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             RouteChecks._check_proxy_admin_viewer_access(
                 route=route,
@@ -316,8 +344,11 @@ class RouteChecks:
             )
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
-            or _user_is_org_admin(request_data=request_data, user_object=user_obj)
+            and (
+                RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
+                or RouteChecks.is_internal_user_credential_connection_route(route=route, request=request)
+            )
+            or user_is_org_admin(request_data=request_data, user_object=user_obj)
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
             or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
             and RouteChecks.check_route_access(
@@ -329,7 +360,12 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
+            valid_token.is_team_service_account
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+            )
+        ):
             pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
@@ -394,7 +430,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
-        if route in LiteLLMRoutes.litellm_native_routes.value:
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.litellm_native_routes.value):
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
@@ -406,7 +442,7 @@ class RouteChecks:
                 if RouteChecks._route_matches_pattern(route=route, pattern=openai_route):
                     return True
             # Check for wildcard patterns like "/containers/*"
-            if RouteChecks._is_wildcard_pattern(pattern=openai_route):
+            if RouteChecks.is_wildcard_pattern(pattern=openai_route):
                 if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
@@ -466,6 +502,13 @@ class RouteChecks:
         Check if route is an info route
         """
         return route in LiteLLMRoutes.info_routes.value
+
+    @staticmethod
+    def is_dashboard_session_info_route(route: str, team_id: str | None) -> bool:
+        """
+        Check if an Admin UI session key is calling an info route the dashboard polls in the background
+        """
+        return team_id == UI_TEAM_ID and RouteChecks.is_info_route(route)
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
@@ -532,11 +575,13 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _is_wildcard_pattern(pattern: str) -> bool:
+    def is_wildcard_pattern(pattern: str) -> bool:
         """
         Check if pattern is a wildcard pattern
         """
         return pattern.endswith("*")
+
+    _is_wildcard_pattern = is_wildcard_pattern
 
     @staticmethod
     def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
@@ -594,7 +639,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: Sequence[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
@@ -618,7 +663,7 @@ class RouteChecks:
         if any(
             RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
-            if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
+            if RouteChecks.is_wildcard_pattern(pattern=allowed_route)
         ):
             return True
 
@@ -636,18 +681,32 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _get_request_method(request: Request | None) -> str | None:
+    def get_request_method(request: Request | None) -> str | None:
         if request is None:
             return None
 
         try:
-            method: Final = request.method
+            method: Final = cast(  # cast-ok: request.method is str at runtime; tests hand a MagicMock
+                object, request.method
+            )
         except (AttributeError, KeyError):
             return None
         if not isinstance(method, str):
             return None
 
         return method.upper()
+
+    _get_request_method = get_request_method
+
+    @staticmethod
+    def is_internal_user_credential_connection_route(route: str, request: Request | None) -> bool:
+        method: Final = RouteChecks.get_request_method(request)
+        if method is None:
+            return False
+        return any(
+            method == expected_method and RouteChecks.check_route_access(route=route, allowed_routes=(pattern,))
+            for expected_method, pattern in _INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES
+        )
 
     @staticmethod
     def is_auth_enforced_pass_through_route(route: str, method: str | None = None) -> bool:
@@ -678,14 +737,107 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _route_matches_denied_route(route: str, denied_route: str) -> bool:
+        """A `/` entry denies every route, since every route sits under the root."""
+        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
+        return (
+            normalized_denied_route == "/"
+            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
+            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        )
+
+    @staticmethod
+    def matching_denied_passthrough_route(
+        route: str, metadata_sources: Iterable[Mapping[str, object] | None]
+    ) -> str | None:
+        """
+        First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
+        Unlike the allowlist (key list, else team list), every source's deny list applies.
+        """
+        denied_routes: Final = tuple(
+            itertools.chain.from_iterable(
+                cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+                    "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
+                )
+                for metadata in metadata_sources
+            )
+        )
+        if not denied_routes:
+            return None
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        forwarded_routes: Final = InitPassThroughEndpointHelpers.forwarded_routes(route)
+        return next(
+            (
+                denied_route
+                for denied_route in denied_routes
+                if any(
+                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
+                    for candidate in forwarded_routes
+                )
+            ),
+            None,
+        )
+
+    @staticmethod
+    def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team denied access to passthrough route {route}. "
+                f"Matched `{denied_route}` in `denied_passthrough_routes`."
+            ),
+        )
+
+    @staticmethod
+    def _raise_if_passthrough_route_denied(route: str, valid_token: UserAPIKeyAuth) -> None:
+        denied_route: Final = RouteChecks.matching_denied_passthrough_route(
+            route=route,
+            metadata_sources=(valid_token.metadata, valid_token.team_metadata),
+        )
+        if denied_route is not None:
+            raise RouteChecks.passthrough_route_denied_exception(route=route, denied_route=denied_route)
+
+    @staticmethod
+    def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
+        """
+        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
+        a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
+        no path segment (``*``, ``/*``) is skipped.
+        """
+        return any(
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            for allowed_route in team_allowed_routes
+            if allowed_route.rstrip("*").strip("/")
+        )
+
+    @staticmethod
+    def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
+        """``team_allowed_routes`` for team tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
+        if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
+            return ()
+
+        from litellm.proxy.proxy_server import jwt_handler
+
+        return jwt_handler.litellm_jwtauth.team_allowed_routes
+
+    @staticmethod
     def _require_auth_pass_through_access(
         route: str,
         valid_token: UserAPIKeyAuth,
+        jwt_team_allowed_routes: Collection[str] = (),
     ) -> None:
         """
-        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
+        key or team, or an explicit JWT ``team_allowed_routes`` entry. A key or team
+        ``denied_passthrough_routes`` match blocks the route even when one of those grants it.
         """
+        RouteChecks._raise_if_passthrough_route_denied(route=route, valid_token=valid_token)
         if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+            return
+        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
             return
         raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
@@ -719,7 +871,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _is_assistants_api_request(request: Request) -> bool:
+    def is_assistants_api_request(request: Request) -> bool:
         """
         Returns True if `thread` or `assistant` is in the request path
 
@@ -736,6 +888,8 @@ class RouteChecks:
         if "thread" in route or "assistant" in route:
             return True
         return False
+
+    _is_assistants_api_request = is_assistants_api_request
 
     @staticmethod
     def is_generate_content_route(route: str) -> bool:
@@ -765,9 +919,13 @@ class RouteChecks:
     _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
         [
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/management/v1/teams/{team_id}/members/bulk_delete",
+            "/management/v1/teams/{team_id}/members/bulk_update",
             "/team/update",
             "/team/delete",
             "/model/new",
@@ -832,7 +990,7 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
                             )
-            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
@@ -868,12 +1026,16 @@ class RouteChecks:
         if route == "/user/password/change":
             return
 
+        # Self-service logout; the endpoint only revokes the caller's own session key.
+        if route == "/session/logout":
+            return
+
         # Hard-block known write routes regardless of HTTP method (defensive
         # — these are POSTs in practice, but pinning them here protects
         # against future GET-shaped writes).
-        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
-            route.startswith("/key/") and route.endswith("/regenerate")
-        ):
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
+        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",

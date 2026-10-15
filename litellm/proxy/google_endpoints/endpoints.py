@@ -1,17 +1,97 @@
+from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
+from litellm.proxy._types import TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
+
+
+class _GoogleCountTokensTextPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    text: str
+
+
+class _GoogleCountTokensSystemInstruction(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    parts: tuple[_GoogleCountTokensTextPart, ...]
+
+
+class _GoogleCountTokensFunctionDeclaration(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    name: str
+    description: str | None = None
+    parameters: JsonValue | None = None
+    parameters_json_schema: JsonValue | None = Field(default=None, alias="parametersJsonSchema")
+
+
+class _GoogleCountTokensTool(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    function_declarations: tuple[_GoogleCountTokensFunctionDeclaration, ...] = Field(
+        default=(), alias="functionDeclarations"
+    )
+
+
+class _GoogleCountTokensRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+    contents: tuple[Mapping[str, JsonValue], ...] = ()
+    system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
+    tools: tuple[_GoogleCountTokensTool, ...] = ()
+
 
 router: Final = APIRouter(
     tags=["google genai endpoints"],
 )
+
+
+def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
+    if declaration.parameters_json_schema is not None:
+        return declaration.parameters_json_schema
+    if declaration.parameters is not None:
+        return normalize_json_schema_types(declaration.parameters)
+    return {"type": "object", "properties": {}}
+
+
+def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
+    contents: Final = [dict(content) for content in validated_data.contents]
+    messages: Final = (
+        GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
+    )
+    system: Final = (
+        [{"type": "text", "text": part.text} for part in validated_data.system_instruction.parts]
+        if validated_data.system_instruction is not None
+        else None
+    )
+    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools)
+    tools: Final = [
+        {
+            "name": declaration.name,
+            **({"description": declaration.description} if declaration.description is not None else {}),
+            "input_schema": _input_schema(declaration),
+        }
+        for declaration in declarations
+    ]
+    return TokenCountRequest(
+        model=model_name,
+        contents=contents,
+        messages=messages,
+        system=system,
+        tools=tools or None,
+    )
 
 
 @router.post(
@@ -42,7 +122,7 @@ async def google_generate_content(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
 
@@ -67,7 +147,7 @@ async def google_generate_content(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -103,7 +183,7 @@ async def google_stream_generate_content(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
     data["stream"] = True
@@ -132,7 +212,7 @@ async def google_stream_generate_content(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -165,49 +245,26 @@ async def google_count_tokens(request: Request, model_name: str):
     }
     ```
     """
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
-    data: Final = await _read_request_body(request=request)
-    contents: Final = data.get("contents", [])
-    # Create TokenCountRequest for the internal endpoint
-    from litellm.proxy._types import TokenCountRequest
-
-    # Translate contents to openai format messages using the adapter
-    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
-
-    token_request: Final = TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,  # compatibility when use openai-like endpoint
-    )
+    data: Final = await read_request_body(request=request)
+    try:
+        token_request: Final = _google_count_tokens_request(model_name, data)
+    except ValidationError as error:
+        raise HTTPException(status_code=400, detail="Invalid Google countTokens request body") from error
 
     # Call the internal token counter function with direct request flag set to False
     token_response: Final = await internal_token_counter(
         request=token_request,
         call_endpoint=True,
     )
-    if token_response is not None:
-        # cast the response to the well known format
-        original_response: Final[dict] = token_response.original_response or {}
-        if original_response:
-            return TokenCountDetailsResponse(
-                totalTokens=original_response.get("totalTokens", 0),
-                promptTokensDetails=original_response.get("promptTokensDetails", []),
-            )
-        else:
-            return TokenCountDetailsResponse(
-                totalTokens=token_response.total_tokens or 0,
-                promptTokensDetails=[],
-            )
-
-    #########################################################
-    # Return the response in the well known format
-    #########################################################
+    if token_response is None:
+        return TokenCountDetailsResponse(totalTokens=0, promptTokensDetails=[])
+    original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(
-        totalTokens=0,
-        promptTokensDetails=[],
+        totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,
+        promptTokensDetails=original_response.get("promptTokensDetails", []),
     )
 
 
@@ -246,7 +303,7 @@ async def create_interaction(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1beta/interactions" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "gemini/gemini-2.5-flash",
@@ -268,7 +325,7 @@ async def create_interaction(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
 
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
@@ -295,7 +352,7 @@ async def create_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -363,7 +420,7 @@ async def get_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -431,7 +488,7 @@ async def delete_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -499,7 +556,7 @@ async def cancel_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

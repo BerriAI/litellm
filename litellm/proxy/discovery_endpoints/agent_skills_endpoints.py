@@ -42,7 +42,7 @@ _ARCHIVE_CACHE: Final = InMemoryCache(
 _NON_SLUG_PATTERN: Final = re.compile(r"[^a-z0-9]+")
 _FALLBACK_SKILL_NAME: Final = "skill"
 
-router: Final = APIRouter(tags=["public", "skills"])  # mutable-ok: fastapi types tags as list[str | Enum]
+router: Final = APIRouter(tags=["public", "skills"])
 
 
 class ZipArchiveResponse(Response):
