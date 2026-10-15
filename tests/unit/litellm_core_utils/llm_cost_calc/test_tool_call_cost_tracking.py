@@ -591,3 +591,66 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
+
+
+@pytest.mark.parametrize(
+    ("model_key", "web_search_requests", "medium_cost_per_query", "expected_cost"),
+    [
+        ("azure_ai/claude-haiku-4-5", 2, 0.01, 0.02),
+        ("azure_ai/claude-sonnet-4-5", 3, 0.01, 0.03),
+        ("azure_ai/claude-haiku-4-5", 1, 0.01, 0.01),
+        ("azure_ai/claude-haiku-4-5", 2, 0.0, 0.0),
+        ("4d696a77-1451-438a-85be-9750c7fb4eb7", 2, 0.01, 0.02),
+        ("4d696a77-1451-438a-85be-9750c7fb4eb7", 3, 0.01, 0.03),
+        ("4d696a77-1451-438a-85be-9750c7fb4eb7", 2, 0.0, 0.0),
+    ],
+)
+def test_azure_ai_claude_web_search_billed_per_server_tool_use_request(
+    model_key: str, web_search_requests: int, medium_cost_per_query: float, expected_cost: float
+) -> None:
+    from litellm.llms import get_cost_for_web_search_request
+    from litellm.types.utils import ModelInfo, SearchContextCostPerQuery, ServerToolUse, Usage
+
+    model_info = ModelInfo(
+        key=model_key,
+        litellm_provider="azure_ai",
+        mode="chat",
+        max_tokens=None,
+        max_input_tokens=None,
+        max_output_tokens=None,
+        input_cost_per_token=1e-6,
+        output_cost_per_token=5e-6,
+        search_context_cost_per_query=SearchContextCostPerQuery(search_context_size_medium=medium_cost_per_query),
+    )
+    usage = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
+    )
+
+    cost = get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info)
+
+    assert cost == pytest.approx(expected_cost), (
+        f"azure_ai claude must bill {web_search_requests} searches at {medium_cost_per_query} each, got {cost}"
+    )
+
+
+def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
+    from litellm.llms import get_cost_for_web_search_request
+    from litellm.types.utils import ModelInfo, SearchContextCostPerQuery, Usage
+
+    model_info = ModelInfo(
+        key="azure_ai/gpt-5.4-mini-2026-03-17",
+        litellm_provider="azure_ai",
+        mode="chat",
+        max_tokens=None,
+        max_input_tokens=None,
+        max_output_tokens=None,
+        input_cost_per_token=1e-6,
+        output_cost_per_token=5e-6,
+        search_context_cost_per_query=SearchContextCostPerQuery(search_context_size_medium=0.01),
+    )
+    usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
+
+    assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None

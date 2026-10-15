@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -939,7 +938,7 @@ def _chaos_budget(boots: int, stops: int) -> float:
     return (boots + stops) * graceful_stop_seconds() + _CHAOS_TRAFFIC_SECONDS
 
 
-@pytest.mark.timeout(_chaos_budget(boots=2, stops=1))
+@pytest.mark.timeout(_chaos_budget(boots=3, stops=1))
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_renaming_the_yaml_limit(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -969,18 +968,18 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_renaming_the_yaml_lim
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            outcome: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert (len(outcome.served), outcome.lost) == (held_by[survivor_pid], held_by[victim_pid]), (
-                held_by,
-                outcome,
-            )
-            for item in outcome.served:
-                _assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                outcome: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert (len(outcome.served), outcome.lost) == (held_by[survivor_pid], held_by[victim_pid]), (
+                    held_by,
+                    outcome,
+                )
+                for item in outcome.served:
+                    _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call(endpoint="chat", stream=False, marker=uuid.uuid4().hex)
             (answered,) = (
                 await _burst(_proxy_url(candidate), candidate.key, _CONFIG_MODEL, (follow_up,), limit=None)
@@ -1011,7 +1010,7 @@ async def test_proxy_restart_mid_burst_loses_only_in_flight_requests_and_renames
                 )
             )
             await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == 20, 60)
-            first.process.terminate()
+            first.begin_shutdown()
             release.set()
             outcome: Final = await burst
         assert len(outcome.served) + outcome.lost == len(calls), outcome

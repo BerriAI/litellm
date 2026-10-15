@@ -4,8 +4,10 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -22,6 +24,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from tests.integration._support.client import Gateway
 from tests.integration._support.database import scratch_database
 from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.routing import WORKER_DATABASE_PREFIX
 
 READINESS_OBJECT: Final = TypeAdapter(dict[str, object])
 SUBSCRIBER_COUNTS: Final = TypeAdapter(tuple[tuple[str, int], ...])
@@ -116,12 +119,46 @@ def _replica_urls(database: str) -> Mapping[str, str]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GatewayProfile:
+    peer: bool
+    replica: bool
+    cost_map: bool
+    coverage_file: Path | None
+
+
+def gateway_profile(environment: Mapping[str, str]) -> GatewayProfile:
+    coverage: Final = environment.get("INTEGRATION_COVERAGE_FILE", "")
+    return GatewayProfile(
+        peer=environment.get("INTEGRATION_WORKER_PEER") == "1",
+        replica=bool(environment.get("INTEGRATION_PROXY_READ_REPLICA_URL")),
+        cost_map=environment.get("INTEGRATION_WORKER_COST_MAP") == "1",
+        coverage_file=Path(coverage) if coverage else None,
+    )
+
+
+def cost_map_environment(upstream: str) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            "LITELLM_MODEL_COST_MAP_URL": f"{upstream}/_cost_map",
+            "MODEL_COST_MAP_MIN_MODEL_COUNT": "1",
+            "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0",
+            "GEMINI_API_BASE": upstream,
+            "ANTHROPIC_API_BASE": upstream,
+            "GEMINI_API_KEY": "sk-scripted-provider",
+            "ANTHROPIC_API_KEY": "sk-scripted-provider",
+        }
+    )
+
+
 @contextmanager
-def worker_services(directory: Path, *, replica: bool = False) -> Iterator[Mapping[str, str]]:
+def worker_services(
+    directory: Path, *, replica: bool = False, inherited: Mapping[str, str] = os.environ
+) -> Iterator[Mapping[str, str]]:
     directory.mkdir(parents=True, exist_ok=True)
     with (
-        scratch_database() as database,
-        owned_redis(directory) as cache,
+        scratch_database(WORKER_DATABASE_PREFIX) as database,
+        owned_redis(directory, inherited=inherited) as cache,
     ):
         yield MappingProxyType(
             {
@@ -136,25 +173,47 @@ def worker_services(directory: Path, *, replica: bool = False) -> Iterator[Mappi
 
 
 @contextmanager
-def worker_gateway(directory: Path, *, peer: bool, replica: bool) -> Iterator[Mapping[str, str]]:
-    from tests.integration._support.asgi import asgi_server
-    from tests.integration._support.process import owned_proxy
-    from tests.integration._support.upstream import Provider
+def worker_gateway(
+    directory: Path, profile: GatewayProfile, inherited: Mapping[str, str]
+) -> Iterator[Mapping[str, str]]:
+    from tests.integration._support.process import owned_proxy, owned_upstream
 
-    port: Final = urlsplit(os.environ["INTEGRATION_UPSTREAM_URL"]).port
+    upstream: Final = inherited["INTEGRATION_UPSTREAM_URL"]
+    port: Final = urlsplit(upstream).port
     assert port is not None
     key: Final = f"sk-{uuid.uuid4().hex}"
-    with worker_services(directory, replica=replica) as services:
+    removed: Final = ("LITELLM_LOCAL_MODEL_COST_MAP",) if profile.cost_map else ()
+    with worker_services(directory, replica=profile.replica, inherited=inherited) as services:
         overrides: Final = {
             **services,
             "DATABASE_URL": services["INTEGRATION_PROXY_DATABASE_URL"],
-            **({"DATABASE_URL_READ_REPLICA": services["INTEGRATION_PROXY_READ_REPLICA_URL"]} if replica else {}),
+            **(
+                {"DATABASE_URL_READ_REPLICA": services["INTEGRATION_PROXY_READ_REPLICA_URL"]} if profile.replica else {}
+            ),
+            "LITELLM_ENABLE_MCP_STDIO": "true",
+            **(cost_map_environment(upstream) if profile.cost_map else {}),
         }
         with (
-            asgi_server(Provider().app(), port=port, keepalive_seconds=125) as upstream,
+            owned_upstream(directory, port=port, inherited=inherited),
             httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
-            owned_proxy(Gateway(client, key, upstream), directory, overrides) as primary,
-            owned_proxy(primary, directory, overrides) if peer else nullcontext(None) as secondary,
+            owned_proxy(
+                Gateway(client, key, upstream),
+                directory,
+                overrides,
+                remove_environment=removed,
+                coverage_file=profile.coverage_file,
+                inherited=inherited,
+            ) as primary,
+            owned_proxy(
+                primary,
+                directory,
+                overrides,
+                remove_environment=removed,
+                coverage_file=profile.coverage_file,
+                inherited=inherited,
+            )
+            if profile.peer
+            else nullcontext(None) as secondary,
         ):
             with Redis(host=services["REDIS_HOST"], port=int(services["REDIS_PORT"]), socket_timeout=2) as cache:
                 wait_for_services(upstream, (primary, secondary) if secondary is not None else (primary,), cache)
@@ -169,3 +228,36 @@ def worker_gateway(directory: Path, *, peer: bool, replica: bool) -> Iterator[Ma
                     "INTEGRATION_UPSTREAM_URL": upstream,
                 }
             )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerStack:
+    resources: ExitStack
+    environment: Mapping[str, str]
+
+
+def worker_stack(results: Path, profile: GatewayProfile) -> WorkerStack:
+    endpoints: Final = worker_endpoints()
+    inherited: Final = MappingProxyType({**os.environ, **endpoints, "INTEGRATION_RESULTS_DIR": str(results)})
+    resources: Final = ExitStack()
+    try:
+        services: Final = resources.enter_context(worker_gateway(results / "runtime", profile, inherited))
+    except BaseException:
+        resources.close()
+        raise
+    return WorkerStack(resources, MappingProxyType({**endpoints, **services, "INTEGRATION_RESULTS_DIR": str(results)}))
+
+
+def start_worker_stacks(
+    directories: tuple[Path, ...], build: Callable[[Path], WorkerStack], resources: ExitStack, concurrency: int
+) -> tuple[Mapping[str, str], ...]:
+    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="integration-worker-stack") as pool:
+        futures: Final = tuple(pool.submit(build, directory) for directory in directories)
+    for future in futures:
+        if future.exception() is None:
+            resources.enter_context(future.result().resources)
+    failure: Final = next((error for future in futures if (error := future.exception()) is not None), None)
+    if failure is not None:
+        resources.close()
+        raise failure
+    return tuple(future.result().environment for future in futures)

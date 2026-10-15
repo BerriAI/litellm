@@ -5139,3 +5139,222 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    first: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_first",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+        }
+    )
+    second_annotation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Second",
+        "url": "https://example.com/second",
+    }
+    second: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_second",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Second message.", "annotations": [second_annotation]}],
+        }
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (first, second, function_call)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "First message.Second message."
+    assert choices[0].message.annotations == [
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
+    ]
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [call.model_dump(exclude_none=True) for call in tool_calls] == [
+        {
+            "id": "fc_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+            "index": 0,
+        }
+    ]
+
+
+def test_convert_response_output_folds_commentary_and_final_answer_into_one_choice() -> None:
+    commentary: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_commentary",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Let me answer that.", "annotations": []}],
+        }
+    )
+    final_answer: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_final",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": '{"city": "Paris"}', "annotations": []}],
+        }
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (commentary, final_answer)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.tool_calls is None
+
+
+def test_convert_response_output_numbers_two_function_calls_zero_and_one() -> None:
+    message: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_only",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Checking both.", "annotations": []}],
+        }
+    )
+    weather: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+    time: Final = ResponseFunctionToolCall(
+        id="fc_2",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_2",
+        name="get_time",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
+        (message, weather, time)
+    )
+
+    assert len(choices) == 1
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.index, call.function.name) for call in tool_calls] == [(0, "get_weather"), (1, "get_time")]
+
+
+def _final_answer_message(item_id: str, text: str) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_convert_response_output_structured_output_keeps_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    """gpt-5.4-mini on /responses with a strict json_schema and a 'say what you will do first'
+    system prompt returned two final_answer items, each the whole document (captured 2026-10-14)."""
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (_final_answer_message("msg_1", '{"city":"Paris"}'), _final_answer_message("msg_2", '{"city":"Paris"}')),
+        structured_output=structured_output,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == expected_content
+    if structured_output:
+        assert json.loads(expected_content) == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}}, True),
+        ({"response_format": {"type": "json_object"}}, True),
+        ({"response_format": {"type": "text"}}, False),
+        ({}, False),
+    ],
+)
+def test_is_structured_output_request(optional_params: dict[str, object], expected: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        is_structured_output_request,
+    )
+
+    assert is_structured_output_request(optional_params) is expected
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_stream_structured_output_drops_text_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, structured_output=structured_output
+    )
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.completed"},
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert content == expected_content
+    assert chunks[-1].choices[0].finish_reason == "stop"
