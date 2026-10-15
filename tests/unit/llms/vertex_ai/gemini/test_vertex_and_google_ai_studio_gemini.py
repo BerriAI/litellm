@@ -9755,8 +9755,8 @@ PER_REQUEST_THOUGHT_SUMMARY_ASKS: Final = (
         "gemini-3.8-flash",
         {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
         True,
-        False,
-        id="level-display-omitted-beats-on",
+        True,
+        id="level-display-omitted-leaves-the-default-on",
     ),
     pytest.param(
         "gemini-2.5-flash",
@@ -9769,8 +9769,8 @@ PER_REQUEST_THOUGHT_SUMMARY_ASKS: Final = (
         "gemini-2.5-flash",
         {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
         True,
-        False,
-        id="budget-display-omitted-beats-on",
+        True,
+        id="budget-display-omitted-leaves-the-default-on",
     ),
     pytest.param(
         "gemini-3.8-flash",
@@ -9823,5 +9823,20 @@ async def test_gemini_per_request_thought_summary_ask_beats_gateway_default(
     monkeypatch.setattr(litellm, "gemini_include_thoughts_default", gateway_default)
 
     sent: Final = await _sent_thinking_config(model, thinking_params)
+
+    assert sent["includeThoughts"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gateway_default", "expected"),
+    (("false", False), (" Off ", False), ("0", False), ("true", True), (None, True), ("not-a-flag", True)),
+)
+async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_null(
+    gateway_default: object, expected: bool, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", gateway_default)
+
+    sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected

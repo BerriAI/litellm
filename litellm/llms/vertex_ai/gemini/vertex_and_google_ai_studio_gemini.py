@@ -27,6 +27,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -892,7 +893,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _include_thoughts(requested: bool | None) -> bool:
-        return litellm.gemini_include_thoughts_default if requested is None else requested
+        if requested is not None:
+            return requested
+        return normalize_drop_params(litellm.gemini_include_thoughts_default) is not False
 
     @staticmethod
     def _include_thoughts_requested_by_reasoning_effort(reasoning_effort: object) -> bool | None:
@@ -1056,7 +1059,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_enabled: Final = thinking_param.get("type") == "enabled"
         thinking_budget: Final = thinking_param.get("budget_tokens")
         display: Final = thinking_param.get("display")
-        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(None if display is None else display != "omitted")
+        asks_for_thoughts: Final = display is not None and display != "omitted"
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(True if asks_for_thoughts else None)
 
         params: Final[GeminiThinkingConfig] = {}
 
