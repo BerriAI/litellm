@@ -722,6 +722,16 @@ def _deployments(*deployment_ids: str) -> list[dict[str, dict[str, str]]]:
         (_not_found(), ("a",), ("a", "b")),
         (_bad_request(), ("a",), ("a", "b")),
         (_bad_request(), ("a",), ("b",)),
+        (
+            litellm.UnprocessableEntityError(
+                message="unprocessable",
+                model="m",
+                llm_provider="openai",
+                response=httpx.Response(422, request=httpx.Request("POST", "https://example.invalid/v1")),
+            ),
+            ("a",),
+            ("a", "b"),
+        ),
     ],
 )
 def test_non_retryable_error_is_retried_on_an_untried_healthy_deployment(
