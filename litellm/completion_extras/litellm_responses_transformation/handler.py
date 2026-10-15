@@ -164,9 +164,19 @@ class ResponsesToCompletionBridgeHandler:
         if kwargs.get("acompletion") is True:
             return self.acompletion(**kwargs)
 
-        from litellm import responses
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from functools import partial
 
+        import litellm
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+        responses_call: Final[
+            partial[
+                ResponsesAPIResponse
+                | BaseResponsesAPIStreamingIterator
+                | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+            ]
+        ] = partial(litellm.responses)
         validated_kwargs: Final = self.validate_input_kwargs(kwargs)
         model: Final = validated_kwargs["model"]
         messages: Final = validated_kwargs["messages"]
@@ -196,7 +206,7 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = responses(
+        result: Final = responses_call(
             **request_data,
         )
 
@@ -259,9 +269,15 @@ class ResponsesToCompletionBridgeHandler:
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
     async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
-        from litellm import aresponses
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from functools import partial
 
+        import litellm
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+        aresponses_call: Final[
+            partial[Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+        ] = partial(litellm.aresponses)
         validated_kwargs: Final = self.validate_input_kwargs(kwargs)
         model: Final = validated_kwargs["model"]
         messages: Final = validated_kwargs["messages"]
@@ -293,7 +309,7 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = await aresponses(
+        result: Final = await aresponses_call(
             **request_data,
             aresponses=True,
         )

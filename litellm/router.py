@@ -992,7 +992,7 @@ class Router:
         redis_password: str | None = None,
         redis_db: int | None = None,
         cache_responses: bool | None = False,
-        cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
+        cache_kwargs: dict[str, object] = {},  # additional kwargs to pass to RedisCache (see caching.py)
         caching_groups: list[tuple] | None = None,  # if you want to cache across model groups
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
         ## SCHEDULER ##
@@ -1027,7 +1027,7 @@ class Router:
         fallback_on_unsupported_params: bool = True,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
-        routing_strategy_args: dict = {},  # just for latency-based
+        routing_strategy_args: dict[str, object] = {},  # just for latency-based
         routing_groups: list[RoutingGroup | dict] | None = None,
         provider_budget_config: GenericBudgetConfigType | None = None,
         alerting_config: AlertingConfig | None = None,
@@ -1144,8 +1144,8 @@ class Router:
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
         self.guardrail_list = guardrail_list or []
-        self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
-        self.deployment_latency_map = {}
+        self.deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_latency_map: dict[str, int] = {}  # mutable-ok: per-model latency counters
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -1343,7 +1343,7 @@ class Router:
         self.default_litellm_params.setdefault("max_retries", 0)
         self.default_litellm_params.setdefault("metadata", {}).update({"caching_groups": caching_groups})
 
-        self.deployment_stats: dict = {}  # used for debugging load balancing
+        self.deployment_stats: dict[str, object] = {}  # used for debugging load balancing
         """
         deployment_stats = {
             "122999-2828282-277:
@@ -1551,7 +1551,7 @@ class Router:
     def _build_strategy_selector(
         self,
         strategy: RoutingStrategy | str,
-        routing_strategy_args: dict,
+        routing_strategy_args: dict[str, object],
         register_callbacks: bool = True,
     ) -> RouterStrategySelector | None:
         """
@@ -1656,7 +1656,7 @@ class Router:
         self._unregister_router_selectors((current,))
         setattr(self, attr, rebuilt)
 
-    def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
+    def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict[str, object]):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
         self._validate_routing_strategy(routing_strategy)
         self._reset_custom_routing_strategy()
