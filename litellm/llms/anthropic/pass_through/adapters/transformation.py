@@ -11,6 +11,7 @@ import litellm
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 
@@ -216,13 +217,6 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     if not model:
         return False
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
-
-
-def _detached_tool(tool: AllAnthropicToolsValues) -> AllAnthropicToolsValues:
-    try:
-        return copy.deepcopy(tool)
-    except (TypeError, RecursionError):
-        return tool
 
 
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
@@ -816,7 +810,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "eager_input_streaming",
         ]
 
-        for idx, tool in enumerate(_detached_tool(tool) for tool in tools):
+        for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
