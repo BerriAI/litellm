@@ -276,6 +276,14 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{server_name}"
 
 
+def get_toolset_resource_metadata_url(scope: Scope) -> str | None:
+    toolset_path: Final = re.fullmatch(r"/toolset/[^/]+/mcp", get_route_relative_request_path(scope))
+    if toolset_path is None:
+        return None
+    base_url: Final = get_request_base_url(Request(scope))
+    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}{toolset_path.group(0)}"
+
+
 def get_passthrough_www_authenticate(
     scope: Scope,
     server_name: str,

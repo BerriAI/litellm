@@ -3102,6 +3102,23 @@ async def oauth_protected_resource_aggregate(request: Request):
     return _build_aggregate_protected_resource_response(request)
 
 
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/toolset/{{toolset_name}}/mcp")
+async def oauth_protected_resource_toolset(request: Request, toolset_name: str) -> Mapping[str, object]:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    if await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name) is None:
+        raise HTTPException(status_code=404, detail=f"Toolset '{toolset_name}' not found")
+    request_base_url: Final = get_request_base_url(request)
+    return {
+        "authorization_servers": [f"{request_base_url}/mcp"],
+        "resource": f"{request_base_url}/toolset/{toolset_name}/mcp",
+        "scopes_supported": [],
+    }
+
+
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")
 async def oauth_authorization_server_aggregate(request: Request):
     """

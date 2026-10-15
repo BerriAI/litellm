@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
     from fastapi import APIRouter
+    from fastapi.testclient import TestClient
     from respx import MockRouter
 
     from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -9593,6 +9594,70 @@ def test_aggregate_wellknown_routes_serve_gateway_metadata():
     assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
 
 
+_KNOWN_TOOLSET: Final = "unit-known-toolset"
+_UNKNOWN_TOOLSET: Final = "unit-unknown-toolset"
+
+
+@pytest.fixture
+def _wellknown_client() -> "TestClient":
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+@pytest.fixture
+def _cached_toolsets(monkeypatch: pytest.MonkeyPatch) -> "Iterator[None]":
+    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    database_present: Final = object()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", database_present)
+    known: Final = MCPToolset(toolset_id="unit-toolset-id", toolset_name=_KNOWN_TOOLSET)
+    user_api_key_cache.set_cache(key=f"toolset_name:{_KNOWN_TOOLSET}", value=known.model_dump(mode="json"))
+    user_api_key_cache.set_cache(key=f"toolset_name:{_UNKNOWN_TOOLSET}", value="__not_found__")
+    yield
+    user_api_key_cache.delete_cache(f"toolset_name:{_KNOWN_TOOLSET}")
+    user_api_key_cache.delete_cache(f"toolset_name:{_UNKNOWN_TOOLSET}")
+
+
+def test_toolset_protected_resource_metadata_names_the_toolset_url_as_its_resource(
+    _no_proxy_base_url, _cached_toolsets, _wellknown_client: "TestClient"
+):
+    response: Final = _wellknown_client.get(f"/.well-known/oauth-protected-resource/toolset/{_KNOWN_TOOLSET}/mcp")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "authorization_servers": ["http://testserver/mcp"],
+        "resource": f"http://testserver/toolset/{_KNOWN_TOOLSET}/mcp",
+        "scopes_supported": [],
+    }, response.text
+
+
+def test_toolset_protected_resource_metadata_for_an_unknown_toolset_is_not_found(
+    _cached_toolsets, _wellknown_client: "TestClient"
+):
+    response: Final = _wellknown_client.get(f"/.well-known/oauth-protected-resource/toolset/{_UNKNOWN_TOOLSET}/mcp")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": f"Toolset '{_UNKNOWN_TOOLSET}' not found"}, response.text
+
+
+def test_toolset_protected_resource_metadata_without_a_database_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, _wellknown_client: "TestClient"
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response: Final = _wellknown_client.get(f"/.well-known/oauth-protected-resource/toolset/{_KNOWN_TOOLSET}/mcp")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "Database not available"}, response.text
+
+
 def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
     """The single-segment /.well-known/oauth-authorization-server/mcp is reserved for the
     aggregate even when a server is literally named ``mcp``. The aggregate protected-resource
@@ -11252,6 +11317,38 @@ class TestPerRequestRootPathDiscovery:
             server_name="github",
         )
         assert bare == "http://testserver/.well-known/oauth-protected-resource/mcp/github"
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            pytest.param(
+                "/toolset/my-tools/mcp",
+                "http://testserver/.well-known/oauth-protected-resource/toolset/my-tools/mcp",
+                id="toolset",
+            ),
+            pytest.param("/mcp", None, id="aggregate"),
+            pytest.param("/my-tools/mcp", None, id="per-server-spelling"),
+            pytest.param("/toolset/my-tools/mcp/extra", None, id="trailing-segment"),
+        ],
+    )
+    def test_toolset_challenge_metadata_url_is_advertised_only_for_toolset_paths(
+        self, _no_proxy_base_url, path: str, expected: str | None
+    ):
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_toolset_resource_metadata_url,
+        )
+
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("1.2.3.4", 4444),
+        }
+
+        assert get_toolset_resource_metadata_url(scope) == expected, path
 
     def test_user_oauth_challenge_url_routes_and_resource_matches_client_url(
         self, _no_proxy_base_url, _isolated_mcp_registry

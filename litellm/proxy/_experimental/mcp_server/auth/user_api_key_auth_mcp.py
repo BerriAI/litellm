@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_request_base_url,
+    get_toolset_resource_metadata_url,
     well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -355,9 +356,12 @@ def _gateway_dcr_challenge(
     spec-compliant clients to re-authorize rather than retry; a request with
     no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
     target: Final = _gateway_dcr_challenge_target(route, mcp_servers, IPAddressUtils.get_mcp_client_ip(request))
+    toolset_metadata_url: Final = get_toolset_resource_metadata_url(request.scope)
     resource_metadata_url: Final = (
         get_passthrough_resource_metadata_url(request.scope, target)
         if target is not None
+        else toolset_metadata_url
+        if toolset_metadata_url is not None
         else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
     )
     error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
