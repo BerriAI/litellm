@@ -242,7 +242,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             row: Final = poll_cost_row(key)
             assert isinstance(expected, RecountExpected)
             assert row.status == "success", f"{case.name}: disconnect row status was {row.status}"
-            assert_recount(case.name, expected, row)
+            assert_recount(case.name, case.response.content_type, expected, row, None)
             _settled_rows(scenario, gateway, key, 1)
             return
         responses: Final = tuple(
@@ -288,7 +288,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         rows: Final = poll_rows(key, row_count)
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
-            assert_recount(case.name, expected, row)
+            assert_recount(case.name, case.response.content_type, expected, row, response)
             _settled_rows(scenario, gateway, key, row_count)
             return
         assert isinstance(expected, ExactExpected)
