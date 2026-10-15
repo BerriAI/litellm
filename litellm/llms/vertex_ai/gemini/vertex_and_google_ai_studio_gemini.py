@@ -308,13 +308,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return super().get_json_schema_from_pydantic_object(response_format)
 
     @staticmethod
+    def _strip_regional_prefix(model: str) -> str:
+        return re.sub(
+            r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+            r"\1",
+            model,
+            flags=re.IGNORECASE,
+        )
+
+    @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
         Check if the model is Gemini 3 or newer.
         """
-        model_name: Final = model.split("/")[-1].lower()
+        normalized_model: Final = VertexGeminiConfig._strip_regional_prefix(model).lower()
+        model_name: Final = normalized_model.split("/")[-1]
         is_vertex_fine_tuned_model: Final = model_name.isdigit() or (
-            model.startswith("gemini/") and not model_name.startswith("gemini-")
+            normalized_model.startswith("gemini/") and not model_name.startswith("gemini-")
         )
         if not model_name or is_vertex_fine_tuned_model or model_name.startswith("gemma-"):
             return False
@@ -386,7 +396,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
 
-        if supports_reasoning(model) or self._is_gemini_3_or_newer(model):
+        if supports_reasoning(self._strip_regional_prefix(model)) or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
 
@@ -937,10 +947,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
-        lowered: Final = model.lower()
-        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
+        normalized_model: Final = VertexGeminiConfig._strip_regional_prefix(model)
+        lowered: Final = normalized_model.lower()
+        is_gemini3_or_newer_flash: Final = (
+            VertexGeminiConfig._is_gemini_3_or_newer(normalized_model) and "flash" in lowered
+        )
         return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
-            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+            model=normalized_model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
         )
 
     @staticmethod
@@ -1033,18 +1046,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if thinking_enabled:
-                if thinking_budget == 0:
-                    params["includeThoughts"] = False
-                else:
-                    params["includeThoughts"] = True
-                    # Follow provider defaults unless explicitly opted into legacy behavior.
-                    if litellm.enable_gemini_default_thinking_level_low is True:
-                        params["thinkingLevel"] = (
-                            "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
-                        )
+            default_low_thinking_level: Final = (
+                "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
+            )
+            if thinking_enabled and thinking_budget != 0:
+                params["includeThoughts"] = True
+                # Follow provider defaults unless explicitly opted into legacy behavior.
+                if litellm.enable_gemini_default_thinking_level_low is True:
+                    params["thinkingLevel"] = default_low_thinking_level
             else:
-                # Thinking disabled
+                params["thinkingLevel"] = default_low_thinking_level
                 params["includeThoughts"] = False
         else:
             # For older Gemini models, use thinkingBudget
