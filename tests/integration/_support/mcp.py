@@ -162,6 +162,8 @@ def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
                     raise RuntimeError("MCP notification acknowledgement must be a single empty response")
                 pending.append(message)
             else:
+                if dispatched is not None and message["type"] == "http.response.start":
+                    dispatched.set()
                 await send(message)
 
         try:

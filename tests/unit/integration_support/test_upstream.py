@@ -219,3 +219,39 @@ async def test_mcp_session_deletion_waits_for_concurrent_notification_dispatch(
         await asyncio.wait_for(asyncio.gather(*posts, *([deletion] if deletion is not None else [])), 2)
     assert set(completed[:2]) == {"0", "1"}
     assert completed[-1] == "DELETE"
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_deletion_can_terminate_streaming_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import _acknowledge_notifications_after_dispatch
+    from starlette.types import Receive, Send
+
+    streaming: Final = asyncio.Event()
+    deleted: Final = asyncio.Event()
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        return None
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        if scope["method"] == "POST":
+            streaming.set()
+            await deleted.wait()
+        else:
+            deleted.set()
+        await send({"type": "http.response.body", "body": b""})
+
+    ordered: Final = _acknowledge_notifications_after_dispatch(app)
+    scope: Final[Scope] = {"type": "http", "headers": [(b"mcp-session-id", b"streaming-session")]}
+    post: Final = asyncio.create_task(ordered({**scope, "method": "POST"}, receive, send))
+    try:
+        await asyncio.wait_for(streaming.wait(), 2)
+        await asyncio.wait_for(ordered({**scope, "method": "DELETE"}, receive, send), 2)
+        assert deleted.is_set(), "Session deletion must terminate an ordinary streaming request"
+    finally:
+        deleted.set()
+        await asyncio.wait_for(post, 2)
