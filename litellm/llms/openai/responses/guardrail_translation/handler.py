@@ -297,6 +297,16 @@ def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
     return item.model_dump() if isinstance(item, BaseModel) else None
 
 
+def _tool_call_item_key(item: object) -> str | None:
+    call_id: Final = stream_item_field(item, "call_id")
+    if isinstance(call_id, str) and call_id:
+        return call_id
+    item_id: Final = stream_item_field(item, "id")
+    if stream_item_field(item, "type") == _TOOL_SEARCH_CALL_TYPE and isinstance(item_id, str) and item_id:
+        return item_id
+    return None
+
+
 def _is_tool_call_output_item(item: object) -> bool:
     return _tool_call_output_item_mapping(item) is not None
 
@@ -1263,7 +1273,8 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         """Write ended-stream guardrail tool-call rewrites into the completed
         envelope's ``function_call`` and ``custom_tool_call`` items and sync the
-        earlier stream events, keyed by ``call_id``. The guardrail sees the
+        earlier stream events, keyed by ``call_id`` (a ``tool_search_call`` without one, as
+        OpenAI streams its server search, is keyed by its item ``id``). The guardrail sees the
         envelope's tool calls in output order, which is how a rewritten call
         finds its ``call_id``; the stream events find their call through the
         ``call_id`` on ``output_item`` events and the ``item_id`` on argument
@@ -1278,9 +1289,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         indexed_tool_call_items: Final = _indexed_tool_call_output_items(outputs)
         tool_call_items: Final = tuple(output_item for _, output_item in indexed_tool_call_items)
         call_ids: Final = tuple(
-            call_id
-            for output_item in tool_call_items
-            if isinstance(call_id := stream_item_field(output_item, "call_id"), str) and call_id
+            call_id for output_item in tool_call_items if (call_id := _tool_call_item_key(output_item)) is not None
         )
         stream_events: Final = responses_so_far[:-1]
         call_id_by_item_id: Final = self._tool_call_ids_by_item_id(stream_events)
@@ -1391,12 +1400,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         if event_type not in _OUTPUT_ITEM_EVENT_TYPES:
             return None
         item: Final = stream_item_field(event, "item")
-        call_id: Final = stream_item_field(item, "call_id")
-        return (
-            call_id
-            if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES and isinstance(call_id, str)
-            else None
-        )
+        return _tool_call_item_key(item) if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES else None
 
     @staticmethod
     def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> object:

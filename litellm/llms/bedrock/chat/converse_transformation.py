@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_lookaround_regex_patterns,
+    native_redacted_thinking_data,
     parse_content_for_reasoning,
     tool_with_sanitized_parameters,
 )
@@ -139,6 +140,7 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _tools_the_model_accepts(
@@ -2059,6 +2061,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
@@ -2074,6 +2077,11 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
+
+    @staticmethod
+    def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
+        base_model: Final = litellm_params.get("base_model")
+        return base_model if isinstance(base_model, str) else None
 
     def transform_request(
         self,
@@ -2127,6 +2135,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
@@ -2200,7 +2209,7 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_thinking_block)
             elif "redactedContent" in block:
                 _redacted_block = ChatCompletionRedactedThinkingBlock(
-                    type="redacted_thinking", data=block["redactedContent"]
+                    type="redacted_thinking", data=native_redacted_thinking_data(block["redactedContent"])
                 )
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list

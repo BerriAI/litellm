@@ -1471,6 +1471,37 @@ def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_b
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "reasoning_effort", "api_base", "expected_mode"),
+    [
+        ("openai", "none", None, "responses"),
+        ("openai", {"effort": "none"}, None, "responses"),
+        ("azure", "none", "https://example.openai.azure.com", "responses"),
+        ("openai", "none", "http://vllm.internal:8000/v1", None),
+    ],
+    ids=["openai-effort-none", "openai-dict-effort-none", "azure-effort-none", "chat-only-custom-base"],
+)
+def test_responses_api_bridge_check_tool_search_routes_to_responses_on_openai_endpoints(
+    custom_llm_provider, reasoning_effort, api_base, expected_mode
+):
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, _ = responses_api_bridge_check(
+            model="gpt-5.5",
+            custom_llm_provider=custom_llm_provider,
+            tools=[
+                {"type": "tool_search"},
+                {"type": "function", "function": {"name": "get_weather"}, "defer_loading": True},
+            ],
+            reasoning_effort=reasoning_effort,
+            api_base=api_base,
+        )
+
+    assert model_info.get("mode") == expected_mode
+
+
 def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
     """
     Chat-only OpenAI-compatible backends registered under the openai provider with a
@@ -4475,6 +4506,48 @@ def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch
     assert usage_cost is not None
     assert usage_cost > 0
     assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
+
+
+def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = LiteLLMLogging(
+        model="xai/grok-4.7",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-xai-stamped-cost",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "xai"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("grok-4.7", "")
+    usage_chunk.usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
+    chunks: Final = [
+        _stream_builder_text_chunk("grok-4.7", "Hello.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    usage_cost: Final = getattr(response.usage, "cost", None)
+    assert usage_cost is not None
+    assert usage_cost > 0
+
+    spend_row_cost: Final = logging_obj._response_cost_calculator(result=response)
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    assert breakdown["input_cost"] > 0
+    assert breakdown["output_cost"] > 0
+    assert breakdown["input_cost"] + breakdown["output_cost"] == pytest.approx(usage_cost)
+    assert spend_row_cost == pytest.approx(usage_cost)
+    assert response._hidden_params.get("response_cost") == pytest.approx(usage_cost)
 
 
 def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():

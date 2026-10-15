@@ -18,7 +18,7 @@ logic.
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -180,8 +180,25 @@ def validated_defer_loading(value: object) -> bool:
         raise BadRequestError(message="defer_loading must be a boolean", model="", llm_provider="") from exc
 
 
+ToolSearchExecution: TypeAlias = Literal["server", "client"]
+_TOOL_SEARCH_EXECUTION_ADAPTER: Final = TypeAdapter[ToolSearchExecution | None](ToolSearchExecution | None)
+
+
+def validated_tool_search_execution(value: object) -> ToolSearchExecution | None:
+    try:
+        return _TOOL_SEARCH_EXECUTION_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise BadRequestError(
+            message="tool_search execution must be 'server' or 'client'", model="", llm_provider=""
+        ) from exc
+
+
 _TOOL_FLAG_ADAPTERS: Final = MappingProxyType(
-    {"defer_loading": _DEFER_LOADING_ADAPTER, "allowed_callers": _ALLOWED_CALLERS_ADAPTER}
+    {
+        "defer_loading": _DEFER_LOADING_ADAPTER,
+        "allowed_callers": _ALLOWED_CALLERS_ADAPTER,
+        "execution": _TOOL_SEARCH_EXECUTION_ADAPTER,
+    }
 )
 
 

@@ -16,6 +16,7 @@ import pytest
 from _pytest.mark.structures import ParameterSet
 from anthropic.types.beta import BetaToolUnionParam
 from integration._support import claude_code as cc
+from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, MODEL, Event, aws_chunks, sse_chunks
 from integration._support.client import Gateway, Scenario, eventually, object_value
@@ -681,12 +682,8 @@ def test_tool_search_alone_reaches_claude_as_the_only_tool(gateway: Gateway) -> 
         _assert_anthropic_wire(request, body, ())
 
 
-@pytest.mark.parametrize(
-    "execution",
-    [..., None, "server", "x" * 5000],
-    ids=["missing", "null", "server", "five-kilobyte-string"],
-)
-def test_every_execution_value_but_client_is_a_server_tool_search(gateway: Gateway, execution: object) -> None:
+@pytest.mark.parametrize("execution", [..., None, "server"], ids=["missing", "null", "server"])
+def test_a_missing_null_or_server_execution_is_a_server_tool_search(gateway: Gateway, execution: object) -> None:
     marker: Final = uuid.uuid4().hex
     tool: Final = (
         _tool_search()
@@ -837,16 +834,42 @@ def test_a_claude_the_cost_map_does_not_list_gets_the_tool_dropped_on_the_anthro
         _assert_dropped_on_wire(body, _DEFERRED_NAMES)
 
 
-@pytest.mark.parametrize("execution", ["client", 5, ["server"]], ids=["client", "int", "list"])
-def test_client_or_malformed_execution_drops_the_tool_search_tool(gateway: Gateway, execution: JsonValue) -> None:
+def test_client_execution_drops_the_tool_search_tool(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
-        tools: Final = (_tool_search(execution=execution), _function_tool(defer_loading=False), _namespace_tool())
+        tools: Final = (_tool_search(execution="client"), _function_tool(defer_loading=False), _namespace_tool())
         answer: Final = _raw_answer(gateway, _responses_body(model, marker, tools, False))
         assert _output_types(answer.payload) == ["message", "function_call"], answer
         _, body = _only_request(wire)
         _assert_dropped_on_wire(body, _DEFERRED_NAMES)
+
+
+@pytest.mark.parametrize("drop_params", [False, True], ids=["refused", "dropped"])
+@pytest.mark.parametrize(
+    "execution", ["", "x" * 5000, 5, ["server"]], ids=["empty", "five-kilobyte-string", "int", "list"]
+)
+def test_a_malformed_execution_is_refused_with_400_unless_drop_params_leaves_a_server_search(
+    gateway: Gateway, execution: JsonValue, drop_params: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        tools: Final = (_tool_search(execution=execution), _function_tool())
+        response: Final = _raw(
+            gateway,
+            "/v1/responses",
+            {**_responses_body(model, marker, tools, False), **_CACHE_BUST, "drop_params": drop_params},
+        )
+        if not drop_params:
+            assert response.status_code == 400, response.text
+            assert "tool_search execution must be 'server' or 'client'" in response.text, response.text
+            assert wire.drain() == (), response.text
+            return
+        assert response.status_code == 200, response.text
+        _assert_search_call_output(_JSON_OBJECT.validate_json(response.content), marker)
+        request, body = _only_request(wire)
+        _assert_anthropic_wire(request, body, ("get_weather",))
 
 
 def _tool_results(messages: Sequence[Mapping[str, JsonValue]]) -> Iterator[dict[str, JsonValue]]:
@@ -1243,3 +1266,61 @@ def test_messages_endpoint_keeps_forwarding_the_regex_tool_and_defer_loading(gat
         stream_request, stream_sent = _only_request(wire)
         _assert_anthropic_wire(stream_request, stream_sent, ("get_weather",))
         assert stream_sent.get("stream") is True, stream_sent
+
+
+_DEFER_PARAMETERS: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_PLAIN_TOOL_SEARCH: Final[dict[str, JsonValue]] = {"type": "tool_search"}
+
+
+def _defer_function(name: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {"name": name, "description": f"Look up {name}", "parameters": _DEFER_PARAMETERS, **extra}
+
+
+def _defer_wire_function(name: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "function", "strict": None, **_defer_function(name), **extra}
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": _defer_function("get_weather"), "defer_loading": True},
+        {"type": "function", "function": _defer_function("get_weather", defer_loading=True)},
+    ],
+    ids=["tool-level", "function-level"],
+)
+def test_chat_bridge_forwards_defer_loading_so_tool_search_has_a_deferred_tool(
+    gateway: Gateway, deferred_tool: dict[str, JsonValue]
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(pcb.respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=f"{wire.url}/v1")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": pcb.prompt(marker)}],
+                "tools": [
+                    _PLAIN_TOOL_SEARCH,
+                    deferred_tool,
+                    {"type": "function", "function": _defer_function("get_time")},
+                    {"type": "function", "function": _defer_function("get_news", defer_loading=False)},
+                ],
+                **pcb.NO_CACHE,
+            },
+        )
+        assert response.status_code == 200, response.text
+        message: Final = rv.JSON_OBJECT.validate_python(
+            rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(response.text)["choices"])[0]["message"]
+        )
+        assert message["content"] == rv.answer(marker), response.text
+        assert pcb.body_of(pcb.posted(wire, marker))["tools"] == [
+            _PLAIN_TOOL_SEARCH,
+            _defer_wire_function("get_weather", defer_loading=True),
+            _defer_wire_function("get_time"),
+            _defer_wire_function("get_news", defer_loading=False),
+        ]

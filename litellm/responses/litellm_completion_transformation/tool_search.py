@@ -46,7 +46,7 @@ class _ToolSearchFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""
-    execution: str | None = None
+    execution: object = None
 
 
 def is_server_tool_search_tool(tool: object) -> bool:
