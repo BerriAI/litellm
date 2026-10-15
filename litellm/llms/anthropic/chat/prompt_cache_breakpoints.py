@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import accumulate, chain
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -19,7 +19,7 @@ _Kind: TypeAlias = Literal["written", "explicit", "free"]
 _MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
 _TOOL_RESULT_ROLES: Final = ("tool", "function")
 _SYSTEM_ROLES: Final = ("system", "developer")
-_SYSTEM_MOVES_PAST_ROLES: Final = ("user", *_TOOL_RESULT_ROLES)
+_SYSTEM_MOVES_WITHIN_ROLES: Final = (*_SYSTEM_ROLES, "user", *_TOOL_RESULT_ROLES)
 _REQUEST: Final[_Path] = ("cache_control",)
 _TOOL_CONFIG: Final[_Path] = ("tool_config",)
 _CLAUDE_TTL_MARKS: Final = MappingProxyType(
@@ -49,7 +49,8 @@ class _Placed:
     path: _Path
     ttl: Literal["5m", "1h"]
     kind: _Kind
-    rank: tuple[int, ...]
+    first_read: tuple[int, ...]
+    last_read: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,12 +168,29 @@ def _block_mark(block: object, key: str) -> object:
     return (_fields(block) or {}).get(key)
 
 
+def _asks_for_an_hour(marker: object) -> bool:
+    mark: Final = _breakpoint_mark(marker)
+    return not isinstance(mark, UnsupportedPromptCacheParam) and mark.get("ttl") == "1h"
+
+
 def _joined_breakpoint(kept: object, replaced: Sequence[object]) -> object:
-    """The breakpoint that stays takes 1h when it sets no ttl and one it replaces asks for 1h."""
+    """The breakpoint that stays takes 1h when one it replaces asks for 1h, so joining breakpoints never shortens a
+    ttl the caller chose."""
     fields: Final = _fields(kept)
-    if fields is None or fields.get("ttl") is not None:
+    if fields is None or fields.get("ttl") not in (None, "5m") or not any(map(_asks_for_an_hour, replaced)):
         return kept
-    return {**fields, "ttl": "1h"} if any(_block_mark(marker, "ttl") == "1h" for marker in replaced) else kept
+    return {**fields, "ttl": "1h"}
+
+
+def _usable(marker: object) -> bool:
+    mark: Final = _breakpoint_mark(marker)
+    return not isinstance(mark, UnsupportedPromptCacheParam) or mark.fallback is not None
+
+
+def _first_usable(markers: Sequence[object]) -> tuple[object, tuple[object, ...]]:
+    """The first breakpoint Claude can use stays, so a malformed one ``drop_params`` drops never takes its place."""
+    index: Final = next((index for index, marker in enumerate(markers) if _usable(marker)), 0)
+    return markers[index], (*markers[:index], *markers[index + 1 :])
 
 
 def _tool_result_hoisted(message: _Fields) -> _Hoisted:
@@ -193,8 +211,7 @@ def _tool_result_hoisted(message: _Fields) -> _Hoisted:
         return _Hoisted({**_without_message_breakpoint(message), "content": unmarked_parts}, part_breakpoints)
     if own is None and not part_breakpoints:
         return _Hoisted(message, ())
-    kept: Final = part_breakpoints[0] if own is None else own
-    replaced: Final = part_breakpoints[1:] if own is None else part_breakpoints
+    kept, replaced = _first_usable(part_breakpoints if own is None else (own, *part_breakpoints))
     return _Hoisted(
         {**message, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced), "content": unmarked_parts}, replaced
     )
@@ -238,15 +255,13 @@ def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
     if block.get("cache_control") is not None:
         return _Hoisted(_without_message_breakpoint(message), ())
     existing: Final = block.get("prompt_cache_breakpoint")
+    kept, replaced = (own, ()) if existing is None else _first_usable((existing, own))
     return _Hoisted(
         {
             **_without_message_breakpoint(message),
-            key: [
-                *blocks[:-1],
-                {**block, "prompt_cache_breakpoint": own if existing is None else _joined_breakpoint(existing, (own,))},
-            ],
+            key: [*blocks[:-1], {**block, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced)}],
         },
-        () if existing is None else (own,),
+        replaced,
     )
 
 
@@ -386,32 +401,23 @@ def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
     return (group, index, *block)
 
 
-def _open_system_group(opened_at: tuple[int, ...], indexed: tuple[int, object]) -> tuple[int, ...]:
-    index, message = indexed
-    role: Final = _role(message)
-    if role in _SYSTEM_ROLES:
-        return opened_at or (index,)
-    return opened_at if role in _SYSTEM_MOVES_PAST_ROLES else ()
-
-
-def _system_groups(messages: Sequence[object], leading_system_count: int) -> Mapping[int, int]:
-    """The transforms move a system message after the conversation start behind the user, tool and function turns
-    that follow it, never past the next assistant turn, so each such message and those turns map to the message
-    that opens their group."""
-    opened: Final = tuple(
-        accumulate(
-            enumerate(messages[leading_system_count:], start=leading_system_count), _open_system_group, initial=()
-        )
-    )[1:]
-    return MappingProxyType(
-        {index: opened_at[0] for index, opened_at in enumerate(opened, start=leading_system_count) if opened_at}
+def _last_read(path: _Path, messages: Sequence[object], leading_system_count: int) -> tuple[int, ...]:
+    """The transforms may move a system message after the conversation start behind the user, tool and function
+    turns that follow it, never past the next assistant turn, so Claude may read its marks as late as the end of
+    those turns."""
+    position: Final = _wire_position(path, leading_system_count)
+    index: Final = int(path[1]) if path[0] == "messages" else -1
+    if index < leading_system_count or _role(messages[index]) not in _SYSTEM_ROLES:
+        return position
+    turns_end: Final = next(
+        (
+            later
+            for later in range(index + 1, len(messages))
+            if _role(messages[later]) not in _SYSTEM_MOVES_WITHIN_ROLES
+        ),
+        len(messages),
     )
-
-
-def _rank(path: _Path, leading_system_count: int, system_groups: Mapping[int, int]) -> tuple[int, ...]:
-    """Marks in one system group share a rank, since Claude may read them in any order."""
-    opened_at: Final = system_groups.get(int(path[1])) if path[0] == "messages" else None
-    return _wire_position(path, leading_system_count) if opened_at is None else (3, opened_at)
+    return (3, turns_end - 1, 3)
 
 
 def _tool_call_id(message: _Fields, index: int) -> object:
@@ -459,31 +465,49 @@ def _chosen(mark: _Placed, ttl: Literal["5m", "1h"]) -> bool:
     return mark.kind != "free" and mark.ttl == ttl
 
 
-def _last_chosen_hour(marks: Sequence[_Placed]) -> tuple[int, ...]:
-    return max((mark.rank for mark in marks if _chosen(mark, "1h")), default=(-1,))
+def _first_five(marks: Sequence[_Placed]) -> tuple[int, ...]:
+    return min((mark.first_read for mark in marks if _chosen(mark, "5m")), default=(5,))
+
+
+def _hour_reach(hour: _Placed, marks: Sequence[_Placed]) -> tuple[int, ...]:
+    """A 1h mark makes every breakpoint without a ttl that Claude may read before it take 1h too, so its order with a
+    5m mark holds as late as the last of them may be read."""
+    return max(
+        (
+            hour.last_read,
+            *(mark.last_read for mark in marks if mark.kind == "free" and mark.first_read < hour.last_read),
+        )
+    )
 
 
 def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
     """Claude rejects a 1h mark read after a 5m one."""
-    first_five: Final = min((mark.rank for mark in marks if _chosen(mark, "5m")), default=(5,))
-    last_hour: Final = _last_chosen_hour(marks)
+    if not drop_params:
+        return tuple(marks)
+    first_five: Final = _first_five(marks)
+    reaches: Final = MappingProxyType({mark.path: _hour_reach(mark, marks) for mark in marks if _chosen(mark, "1h")})
+    last_hour: Final = max(reaches.values(), default=(-1,))
     return tuple(
         replace(mark, ttl="5m", kind="free")
-        if drop_params
-        and mark.kind == "explicit"
-        and (mark.rank >= first_five if mark.ttl == "1h" else mark.rank <= last_hour)
+        if mark.kind == "explicit"
+        and (reaches[mark.path] > first_five if mark.ttl == "1h" else mark.first_read < last_hour)
         else mark
         for mark in marks
     )
 
 
 def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
-    """A breakpoint without a ttl takes 1h when a 1h mark is read after it, so the request stays valid for Claude;
-    under ``drop_params`` a ttl the client set on a breakpoint that breaks that order is dropped first."""
+    """A breakpoint without a ttl takes 1h when Claude may read a 1h mark after it and no 5m mark before it, so the
+    request stays valid for Claude; under ``drop_params`` a ttl the client set on a breakpoint that breaks that order
+    is dropped first."""
     loosened: Final = _loosened(marks, drop_params)
-    last_hour: Final = _last_chosen_hour(loosened)
+    first_five: Final = _first_five(loosened)
+    last_hour: Final = max((mark.last_read for mark in loosened if _chosen(mark, "1h")), default=(-1,))
     return tuple(
-        replace(mark, ttl="1h") if mark.kind == "free" and mark.rank <= last_hour else mark for mark in loosened
+        replace(mark, ttl="1h")
+        if mark.kind == "free" and mark.first_read < last_hour and mark.last_read < first_five
+        else mark
+        for mark in loosened
     )
 
 
@@ -543,7 +567,6 @@ def claude_prompt_cache(
     renamed_messages, renamed_tools = _marked_request(hoisted_messages, listed_tools, _renamed)
     translated: Final = _translated(hoisted_messages, listed_tools)
     leading_system_count: Final = _leading_system_count(messages)
-    system_groups: Final = _system_groups(messages, leading_system_count)
     unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
@@ -557,10 +580,16 @@ def claude_prompt_cache(
     )
     marks: Final = sorted(
         (
-            _Placed(path, _ttl(cache_control), kind, _rank(path, leading_system_count, system_groups))
+            _Placed(
+                path,
+                _ttl(cache_control),
+                kind,
+                _wire_position(path, leading_system_count),
+                _last_read(path, messages, leading_system_count),
+            )
             for path, cache_control, kind in placements
         ),
-        key=lambda mark: _wire_position(mark.path, leading_system_count),
+        key=lambda mark: mark.first_read,
     )
     excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
     dropped: Final[frozenset[_Path]] = (

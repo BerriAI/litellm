@@ -248,7 +248,7 @@ def test_a_client_cache_control_on_a_tool_result_part_wins_over_the_results_own_
 
 @pytest.mark.parametrize("client_marked", (False, True), ids=("breakpoints", "client_marked_part"))
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_part_marks_on_one_tool_result_take_one_slot_where_the_route_sends_one_mark_under_drop_params(
+def test_part_marks_on_one_tool_result_take_one_slot_under_drop_params(
     gateway: Gateway, provider: Provider, client_marked: bool
 ) -> None:
     marker: Final = new_marker()
@@ -262,9 +262,70 @@ def test_part_marks_on_one_tool_result_take_one_slot_where_the_route_sends_one_m
         lambda model: chat_body(model, _tool_result_turns(marker, result, leading=True)),
         drop_params=True,
     )
-    one_mark_per_result: Final = [_label(SYSTEM), _label(ASK), _result_label(_LONDON), _label(final_text(marker))]
-    mark_per_part: Final = [_label(ASK), _label(_CLOUDY), _label(_SUNNY), _label(final_text(marker))]
-    assert [mark.label for mark in marks] == (one_mark_per_result if provider == "bedrock_converse" else mark_per_part)
+    result_mark: Final = _label(_CLOUDY) if client_marked and provider != "bedrock_converse" else _result_label(_LONDON)
+    assert [mark.label for mark in marks] == [_label(SYSTEM), _label(ASK), result_mark, _label(final_text(marker))]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_breakpoints_on_two_parts_of_one_tool_result_become_one_mark_on_the_result(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    result: Final[dict[str, JsonValue]] = {
+        "content": [
+            _text(_CLOUDY, prompt_cache_breakpoint=_EXPLICIT),
+            _text(_SUNNY, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT),
+        ]
+    }
+    marks: Final = _marks_sent(gateway, provider, lambda model: chat_body(model, _tool_result_turns(marker, result)))
+    assert marks == (Mark(_result_label(_LONDON), "1h"),)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_client_cache_control_on_one_tool_result_part_wins_over_a_breakpoint_on_another(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    result: Final[dict[str, JsonValue]] = {
+        "content": [
+            _text(_CLOUDY, cache_control=EPHEMERAL),
+            _text(_SUNNY, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT),
+        ]
+    }
+    marks: Final = _marks_sent(gateway, provider, lambda model: chat_body(model, _tool_result_turns(marker, result)))
+    sent_on: Final = _result_label(_LONDON) if provider == "bedrock_converse" else _label(_CLOUDY)
+    assert marks == (Mark(sent_on, None),)
+
+
+@pytest.mark.parametrize(
+    ("value", "drop_params", "status"),
+    (
+        *((value, False, 400) for value in _MALFORMED),
+        *((value, True, 200) for value in _MALFORMED),
+    ),
+    ids=(*(f"{name}-default" for name in _MALFORMED_IDS), *(f"{name}-drop_params" for name in _MALFORMED_IDS)),
+)
+def test_a_malformed_breakpoint_on_the_first_part_of_a_tool_result_beside_a_valid_one(
+    gateway: Gateway, value: JsonValue, drop_params: bool, status: int
+) -> None:
+    marker: Final = new_marker()
+    result: Final[dict[str, JsonValue]] = {
+        "content": [_text(_CLOUDY, prompt_cache_breakpoint=value), _text(_SUNNY, prompt_cache_breakpoint=_EXPLICIT)]
+    }
+    with wire_server(lambda request: respond("anthropic", request)) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(gateway, scenario, wire, "anthropic")
+        response_status, _, text = post_chat(
+            gateway, chat_body(model, _tool_result_turns(marker, result), drop_params=drop_params)
+        )
+        received: Final = wire.drain()
+    assert response_status == status, text
+    if status == 400:
+        assert "prompt_cache_breakpoint" in text and "drop_params" in text, text
+        assert received == (), [request.target for request in received]
+        return
+    assert len(received) == 1, [request.target for request in received]
+    assert b"prompt_cache_breakpoint" not in received[0].body, received[0].body
+    assert sent_marks("anthropic", received[0]) == (Mark(_result_label(_LONDON), None),)
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -486,3 +547,240 @@ def test_a_message_breakpoint_and_its_last_parts_own_breakpoint_join_into_one_ma
         gateway, provider, lambda model: chat_body(model, _list_content_turns("user", marker, message_mark, last))
     )
     assert marks == (Mark(_label(_LAST_PART), "1h"),)
+
+
+_REMINDER: Final = "Reminder: answer in one word."
+_FIVE_MINUTE_BREAKPOINT: Final[dict[str, JsonValue]] = {"mode": "explicit", "ttl": "5m"}
+_TOOL_CONFIG: Final[list[JsonValue]] = [{"location": "tool_config"}]
+_TOOL_LABEL: Final = "tool:lookup_weather"
+_JSON_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+    },
+}
+
+
+def _reminder(mark: JsonValue) -> dict[str, JsonValue]:
+    return {"role": "system", "content": [_text(_REMINDER, prompt_cache_breakpoint=mark)]}
+
+
+def _reminder_after_an_answer(marker: str, final_mark: JsonValue) -> list[JsonValue]:
+    return [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": ASK},
+        {"role": "assistant", "content": "noted"},
+        _reminder(_ONE_HOUR_BREAKPOINT),
+        _final(marker, prompt_cache_breakpoint=final_mark),
+    ]
+
+
+def _reminder_between_a_call_and_its_result(marker: str) -> list[JsonValue]:
+    return [
+        {"role": "user", "content": ASK},
+        {"role": "assistant", "content": None, "tool_calls": [tool_call(_LONDON)]},
+        _reminder(_ONE_HOUR_BREAKPOINT),
+        {"role": "tool", "tool_call_id": call_id(_LONDON), "content": "sunny.", "prompt_cache_breakpoint": _EXPLICIT},
+        _final(marker),
+    ]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_breakpoint_after_a_one_hour_mid_conversation_system_message_is_sent_as_one_hour(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    turns: Final = _reminder_after_an_answer(marker, _EXPLICIT)
+    marks: Final = _marks_sent(gateway, provider, lambda model: chat_body(model, turns))
+    assert sorted(marks, key=lambda mark: mark.label) == [
+        Mark(_label(_REMINDER), "1h"),
+        Mark(_label(final_text(marker)), "1h"),
+    ]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_tool_result_breakpoint_after_a_one_hour_system_message_between_the_call_and_result_is_sent_as_one_hour(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    turns: Final = _reminder_between_a_call_and_its_result(marker)
+    marks: Final = _marks_sent(gateway, provider, lambda model: chat_body(model, turns))
+    assert sorted(marks, key=lambda mark: mark.label) == [
+        Mark(_result_label(_LONDON), "1h"),
+        Mark(_label(_REMINDER), "1h"),
+    ]
+
+
+@pytest.mark.parametrize("provider", ("anthropic", "bedrock_converse"))
+def test_a_five_minute_breakpoint_after_a_one_hour_mid_conversation_system_message_loosens_both_under_drop_params(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    turns: Final = _reminder_after_an_answer(marker, _FIVE_MINUTE_BREAKPOINT)
+    marks: Final = _marks_sent(gateway, provider, lambda model: chat_body(model, turns, drop_params=True))
+    assert sorted(marks, key=lambda mark: mark.label) == [
+        Mark(_label(_REMINDER), None),
+        Mark(_label(final_text(marker)), "5m"),
+    ]
+
+
+def test_a_five_minute_breakpoint_claude_reads_before_a_one_hour_system_message_gets_claudes_400(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final = _reminder_after_an_answer(marker, _FIVE_MINUTE_BREAKPOINT)
+    with wire_server(lambda request: respond("anthropic", request)) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(gateway, scenario, wire, "anthropic")
+        status, _, text = post_chat(gateway, chat_body(model, turns))
+        request: Final = only_request(wire)
+    assert status == 400, text
+    assert "must not come after" in text, text
+    assert sent_marks("anthropic", request) == (
+        Mark(_label(final_text(marker)), "5m"),
+        Mark(_label(_REMINDER), "1h"),
+    )
+
+
+def _history_without_tools_body(model: str, marker: str, **fields: JsonValue) -> dict[str, JsonValue]:
+    turns: Final = _noted_turns(
+        marker,
+        {"role": "assistant", "content": None, "tool_calls": [tool_call(_LONDON, prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "tool", "tool_call_id": call_id(_LONDON), "content": "sunny.", "prompt_cache_breakpoint": _EXPLICIT},
+    )
+    return {"model": model, "messages": turns, "max_tokens": 64, "drop_params": True, **fields}
+
+
+def test_breakpoints_on_tool_history_a_response_format_tool_keeps_on_converse_count_under_drop_params(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: _history_without_tools_body(model, marker, response_format=_JSON_SCHEMA),
+    )
+    assert [mark.label for mark in marks] == [
+        *_note_labels()[1:],
+        _call_label(_LONDON),
+        _result_label(_LONDON),
+    ]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    ({"functions": [TOOL["function"]]}, {"web_search_options": {"search_context_size": "low"}}),
+    ids=("functions", "web_search_options"),
+)
+def test_breakpoints_on_tool_history_converse_sends_as_text_beside_a_dropped_tool_source_still_take_slots(
+    gateway: Gateway, fields: dict[str, JsonValue]
+) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marks_sent(
+        gateway, "bedrock_converse", lambda model: _history_without_tools_body(model, marker, **fields)
+    )
+    assert [mark.label for mark in marks] == _note_labels()[1:]
+
+
+def test_a_tool_config_cache_point_before_a_one_hour_breakpoint_is_sent_as_one_hour(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)]},
+        _final(marker),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, turns),
+        cache_control_injection_points=_TOOL_CONFIG,
+    )
+    assert marks == (Mark(_TOOL_LABEL, "1h"), Mark(_label(SYSTEM), "1h"))
+
+
+def test_a_tool_config_injection_point_stands_down_behind_four_breakpoints_under_drop_params(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, _noted_turns(marker), drop_params=True),
+        cache_control_injection_points=_TOOL_CONFIG,
+    )
+    assert [mark.label for mark in marks] == [_label(SYSTEM), *_note_labels()]
+
+
+def test_a_tool_config_injection_point_without_tools_takes_no_slot_under_drop_params(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: {"model": model, "messages": _noted_turns(marker), "max_tokens": 64, "drop_params": True},
+        cache_control_injection_points=_TOOL_CONFIG,
+    )
+    assert [mark.label for mark in marks] == [_label(SYSTEM), *_note_labels()]
+
+
+def test_a_five_minute_tool_config_cache_point_loosens_a_later_one_hour_breakpoint_under_drop_params(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)]},
+        _final(marker),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, turns, drop_params=True),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+    )
+    assert marks == (Mark(_TOOL_LABEL, "5m"), Mark(_label(SYSTEM), None))
+
+
+@pytest.mark.parametrize("control", _MALFORMED, ids=_MALFORMED_IDS)
+def test_a_malformed_tool_config_control_is_a_default_cache_point_that_follows_a_one_hour_breakpoint(
+    gateway: Gateway, control: JsonValue
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)]},
+        _final(marker),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, turns),
+        cache_control_injection_points=[{"location": "tool_config", "control": control}],
+    )
+    assert marks == (Mark(_TOOL_LABEL, "1h"), Mark(_label(SYSTEM), "1h"))
+
+
+def test_messages_to_converse_send_a_tool_config_cache_point_before_a_one_hour_system_breakpoint_as_one_hour(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    function: Final = TOOL["function"]
+    assert isinstance(function, dict), TOOL
+    with wire_server(lambda request: respond("bedrock_converse", request)) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(
+            gateway, scenario, wire, "bedrock_converse", cache_control_injection_points=_TOOL_CONFIG
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "system": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)],
+                "tools": [
+                    {
+                        "name": function["name"],
+                        "description": function["description"],
+                        "input_schema": function["parameters"],
+                    }
+                ],
+                "messages": [{"role": "user", "content": final_text(marker)}],
+            },
+        )
+        request: Final = only_request(wire)
+    assert response.status_code == 200, response.text
+    assert sent_marks("bedrock_converse", request) == (Mark(_TOOL_LABEL, "1h"), Mark(_label(SYSTEM), "1h"))

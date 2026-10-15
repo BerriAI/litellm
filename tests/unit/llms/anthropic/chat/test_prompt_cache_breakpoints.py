@@ -565,6 +565,45 @@ def test_a_part_breakpoint_a_client_marked_part_replaces_is_still_reported():
     assert outcome.value == {"mode": "explicit", "ttl": "30m"}
 
 
+@pytest.mark.parametrize("malformed", [5, [], "", {"mode": "implicit"}])
+def test_a_malformed_breakpoint_beside_a_valid_one_on_a_tool_result_keeps_the_valid_one_under_drop_params(
+    malformed: object,
+):
+    messages: Final = [
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [
+                _part("r0", prompt_cache_breakpoint=malformed),
+                _part("r1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"}),
+            ],
+        }
+    ]
+
+    assert isinstance(_cache(messages), UnsupportedPromptCacheParam)
+    assert list(_resolved(messages, drop_params=True).messages) == [
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1")], "cache_control": _ONE_HOUR},
+    ]
+
+
+@pytest.mark.parametrize("malformed", [5, [], "", {"mode": "implicit"}])
+def test_a_malformed_breakpoint_on_a_messages_last_part_keeps_the_messages_own_breakpoint_under_drop_params(
+    malformed: object,
+):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [_part("u0"), _part("u1", prompt_cache_breakpoint=malformed)],
+            "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+        }
+    ]
+
+    assert isinstance(_cache(messages), UnsupportedPromptCacheParam)
+    assert list(_resolved(messages, drop_params=True).messages) == [
+        {"role": "user", "content": [_part("u0"), _part("u1", cache_control=_ONE_HOUR)]},
+    ]
+
+
 def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():
     tools: Final = [
         {
@@ -632,6 +671,133 @@ def test_marks_on_a_mid_conversation_system_message_and_the_turns_it_may_move_pa
         {"role": "system", "content": [_part("reminder", cache_control=sent_reminder)]},
         {"role": "user", "content": [_part("ask", cache_control=sent_ask)]},
     )
+
+
+_FIVE_MINUTES: Final = {"type": "ephemeral", "ttl": "5m"}
+
+
+@pytest.mark.parametrize(
+    ("after_the_answer", "sent"),
+    [
+        pytest.param(
+            [
+                {"role": "system", "content": "note"},
+                {
+                    "role": "user",
+                    "content": [
+                        _part("p0", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"}),
+                        _part("p1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"}),
+                        _part("p2", prompt_cache_breakpoint=_EXPLICIT),
+                    ],
+                },
+            ],
+            [
+                {"role": "system", "content": "note"},
+                {
+                    "role": "user",
+                    "content": [
+                        _part("p0", cache_control=_ONE_HOUR),
+                        _part("p1", cache_control=_FIVE_MINUTES),
+                        _part("p2", cache_control=_EPHEMERAL),
+                    ],
+                },
+            ],
+            id="parts-after-an-unmarked-system-message",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": [_part("s", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+                {"role": "user", "content": [_part("u1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"})]},
+                {"role": "user", "content": [_part("u2", prompt_cache_breakpoint=_EXPLICIT)]},
+            ],
+            [
+                {"role": "system", "content": [_part("s", cache_control=_ONE_HOUR)]},
+                {"role": "user", "content": [_part("u1", cache_control=_FIVE_MINUTES)]},
+                {"role": "user", "content": [_part("u2", cache_control=_EPHEMERAL)]},
+            ],
+            id="turn-after-a-five-minute-turn",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+                {"role": "user", "content": [_part("u1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+                {"role": "user", "content": [_part("u2", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"})]},
+            ],
+            [
+                {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+                {"role": "user", "content": [_part("u1", cache_control=_ONE_HOUR)]},
+                {"role": "user", "content": [_part("u2", cache_control=_FIVE_MINUTES)]},
+            ],
+            id="system-message-that-may-move-past-a-five-minute-turn",
+        ),
+    ],
+)
+def test_a_breakpoint_claude_may_read_after_a_five_minute_mark_keeps_the_default_ttl(
+    after_the_answer: list[dict[str, object]], sent: list[dict[str, object]]
+):
+    messages: Final = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+        *after_the_answer,
+    ]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages[3:]) == sent
+
+
+def test_drop_params_drops_a_one_hour_ttl_a_moving_system_message_would_put_after_a_five_minute_mark():
+    messages: Final = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part("u1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        {"role": "user", "content": [_part("u2", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"})]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert list(result.messages[3:]) == [
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part("u1", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part("u2", cache_control=_FIVE_MINUTES)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "sent"),
+    [
+        pytest.param(
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": [
+                    _part("r0", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"}),
+                    _part("r1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"}),
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1")], "cache_control": _ONE_HOUR},
+            id="tool-result-parts",
+        ),
+        pytest.param(
+            {
+                "role": "user",
+                "content": [_part("u0"), _part("u1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"})],
+                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+            },
+            {"role": "user", "content": [_part("u0"), _part("u1", cache_control=_ONE_HOUR)]},
+            id="message-and-its-last-part",
+        ),
+    ],
+)
+def test_breakpoints_joined_into_one_mark_keep_the_longest_ttl_the_caller_chose(
+    message: dict[str, object], sent: dict[str, object]
+):
+    result: Final = _resolved([message])
+
+    assert list(result.messages) == [sent]
 
 
 def test_a_tool_config_cache_point_takes_one_of_claudes_four_and_is_never_dropped_under_drop_params():

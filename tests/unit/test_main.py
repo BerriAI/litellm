@@ -849,6 +849,69 @@ def test_a_tool_breakpoint_before_a_one_hour_tool_config_cache_point_reaches_con
     assert [tool["cachePoint"] for tool in sent_tools if "cachePoint" in tool] == [{"type": "default", "ttl": "1h"}] * 2
 
 
+_ONE_HOUR_BREAKPOINT: Final = {"mode": "explicit", "ttl": "1h"}
+_FIVE_MINUTE_TOOL_CONFIG: Final = [{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}]
+
+
+def _converse_cache_point_ttls(body: Mapping[str, object]) -> tuple[str | None, ...]:
+    tool_config: Final = body.get("toolConfig")
+    tools: Final = tool_config["tools"] if isinstance(tool_config, dict) else []
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    in_messages: Final = tuple(block for message in messages for block in message["content"])
+    return tuple(block["cachePoint"].get("ttl") for block in (*tools, *in_messages) if "cachePoint" in block)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("bedrock/converse/us.anthropic.claude-opus-5-5", id="converse"),
+        pytest.param("bedrock/chat_completions/us.anthropic.claude-opus-5-5", id="chat-completions-falls-back"),
+    ],
+)
+def test_a_one_hour_breakpoint_after_a_five_minute_tool_config_cache_point_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, model: str
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}]}],
+        tools=[_WEATHER_TOOL],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+def test_a_one_hour_breakpoint_after_the_dummy_tools_five_minute_cache_point_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "And tomorrow?", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):

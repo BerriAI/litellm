@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from typing import Final, Literal
 
@@ -42,10 +43,54 @@ _MANTLE_TOKEN: Final = "synthetic-mantle-bearer"
 _VERTEX_PROJECT: Final = "scripted-project"
 _VERTEX_LOCATION: Final = "us-east5"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+# Claude's 400s on api.anthropic.com, Bedrock Invoke, Bedrock Mantle, Claude Platform and Bedrock Converse, observed
+# live 2026-10-15 for PR 46391 (two marks on one tool result, and a 1h cachePoint read after a 5m one on Converse)
+_TOOL_RESULT_MARKED_TWICE: Final = "cache_control may not be specified within `tool_result.content`"
+_TTL_ORDER: Final = "a ttl='1h' cache_control block must not come after a ttl='5m' cache_control block"
+
+
+def _ttl_out_of_order(marks: tuple[Mark, ...]) -> bool:
+    first_short: Final = next((index for index, mark in enumerate(marks) if mark.ttl != "1h"), len(marks))
+    return any(mark.ttl == "1h" for mark in marks[first_short:])
+
+
+def _marked(block: JsonValue) -> bool:
+    return isinstance(block, dict) and block.get("cache_control") is not None
+
+
+def _marked_more_than_once(result: dict[str, JsonValue]) -> bool:
+    content: Final = result.get("content")
+    return _marked(result) + sum(map(_marked, content if isinstance(content, list) else [])) > 1
+
+
+def _tool_results(request: Request) -> Iterator[dict[str, JsonValue]]:
+    for message in _messages(_JSON_OBJECT.validate_json(request.body)):
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                yield block
 
 
 def respond(provider: Provider, request: Request) -> Reply:
-    return bedrock_peer(request) if provider == "bedrock_converse" else anthropic_peer(request)
+    """The scripted peers, holding a request to the tool result and ttl order rules Claude enforces"""
+    if provider == "bedrock_converse":
+        return (
+            Reply(
+                status=400,
+                headers={"x-amzn-errortype": "ValidationException"},
+                body=json.dumps({"message": _TTL_ORDER}).encode(),
+            )
+            if _ttl_out_of_order(sent_marks(provider, request))
+            else bedrock_peer(request)
+        )
+    if any(map(_marked_more_than_once, _tool_results(request))):
+        return Reply(
+            status=400,
+            body=json.dumps(
+                {"type": "error", "error": {"type": "invalid_request_error", "message": _TOOL_RESULT_MARKED_TWICE}}
+            ).encode(),
+        )
+    return anthropic_peer(request)
 
 
 def labels(provider: Provider, request: Request) -> list[str]:

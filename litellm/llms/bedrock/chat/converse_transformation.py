@@ -256,10 +256,28 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def may_send_tools(
-        *, tools: object, functions: object, response_format: object, web_search_options: object
+        *,
+        tools: object,
+        functions: object,
+        response_format: object,
+        web_search_options: object,
+        messages: Sequence[object],
     ) -> bool:
-        """Converse builds tools from ``functions``, a ``response_format`` or ``web_search_options`` too."""
-        return bool(tools) or any(value is not None for value in (functions, response_format, web_search_options))
+        """Converse builds tools from ``functions``, a ``response_format`` or ``web_search_options`` too, and adds a
+        dummy tool for tool calls in the history under ``modify_params``."""
+        return (
+            bool(tools)
+            or any(value is not None for value in (functions, response_format, web_search_options))
+            or AmazonConverseConfig._adds_a_dummy_tool(messages)
+        )
+
+    @staticmethod
+    def _adds_a_dummy_tool(messages: Sequence[object]) -> bool:
+        return (
+            not litellm.bedrock_neutralize_orphaned_tool_blocks
+            and litellm.modify_params
+            and any(message_field(message, "tool_calls") is not None for message in messages)
+        )
 
     @staticmethod
     def sends_tool_history_as_text(may_send_tools: bool) -> bool:
@@ -284,13 +302,22 @@ class AmazonConverseConfig(BaseConfig):
         return control if isinstance(control, dict) else ChatCompletionCachedContent(type="ephemeral")
 
     @staticmethod
+    def _cache_point_holders(message: AllMessageValues) -> tuple[object, ...]:
+        """The blocks whose ``cache_control`` Converse sends as a cachePoint: every part and tool call, and the message
+        itself when its content is a string or it is a tool result."""
+        content: Final = message_field(message, "content")
+        sends_message_mark: Final = isinstance(content, str) or message_field(message, "role") in ("tool", "function")
+        return (
+            *((message,) if sends_message_mark else ()),
+            *parts_of(content),
+            *parts_of(message_field(message, "tool_calls")),
+        )
+
+    @staticmethod
     def _sends_a_one_hour_cache_point(
         system_content_blocks: Sequence[SystemContentBlock], messages: Sequence[AllMessageValues]
     ) -> bool:
-        holders: Final = chain.from_iterable(
-            (message, *parts_of(message_field(message, "content")), *parts_of(message_field(message, "tool_calls")))
-            for message in messages
-        )
+        holders: Final = chain.from_iterable(map(AmazonConverseConfig._cache_point_holders, messages))
         return any(message_field(block.get("cachePoint"), "ttl") == "1h" for block in system_content_blocks) or any(
             message_field(message_field(holder, "cache_control"), "ttl") == "1h" for holder in holders
         )

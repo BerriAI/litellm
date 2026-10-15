@@ -1100,6 +1100,22 @@ def _is_claude_prompt_cache_target(custom_llm_provider: str | None, model: str, 
     return _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
 
 
+def _reaches_converse(
+    provider_config: BaseConfig | None,
+    custom_llm_provider: str | None,
+    model: str,
+    route_params: Mapping[str, object],
+    additional_drop_params: Sequence[str] | None,
+) -> bool:
+    """A Bedrock model on the native Chat Completions route still reaches Converse when the request needs it."""
+    if isinstance(provider_config, AmazonConverseConfig):
+        return True
+    return (
+        custom_llm_provider == "bedrock"
+        and bedrock_route_for_request(model, route_params, additional_drop_params) == "converse"
+    )
+
+
 def _history_without_unanswered_tool_search_calls(
     messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
 ) -> tuple[object, ...] | None:
@@ -5600,6 +5616,28 @@ def completion(
             functions=cast(object, functions),  # cast-ok: completion types functions as a bare List
             response_format=cast(object, response_format),  # cast-ok: completion types response_format as a bare dict
             web_search_options=web_search_options,
+            messages=routed_messages,
+        )
+        reaches_converse: Final = _reaches_converse(
+            provider_config,
+            custom_llm_provider,
+            model,
+            MappingProxyType(
+                {
+                    "tools": request_tools,
+                    "functions": cast(object, functions),  # cast-ok: completion types functions as a bare List
+                    "response_format": cast(object, response_format),  # cast-ok: completion types it as a bare dict
+                    "stop": cast(object, stop),  # cast-ok: completion types stop loosely
+                    "thinking": thinking,
+                    "reasoning_effort": reasoning_effort,
+                    **non_default_params,
+                }
+            ),
+            (
+                _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs["additional_drop_params"])
+                if kwargs.get("additional_drop_params") is not None
+                else None
+            ),
         )
         claude_cache: Final = (
             resolved_claude_prompt_cache(
@@ -5608,13 +5646,13 @@ def completion(
                     request_tools,
                     non_default_params,
                     drop_params=claude_drop_params,
-                    tool_history_as_text=isinstance(provider_config, AmazonConverseConfig)
+                    tool_history_as_text=reaches_converse
                     and AmazonConverseConfig.sends_tool_history_as_text(converse_may_send_tools),
                     tool_config_cache_control=(
                         AmazonConverseConfig.tool_config_cache_control(
                             non_default_params.get("cache_control_injection_points")
                         )
-                        if isinstance(provider_config, AmazonConverseConfig) and converse_may_send_tools
+                        if reaches_converse and converse_may_send_tools
                         else None
                     ),
                 ),

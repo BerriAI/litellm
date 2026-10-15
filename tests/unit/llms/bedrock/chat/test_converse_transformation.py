@@ -5990,6 +5990,17 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
             {"type": "default"},
             id="five-minute-message",
         ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "What is the weather?"}],
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+            {"type": "default"},
+            id="one-hour-mark-converse-does-not-send-on-a-message-with-parts",
+        ),
     ],
 )
 def test_a_tool_config_cache_point_without_a_ttl_takes_one_hour_when_a_later_cache_point_does(
