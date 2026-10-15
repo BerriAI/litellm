@@ -72,6 +72,11 @@ def test_metadata_seed_resumes_without_duplicates_and_rolls_up_exact_totals(
         'LEFT JOIN "LiteLLM_UserTable" u ON l."user" = u.user_id '
         "WHERE k.token IS NULL OR t.team_id IS NULL OR u.user_id IS NULL"
     ).fetchone() == (0,)
+    assert seed_database.execute(
+        'SELECT EXISTS(SELECT 1 FROM "LiteLLM_SpendLogs" l '
+        'JOIN "LiteLLM_VerificationToken" k ON l.api_key = k.token '
+        "WHERE l.team_id NOT IN ('perf-team-0', 'perf-team-1') AND right(k.key_alias, 1) NOT IN ('8', '9'))"
+    ).fetchone() == (True,)
 
 
 def test_failed_batch_rolls_back_logs_and_checkpoint_then_resumes(

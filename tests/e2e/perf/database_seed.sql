@@ -6,7 +6,7 @@ WITH hashes AS (
     FROM generate_series(%(first)s::bigint, %(last)s::bigint) AS g
 ), dimensions AS (
     SELECT *,
-        CASE WHEN key_hash %% 10 < 8 THEN key_hash %% 200 ELSE key_hash %% 10000 END AS key_slot,
+        CASE WHEN key_hash %% 10 < 8 THEN key_hash / 10 %% 200 ELSE 200 + key_hash / 10 %% 9800 END AS key_slot,
         %(anchor)s::timestamp - interval '90 days'
             + (time_hash %% 7775900 + (g - 1) %% 8 * 10) * interval '1 second' AS started,
         200 + token_hash %% 30000 AS input_tokens,
