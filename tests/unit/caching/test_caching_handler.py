@@ -201,6 +201,22 @@ async def test_existing_provider_response_cache_still_hits(copilot_response_cach
     assert hidden_params.get("cache_hit") is True
 
 
+@pytest.mark.asyncio
+async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cache) -> None:
+    messages: Final = [{"role": "user", "content": "cache cost repro"}]
+    first: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=messages, mock_response="hi there " * 50, caching=True
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=messages, mock_response="hi there " * 50, caching=True
+    )
+
+    assert first._hidden_params["response_cost"] > 0
+    assert second._hidden_params["cache_hit"] is True
+    assert second._hidden_params["response_cost"] == 0
+
+
 chat_completion_response = litellm.ModelResponse(
     id=str(uuid.uuid4()),
     choices=[

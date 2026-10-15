@@ -1088,6 +1088,7 @@ class LLMCachingHandler:
             kwargs=kwargs,
             start_time=self.start_time,
             end_time=datetime.datetime.now(),
+            cache_hit=True,
         )
         return cached_result
 
