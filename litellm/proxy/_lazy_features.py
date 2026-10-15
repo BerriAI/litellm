@@ -208,6 +208,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/config_overrides",),
     ),
     LazyFeature(
+        name="codex_passthrough",
+        module_path="litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints",
+        path_prefixes=("/backend-api/codex/",),
+    ),
+    LazyFeature(
         name="llm_passthrough",
         module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         path_prefixes=(

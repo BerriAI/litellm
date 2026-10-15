@@ -85,6 +85,19 @@
     ]
 },
 {
+    "title": "ChatGPT Subscription Passthrough",
+    "description": "Use a personal ChatGPT subscription through an authenticated LiteLLM gateway with Pi or Codex.",
+    "url": "https://github.com/BerriAI/litellm/blob/main/cookbook/ai_coding_tool_guides/chatgpt_subscription_passthrough.md",
+    "date": "2026-10-14",
+    "version": "1.0.0",
+    "tags": [
+        "Pi",
+        "OpenAI Codex CLI",
+        "ChatGPT",
+        "LiteLLM"
+    ]
+},
+{
     "title": "OpenWebUI Quickstart",
     "description": "This is a quickstart guide to using OpenWebUI with LiteLLM.",
     "url": "https://docs.litellm.ai/docs/tutorials/openweb_ui",

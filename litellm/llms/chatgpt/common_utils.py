@@ -5,6 +5,7 @@ Constants and helpers for ChatGPT subscription OAuth.
 import os
 import platform
 from typing import Any, Final
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -103,6 +104,11 @@ You are producing plain text that will later be styled by the CLI. Follow these 
   * Do not provide range of lines
   * Examples: src/app.ts, src/app.ts:42, b/server/index.js#L10, C:\\repo\\project\\main.rs:12:5
 """
+
+
+def is_chatgpt_codex_responses_url(url: str) -> bool:
+    parsed: Final = urlsplit(url)
+    return parsed.scheme == "https" and parsed.netloc == "chatgpt.com" and parsed.path == "/backend-api/codex/responses"
 
 
 class ChatGPTAuthError(BaseLLMException):

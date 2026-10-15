@@ -8673,6 +8673,82 @@
       }
     }
   },
+  "codex_passthrough": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/backend-api/codex/models": {
+        "get": {
+          "description": "Forward the signed-in user's native Codex catalog using a separate LiteLLM gateway credential.",
+          "operationId": "codex_models_backend_api_codex_models_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Models",
+          "tags": [
+            "codex_passthrough"
+          ]
+        }
+      },
+      "/backend-api/codex/responses": {
+        "post": {
+          "description": "Relay ChatGPT subscription Responses over HTTP/SSE. The client owns login and token refresh.",
+          "operationId": "codex_responses_backend_api_codex_responses_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "The upstream Responses payload or unchanged server-sent events"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Codex Responses",
+          "tags": [
+            "codex_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "compliance": {
     "components": {
       "schemas": {
