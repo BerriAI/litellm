@@ -2081,8 +2081,9 @@ class ResponsesWebSocketStreaming:
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
     def _start_turn(self, client_frame: str | None) -> None:
+        start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
-            litellm_call_id=str(uuid.uuid4()), start_time=datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
+            litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
