@@ -17678,6 +17678,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ternary/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Ternary Settings
+         * @description Delete the stored Ternary export settings. Proxy Admin only.
+         */
+        delete: operations["delete_ternary_settings_ternary_delete_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ternary/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ternary Dry Run
+         * @description Preview the most recent usage as the FOCUS rows Ternary would receive. Sends nothing. Proxy Admin only.
+         */
+        post: operations["ternary_dry_run_ternary_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ternary/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ternary Export
+         * @description Export usage to Ternary now, one upload per UTC day.
+         *
+         *     With no bounds this sends the same window as the next scheduled export. Proxy Admin only.
+         */
+        post: operations["ternary_export_ternary_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ternary/init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Init Ternary Settings
+         * @description Store the Ternary export settings, with the API key encrypted. Proxy Admin only.
+         */
+        post: operations["init_ternary_settings_ternary_init_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ternary/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ternary Settings
+         * @description View the Ternary export settings with the API key masked. Proxy Admin or Admin Viewer only.
+         */
+        get: operations["get_ternary_settings_ternary_settings_get"];
+        /**
+         * Update Ternary Settings
+         * @description Update some of the Ternary export settings. Omitted fields keep their stored value. Proxy Admin only.
+         */
+        put: operations["update_ternary_settings_ternary_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/test": {
         parameters: {
             query?: never;
@@ -46685,6 +46791,210 @@ export interface components {
             groups: string[];
         };
         /**
+         * TernaryDryRunRequest
+         * @description Request model for a Ternary dry run, which previews the export locally without contacting Ternary
+         */
+        TernaryDryRunRequest: {
+            /**
+             * Limit
+             * @description Maximum number of usage rows to preview
+             * @default 500
+             */
+            limit: number;
+        };
+        /** TernaryDryRunResponse */
+        TernaryDryRunResponse: {
+            /** Message */
+            message: string;
+            /**
+             * Normalized Data
+             * @description The same rows as FOCUS records, including token counts in Tags, as Ternary would receive them
+             */
+            normalized_data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /** Status */
+            status: string;
+            summary: components["schemas"]["TernaryDryRunSummary"];
+            /**
+             * Usage Data
+             * @description Sample of LiteLLM daily spend rows
+             */
+            usage_data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+        };
+        /** TernaryDryRunSummary */
+        TernaryDryRunSummary: {
+            /**
+             * Days
+             * @description UTC days the previewed rows fall on, one upload each
+             */
+            days: string[];
+            /**
+             * Estimated Spend
+             * @description LiteLLM's estimated spend for the previewed rows, not billed cost
+             */
+            estimated_spend: number;
+            /** Total Records */
+            total_records: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** Unique Models */
+            unique_models: number;
+            /** Unique Teams */
+            unique_teams: number;
+        };
+        /**
+         * TernaryExportRequest
+         * @description Request model for a manual Ternary export. With no bounds, exports the scheduled window
+         */
+        TernaryExportRequest: {
+            /**
+             * End Time Utc
+             * @description End of the export window in UTC
+             */
+            end_time_utc?: string | null;
+            /**
+             * Limit
+             * @description Optional cap on the number of usage rows to export
+             */
+            limit?: number | null;
+            /**
+             * Start Time Utc
+             * @description Start of the export window in UTC
+             */
+            start_time_utc?: string | null;
+        };
+        /** TernaryExportResponse */
+        TernaryExportResponse: {
+            /**
+             * End Time Utc
+             * Format: date-time
+             */
+            end_time_utc: string;
+            /** Message */
+            message: string;
+            /**
+             * Start Time Utc
+             * Format: date-time
+             */
+            start_time_utc: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * TernaryMessageResponse
+         * @description Response model for Ternary settings writes
+         */
+        TernaryMessageResponse: {
+            /** Message */
+            message: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * TernarySettings
+         * @description Ternary export settings. The init request body, and the stored row once the API key is decrypted
+         */
+        TernarySettings: {
+            /**
+             * Api Key
+             * @description Ternary AI Gateway connection API key
+             */
+            api_key: string;
+            /**
+             * Base Url
+             * @description Ternary API base URL
+             * @default https://api.ternary.app
+             */
+            base_url: string;
+            /**
+             * Connection Id
+             * @description Ternary AI Gateway connection ID
+             */
+            connection_id: string;
+            /**
+             * Frequency
+             * @description Export cadence. 'interval' is meant for short setup-validation loops
+             * @default daily
+             * @enum {string}
+             */
+            frequency: "daily" | "interval";
+            /**
+             * Interval Seconds
+             * @description Seconds between exports when frequency is 'interval'
+             */
+            interval_seconds?: number | null;
+        };
+        /**
+         * TernarySettingsUpdate
+         * @description Request model for updating Ternary export settings. Omitted fields keep their stored value
+         */
+        TernarySettingsUpdate: {
+            /**
+             * Api Key
+             * @description New Ternary connection API key
+             */
+            api_key?: string | null;
+            /**
+             * Base Url
+             * @description New Ternary API base URL
+             */
+            base_url?: string | null;
+            /**
+             * Connection Id
+             * @description New Ternary connection ID
+             */
+            connection_id?: string | null;
+            /**
+             * Frequency
+             * @description New export cadence
+             */
+            frequency?: ("daily" | "interval") | null;
+            /**
+             * Interval Seconds
+             * @description New seconds between exports for 'interval'
+             */
+            interval_seconds?: number | null;
+        };
+        /**
+         * TernarySettingsView
+         * @description Response model for viewing Ternary export settings with the API key masked
+         */
+        TernarySettingsView: {
+            /**
+             * Api Key Masked
+             * @description Masked API key
+             */
+            api_key_masked?: string | null;
+            /**
+             * Base Url
+             * @description Ternary API base URL
+             */
+            base_url?: string | null;
+            /**
+             * Connection Id
+             * @description Ternary connection ID
+             */
+            connection_id?: string | null;
+            /**
+             * Frequency
+             * @description Export cadence
+             */
+            frequency?: ("daily" | "interval") | null;
+            /**
+             * Interval Seconds
+             * @description Seconds between exports for 'interval'
+             */
+            interval_seconds?: number | null;
+            /**
+             * Status
+             * @description Configuration status
+             */
+            status?: string | null;
+        };
+        /**
          * TestCustomCodeGuardrailRequest
          * @description Request model for testing custom code guardrails.
          */
@@ -74219,6 +74529,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UIEventsEnabledResponse"];
+                };
+            };
+        };
+    };
+    delete_ternary_settings_ternary_delete_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernaryMessageResponse"];
+                };
+            };
+        };
+    };
+    ternary_dry_run_ternary_dry_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TernaryDryRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernaryDryRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ternary_export_ternary_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TernaryExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernaryExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    init_ternary_settings_ternary_init_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TernarySettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernaryMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ternary_settings_ternary_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernarySettingsView"];
+                };
+            };
+        };
+    };
+    update_ternary_settings_ternary_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TernarySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TernaryMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
