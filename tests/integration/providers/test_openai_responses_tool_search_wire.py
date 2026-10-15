@@ -585,8 +585,19 @@ def test_an_openai_error_on_the_mapped_request_reaches_the_caller_and_lands_as_a
     assert str(rows[0]["status"]) == "failure", rows
 
 
-def test_chat_completions_through_the_responses_bridge_drop_the_search_tool_under_drop_params(
-    openai_gateway: Gateway, openai_api: ControlPlane
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [
+        (_RESPONSES_MODEL, [("tool_search", "server", None, None), ("function", None, "get_weather", True)]),
+        ("openai/responses/gpt-5.4-nano", [("function", None, "get_weather", None)]),
+    ],
+    ids=["flagged-deferred", "unflagged"],
+)
+def test_chat_completions_through_the_responses_bridge_follow_drop_params(
+    openai_gateway: Gateway,
+    openai_api: ControlPlane,
+    model: str,
+    forwarded: list[tuple[JsonValue, ...]],
 ) -> None:
     exchange: Final = _exchange(
         openai_gateway,
@@ -608,12 +619,14 @@ def test_chat_completions_through_the_responses_bridge_drop_the_search_tool_unde
             ],
         },
         path="/v1/chat/completions",
+        model=model,
         deployment={"drop_params": True},
     )
 
     assert exchange.response.status_code == 200, exchange.response.text
     tools: Final = _ITEMS.validate_python(exchange.only_body()["tools"])
-    assert [(tool["type"], tool.get("name")) for tool in tools] == [("function", "get_weather")], tools
+    wire_keys: Final = ("type", "execution", "name", "defer_loading")
+    assert [tuple(tool.get(key) for key in wire_keys) for tool in tools] == forwarded, tools
 
 
 def test_messages_to_an_openai_model_with_the_search_tool_still_answers(
