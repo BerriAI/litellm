@@ -698,6 +698,24 @@ async def test_deployment_hook_intercepts_bare_web_search_type_and_keeps_user_we
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", [CallTypes.anthropic_messages, CallTypes.aanthropic_messages])
+async def test_deployment_hook_leaves_bare_web_search_type_alone_on_messages(call_type: CallTypes):
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "some-model",
+            "messages": [{"role": "user", "content": "Who won the latest Nobel Prize in Physics?"}],
+            "tools": [{"type": "web_search"}],
+            "custom_llm_provider": "openai",
+        },
+        call_type=call_type,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_skips_disabled_provider():
     """Test that the hook returns None for providers not in enabled_providers."""
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
@@ -902,7 +920,6 @@ async def test_converted_stream_moves_stream_options_out_of_the_provider_request
         result["_websearch_interception_converted_stream"],
         result["_websearch_interception_stream_options"],
     ) == (False, False, True, _STREAM_USAGE_OPTIONS)
-
 
 
 def test_sync_forced_tool_choice_repoints_converted_web_search():

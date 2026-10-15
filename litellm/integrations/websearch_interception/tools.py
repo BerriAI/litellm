@@ -157,11 +157,11 @@ def is_web_search_tool_responses(tool: Mapping[str, object]) -> bool:
     if tool_type == "function":
         return tool.get("name") == LITELLM_WEB_SEARCH_TOOL_NAME
 
-    return _is_hosted_web_search_type(tool_type)
-
-
-def _is_hosted_web_search_type(tool_type: str) -> bool:
     return tool_type == "web_search" or tool_type.startswith("web_search_")
+
+
+def is_chat_completion_request_web_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "web_search" or is_web_search_tool(dict(tool))
 
 
 def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
@@ -236,8 +236,7 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     Detects:
     - LiteLLM standard: name == "litellm_web_search"
     - OpenAI format: type == "function" with function.name == "litellm_web_search"
-    - Hosted web search types: type == "web_search" (OpenAI) or type starts with
-      "web_search_" (e.g., Anthropic "web_search_20250305", OpenAI "web_search_preview")
+    - Anthropic native: type starts with "web_search_" (e.g., "web_search_20250305")
     - Claude Code: name == "web_search" with a type field
     - Custom: name == "WebSearch" (legacy interception marker — only matched
       when input_schema is absent; see note below)
@@ -269,8 +268,6 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
         True
         >>> is_web_search_tool({"type": "web_search_20250305", "name": "web_search"})
         True
-        >>> is_web_search_tool({"type": "web_search"})
-        True
         >>> is_web_search_tool({"name": "calculator"})
         False
         >>> is_web_search_tool({"name": "WebSearch"})  # legacy interception marker
@@ -292,7 +289,8 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     if tool_name == LITELLM_WEB_SEARCH_TOOL_NAME:
         return True
 
-    if _is_hosted_web_search_type(tool_type):
+    # Check for native Anthropic web_search_* types
+    if tool_type.startswith("web_search_"):
         return True
 
     # Check for Claude Code's web_search with a type field
