@@ -8,7 +8,6 @@ reason `perf-test-block`. Its own latency comes from `additional_provider_specif
 from __future__ import annotations
 
 import asyncio
-import time
 from collections import deque
 from collections.abc import Mapping
 from typing import Final, Literal
@@ -26,30 +25,18 @@ class GuardrailRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
     input_type: Literal["request", "response"]
     texts: list[str] | None = None
-    request_data: dict[str, object] = {}
     litellm_call_id: str | None = None
-    model: str | None = None
     additional_provider_specific_params: dict[str, object] | None = None
 
     def latency_s(self) -> float:
         value: Final = (self.additional_provider_specific_params or {}).get("latency_s")
         return float(value) if isinstance(value, (int, float)) else 0.0
 
-    def metadata(self, key: str) -> str | None:
-        value: Final = self.request_data.get(key)
-        return value if isinstance(value, str) else None
-
 
 class GuardrailCall(BaseModel):
     marker: str | None
     input_type: Literal["request", "response"]
     action: Action
-    model: str | None
-    team_id: str | None
-    key_alias: str | None
-    user_id: str | None
-    litellm_call_id: str | None
-    received_at: float
 
 
 class GuardrailCallsResponse(BaseModel):
@@ -109,12 +96,6 @@ def build_app() -> FastAPI:
                 marker=marker,
                 input_type=body.input_type,
                 action=action,
-                model=body.model,
-                team_id=body.metadata("user_api_key_team_id"),
-                key_alias=body.metadata("user_api_key_alias"),
-                user_id=body.metadata("user_api_key_user_id"),
-                litellm_call_id=body.litellm_call_id,
-                received_at=time.time(),
             )
         )
         return JSONResponse(content=content)

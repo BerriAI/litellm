@@ -18,7 +18,6 @@ import asyncio
 import hashlib
 import json
 import re
-import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Final, Literal, cast
@@ -32,8 +31,6 @@ from replay import Capture, Provider, body_bytes, paced, pick
 MARKER: Final = re.compile(r"perfreq-\d{6}-[nib]")
 _KNOBS: Final = re.compile(r"^(?:[fsp]\d+)(?:-[fsp]\d+)*$")
 DELAY_HEADER: Final = "x-mock-delay-s"
-TOTAL_HEADER: Final = "x-mock-total-s"
-SHAPE_HEADER: Final = "x-mock-shape"
 KNOBS_HEADER: Final = "x-mock-knobs"
 Flag = Literal["n", "i", "b"]
 
@@ -43,11 +40,6 @@ class Knobs:
     flake_percent: int = 0
     flake_status: int = 500
     speed_percent: int = 100
-
-    @property
-    def header_value(self) -> str:
-        """What a deployment puts in its `x-mock-knobs` extra header so this mock applies these knobs."""
-        return f"f{self.flake_percent}-s{self.flake_status}-p{self.speed_percent}"
 
     @property
     def scale(self) -> float:
@@ -125,18 +117,11 @@ class MockRequest(BaseModel):
 
     provider: Provider
     marker: str | None
-    model: str
     route: str
     stream: bool
     shape: str
-    attempt: int
     failed: bool
-    status: int
     delay_s: float
-    total_s: float
-    prompt_tokens: int
-    prompt_text: str
-    received_at: float
 
 
 class MockRequestsResponse(BaseModel):
@@ -159,8 +144,6 @@ class Decision:
     knobs: Knobs
     capture: Capture
     fail: bool
-    prompt_text: str
-    prompt_tokens: int
 
     @property
     def seed(self) -> str:
@@ -176,16 +159,8 @@ class Decision:
         return 0.0 if self.fail else self.capture.ttfb_s * self.knobs.scale
 
     @property
-    def total_s(self) -> float:
-        return 0.0 if self.fail else self.capture.total_s * self.knobs.scale
-
-    @property
     def headers(self) -> dict[str, str]:
-        return {
-            DELAY_HEADER: f"{self.delay_s:.4f}",
-            TOTAL_HEADER: f"{self.total_s:.4f}",
-            SHAPE_HEADER: self.capture.shape,
-        }
+        return {DELAY_HEADER: f"{self.delay_s:.4f}"}
 
 
 class RequestLog:
@@ -214,25 +189,16 @@ class RequestLog:
             knobs=knobs,
             capture=pick(self._provider, route, stream, prompt_tokens),
             fail=fail,
-            prompt_text=prompt_text[:500],
-            prompt_tokens=prompt_tokens,
         )
         self._entries.append(
             MockRequest(
                 provider=self._provider,
                 marker=marker,
-                model=model,
                 route=route,
                 stream=stream,
                 shape=decision.capture.shape,
-                attempt=attempt,
                 failed=fail,
-                status=decision.status,
                 delay_s=decision.delay_s,
-                total_s=decision.total_s,
-                prompt_tokens=prompt_tokens,
-                prompt_text=decision.prompt_text,
-                received_at=time.time(),
             )
         )
         return decision

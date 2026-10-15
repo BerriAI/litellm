@@ -40,13 +40,8 @@ class Capture(BaseModel):
     provider: Provider
     route: str
     shape: str
-    marker: str
-    captured_at: str
     stream: bool
-    model: str
-    request_bytes: int
     request_tokens_estimate: int
-    status: int
     ttfb_s: float
     total_s: float
     body: dict[str, object] | None
@@ -61,10 +56,6 @@ class Capture(BaseModel):
     def text(self) -> str:
         """The visible reply text, what a client should see once the gateway has translated the body."""
         return "".join(_texts(self))
-
-    @property
-    def usage(self) -> dict[str, object]:
-        return _mapping(self.body.get("usage")) if self.body is not None else _stream_usage(self)
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -149,21 +140,6 @@ def _stream_texts(capture: Capture) -> Iterator[str]:
         yield from (_event_text(event) for event in capture.events)
         return
     yield from (_sse_text(payload) for payload in _sse_payloads(capture))
-
-
-def _payload_usage(payload: dict[str, object]) -> dict[str, object]:
-    direct: Final = _mapping(payload.get("usage"))
-    return direct if direct else _mapping(_mapping(payload.get("response")).get("usage"))
-
-
-def _stream_usage(capture: Capture) -> dict[str, object]:
-    payloads: Final = (
-        tuple(_mapping(event.get("payload")) for event in capture.events)
-        if capture.provider == "bedrock"
-        else tuple(_sse_payloads(capture))
-    )
-    empty: Final[dict[str, object]] = {}
-    return next((usage for usage in (_payload_usage(payload) for payload in payloads) if usage), empty)
 
 
 @cache
