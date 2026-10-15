@@ -665,9 +665,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         _meta_model: Final[object] = payload_metadata.get("model_name", "unknown")
         _meta_provider: Final[object] = payload_metadata.get("model_provider", "unknown")
         model_name: Final[str] = _meta_model if isinstance(_meta_model, str) else "unknown"
-        model_provider: Final[str] = (
-            _meta_provider if isinstance(_meta_provider, str) else "unknown"
-        )
+        model_provider: Final[str] = _meta_provider if isinstance(_meta_provider, str) else "unknown"
         meta: Final[Meta] = {
             "kind": span_kind,
             "input": input_meta,
