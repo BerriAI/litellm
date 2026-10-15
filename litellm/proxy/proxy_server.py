@@ -431,7 +431,7 @@ from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
-from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
+from litellm.proxy.common_utils.debug_utils import freeze_gc_after_startup, init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
     discoverable_rows,
@@ -1737,6 +1737,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    freeze_gc_after_startup()
                     yield state
                 finally:
                     if model_info_scheduler is not None and model_info_scheduler.running:
