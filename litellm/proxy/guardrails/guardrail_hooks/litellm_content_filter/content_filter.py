@@ -1975,7 +1975,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             return inputs
         except HTTPException:
-            status = "guardrail_flagged" if self._is_logging_only_scan() else "guardrail_intervened"
+            status = "guardrail_intervened"
             raise
         except Exception as e:
             status = "guardrail_failed_to_respond"
