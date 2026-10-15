@@ -1,0 +1,11 @@
+{
+  "capture_time_utc": "2026-10-15T04:04:16.711495+00:00",
+  "source_head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
+  "endpoint": "https://drex.nace.ai/v1/systemone",
+  "http_status": 200,
+  "request": "upstream-request.json",
+  "response": "upstream-response.json",
+  "legend_format": "array",
+  "credentials": "NACE_API_KEY supplied privately",
+  "command": "curl -sS https://drex.nace.ai/v1/systemone -H \"Authorization: Bearer $NACE_API_KEY\" -H \"Content-Type: application/json\" --data-binary @upstream-request.json"
+}

@@ -1,0 +1,17 @@
+{
+  "head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
+  "command": "PYTHONPATH=/path/to/litellm PYTHON_DOTENV_DISABLED=1 LITELLM_LOCAL_MODEL_COST_MAP=True python -m pytest test_recorded_drex.py -v",
+  "result": "8 passed",
+  "providers": [
+    "nace",
+    "openrouter",
+    "fireworks_ai",
+    "typesafe"
+  ],
+  "cases": [
+    "actual recorded upstream array legend",
+    "derived mapping legend control"
+  ],
+  "assertion": "Full normalized response equals original, except indexed legend mapping. Includes every answer, probabilities, usage, model and metadata",
+  "scope": "Real Nace HTTP capture. Replay through other provider adapters uses fixtures, not live calls to those hosts"
+}
