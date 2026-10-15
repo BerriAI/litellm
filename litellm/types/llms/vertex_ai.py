@@ -7,12 +7,14 @@ from typing_extensions import (
     TypedDict,
 )
 
-from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.llms.openai import ChatCompletionFileObject, ChatCompletionTextObject, EmbeddingInput
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
-# opt-in for combined embeddings — a provider-specific extension of the
+# opt-in for combined embeddings, and typed content blocks: a {"type": "text",
+# "text": ...} block embeds its text verbatim with no media-prefix detection,
+# while file blocks carry media — provider-specific extensions of the
 # OpenAI-faithful EmbeddingInput shape.
-GeminiEmbeddingElement = str | ChatCompletionFileObject
+GeminiEmbeddingElement = str | ChatCompletionFileObject | ChatCompletionTextObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
