@@ -202,6 +202,15 @@ def test_anyof_conversion_with_only_null_branches_keeps_one_nullable_null(null_c
     assert schema == expected
 
 
+def test_anyof_conversion_leaves_empty_anyof_for_the_provider_to_judge():
+    """An empty union has no null branch to strip, so it is forwarded unchanged."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
     # generate a schema with excessive nesting
