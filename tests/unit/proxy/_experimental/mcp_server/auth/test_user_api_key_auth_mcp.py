@@ -9722,6 +9722,26 @@ class TestSessionBearerEgressScrub:
         )
         assert result == (None, {empty_header: "", "x-tenant": "tenant-control"}, None, {})
 
+    @pytest.mark.parametrize("claims", [None, {"sub": "caller"}])
+    @pytest.mark.parametrize("bearer", ["validated-jwt", "sk-admission-key"])
+    async def test_scrubbing_preserves_only_validated_jwt_admission(
+        self, claims: dict[str, str] | None, bearer: str
+    ) -> None:
+        headers: Final = Headers({"Authorization": f"Bearer {bearer}"})
+        auth: Final = UserAPIKeyAuth(api_key="stored-key-hash", jwt_claims=claims)
+        credential: Final = MCPRequestHandler.caller_admission_credential(headers, auth, custom_key_header_name=None)
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": f"Bearer {bearer}"},
+            raw_headers={**dict(headers), "x-mcp-echo-authorization": f"Bearer {bearer}"},
+            mcp_auth_header=bearer,
+            mcp_server_auth_headers={"echo": {"Authorization": f"Bearer {bearer}"}},
+            admitted_credential=credential,
+            preserve_jwt_subject=bool(claims),
+        )
+        expected: Final = {"Authorization": f"Bearer {bearer}"} if claims and not bearer.startswith("sk-") else None
+        assert result == (None, dict(headers) if expected else {}, None, {})
+
     async def test_caller_admission_credential_prefers_x_litellm_header(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
         upstream_authorization: Final = "Bearer unrelated-upstream-token"

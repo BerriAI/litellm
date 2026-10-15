@@ -15,6 +15,8 @@ from litellm.types.mcp import (
     MCP_LEGACY_VERSIONS,
     MCPAdvertisedVersion,
     MCPAdvertisedVersions,
+    MCPDisableableCapability,
+    MCPDisabledCapabilities,
     MCPSpecVersion,
     MCPTransport,
 )
@@ -29,6 +31,12 @@ GATEWAY_OPERATIONS: Final = frozenset(
         "resources/read",
         "resources/templates/list",
         "subscriptions/listen",
+    }
+)
+_CAPABILITY_OPERATIONS: Final[Mapping[MCPDisableableCapability, frozenset[str]]] = MappingProxyType(
+    {
+        "prompts": frozenset({"prompts/list", "prompts/get"}),
+        "resources": frozenset({"resources/list", "resources/read", "resources/templates/list"}),
     }
 )
 
@@ -61,6 +69,7 @@ REVISION_SUPPORT: Final[Mapping[str, RevisionSupport]] = MappingProxyType(
 _COMPLETED_REVISIONS: Final = tuple(version for version, support in REVISION_SUPPORT.items() if support.completed)
 TRANSLATION_PAIRS: Final = frozenset(product(_COMPLETED_REVISIONS, repeat=2))
 _ADVERTISED_VERSIONS: Final[TypeAdapter[tuple[MCPAdvertisedVersion, ...]]] = TypeAdapter(MCPAdvertisedVersions)
+_DISABLED_CAPABILITIES: Final[TypeAdapter[MCPDisabledCapabilities]] = TypeAdapter(MCPDisabledCapabilities)
 
 
 def configured_versions() -> tuple[str, ...]:
@@ -68,6 +77,22 @@ def configured_versions() -> tuple[str, ...]:
 
     configured: Final = general_settings_view().get("mcp_advertised_versions")
     return _ADVERTISED_VERSIONS.validate_python(MCP_LEGACY_VERSIONS if configured is None else configured)
+
+
+def disabled_capabilities() -> frozenset[MCPDisableableCapability]:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return frozenset(
+        _DISABLED_CAPABILITIES.validate_python(general_settings_view().get("mcp_disabled_capabilities") or ())
+    )
+
+
+def disabled_operations(disabled: frozenset[MCPDisableableCapability]) -> frozenset[str]:
+    return frozenset[str]().union(*(_CAPABILITY_OPERATIONS[name] for name in disabled))
+
+
+def enabled_gateway_operations(disabled: frozenset[MCPDisableableCapability]) -> frozenset[str]:
+    return GATEWAY_OPERATIONS - disabled_operations(disabled)
 
 
 def build_discovery(
@@ -136,8 +161,13 @@ def build_discovery(
 
 
 class GatewayVersionPolicy:
-    def __init__(self, versions: Callable[[], tuple[str, ...]] = configured_versions) -> None:
+    def __init__(
+        self,
+        versions: Callable[[], tuple[str, ...]] = configured_versions,
+        disabled: Callable[[], frozenset[MCPDisableableCapability]] = disabled_capabilities,
+    ) -> None:
         self._versions = versions
+        self._disabled = disabled
 
     async def __call__(self, ctx: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
         versions: Final = self._versions()
@@ -161,7 +191,7 @@ class GatewayVersionPolicy:
             configured=versions,
             revision=initialized.protocol_version,
             transport=MCPTransport.http,
-            authorized_operations=GATEWAY_OPERATIONS,
+            authorized_operations=enabled_gateway_operations(self._disabled()),
             upstream_versions=frozenset(HANDSHAKE_PROTOCOL_VERSIONS),
             capabilities=initialized.capabilities,
             instructions=initialized.instructions,
