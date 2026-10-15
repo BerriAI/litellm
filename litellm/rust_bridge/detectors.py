@@ -119,9 +119,7 @@ def managed_resource_ids(request: NativeCall) -> bool:
 
     model_id: Final = optional_str((_model_info(request) or {}).get("id"))
     mapping: Final = request.resolved.get("model_file_id_mapping")
-    file_ids: Final = cast(
-        "dict[str, dict[str, str]] | None", mapping
-    )  # cast-ok: the handler passes the proxy mapping unvalidated too
+    file_ids: Final = cast("dict[str, dict[str, str]] | None", mapping)  # cast-ok: handler passes it unvalidated
     input_value: Final = request.resolved.get("input")
     tools: Final = [dict(tool) for tool in map(optional_mapping, _tools(request)) if tool is not None]
     rewritten_tools: Final = update_responses_tools_with_model_file_ids(tools, model_id, file_ids) if tools else tools
@@ -164,9 +162,7 @@ def tool_schema_repair(request: NativeCall) -> bool:
         return True
     sanitized: Final = OpenAIResponsesAPIConfig()._sanitized_tool_schemas_for_openai(  # pyright: ignore[reportPrivateUsage]  # the handler's own schema rewrite
         model=_openai_model(request),
-        tools=cast(
-            "Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", tools
-        ),  # cast-ok: the sanitizer skips entries that are not tool dicts
+        tools=cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", tools),  # cast-ok: sanitizer skips non-dict tools
         litellm_params=GenericLiteLLMParams(model_info=_model_info(request)),
     )
     return bool(tools) and sanitized is not tools
@@ -182,9 +178,7 @@ def model_param_gating(request: NativeCall) -> bool:
     params: Final = {name: request.resolved[name] for name in PARAMETERS if request.resolved.get(name) is not None}
     mapped: Final = _PARAMS.validate_python(
         OpenAIResponsesAPIConfig().map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict
-            cast(
-                "ResponsesAPIOptionalRequestParams", params
-            ),  # cast-ok: the handler hands the same projected kwargs over
+            cast("ResponsesAPIOptionalRequestParams", params),  # cast-ok: the handler passes these kwargs
             _openai_model(request),
             drop_params=True,
         )
