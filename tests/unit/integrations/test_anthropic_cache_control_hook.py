@@ -1269,17 +1269,22 @@ def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_r
     assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
 
 
+@pytest.mark.parametrize(
+    "after_the_call",
+    [(_SEARCH_ANSWER, _SYSTEM_NOTE), (_SYSTEM_NOTE, _SEARCH_ANSWER)],
+    ids=["system_message_after_the_answer", "system_message_before_the_answer"],
+)
 @pytest.mark.parametrize("modify_params", [False, True])
 @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
 def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_after_a_system_message(
-    monkeypatch: pytest.MonkeyPatch, modify_params: bool, model: str
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, model: str, after_the_call: tuple[dict[str, object], ...]
 ):
     monkeypatch.setattr(litellm, "modify_params", modify_params)
     messages: Final = [
+        cast(AllMessageValues, {"role": "system", "content": "You are a weather assistant."}),
         cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
         _replayed_search_call(_SEARCH_CALL),
-        cast(AllMessageValues, _SEARCH_ANSWER),
-        cast(AllMessageValues, _SYSTEM_NOTE),
+        *(cast(AllMessageValues, message) for message in after_the_call),
     ]
 
     census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
