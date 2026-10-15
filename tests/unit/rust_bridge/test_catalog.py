@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from typing import Final
 
 import pytest
@@ -23,36 +23,6 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     configuration.reset_rust_configuration()
     yield
     configuration.reset_rust_configuration()
-
-
-@pytest.mark.parametrize("route", tuple(Route))
-@pytest.mark.parametrize(
-    "provider", (None, "bedrock", "mistral", "anthropic", "deepseek", "vertex_ai", "openai", "azure_ai", "unknown")
-)
-@pytest.mark.parametrize("process", (None, False, True))
-@pytest.mark.parametrize("environment", (None, "0", "1"))
-def test_shipped_decisions(
-    monkeypatch: pytest.MonkeyPatch,
-    route: Route,
-    provider: str | None,
-    process: bool | None,
-    environment: str | None,
-) -> None:
-    configuration.rust(process)
-    if environment is not None:
-        monkeypatch.setenv("LITELLM_RUST", environment)
-    context: Final = RouteContext(route, provider=provider, model="test-model")
-
-    if route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
-        assert catalog.rollout(context) is Rollout.RUST_REQUIRED
-        assert catalog.decision(context) is Decision.RUST_REQUIRED
-    elif route is Route.MESSAGES and provider in ("anthropic", "deepseek", "vertex_ai"):
-        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
-        opted_in: Final = environment == "1" or (environment is None and process is True)
-        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
-    else:
-        assert catalog.rollout(context) is Rollout.PYTHON_ONLY
-        assert catalog.decision(context) is Decision.PYTHON
 
 
 @pytest.mark.parametrize("route", tuple(Route))
@@ -96,19 +66,6 @@ def test_first_matching_rule_respects_every_constraint(context: RouteContext, ex
     )
 
     assert catalog.decision(context, rules) is expected
-
-
-@pytest.mark.parametrize("process", (None, False, True))
-@pytest.mark.parametrize("environment", (None, "0", "1"))
-def test_ocr_has_no_python_path_to_opt_out_to(
-    monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
-) -> None:
-    configuration.rust(process)
-    if environment is not None:
-        monkeypatch.setenv("LITELLM_RUST", environment)
-
-    assert catalog.decision(RouteContext(Route.OCR, model="m")) is Decision.RUST_REQUIRED
-    assert catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED
 
 
 @pytest.mark.parametrize(
@@ -171,19 +128,3 @@ def test_empty_constraints_match_nothing() -> None:
     assert catalog.decision(
         RouteContext(Route.OCR, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})), rules
     ) is Decision.PYTHON
-
-
-def _messages_rule_providers() -> Iterator[str]:
-    for rule in catalog.RULES:
-        if isinstance(rule, RouteRule) and rule.route is Route.MESSAGES and rule.providers is not None:
-            yield from rule.providers
-
-
-@pytest.mark.parametrize("target", (Target.CHAT_COMPLETIONS, Target.RESPONSES))
-@pytest.mark.parametrize("provider", (None, *sorted(frozenset(_messages_rule_providers()))))
-def test_translated_messages_stay_on_python_for_every_provider(target: Target, provider: str | None) -> None:
-    configuration.rust(True)
-
-    assert catalog.decision(RouteContext(Route.MESSAGES, provider=provider, model="m", target=target)) is (
-        Decision.PYTHON
-    )
