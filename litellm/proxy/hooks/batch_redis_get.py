@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, response_cache_phase
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.caching import DynamicCacheControl
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):
