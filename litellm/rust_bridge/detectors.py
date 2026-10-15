@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
 
@@ -128,13 +129,25 @@ def managed_resource_ids(request: NativeCall) -> bool:
     )
 
 
-def _mentions(value: object, key: str) -> bool:
+def _children(value: object) -> tuple[object, ...]:
     if isinstance(value, Mapping):
-        mapping: Final = cast("Mapping[object, object]", value)  # cast-ok: only keys and values are walked
-        return key in mapping or any(_mentions(child, key) for child in mapping.values())
+        return tuple(cast("Mapping[object, object]", value).values())  # cast-ok: only values are walked
     if isinstance(value, list | tuple):
-        return any(_mentions(child, key) for child in cast("Sequence[object]", value))  # cast-ok: only items are walked
-    return False
+        return tuple(cast("Sequence[object]", value))  # cast-ok: only items are walked
+    return ()
+
+
+def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(map(_children, level)))
+
+
+def _mentions(value: object, key: str) -> bool:
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_level, initial=(value,)))
+    return any(
+        key in cast("Mapping[object, object]", node)
+        for node in chain.from_iterable(levels)
+        if isinstance(node, Mapping)
+    )
 
 
 def cache_control_marks(request: NativeCall) -> bool:

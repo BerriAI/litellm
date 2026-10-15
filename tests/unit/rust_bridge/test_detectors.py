@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from functools import reduce
 from typing import Final
 
 import httpx
@@ -37,6 +38,10 @@ def function_tool(parameters: object) -> Mapping[str, object]:
 
 def call(**kwargs: object) -> NativeCall:
     return NativeCall(args=(), kwargs=kwargs, base={"model": "gpt-5"})
+
+
+def _wrap_nested_level(value: object, depth: int) -> object:
+    return {"nested": value} if depth % 2 else [value]
 
 
 @pytest.mark.parametrize(
@@ -112,6 +117,11 @@ def test_request_detectors(
     detector: Callable[[NativeCall], bool], kwargs: Mapping[str, object], expected: bool
 ) -> None:
     assert detector(call(**kwargs)) is expected
+
+
+def test_cache_control_marks_handles_deeply_nested_input() -> None:
+    nested_input: Final = reduce(_wrap_nested_level, range(5_000), {"cache_control": {}})
+    assert detectors.cache_control_marks(call(input=nested_input))
 
 
 @pytest.mark.parametrize(
