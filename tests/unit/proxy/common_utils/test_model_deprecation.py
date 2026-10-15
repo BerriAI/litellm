@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 
 import litellm
+from litellm import Router
 from litellm.proxy.common_utils.model_deprecation import (
     _classify,
     _parse_deprecation_date,
@@ -362,13 +363,14 @@ class TestFormatDeprecationAlertMessage:
 class TestSuccessorModel:
     def test_should_surface_the_successor_set_on_the_deployment(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
-        router = _make_router(
-            [
+        router = Router(
+            model_list=[
                 {
                     "model_name": "old",
                     "litellm_params": {"model": "openai/old-model"},
                     "model_info": {"id": "1", "deprecation_date": "2026-06-10", "successor_model": "new"},
-                }
+                },
+                {"model_name": "new", "litellm_params": {"model": "openai/new-model"}, "model_info": {"id": "2"}},
             ]
         )
 
@@ -378,13 +380,14 @@ class TestSuccessorModel:
 
     def test_should_name_the_deployment_successor_when_the_date_comes_from_the_cost_map(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {"old-model": {"deprecation_date": "2026-06-10"}})
-        router = _make_router(
-            [
+        router = Router(
+            model_list=[
                 {
                     "model_name": "old",
-                    "litellm_params": {"model": "old-model"},
+                    "litellm_params": {"model": "openai/old-model"},
                     "model_info": {"id": "1", "successor_model": "my-pick"},
-                }
+                },
+                {"model_name": "my-pick", "litellm_params": {"model": "openai/pick"}, "model_info": {"id": "2"}},
             ]
         )
 
@@ -413,10 +416,58 @@ class TestSuccessorModel:
 
         assert [m.successor_model for m in snapshot.imminent] == [None, None]
 
+    def test_should_only_name_successors_callable_in_the_deployment_team_scope(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "model_name_t1_old",
+                    "litellm_params": {"model": "openai/team-old"},
+                    "model_info": {
+                        "id": "1",
+                        "team_id": "t1",
+                        "team_public_model_name": "team-old",
+                        "deprecation_date": "2026-06-10",
+                        "successor_model": "team-new",
+                    },
+                },
+                {
+                    "model_name": "model_name_t1_new",
+                    "litellm_params": {"model": "openai/team-new"},
+                    "model_info": {"id": "2", "team_id": "t1", "team_public_model_name": "team-new"},
+                },
+                {
+                    "model_name": "global-old",
+                    "litellm_params": {"model": "openai/global-old"},
+                    "model_info": {"id": "3", "deprecation_date": "2026-06-10", "successor_model": "team-new"},
+                },
+                {
+                    "model_name": "typo-old",
+                    "litellm_params": {"model": "openai/typo-old"},
+                    "model_info": {"id": "4", "deprecation_date": "2026-06-10", "successor_model": "gpt-nwe"},
+                },
+                {
+                    "model_name": "wildcard-old",
+                    "litellm_params": {"model": "openai/wildcard-old"},
+                    "model_info": {"id": "5", "deprecation_date": "2026-06-10", "successor_model": "anthropic/x"},
+                },
+                {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}, "model_info": {"id": "6"}},
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert {m.model_name: m.successor_model for m in snapshot.imminent} == {
+            "model_name_t1_old": "team-new",
+            "global-old": None,
+            "typo-old": None,
+            "wildcard-old": "anthropic/x",
+        }
+
     def test_should_keep_the_first_deployment_and_carry_the_group_successor_when_deduping(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
-        router = _make_router(
-            [
+        router = Router(
+            model_list=[
                 {
                     "model_name": "alias",
                     "litellm_params": {"model": "openai/a"},
@@ -432,6 +483,8 @@ class TestSuccessorModel:
                     "litellm_params": {"model": "openai/c"},
                     "model_info": {"id": "3", "deprecation_date": "2026-06-10", "successor_model": "alias-v3"},
                 },
+                {"model_name": "alias-v2", "litellm_params": {"model": "openai/v2"}, "model_info": {"id": "4"}},
+                {"model_name": "alias-v3", "litellm_params": {"model": "openai/v3"}, "model_info": {"id": "5"}},
             ]
         )
 
@@ -441,8 +494,8 @@ class TestSuccessorModel:
 
     def test_should_name_the_successor_in_the_slack_entry_and_escape_it(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
-        router = _make_router(
-            [
+        router = Router(
+            model_list=[
                 {
                     "model_name": "old",
                     "litellm_params": {"model": "openai/old-model"},
@@ -453,9 +506,14 @@ class TestSuccessorModel:
                     },
                 },
                 {
+                    "model_name": "<https://evil.example|new>",
+                    "litellm_params": {"model": "openai/new-model"},
+                    "model_info": {"id": "2"},
+                },
+                {
                     "model_name": "orphan",
                     "litellm_params": {"model": "openai/orphan-model"},
-                    "model_info": {"id": "2", "deprecation_date": "2026-06-10"},
+                    "model_info": {"id": "3", "deprecation_date": "2026-06-10"},
                 },
             ]
         )
