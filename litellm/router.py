@@ -128,6 +128,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -996,15 +997,22 @@ def _exact_base_model_max_input_tokens(base_model: str, custom_llm_provider: str
     )
     try:
         model_info: Final = litellm.get_model_info(model=lookup_name)
-    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+    except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
         return None
     if is_generalized_model_info(model_info):
         return None
     return model_info.get("max_input_tokens")
 
 
-def _provider_model_id(model_name: str) -> str:
-    return model_name.rsplit("/", 1)[-1]
+def _provider_model_id(model_name: str, custom_llm_provider: str) -> str:
+    model_id: Final = model_name.rsplit("/", 1)[-1]
+    return get_bedrock_base_model(model_id) if custom_llm_provider.startswith("bedrock") else model_id
+
+
+def _names_route_model(base_model: str, route_key: str, custom_llm_provider: str) -> bool:
+    route_model_id: Final = _provider_model_id(route_key, custom_llm_provider)
+    base_model_id: Final = _provider_model_id(base_model, custom_llm_provider)
+    return route_model_id in (base_model_id, base_model_id.split("@", 1)[0])
 
 
 def _declared_base_model(user_model_info: Mapping[str, object]) -> str | None:
@@ -1021,7 +1029,7 @@ def _base_model_widened_window(
     route_max_input_tokens: Final = route_model_info.get("max_input_tokens")
     if base_model is None or route_max_input_tokens is None:
         return MappingProxyType({})
-    if _provider_model_id(base_model) != _provider_model_id(route_model_info["key"]):
+    if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
         return MappingProxyType({})
     base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model, custom_llm_provider)
     if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
