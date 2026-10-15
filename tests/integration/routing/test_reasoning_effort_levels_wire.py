@@ -41,10 +41,15 @@ MESSAGES: Final = "/v1/messages"
 RESPONSES: Final = "/v1/responses"
 _BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 2048}
 _ADAPTIVE: Final[dict[str, JsonValue]] = {"type": "adaptive"}
+_STRING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "2048"}
+_XHIGH_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 9000}
 _KIMI_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(KIMI_LEVELS)})
 _CLAUDE_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(CLAUDE_LEVELS)})
 _GPT_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(GPT_LEVELS)})
 _UNDECLARED: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+_ECHOED_MAP_KEY: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"key": "azure/chat-latest", "litellm_provider": "azure"}
+)
 _LONG_LEVEL: Final = "x" * 5000
 _JSON_SCHEMA_FORMAT: Final[dict[str, JsonValue]] = {
     "type": "json_schema",
@@ -84,6 +89,19 @@ def _anthropic_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
         "output_config": {"effort": effort},
         "max_tokens": 128000,
     }
+
+
+def _anthropic_chat_without_effort(thinking: Mapping[str, JsonValue]) -> Expected:
+    return lambda marker: {
+        "model": CLAUDE,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt(marker)}]}],
+        "thinking": dict(thinking),
+        "max_tokens": 128000,
+    }
+
+
+def _with_output_config(expected: Expected, output_config: JsonValue) -> Expected:
+    return lambda marker: {**expected(marker), "output_config": output_config}
 
 
 def _converse_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
@@ -139,13 +157,17 @@ def _responses_bridged_messages(effort: str) -> Expected:
     }
 
 
-def _converse_messages(effort: str) -> Expected:
-    return lambda marker: {
-        "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
-        "inferenceConfig": {"maxTokens": 4096},
-        "additionalModelRequestFields": {"thinking": dict(_ADAPTIVE), "output_config": {"effort": effort}},
-        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
-    }
+def _converse_messages(effort: str | None) -> Expected:
+    def expected(marker: str) -> dict[str, JsonValue]:
+        effort_fields: Final[dict[str, JsonValue]] = {} if effort is None else {"output_config": {"effort": effort}}
+        return {
+            "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
+            "inferenceConfig": {"maxTokens": 4096},
+            "additionalModelRequestFields": {"thinking": dict(_ADAPTIVE), **effort_fields},
+            "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
+        }
+
+    return expected
 
 
 def _native_responses(reasoning: Mapping[str, JsonValue] | None, *, model: str = KIMI) -> Expected:
@@ -179,6 +201,7 @@ _OPENAI_CHAT: Final = "/v1/chat/completions"
 _AZURE_CHAT: Final = f"/openai/deployments/{GPT}/chat/completions?api-version={AZURE_API_VERSION}"
 _ANTHROPIC: Final = "/v1/messages"
 _CONVERSE: Final = f"/model/us.anthropic.{CLAUDE}/converse"
+_CONVERSE_STREAM: Final = f"/model/us.anthropic.{CLAUDE}/converse-stream"
 _INVOKE: Final = f"/model/us.anthropic.{CLAUDE}/invoke"
 _AZURE_AI_ANTHROPIC: Final = "/anthropic/v1/messages"
 _VLLM_RESPONSES: Final = "/v1/responses"
@@ -471,7 +494,7 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
         "chat-vllm-echoed-map-key-undeclared-unchanged": Cell(
             CHAT,
             "hosted_vllm_echoed_key",
-            {"key": "azure/chat-latest", "litellm_provider": "azure"},
+            _ECHOED_MAP_KEY,
             {"reasoning_effort": "high"},
             _openai_compatible("high", model=ECHOED_KEY_MODEL),
             _VLLM_CHAT,
@@ -772,6 +795,288 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _native_responses({"effort": "high"}, model=GPT),
             _AZURE_RESPONSES,
         ),
+        "chat-anthropic-output-config-medium-to-high": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _anthropic_chat("high", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-output-config-undeclared-control": Cell(
+            CHAT,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _anthropic_chat("medium", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-output-config-default-sends-no-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "default"}},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-output-config-unknown-drop-params": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "turbo"}, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-converse-output-config-medium-to-high": Cell(
+            CHAT,
+            "bedrock_converse",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _converse_chat("high", _ADAPTIVE),
+            _CONVERSE,
+        ),
+        "chat-converse-output-config-undeclared-control": Cell(
+            CHAT,
+            "bedrock_converse",
+            _UNDECLARED,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _converse_chat("medium", _ADAPTIVE),
+            _CONVERSE,
+        ),
+        "chat-vllm-output-config-medium-to-high": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": "medium"}},
+            _with_output_config(_openai_compatible(None), {"effort": "high"}),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-keeps-other-keys": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": "minimal", "format": _JSON_SCHEMA_FORMAT}},
+            _with_output_config(_openai_compatible(None), {"effort": "low", "format": _JSON_SCHEMA_FORMAT}),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-string-passes": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": "medium"},
+            _with_output_config(_openai_compatible(None), "medium"),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-int-effort-passes": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": 5}},
+            _with_output_config(_openai_compatible(None), {"effort": 5}),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-5kb-effort-drop-params": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": _LONG_LEVEL}, "drop_params": True},
+            _openai_compatible(None),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-undeclared-control": Cell(
+            CHAT,
+            "hosted_vllm",
+            _UNDECLARED,
+            {"output_config": {"effort": "medium"}},
+            _with_output_config(_openai_compatible(None), {"effort": "medium"}),
+            _VLLM_CHAT,
+        ),
+        "messages-converse-claude-code-undeclared-control": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            _UNDECLARED,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _converse_messages("medium"),
+            _CONVERSE,
+        ),
+        "messages-converse-claude-code-unknown-drop-params": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "turbo"}, "drop_params": True},
+            _converse_messages(None),
+            _CONVERSE,
+        ),
+        "messages-converse-claude-code-default-sends-no-effort": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "default"}},
+            _converse_messages(None),
+            _CONVERSE,
+        ),
+        "messages-converse-claude-code-rounds-down": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            {**_CLAUDE_INFO, "reasoning_effort_rounding": "down"},
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}},
+            _converse_messages("low"),
+            _CONVERSE,
+        ),
+        "messages-converse-claude-code-stream-medium-to-high": Cell(
+            MESSAGES,
+            "bedrock_converse",
+            _CLAUDE_INFO,
+            {"thinking": _ADAPTIVE, "output_config": {"effort": "medium"}, "stream": True},
+            _converse_messages("high"),
+            _CONVERSE_STREAM,
+            stream=True,
+        ),
+        "chat-vllm-bool-budget-400": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"thinking": {"type": "enabled", "budget_tokens": True}},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-null-budget-400": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"thinking": {"type": "enabled", "budget_tokens": None}},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-list-budget-400": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"thinking": {"type": "enabled", "budget_tokens": [2048]}},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-missing-budget-to-low": Cell(
+            CHAT, "hosted_vllm", _KIMI_INFO, {"thinking": {"type": "enabled"}}, _openai_compatible("low"), _VLLM_CHAT
+        ),
+        "chat-vllm-explicit-effort-beside-string-budget-400": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"reasoning_effort": "high", "thinking": _STRING_BUDGET},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-explicit-effort-beside-string-budget-drop-params": Cell(
+            CHAT,
+            "hosted_vllm_drop_params",
+            _KIMI_INFO,
+            {"reasoning_effort": "medium", "thinking": _STRING_BUDGET},
+            _openai_compatible("high"),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-undeclared-explicit-effort-beside-string-budget-400": Cell(
+            CHAT,
+            "hosted_vllm",
+            _UNDECLARED,
+            {"reasoning_effort": "medium", "thinking": _STRING_BUDGET},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-string-budget-deployment-drop-params": Cell(
+            CHAT,
+            "hosted_vllm_drop_params",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET},
+            _openai_compatible(None),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-undeclared-string-budget-drop-params": Cell(
+            CHAT,
+            "hosted_vllm",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET, "drop_params": True},
+            _openai_compatible(None),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-empty-levels-budget-unchanged": Cell(
+            CHAT,
+            "hosted_vllm",
+            {"reasoning_effort_levels": []},
+            {"thinking": _BUDGET},
+            _openai_compatible("medium"),
+            _VLLM_CHAT,
+        ),
+        "chat-azure_ai-string-budget-400": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET},
+            None,
+            _AZURE_AI_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-anthropic-numeric-string-budget-to-high": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _STRING_BUDGET},
+            _anthropic_chat("high", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-vllm-string-budget-400": Cell(
+            MESSAGES,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"thinking": _STRING_BUDGET},
+            None,
+            _VLLM_CHAT,
+            status=400,
+            error="budget_tokens",
+        ),
+        "chat-vllm-echoed-map-key-own-levels-win": Cell(
+            CHAT,
+            "hosted_vllm_echoed_key",
+            {**_ECHOED_MAP_KEY, "reasoning_effort_levels": ["low", "high"]},
+            {"reasoning_effort": "medium"},
+            _openai_compatible("high", model=ECHOED_KEY_MODEL),
+            _VLLM_CHAT,
+        ),
+        "responses-vllm-echoed-map-key-undeclared-unchanged": Cell(
+            RESPONSES,
+            "hosted_vllm_echoed_key",
+            _ECHOED_MAP_KEY,
+            {"reasoning": {"effort": "high"}},
+            _native_responses({"effort": "high"}, model=ECHOED_KEY_MODEL),
+            _VLLM_RESPONSES,
+        ),
+        "chat-vllm-claude-name-declared-budget-generic-table": Cell(
+            CHAT,
+            "hosted_vllm_claude",
+            {"reasoning_effort_levels": ["low", "high", "max"]},
+            {"thinking": _XHIGH_BUDGET},
+            _openai_compatible("high", model=CLAUDE),
+            _VLLM_CHAT,
+        ),
+        "messages-vllm-claude-name-declared-budget-generic-table": Cell(
+            MESSAGES,
+            "hosted_vllm_claude",
+            {"reasoning_effort_levels": ["low", "high", "max"]},
+            {"thinking": _XHIGH_BUDGET},
+            _bridged_messages("high", model=CLAUDE),
+            _VLLM_CHAT,
+        ),
     }
 )
 
@@ -801,6 +1106,7 @@ def _assert_answered(cell: Cell, response: httpx.Response, marker: str) -> None:
         "hosted_vllm",
         "hosted_vllm_claude",
         "hosted_vllm_echoed_key",
+        "hosted_vllm_drop_params",
         "azure_ai",
         "openai",
         "azure",
@@ -1035,3 +1341,47 @@ def test_model_group_info_advertises_the_declared_levels(gateway: Gateway) -> No
     entries: Final = list_value(info["data"])
     assert len(entries) == 1, info
     assert object_value(entries[0])["supported_reasoning_efforts"] == ["none", "low", "high", "max"]
+
+
+def _create_swapping_prompt(gateway: Gateway, prompt_id: str, model: str, marker: str) -> None:
+    created: Final = gateway.request(
+        "POST",
+        "/prompts",
+        {
+            "prompt_id": prompt_id,
+            "litellm_params": {
+                "prompt_id": prompt_id,
+                "prompt_integration": "dotprompt",
+                "dotprompt_content": f"---\nmodel: {model}\n---\nUser: {prompt(marker)}",
+            },
+            "prompt_info": {"prompt_type": "db"},
+        },
+    )
+    assert created.status_code == 200, created.text
+
+
+def test_a_prompt_that_swaps_the_model_is_rounded_onto_the_serving_deployments_levels(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    prompt_id: Final = f"prompt-{new_marker()}"
+    with (
+        wire_server(provider_reply) as routed_wire,
+        wire_server(provider_reply) as swapped_wire,
+        gateway.scenario() as scenario,
+    ):
+        routed: Final = deployment(
+            scenario, "hosted_vllm", routed_wire, {"reasoning_effort_levels": ["minimal", "max"]}
+        )
+        swapped: Final = deployment(scenario, "hosted_vllm", swapped_wire, {"reasoning_effort_levels": ["low", "high"]})
+        _create_swapping_prompt(gateway, prompt_id, swapped, marker)
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/prompts/{prompt_id}")
+        response: Final = gateway.request(
+            "POST", CHAT, chat_request(routed, marker, reasoning_effort="medium", prompt_id=prompt_id)
+        )
+        routed_received: Final = routed_wire.drain()
+        swapped_received: Final = swapped_wire.drain()
+    assert response.status_code == 200, response.text
+    assert object_value(response.json())["id"] == f"chatcmpl-{marker}"
+    efforts: Final = [("routed", sent_effort(request)) for request in routed_received] + [
+        ("swapped", sent_effort(request)) for request in swapped_received
+    ]
+    assert efforts in ([("routed", "max")], [("swapped", "high")]), efforts

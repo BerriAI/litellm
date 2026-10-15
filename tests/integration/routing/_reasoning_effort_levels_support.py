@@ -14,6 +14,7 @@ import yaml
 from integration._support.anthropic_sse import message_json, message_stream, stream_reply
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.openai_wire import chat_reply, openai_error, responses_reply
+from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire
 from pydantic import JsonValue, TypeAdapter
 
@@ -31,6 +32,7 @@ AZURE_API_VERSION: Final = "2025-04-01-preview"
 SYNTHETIC_KEY: Final = "synthetic-provider-key"
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
 _SCRIPTED_STATUS: Final = re.compile(r"status=(\d{3})")
+_EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 
 
 def new_marker() -> str:
@@ -72,6 +74,27 @@ def _converse_reply(marker: str) -> Reply:
     )
 
 
+def _converse_frame(event_type: str, payload: Mapping[str, JsonValue]) -> bytes:
+    return aws_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"},
+        json.dumps(payload).encode(),
+    )
+
+
+def _converse_stream_reply(marker: str) -> Reply:
+    frames: Final = (
+        _converse_frame("messageStart", {"role": "assistant"}),
+        _converse_frame("contentBlockDelta", {"delta": {"text": answer(marker)}, "contentBlockIndex": 0}),
+        _converse_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _converse_frame("messageStop", {"stopReason": "end_turn"}),
+        _converse_frame(
+            "metadata",
+            {"usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14}, "metrics": {"latencyMs": 1}},
+        ),
+    )
+    return Reply(body=b"".join(frames), content_type=_EVENT_STREAM)
+
+
 def provider_reply(request: Request) -> Reply:
     marker: Final = marker_of(request)
     scripted: Final = _SCRIPTED_STATUS.search(request.body.decode(errors="replace"))
@@ -83,6 +106,8 @@ def provider_reply(request: Request) -> Reply:
     stream: Final = body.get("stream") is True
     if path.endswith("/converse"):
         return _converse_reply(marker)
+    if path.endswith("/converse-stream"):
+        return _converse_stream_reply(marker)
     if path.endswith("/invoke"):
         return Reply(body=message_json(f"msg_{marker}", model, answer(marker)))
     if path.endswith("/messages"):
@@ -111,6 +136,11 @@ def backend(kind: str, wire_url: str) -> Backend:
         case "hosted_vllm":
             return Backend(
                 f"hosted_vllm/{KIMI}", MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY})
+            )
+        case "hosted_vllm_drop_params":
+            return Backend(
+                f"hosted_vllm/{KIMI}",
+                MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY, "drop_params": True}),
             )
         case "hosted_vllm_echoed_key":
             return Backend(
@@ -205,7 +235,7 @@ def only_request(wire: Wire, marker: str) -> Request:
 def sent_effort(request: Request) -> JsonValue:
     body: Final = body_of(request)
     path: Final = path_of(request)
-    if path.endswith("/converse"):
+    if path.endswith(("/converse", "/converse-stream")):
         fields: Final = body.get("additionalModelRequestFields")
         config: Final = fields.get("output_config") if isinstance(fields, dict) else None
         return config.get("effort") if isinstance(config, dict) else None
