@@ -3,22 +3,22 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from functools import lru_cache
+from functools import cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
-    BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -32,6 +32,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
     AgentCreateInfo,
+    AgentCredentialField,
     AutoRouterPresetRecord,
     ComplexityScorerDefaults,
     ProviderCreateInfo,
@@ -211,68 +212,51 @@ def _load_endpoints() -> list[_EndpointEntry]:
     return _build_endpoints(raw)
 
 
-BundledRecord = Mapping[str, object]
+class _BundledAgentCreateInfo(AgentCreateInfo):
+    model_config = ConfigDict(frozen=True)
+
+    inherit_credentials_from_provider: str | None = None
 
 
-def _read_bundled_json(filename: str) -> tuple[BundledRecord, ...]:
-    """Read one of the JSON data files bundled alongside this module."""
-    with open(os.path.join(os.path.dirname(__file__), filename), "r") as f:
-        loaded: object = json.load(f)
-    if not isinstance(loaded, Sequence):
-        return ()
-    return tuple(record for record in loaded if isinstance(record, Mapping))
+_BUNDLED_AGENTS_ADAPTER: Final = TypeAdapter(list[_BundledAgentCreateInfo])
 
 
-def _credential_fields(record: BundledRecord) -> tuple[BundledRecord, ...]:
-    """A record's ``credential_fields``, empty when the key is absent or not a list."""
-    fields: Final = record.get("credential_fields")
-    if not isinstance(fields, Sequence) or isinstance(fields, (str, bytes)):
-        return ()
-    return tuple(field for field in fields if isinstance(field, Mapping))
+def _read_bundled_file(filename: str) -> bytes:
+    return files("litellm.proxy.public_endpoints").joinpath(filename).read_bytes()
 
 
-@lru_cache(maxsize=1)
-def _get_provider_create_fields() -> tuple[BundledRecord, ...]:
-    """Provider metadata for the dashboard create-model flow, read from disk once per process."""
-    return _read_bundled_json("provider_create_fields.json")
+@cache
+def _provider_create_fields() -> tuple[ProviderCreateInfo, ...]:
+    return tuple(_PROVIDER_CREATE_FIELDS_ADAPTER.validate_json(_read_bundled_file("provider_create_fields.json")))
 
 
-@lru_cache(maxsize=1)
-def _get_validated_provider_create_fields() -> tuple[ProviderCreateInfo, ...]:
-    """The provider metadata validated against ``ProviderCreateInfo``, built once per process."""
-    return tuple(_PROVIDER_CREATE_FIELDS_ADAPTER.validate_python(list(_get_provider_create_fields())))
-
-
-def _agent_with_inherited_credentials(agent: BundledRecord, provider_map: Mapping[str, BundledRecord]) -> BundledRecord:
-    """One agent entry with its provider's credential fields appended after its own.
-
-    ``inherit_credentials_from_provider`` is dropped from the result; the frontend
-    does not consume it. Inherited fields are marked ``include_in_litellm_params``.
-    """
-    inherit_from: Final = agent.get("inherit_credentials_from_provider")
-    provider: Final = provider_map.get(inherit_from) if isinstance(inherit_from, str) else None
-    merged: Final[dict[str, object]] = {
-        key: value for key, value in agent.items() if key != "inherit_credentials_from_provider"
-    }
-
-    if provider is not None:
-        inherited: Final = tuple({**field, "include_in_litellm_params": True} for field in _credential_fields(provider))
-        merged["credential_fields"] = _credential_fields(agent) + inherited
-
-    return merged
-
-
-@lru_cache(maxsize=1)
-def _get_agent_create_fields() -> tuple[BundledRecord, ...]:
-    """Agent metadata for the dashboard create-agent flow, built once per process."""
-    provider_map: Final = {
-        name: provider
-        for provider in _get_provider_create_fields()
-        if isinstance(name := provider.get("provider"), str)
-    }
+def _inherited_credential_fields(provider: ProviderCreateInfo) -> tuple[AgentCredentialField, ...]:
     return tuple(
-        _agent_with_inherited_credentials(agent, provider_map)
-        for agent in _read_bundled_json("agent_create_fields.json")
+        AgentCredentialField.model_validate({**field.model_dump(), "include_in_litellm_params": True})
+        for field in provider.credential_fields
+    )
+
+
+def _with_inherited_credentials(
+    agent: _BundledAgentCreateInfo, providers: Mapping[str, ProviderCreateInfo]
+) -> AgentCreateInfo:
+    provider_name: Final = agent.inherit_credentials_from_provider
+    provider: Final = providers.get(provider_name) if provider_name else None
+    inherited: Final = _inherited_credential_fields(provider) if provider else ()
+    return AgentCreateInfo.model_validate(
+        {
+            **agent.model_dump(exclude={"inherit_credentials_from_provider"}),
+            "credential_fields": [*agent.credential_fields, *inherited],
+        }
+    )
+
+
+@cache
+def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
+    providers: Final = {provider.provider: provider for provider in _provider_create_fields()}
+    return tuple(
+        _with_inherited_credentials(agent, providers)
+        for agent in _BUNDLED_AGENTS_ADAPTER.validate_json(_read_bundled_file("agent_create_fields.json"))
     )
 
 
@@ -287,10 +271,10 @@ def _get_agent_create_fields() -> tuple[BundledRecord, ...]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
+        convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,
+        get_model_group_info,
         llm_router,
         prisma_client,
     )
@@ -300,7 +284,7 @@ async def public_model_hub():
 
     model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
+        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,
@@ -314,7 +298,7 @@ async def public_model_hub():
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_check_dict = convert_health_check_to_dict(check)
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
@@ -388,7 +372,9 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
-        _get_prisma_client,
+        MANIFEST_FIELDS,
+        get_installation_preference,
+        get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -396,7 +382,7 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -418,6 +404,7 @@ async def public_skill_hub():
                     homepage=manifest.get("homepage"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
+                    installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))
@@ -432,7 +419,7 @@ async def public_skill_hub():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import title, version
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -442,7 +429,7 @@ async def public_model_hub_info():
         custom_docs_description = None
 
     return PublicModelHubInfo(
-        docs_title=_title,
+        docs_title=title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
@@ -467,7 +454,7 @@ async def get_supported_providers() -> list[str]:
     tags=["public", "providers"],
     response_model=list[ProviderCreateInfo],
 )
-async def get_provider_fields() -> list[ProviderCreateInfo]:
+async def get_provider_fields() -> tuple[ProviderCreateInfo, ...]:
     """
     Return provider metadata required by the dashboard create-model flow.
 
@@ -475,7 +462,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     lifetime of the server process.
     """
 
-    return list(_get_validated_provider_create_fields())
+    return _provider_create_fields()
 
 
 @router.get(
@@ -512,15 +499,16 @@ async def get_public_fuse_presets() -> FusePresetCatalog:
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(catalog_only: bool = False):
     """
     Public endpoint to get the LiteLLM model cost map.
     Returns pricing information for all supported models.
+    With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
     """
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
@@ -534,21 +522,18 @@ async def get_litellm_model_cost_map():
     tags=["public"],
     response_model=BlogPostsResponse,
 )
-async def get_litellm_blog_posts():
+async def get_litellm_blog_posts() -> BlogPostsResponse:
     """
-    Public endpoint to get the latest LiteLLM blog posts.
+    Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
 
-    Fetches from GitHub with a 1-hour in-process cache.
+    Fetches the docs RSS feed with a 1-hour in-process cache.
     Falls back to the bundled local backup on any failure.
     """
     try:
-        posts_data = get_blog_posts(url=litellm.blog_posts_url)
+        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
-        posts_data = GetBlogPosts.load_local_blog_posts()
-
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
-    return BlogPostsResponse(posts=posts)
+        return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())
 
 
 _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecord])
@@ -562,14 +547,18 @@ def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
     )
 
 
-async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+async def _fetch_remote_bytes(url: str) -> bytes:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
     response: Final = await client.get(url, timeout=5.0)
     response.raise_for_status()
-    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    return response.content
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_json(await _fetch_remote_bytes(url))
     if not presets:
         raise ValueError("remote auto-router preset catalog is empty")
     return presets
@@ -655,7 +644,7 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     tags=["public", "[beta] Agents"],
     response_model=list[AgentCreateInfo],
 )
-async def get_agent_fields() -> list[AgentCreateInfo]:
+async def get_agent_fields() -> tuple[AgentCreateInfo, ...]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
 
@@ -665,4 +654,4 @@ async def get_agent_fields() -> list[AgentCreateInfo]:
     Reads from the bundled local files. Result is cached in-process for the
     lifetime of the server process.
     """
-    return _get_agent_create_fields()  # pyright: ignore[reportReturnType]  # response_model validates the dicts
+    return _agent_create_fields()

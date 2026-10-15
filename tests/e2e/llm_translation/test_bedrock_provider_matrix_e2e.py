@@ -18,6 +18,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
@@ -98,6 +99,15 @@ class TestBedrockResponseHeaders:
         "llm.chat_completions.bedrock_converse.response_headers.nonstream.works",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(CONVERSE_REGIONAL_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_request_id_header_surfaces(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -116,6 +126,15 @@ class TestBedrockResponseHeaders:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.response_headers.stream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(CONVERSE_REGIONAL_BACKEND,),
+            mode=Mode.STREAM,
+        )
     )
     def test_bedrock_request_id_header_surfaces_on_stream(
         self, client: PassthroughClient, resources: ResourceManager
@@ -158,6 +177,15 @@ class TestBedrockBatchDeploymentServesChat:
         "llm.chat_completions.bedrock_converse.batch_deployment.nonstream.works",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(CONVERSE_REGIONAL_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_batch_s3_keys_do_not_break_chat(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -179,6 +207,15 @@ class TestBedrockBatchDeploymentServesChat:
 
 class TestBedrockInvokeRegionalModelIds:
     @pytest.mark.covers("llm.chat_completions.bedrock_invoke.basic.nonstream.works", exercised_on=[])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(INVOKE_REGIONAL_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invoke_regional_id_completes(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -190,6 +227,15 @@ class TestBedrockInvokeRegionalModelIds:
         _assert_completion(response)
 
     @pytest.mark.covers("llm.chat_completions.bedrock_invoke.basic.stream.works", exercised_on=[])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(INVOKE_REGIONAL_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_invoke_regional_id_streams(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -205,6 +251,15 @@ class TestBedrockInvokeRegionalModelIds:
 
 class TestBedrockOpenAIFamilyDefaultRoute:
     @pytest.mark.covers("llm.chat_completions.bedrock_converse.basic.nonstream.works", exercised_on=[])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(OPENAI_FAMILY_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_family_model_id_completes_with_max_tokens(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

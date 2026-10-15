@@ -7,7 +7,6 @@ import CompareUI from "@/app/(dashboard)/playground/components/compareUI/Compare
 import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
 import SystemOneUI from "@/app/(dashboard)/playground/components/systemOneUI/SystemOneUI";
 import BetaBadge from "@/components/BetaBadge";
-import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -70,7 +69,7 @@ export default function PlaygroundPage() {
             Compliance
           </TabsTrigger>
           <TabsTrigger value="system-one" className="flex-none">
-            <BetaBadge>System One</BetaBadge>
+            <BetaBadge>Decisions</BetaBadge>
           </TabsTrigger>
           <TabsTrigger value="agent-builder" className="flex-none">
             Agent Builder (Experimental)
@@ -100,7 +99,6 @@ export default function PlaygroundPage() {
           <SystemOneUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
         <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>
-          <DeprecationBanner featureName="The Playground's Agent Builder" />
           <AgentBuilderView
             accessToken={accessToken}
             token={token}

@@ -2,7 +2,7 @@ import asyncio
 from unittest.mock import Mock, patch, AsyncMock
 import pytest
 from fastapi import Request
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+from litellm.proxy.utils import get_redoc_url, get_docs_url
 from datetime import datetime
 
 import litellm

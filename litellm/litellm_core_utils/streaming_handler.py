@@ -1,6 +1,7 @@
 import asyncio
 import collections.abc
 import datetime
+import inspect
 import json
 import logging
 import threading
@@ -60,7 +61,7 @@ _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
-def _next_sync_or_exhausted(it: Any) -> object:
+def _next_sync_or_exhausted(it: Iterator[object]) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -234,6 +235,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._closed = False
         self._stream_created_time: float = time.time()
 
         litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
@@ -278,6 +280,7 @@ class CustomStreamWrapper:
 
         self._response_headers = _response_headers
         self.response_id: str | None = None
+        self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
@@ -327,6 +330,18 @@ class CustomStreamWrapper:
 
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
+
+    def __enter__(self) -> "CustomStreamWrapper":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "CustomStreamWrapper":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
     def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
         """Restore trace_id/session_id in the *consuming* thread/task/context.
@@ -392,11 +407,26 @@ class CustomStreamWrapper:
         """
         self._restore_consumer_correlation_context(guarded=True)
 
+    def close(self) -> None:
+        stream_to_close: Final = cast(object, self.completion_stream)  # cast-ok: completion_stream is untyped
+        self.completion_stream = None
+        self._closed = True
+        close_stream: Final = getattr(stream_to_close, "close", None)
+        if callable(close_stream):
+            try:
+                result: Final = close_stream()
+                if inspect.iscoroutine(result):
+                    result.close()
+            except Exception as e:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+                verbose_logger.debug("CustomStreamWrapper.close: error closing completion_stream: %s", e)
+        self._restore_consumer_correlation_context()
+
     async def aclose(self):
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
         # carry this closing stream's own trace_id/session_id.
+        self._closed = True
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -809,6 +839,7 @@ class CustomStreamWrapper:
             self.response_id = id
 
         if id and isinstance(id, str) and id.strip():
+            self.received_model_id = id
             model_response.hidden_params["received_model_id"] = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
@@ -1315,7 +1346,7 @@ class CustomStreamWrapper:
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
                 dict[str, object],
-                litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
+                litellm.CodestralTextCompletionConfig().chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
@@ -1727,7 +1758,9 @@ class CustomStreamWrapper:
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
-        model_response: Final = self.model_response_creator()
+        model_response: Final = self.model_response_creator(
+            hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
+        )
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
@@ -1780,6 +1813,8 @@ class CustomStreamWrapper:
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
+        if self._closed:
+            raise StopIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -1950,7 +1985,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
-                self._restore_consumer_correlation_context()
+                self.close()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -1986,6 +2021,7 @@ class CustomStreamWrapper:
             traceback_exception: Final = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            self.close()
             self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
@@ -2005,6 +2041,8 @@ class CustomStreamWrapper:
         return self.completion_stream
 
     async def __anext__(self) -> "ModelResponseStream":
+        if self._closed:
+            raise StopAsyncIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -2125,12 +2163,15 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
                 )
+            await self.aclose()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
+                await self.aclose()
                 self._log_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
+            await self.aclose()
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
@@ -2224,7 +2265,7 @@ class CustomStreamWrapper:
                     )
                 )
 
-            self._restore_consumer_correlation_context()
+            await self.aclose()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
@@ -2303,8 +2344,28 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+
+        An error an inner stream already wrapped (the chat-to-Responses bridge
+        consumes a Responses stream) is rebuilt around the provider exception
+        with this wrapper's own bookkeeping, so the Router's one-level unwrap
+        surfaces the provider exception and is_pre_first_chunk says whether
+        this wrapper's consumer received anything (the inner stream counts a
+        lifecycle event the bridge never forwards as its first chunk).
         """
         from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(e, MidStreamFallbackError):
+            self._restore_consumer_correlation_context()
+            if e.original_exception is None:
+                raise e
+            raise MidStreamFallbackError(
+                message=str(e.original_exception),
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+                original_exception=e.original_exception,
+                generated_content=self.response_uptil_now,
+                is_pre_first_chunk=not self.sent_first_chunk,
+            )
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.
         # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously

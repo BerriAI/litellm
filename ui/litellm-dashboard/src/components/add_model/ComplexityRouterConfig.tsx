@@ -37,7 +37,7 @@ import {
 } from "./tier_rows";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
+import ClassificationMethodConfig, { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
 import ComplexityRouterAdvancedSections from "./ComplexityRouterAdvancedSections";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -472,6 +472,8 @@ export const withClassificationFrequency = (
 });
 
 interface ComplexityRouterConfigProps {
+  creationFlow?: boolean;
+  tierSetup?: React.ReactNode;
   modelInfo: ModelGroup[];
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -548,7 +550,60 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
+const isJevCreation = (value: ComplexityRouterConfigValue, creationFlow: boolean | undefined) =>
+  creationFlow && effectiveClassifierType(value) === "jev";
+
+const CreationClassifierSettings = ({
+  creationFlow,
+  value,
+  onChange,
+  modelOptions,
+  classifierEffortOptionsByModel,
+  defaultModel,
+  showValidationErrors,
+}: Pick<ComplexityRouterConfigProps, "value" | "onChange"> & {
+  creationFlow: boolean | undefined;
+  modelOptions: { value: string; label: string }[];
+  classifierEffortOptionsByModel: Record<string, string[] | null | undefined>;
+  defaultModel: string | undefined;
+  showValidationErrors: boolean;
+}) => {
+  const jevCreation = isJevCreation(value, creationFlow);
+  return (
+    <>
+      <ClassifierPrimarySettings
+        section={creationFlow ? "frequency" : "all"}
+        value={value}
+        onChange={onChange}
+        modelOptions={modelOptions}
+        showValidationErrors={showValidationErrors}
+      />
+      {jevCreation && (
+        <div className="mb-6">
+          <RoutingOptions label="Advanced classifier settings" showValidationErrors={showValidationErrors}>
+            <div className="px-4 pb-4">
+              <ClassificationMethodConfig
+                advancedOnly
+                jevSection="advanced"
+                section="classifier"
+                value={value}
+                onChange={onChange}
+                modelOptions={modelOptions}
+                effortOptionsByModel={classifierEffortOptionsByModel}
+                defaultModel={defaultModel}
+                showValidationErrors={showValidationErrors}
+              />
+            </div>
+          </RoutingOptions>
+        </div>
+      )}
+    </>
+  );
+};
+
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
+  creationFlow,
+  tierSetup,
   modelInfo,
   value,
   onChange,
@@ -572,6 +627,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   showValidationErrors = false,
 }) => {
   const forecast = isForecastClassifier(value.classifier_type);
+  const tierHeading = creationFlow ? "Define your tiers" : "Models by tier";
   const customTierSet = value.custom_tier_set;
   const tierRows = activeTierRows(value);
   const tierRowsError = customTierSet ? getCustomTierRowsError(customTierSet) : null;
@@ -620,19 +676,25 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
   return (
     <div className="w-full max-w-none">
-      <ClassifierPrimarySettings
+      <CreationClassifierSettings
+        creationFlow={creationFlow}
         value={value}
         onChange={onChange}
         modelOptions={modelOptions}
+        classifierEffortOptionsByModel={classifierEffortOptionsByModel}
+        defaultModel={defaultModel}
         showValidationErrors={showValidationErrors}
       />
-      <div className="inline-flex items-center gap-2 mb-4">
-        <h4 className="m-0 text-xl font-semibold text-foreground">{forecast ? "Solver models" : "Models by tier"}</h4>
-        {!forecast && (
-          <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-            <Info className="size-4 text-muted-foreground" />
-          </SimpleTooltip>
-        )}
+      {creationFlow && <Separator className="my-6" />}
+      <div className="mb-4">
+        <div className="inline-flex items-center gap-2">
+          <h4 className="m-0 text-xl font-semibold text-foreground">{forecast ? "Solver models" : tierHeading}</h4>
+          {!forecast && (
+            <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+              <Info className="size-4 text-muted-foreground" />
+            </SimpleTooltip>
+          )}
+        </div>
       </div>
 
       <InactiveHeuristicV2Threshold value={value} onChange={onChange} />
@@ -657,16 +719,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       ) : (
         <>
           <TierConfigIntro value={value} />
+          {tierSetup}
           <Card>
             <CardContent>
-              {!customTierSet && (
-                <NonReasoningTierToggle
-                  value={value}
-                  onChange={onChange}
-                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
-                />
-              )}
-
               {tierRows.map((row, index) => {
                 const tierInfo = builtInTierInfo(row.id);
                 const label = tierRowLabel(row, value.tier_labels);
@@ -756,6 +811,14 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 );
               })}
 
+              {!customTierSet && (
+                <NonReasoningTierToggle
+                  value={value}
+                  onChange={onChange}
+                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
+                />
+              )}
+
               <TierSetToolbar
                 editing={editingTiers}
                 isCustomSet={Boolean(customTierSet)}
@@ -779,7 +842,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </>
       )}
       <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />
-      <Separator className="my-6" />
 
       <RoutingOptions
         showValidationErrors={showValidationErrors}
@@ -803,6 +865,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         )}
         <div className="rounded-lg border border-border bg-muted">
           <ComplexityRouterAdvancedSections
+            hideClassifier={isJevCreation(value, creationFlow)}
             value={value}
             onChange={onChange}
             forecast={forecast}

@@ -9,6 +9,7 @@ import functools
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -27,6 +28,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -37,6 +39,7 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
 
@@ -44,6 +47,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
+_XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
     "converse",
@@ -313,7 +317,7 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         return
     if all(key == "format" for key in output_config):
         return
-    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig.model_supports_effort_param(
         model, "bedrock"
     ):
         return
@@ -773,12 +777,15 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 _BEDROCK_GLOBAL_REGIONS: list[str] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def get_all_bedrock_regions() -> list[str]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
         _BEDROCK_GLOBAL_REGIONS = AmazonBedrockGlobalConfig().get_all_regions()
     return _BEDROCK_GLOBAL_REGIONS
+
+
+_get_all_bedrock_regions = get_all_bedrock_regions
 
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
@@ -805,6 +812,14 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     return ":application-inference-profile/" in model
 
 
+def bedrock_capability_model(model: str, base_model: object) -> str:
+    """The model id to look capabilities up by: the deployment's ``base_model`` for an
+    application inference profile ARN, since the ARN names no model, else ``model``."""
+    if isinstance(base_model, str) and base_model and is_bedrock_application_inference_profile_arn(model):
+        return strip_bedrock_routing_prefix(base_model)
+    return model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
@@ -829,7 +844,7 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     """
     stripped: Final = strip_bedrock_routing_prefix(model)
     region, separator, model_id = stripped.partition("/")
-    if separator and region in _get_all_bedrock_regions():
+    if separator and region in get_all_bedrock_regions():
         return region, model_id
     return None, stripped
 
@@ -865,20 +880,36 @@ def _openai_gpt_version(model: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
+def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
+    if _XAI_GROK_MODEL_RE.search(model) is not None:
+        return True
+    gpt_version: Final = _openai_gpt_version(model)
+    return gpt_version is not None and gpt_version >= _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE
+
+
 def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
     """Whether a model with no route prefix goes to bedrock-runtime's native Chat Completions by default.
 
-    GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which gpt-oss never matches) whose
-    price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``. Older GPT rows, gpt-oss and Grok
-    stay on Converse unless the ``chat_completions/`` prefix opts them in.
+    Grok (``xai.grok-*``) and GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which
+    gpt-oss never matches) whose price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``.
+    Older GPT rows and gpt-oss stay on Converse unless the ``chat_completions/`` prefix opts them in.
     """
-    version: Final = _openai_gpt_version(model)
-    if version is None or version < _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE:
+    if not _bedrock_runtime_chat_completions_default_family(model):
         return False
     return any(
         _price_map_entry_lists_endpoint(entry, _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT)
         for entry in _bedrock_price_map_entries(model)
     )
+
+
+def bedrock_rejects_stop_sequences(model: str) -> bool:
+    """Whether AWS refuses stop sequences for this model on every Bedrock route.
+
+    Grok and GPT 5.6 and newer answer ``stopSequences`` on Converse and ``stop`` on native Chat Completions
+    alike with ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7, GPT 5.6 and GPT 6.1
+    checked live on 2026-10-09), so litellm drops ``stop`` for them instead of forwarding it to a 400.
+    """
+    return _bedrock_runtime_chat_completions_default_family(model)
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
@@ -901,9 +932,33 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
     return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
 
 
+def bedrock_converse_supports_tool_result_images(model: str) -> bool:
+    """Whether Converse accepts an image nested in ``toolResult.content``.
+
+    Missing means yes, which is what Claude accepts. A price-map row sets
+    ``supports_bedrock_converse_tool_result_images`` to false when Bedrock
+    rejects that image and it has to sit beside the tool result instead.
+    """
+    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    if not entries:
+        return True
+    return all(entry.get("supports_bedrock_converse_tool_result_images") is not False for entry in entries)
+
+
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
+
+
+def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
+    """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_inline_reasoning`` flag (gpt-oss).
+    A flagged model opens its answer with a ``<reasoning>...</reasoning>`` block instead of a
+    ``reasoning_content`` field, so litellm splits that block out for it and keeps every other model's
+    text as sent.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_inline_reasoning")
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
@@ -946,7 +1001,9 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, a ``model_id`` override (an application inference profile or provisioned
     throughput ARN) is only encoded into Converse's request URL and so stays on Converse like the
     ``bedrock/arn:...`` model form, ``stop`` stays on Converse where it fails loudly instead of silently
-    stopping hidden reasoning, operator-owned request metadata is only written onto the Converse body,
+    stopping hidden reasoning (except on models that reject stop sequences everywhere,
+    ``bedrock_rejects_stop_sequences``, where both routes drop it), operator-owned request metadata is only
+    written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
     ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
@@ -956,7 +1013,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
     mentions json.
     """
-    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+    converse_only_keys: Final = (
+        BEDROCK_CONVERSE_ONLY_REQUEST_KEYS - {"stop"}
+        if bedrock_rejects_stop_sequences(model)
+        else BEDROCK_CONVERSE_ONLY_REQUEST_KEYS
+    )
+    if any(request_params.get(key) is not None for key in converse_only_keys):
         return True
     if bedrock_request_metadata_is_owned():
         return True
@@ -1104,10 +1166,28 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
+    elif alt_potential_region in get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
+
+
+def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+    """
+    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+
+    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss 400 on it (checked live in us-west-2 on
+    2026-10-14), so every other target keeps dropping the block. A model id that names its model decides on
+    its own. An ARN that hides its model, like an application inference profile, falls back to the
+    deployment's ``base_model`` and counts as non-Claude without one.
+    """
+    if base_model is None or "." in get_bedrock_base_model(model):
+        return _is_claude(model)
+    return _is_claude(base_model)
+
+
+def _is_claude(model: str) -> bool:
+    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
@@ -1117,7 +1197,7 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     )
 
 
-def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str | None = None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
@@ -1135,10 +1215,21 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     inference profile ARN or a model newer than the map, while only the map decides whether
     a model is known: absent a map entry the model keeps emitting so existing caching setups
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
-    it returns False for unmapped models, the opposite polarity.
+    it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
+    model as configured when ``model`` is its ``base_model``: its own declaration wins.
     """
     if model is None:
         return True
+    deployment_declared: Final = (
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+    )
+    return declared is not False
+
+
+def bedrock_declared_cache_point_support(model: str) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     map_keys: Final = (model, get_bedrock_base_model(model))
@@ -1155,7 +1246,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if explicit_marker_support is not None:
         return explicit_marker_support
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys
@@ -1174,23 +1265,34 @@ def bedrock_supports_tool_search(model: str) -> bool:
     """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
+    return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
-def is_claude_4_5_on_bedrock(model: str) -> bool:
+def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     """
-    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
-    (in addition to the default 5m TTL).
-
-    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
-    ``model_prices_and_context_window.json`` instead of a hardcoded list of
-    model-name patterns, so newly released models pick up support as soon as
-    their pricing entry ships, with no code change required here.
+    Whether Bedrock accepts a ``ttl`` ("5m"/"1h") on prompt ``cache_control``
+    for this model, decided by ``cache_creation_input_token_cost_above_1hr`` on
+    the model's or its base model's cost-map entry.
     """
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def bedrock_cache_point_ttl_supported(model: str | None, deployment_model: str | None = None) -> bool:
+    return any(
+        supports_bedrock_prompt_cache_ttl(candidate) for candidate in (model, deployment_model) if candidate is not None
+    )
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    warnings.warn(
+        "is_claude_4_5_on_bedrock is deprecated, use supports_bedrock_prompt_cache_ttl",
+        UserWarning,
+        stacklevel=2,
+    )
+    return supports_bedrock_prompt_cache_ttl(model)
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
@@ -1324,6 +1426,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
+    def __init__(self, client: HTTPHandler | None = None) -> None:
+        super().__init__()
+        self._client: Final = client
+
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
         """
@@ -1351,7 +1457,15 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        return []
+        return self.discover_models({"api_key": api_key})
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        from litellm.llms.bedrock.model_listing import BedrockModelLister
+
+        client: Final = self._client if self._client is not None else litellm.module_level_client
+        return sorted(BedrockModelLister(deployment=litellm_params or {}, client=client).invocable_model_ids())
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """
@@ -1406,8 +1520,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
 
-        GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by default
-        (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
+        Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
+        default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
         model stays on Converse without the prefix.
@@ -1829,6 +1943,7 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
@@ -2049,13 +2164,11 @@ class CommonBatchFilesUtils:
         Returns:
             Tuple of (signed_headers, signed_data)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
-        aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
+        aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
             AwsAuthParams.model_validate(optional_params), aws_region_name
         )

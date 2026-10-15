@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
+from e2e_metadata import step
 from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
 from pydantic import TypeAdapter
@@ -204,7 +205,7 @@ LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
-REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
+PERF_TESTS_OPT_IN_ENV: Final = "E2E_PERF_TESTS"
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
 PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
@@ -212,6 +213,8 @@ OWNED_GATEWAY_OPT_IN_ENV: Final = "E2E_OWNED_GATEWAY"
 OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
 OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
 SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
+SAGEMAKER_NOVA_OPT_IN_ENV: Final = "SAGEMAKER_NOVA_ENDPOINT"
+SAGEMAKER_NOVA2_LITE_OPT_IN_ENV: Final = "SAGEMAKER_NOVA2_LITE_ENDPOINT"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -308,6 +311,7 @@ def available_port() -> int:
         return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
+@step("Wait for the last control-plane write to reach every proxy replica")
 def settle_propagation(written_at: float) -> None:
     """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
     `time.monotonic()` stamp taken the moment a control-plane write returned.

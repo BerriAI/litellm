@@ -10,13 +10,14 @@ import asyncio
 import contextvars
 import logging
 import os
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -30,7 +31,9 @@ from litellm.constants import (
     DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY,
     DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
     S3_PARTITION_GRANULARITY_ENV_VAR,
+    S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS,
 )
+from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
@@ -52,8 +55,8 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
@@ -79,8 +82,13 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
     }
 )
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
-_RETRYABLE_STATUSES: Final = frozenset({403, 500, 503})
+_RETRYABLE_STATUSES: Final = frozenset({403, 429, 500, 503})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
+_TRANSIENT_ERRORS: Final = (httpx.TransportError, LiteLLMTimeout)
+_UPLOAD_ATTEMPTS: Final = 3
+_UPLOAD_ATTEMPT_TIMEOUT: Final = httpx.Timeout(S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS)
+
+PutOutcome: TypeAlias = httpx.Response | Exception
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +111,35 @@ def _is_terminal(response: httpx.Response) -> bool:
 
 def _s3_key_parent(s3_object_key: str) -> str:
     return s3_object_key.rsplit("/", 1)[0] if "/" in s3_object_key else ""
+
+
+def _backoff_seconds(attempt: int) -> float:
+    return (1 << attempt) * (0.5 + random.random())
+
+
+def _log_retry(level: int, attempt: int, reason: str, wait: float, s3_object_key: str) -> None:
+    verbose_logger.log(
+        level,
+        "S3 upload attempt %s/%s failed with %s, retrying in %.2fs key=%s",
+        attempt + 1,
+        _UPLOAD_ATTEMPTS,
+        reason,
+        wait,
+        s3_object_key,
+    )
+
+
+def _response_or_raise(outcome: PutOutcome) -> httpx.Response:
+    if isinstance(outcome, Exception):
+        raise outcome
+    outcome.raise_for_status()
+    return outcome
+
+
+def _throttled(outcome: PutOutcome) -> bool:
+    if isinstance(outcome, Exception):
+        return True
+    return outcome.status_code in (429, 503) or _s3_error_code(outcome) == "SlowDown"
 
 
 class S3BatchUploadError(Exception):
@@ -566,7 +603,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
-            async def signed_put(prepared: _PreparedPut) -> httpx.Response:
+            async def signed_put(prepared: _PreparedPut) -> PutOutcome:
                 credentials: Final = await asyncified_get_credentials(
                     aws_access_key_id=self.s3_aws_access_key_id,
                     aws_secret_access_key=self.s3_aws_secret_access_key,
@@ -582,34 +619,16 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     self._sign_put, credentials, url, prepared.json_string, prepared.headers
                 )
                 try:
-                    return await self.async_httpx_client.put(url, data=prepared.json_string, headers=signed_headers)
+                    return await self.async_httpx_client.put(
+                        url, data=prepared.json_string, headers=signed_headers, timeout=_UPLOAD_ATTEMPT_TIMEOUT
+                    )
                 except httpx.HTTPStatusError as error:
                     return error.response
+                except _TRANSIENT_ERRORS as error:
+                    return error
 
-            max_retries: Final = 3
             prepared: Final = self._prepare_put(batch_logging_element)
-            for attempt in range(max_retries):
-                response = await self._recorded_put(partial(signed_put, prepared))
-                if (
-                    response.status_code in _RETRYABLE_STATUSES
-                    and not (self.s3_drop_on_terminal_error and _is_terminal(response))
-                    and attempt < max_retries - 1
-                ):
-                    wait_time = 1 << attempt  # 1s, 2s
-                    verbose_logger.log(
-                        logging.DEBUG if _in_flush.get() else logging.WARNING,
-                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
-                        response.status_code,
-                        wait_time,
-                        attempt + 1,
-                        max_retries,
-                        batch_logging_element.s3_object_key,
-                    )
-                    self._flush_retries += 1
-                    await asyncio.sleep(wait_time)
-                    continue
-                response.raise_for_status()
-                break
+            await self._put_with_retries(partial(signed_put, prepared), batch_logging_element.s3_object_key)
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
@@ -678,9 +697,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
         dropped: Final = len(failed) - len(requeued)
         if dropped:
+            terminal: Final = sum(1 for _, outcome in failed if outcome == "dropped")
             verbose_logger.warning(
-                "s3 logging: %s uploads dropped (terminal or retrying longer than s3_max_retry_age_seconds=%s)",
+                "s3 logging: %s uploads dropped this flush: %s rejected as terminal by S3, "
+                "%s retrying longer than s3_max_retry_age_seconds=%s",
                 dropped,
+                terminal,
+                dropped - terminal,
                 self.s3_max_retry_age_seconds,
             )
         if not requeued:
@@ -728,22 +751,46 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return "dropped"
         return "retry"
 
-    async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    async def _recorded_put(self, signed_put: Callable[[], Awaitable[PutOutcome]]) -> PutOutcome:
+        outcome: Final = await signed_put()
         limiter: Final = self._upload_limiter
-        adaptive: Final = limiter if isinstance(limiter, AdaptiveConcurrencyLimiter) else None
-        try:
-            response: Final = await signed_put()
-        except Exception:
-            if adaptive is not None:
-                adaptive.record(PutSample(throttled=True))
-            raise
-        if adaptive is not None:
-            adaptive.record(
-                PutSample(
-                    throttled=response.status_code in (429, 503) or _s3_error_code(response) == "SlowDown",
-                )
-            )
-        return response
+        if isinstance(limiter, AdaptiveConcurrencyLimiter):
+            limiter.record(PutSample(throttled=_throttled(outcome)))
+        return outcome
+
+    def _retry_reason(self, outcome: PutOutcome) -> str | None:
+        if isinstance(outcome, Exception):
+            return type(outcome).__name__
+        if outcome.status_code not in _RETRYABLE_STATUSES:
+            return None
+        if self.s3_drop_on_terminal_error and _is_terminal(outcome):
+            return None
+        return str(outcome.status_code)
+
+    async def _put_with_retries(
+        self, signed_put: Callable[[], Awaitable[PutOutcome]], s3_object_key: str
+    ) -> httpx.Response:
+        for attempt in range(_UPLOAD_ATTEMPTS - 1):
+            outcome = await self._recorded_put(signed_put)
+            reason = self._retry_reason(outcome)
+            if reason is None:
+                return _response_or_raise(outcome)
+            wait = _backoff_seconds(attempt)
+            _log_retry(logging.DEBUG if _in_flush.get() else logging.WARNING, attempt, reason, wait, s3_object_key)
+            self._flush_retries += 1
+            await asyncio.sleep(wait)
+        return _response_or_raise(await self._recorded_put(signed_put))
+
+    def _sync_put_with_retries(self, signed_put: Callable[[], PutOutcome], s3_object_key: str) -> httpx.Response:
+        for attempt in range(_UPLOAD_ATTEMPTS - 1):
+            outcome = signed_put()
+            reason = self._retry_reason(outcome)
+            if reason is None:
+                return _response_or_raise(outcome)
+            wait = _backoff_seconds(attempt)
+            _log_retry(logging.WARNING, attempt, reason, wait, s3_object_key)
+            time.sleep(wait)
+        return _response_or_raise(signed_put())
 
     def _batch_file_elements(self, batch: tuple[s3BatchLoggingElement, ...]) -> tuple[s3BatchLoggingElement, ...]:
         now: Final = datetime.now(timezone.utc)
@@ -875,11 +922,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             prepared: Final = self._prepare_put(batch_logging_element)
 
-            httpx_client: Final = _get_httpx_client(
+            httpx_client: Final = get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
 
-            def signed_put(prepared_put: _PreparedPut) -> httpx.Response:
+            def signed_put(prepared_put: _PreparedPut) -> PutOutcome:
                 credentials: Final = self.get_credentials(
                     aws_access_key_id=self.s3_aws_access_key_id,
                     aws_secret_access_key=self.s3_aws_secret_access_key,
@@ -887,29 +934,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     aws_region_name=self.s3_region_name,
                 )
                 signed_headers: Final = self._sign_put(credentials, url, prepared_put.json_string, prepared_put.headers)
-                return httpx_client.put(url, data=prepared_put.json_string, headers=signed_headers)
-
-            max_retries: Final = 3
-            for attempt in range(max_retries):
-                response = signed_put(prepared)
-                if (
-                    response.status_code in _RETRYABLE_STATUSES
-                    and not (self.s3_drop_on_terminal_error and _is_terminal(response))
-                    and attempt < max_retries - 1
-                ):
-                    wait_time = 1 << attempt  # 1s, 2s
-                    verbose_logger.warning(
-                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
-                        response.status_code,
-                        wait_time,
-                        attempt + 1,
-                        max_retries,
-                        batch_logging_element.s3_object_key,
+                try:
+                    return httpx_client.put(
+                        url, data=prepared_put.json_string, headers=signed_headers, timeout=_UPLOAD_ATTEMPT_TIMEOUT
                     )
-                    time.sleep(wait_time)
-                    continue
-                response.raise_for_status()
-                break
+                except _TRANSIENT_ERRORS as error:
+                    return error
+
+            self._sync_put_with_retries(partial(signed_put, prepared), batch_logging_element.s3_object_key)
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
