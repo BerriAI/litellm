@@ -286,14 +286,10 @@ def _expected_spend(provider: _Provider) -> float:
     cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
     prices: Final = object_value(cost_map[provider.cost_map_key])
     input_key: Final = (
-        "input_cost_per_token_decisions"
-        if "input_cost_per_token_decisions" in prices
-        else "input_cost_per_token"
+        "input_cost_per_token_decisions" if "input_cost_per_token_decisions" in prices else "input_cost_per_token"
     )
     output_key: Final = (
-        "output_cost_per_token_decisions"
-        if "output_cost_per_token_decisions" in prices
-        else "output_cost_per_token"
+        "output_cost_per_token_decisions" if "output_cost_per_token_decisions" in prices else "output_cost_per_token"
     )
     return _INPUT_TOKENS * _number(prices[input_key]) + _OUTPUT_TOKENS * _number(prices[output_key])
 
@@ -522,6 +518,19 @@ def test_openai_forwards_image_input_in_its_own_message_shape(gateway: Gateway) 
         assert response.status_code == 200, response.text
         (call,) = _upstream_calls(gateway, handle)
         assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_IMAGE_MESSAGES, "questions": _QUESTIONS}
+
+
+def test_openai_box_answers_reach_the_caller_as_boxes_not_refusals(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        box: Final[dict[str, JsonValue]] = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+        box_answer: Final[dict[str, JsonValue]] = {"type": "box", "name": "crack", "box": box, "confidence": 0.7}
+        handle: Final = _register(scenario, {**_OPENAI.upstream_reply(), "answers": [box_answer]})
+        model: Final = _deployment(scenario, handle, _OPENAI)
+        response: Final = _decide(
+            gateway, model, questions=[{"type": "box", "name": "crack", "instructions": "Where is the crack?"}]
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["answers"] == [box_answer], response.text
 
 
 def test_a_message_list_input_reaches_a_system_one_provider_as_its_flattened_text(gateway: Gateway) -> None:
