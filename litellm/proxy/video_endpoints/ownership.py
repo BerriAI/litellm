@@ -12,7 +12,7 @@ checks are skipped and videos remain reachable by any caller allowed on the rout
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
@@ -35,9 +35,20 @@ if TYPE_CHECKING:
 
 VIDEO_OBJECT_PURPOSE: Final = "video"
 
+
 # Status is polled; a short-lived cache of known owners keeps polling off the DB.
 # Only positive answers are cached, so a missing row is always re-checked.
-_VIDEO_OWNER_CACHE: Final = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
+class _OwnerCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: str) -> None: ...
+
+
+def _owner_cache() -> _OwnerCache:
+    return InMemoryCache(max_size_in_memory=10000, default_ttl=60)
+
+
+_VIDEO_OWNER_CACHE: Final = _owner_cache()
 
 
 def _video_model_object_id(video_id: str) -> str:
