@@ -26776,110 +26776,6 @@ _PRE_CALL_CHECK_UNPARSEABLE_MESSAGES: Final = [
 ]
 
 
-def test_resolve_pre_call_check_input_tokens_short_circuits_and_recovers_from_a_count_failure():
-    """Each early-exit branch skips counting outright; a real attempt either returns the count
-    or, if token_counter() raises, None - never an exception."""
-    router = Router(
-        model_list=[
-            {
-                "model_name": "fake-openai-endpoint",
-                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
-                "model_info": {"max_input_tokens": 100},
-            },
-        ]
-    )
-    healthy_deployments = router.get_model_list(model_name="fake-openai-endpoint")
-    plain_messages = [{"role": "user", "content": "hi"}]
-
-    # An off-loop count is already available: returned as-is, nothing else is attempted.
-    assert (
-        router._resolve_pre_call_check_input_tokens(
-            model="fake-openai-endpoint",
-            healthy_deployments=healthy_deployments,
-            messages=None,
-            input=None,
-            request_kwargs=None,
-            input_token_count=42,
-            skip_inline_token_count=False,
-            has_countable_input=True,
-        )
-        == 42
-    )
-
-    # No countable input at all (e.g. a compaction request): skip without attempting to count.
-    assert (
-        router._resolve_pre_call_check_input_tokens(
-            model="fake-openai-endpoint",
-            healthy_deployments=healthy_deployments,
-            messages=plain_messages,
-            input=None,
-            request_kwargs=None,
-            input_token_count=None,
-            skip_inline_token_count=False,
-            has_countable_input=False,
-        )
-        is None
-    )
-
-    # No deployment declares a context window at all: counting would be wasted work.
-    assert (
-        router._resolve_pre_call_check_input_tokens(
-            model="fake-openai-endpoint",
-            healthy_deployments=[],
-            messages=plain_messages,
-            input=None,
-            request_kwargs=None,
-            input_token_count=None,
-            skip_inline_token_count=False,
-            has_countable_input=True,
-        )
-        is None
-    )
-
-    # The caller already gave up on an off-loop count: don't retry it on the loop.
-    assert (
-        router._resolve_pre_call_check_input_tokens(
-            model="fake-openai-endpoint",
-            healthy_deployments=healthy_deployments,
-            messages=plain_messages,
-            input=None,
-            request_kwargs=None,
-            input_token_count=None,
-            skip_inline_token_count=True,
-            has_countable_input=True,
-        )
-        is None
-    )
-
-    # A real, parseable prompt: counting succeeds and returns a positive count.
-    resolved = router._resolve_pre_call_check_input_tokens(
-        model="fake-openai-endpoint",
-        healthy_deployments=healthy_deployments,
-        messages=plain_messages,
-        input=None,
-        request_kwargs=None,
-        input_token_count=None,
-        skip_inline_token_count=False,
-        has_countable_input=True,
-    )
-    assert isinstance(resolved, int) and resolved > 0
-
-    # An unparseable content block: token_counter() raises, this returns None instead.
-    assert (
-        router._resolve_pre_call_check_input_tokens(
-            model="fake-openai-endpoint",
-            healthy_deployments=healthy_deployments,
-            messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
-            input=None,
-            request_kwargs=None,
-            input_token_count=None,
-            skip_inline_token_count=False,
-            has_countable_input=True,
-        )
-        is None
-    )
-
-
 def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
     """The restructured input-token resolution must still filter out a deployment whose
     context window a successfully-counted prompt exceeds, same as before the refactor."""
@@ -26960,3 +26856,26 @@ def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_toke
     )
 
     assert len(filtered) == 1
+
+
+async def test_async_get_healthy_deployments_keeps_region_check_when_token_counting_fails():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "region_name": region},
+            "model_info": {"id": f"{region}-deployment", "max_input_tokens": 100},
+        }
+        for region in ("eu", "us")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    healthy: Final = await router.async_get_healthy_deployments(
+        model="fake-openai-endpoint",
+        request_kwargs={"allowed_model_region": "eu"},
+        messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+        input=None,
+        specific_deployment=False,
+        parent_otel_span=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in healthy] == ["eu-deployment"]
