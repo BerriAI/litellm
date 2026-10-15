@@ -33,6 +33,7 @@ def test_model_prices_unique_keys_and_backup_sync() -> None:
     backup, backup_duplicates = _load_with_duplicate_hook(BACKUP)
 
     duplicate_key_count = len(root_duplicates) + len(backup_duplicates)
+    print(f"duplicate-key count {duplicate_key_count}")  # noqa: T201
     assert duplicate_key_count == 0
     assert root_duplicates == []
     assert backup_duplicates == []
@@ -41,6 +42,7 @@ def test_model_prices_unique_keys_and_backup_sync() -> None:
     only_backup = set(backup) - set(root)
     value_diffs = [key for key in set(root) & set(backup) if root[key] != backup[key]]
     diff_count = len(only_root) + len(only_backup) + len(value_diffs)
+    print(f"root-vs-backup key and value diff count {diff_count}")  # noqa: T201
     assert diff_count == 0
 
     negative: list[tuple[str, str, int | float]] = []
@@ -53,4 +55,5 @@ def test_model_prices_unique_keys_and_backup_sync() -> None:
                 continue
             if cost < 0:
                 negative.append((key, field, cost))
+    print(f"negative-cost count {len(negative)}")  # noqa: T201
     assert len(negative) == 0
