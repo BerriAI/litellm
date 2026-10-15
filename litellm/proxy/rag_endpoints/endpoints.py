@@ -229,12 +229,17 @@ def _with_body_drop_params(request_data: Mapping[str, object], body: Mapping[str
     return MappingProxyType({**request_data, "drop_params": True})
 
 
-def _rag_ingest_body(body: Mapping[str, object]) -> Mapping[str, object]:
-    form_request: Final = body.get("request")
-    if not isinstance(form_request, (str, bytes)):
+async def _rag_ingest_body(request: Request) -> Mapping[str, object]:
+    body: Final = await read_request_body(request)
+    if "multipart/form-data" not in safe_get_request_headers(request).get("content-type", ""):
         return body
-    parsed: Final[object] = orjson.loads(form_request)
-    return _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(parsed) if isinstance(parsed, dict) else body
+    form_request: Final = body.get("request")
+    parsed: Final[object] = (
+        orjson.loads(form_request) if isinstance(form_request, (str, bytes)) and form_request else None
+    )
+    return (
+        _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(parsed) if isinstance(parsed, dict) else MappingProxyType({})
+    )
 
 
 def _with_request_credentials(
@@ -687,7 +692,7 @@ async def rag_ingest(
             proxy_config=proxy_config,
         )
         forwarded_credentials: Final = _forwarded_store_credentials(
-            base, _with_body_drop_params(request_data, _rag_ingest_body(await read_request_body(request)))
+            base, _with_body_drop_params(request_data, await _rag_ingest_body(request))
         )
         merged_vector_store_config: Final = {
             **_team_provider_credentials(base, llm_router, user_api_key_dict),

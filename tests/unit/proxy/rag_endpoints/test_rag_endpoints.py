@@ -511,6 +511,30 @@ def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_hea
     assert forwarded["api_base"] == _TEAM_OPENAI_BASE
 
 
+@pytest.mark.parametrize("unread_request_field", ["not json", json.dumps({"drop_params": False})])
+def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(client_team_a, unread_request_field):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            **_ingest_json({"custom_llm_provider": "openai"}, drop_params=True, request=unread_request_field),
+        )
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
 def test_rag_ingest_caller_credential_name_suppresses_team_provider_credentials(client_team_a):
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
