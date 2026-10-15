@@ -2138,3 +2138,45 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
         "expires_at": 1767225600,
         "transcript": "Yes.",
     }
+
+
+def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_items: Final[list[dict[str, object]]] = [
+        {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc_1"}
+    ]
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant"),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=" world", role="assistant", reasoning_items=reasoning_items),
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+    assert response.choices[0].message.reasoning_items == reasoning_items

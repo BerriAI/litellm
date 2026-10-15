@@ -46,19 +46,24 @@ def _expect_model_response(response: object) -> ModelResponse:
 
 
 def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionAssistantToolCall:
-    return ChatCompletionAssistantToolCall(
-        id=tool_call.id,
-        type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=tool_call.function.name, arguments=tool_call.function.arguments
-        ),
+    provider_fields: Final[object] = getattr(tool_call, "provider_specific_fields", None)
+    return cast(  # cast-ok: dict literal with provider_specific_fields spread in only when set
+        "ChatCompletionAssistantToolCall",
+        {
+            "id": tool_call.id,
+            "type": "function",
+            "function": ChatCompletionToolCallFunctionChunk(
+                name=tool_call.function.name, arguments=tool_call.function.arguments
+            ),
+            **({"provider_specific_fields": provider_fields} if provider_fields else {}),
+        },
     )
 
 
 def _assistant_message(
-    message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...], replays_server_tool_results: bool
+    message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...], replays_provider_specific_fields: bool
 ) -> ChatCompletionAssistantMessage:
-    return cast(  # cast-ok: dict literal with thinking_blocks, reasoning_items and provider_specific_fields spread in only when set
+    return cast(  # cast-ok: dict literal with the optional message fields spread in only when set
         "ChatCompletionAssistantMessage",
         {
             "role": "assistant",
@@ -71,7 +76,9 @@ def _assistant_message(
                     ("reasoning_items", getattr(message, "reasoning_items", None)),
                     (
                         "provider_specific_fields",
-                        getattr(message, "provider_specific_fields", None) if replays_server_tool_results else None,
+                        getattr(message, "provider_specific_fields", None)
+                        if replays_provider_specific_fields
+                        else None,
                     ),
                 )
                 if value is not None
@@ -102,6 +109,18 @@ def _client_tool_calls(
         tool_call
         for tool_call in tool_calls
         if not tool_call_is_rebuilt_as_server_tool_use(tool_call.id, provider_specific_fields)
+    )
+
+
+def _replays_provider_specific_fields(
+    message: Message,
+    tool_calls: tuple[ChatCompletionMessageToolCall, ...],
+    client_tool_calls: tuple[ChatCompletionMessageToolCall, ...],
+) -> bool:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import carries_tool_search_items
+
+    return client_tool_calls != tool_calls or carries_tool_search_items(
+        getattr(message, "provider_specific_fields", None)
     )
 
 
@@ -148,7 +167,9 @@ def run_tool_loop(
         tool_results = tuple(execute_tool(tool_call) for tool_call in client_tool_calls)
         history = (
             *history,
-            _assistant_message(message, tool_calls, client_tool_calls != tool_calls),
+            _assistant_message(
+                message, tool_calls, _replays_provider_specific_fields(message, tool_calls, client_tool_calls)
+            ),
             *tool_results,
         )
     raise ToolLoopMaxRoundsExceeded(max_rounds)
@@ -197,7 +218,9 @@ async def arun_tool_loop(
         tool_results = tuple([await execute_tool(tool_call) for tool_call in client_tool_calls])
         history = (
             *history,
-            _assistant_message(message, tool_calls, client_tool_calls != tool_calls),
+            _assistant_message(
+                message, tool_calls, _replays_provider_specific_fields(message, tool_calls, client_tool_calls)
+            ),
             *tool_results,
         )
     raise ToolLoopMaxRoundsExceeded(max_rounds)

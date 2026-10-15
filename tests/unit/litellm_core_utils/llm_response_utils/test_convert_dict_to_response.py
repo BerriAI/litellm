@@ -1485,6 +1485,39 @@ def test_convert_to_model_response_object_preserves_provider_specific_fields_fro
         == web_search_results
     )
 
+def test_convert_to_model_response_object_keeps_reasoning_items_from_a_cached_response():
+    reasoning_items: Final = [
+        {"id": "rs_a", "type": "reasoning", "summary": [], "encrypted_content": "enc-a"},
+        {"id": "rs_b", "type": "reasoning", "summary": [], "encrypted_content": "enc-b"},
+    ]
+    result: Final = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object={
+            "id": "chatcmpl-cached",
+            "object": "chat.completion",
+            "created": 1728933352,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": None, "reasoning_items": reasoning_items},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        },
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+    assert isinstance(result, ModelResponse)
+    choice: Final = result.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.reasoning_items == reasoning_items
+
+
 def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():
     """
     Test that provider_specific_fields from the response are merged with

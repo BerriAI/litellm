@@ -483,3 +483,43 @@ class TestGroqReasoning:
             parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"]
             == "test_function"
         )
+
+
+def test_tool_search_reply_sent_to_groq_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = GroqChatConfig().transform_request(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
