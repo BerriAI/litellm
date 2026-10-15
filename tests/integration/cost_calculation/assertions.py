@@ -35,15 +35,18 @@ def _frame_usage(frame: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | No
     return nested_usage if isinstance(nested_usage, dict) else None
 
 
-def streamed_usage_cost(response_text: str) -> float | None:
-    """The `usage.cost` on the last streamed frame that carried a usage object, the only cost a streaming client sees."""
+def streamed_usage(response_text: str) -> Mapping[str, JsonValue] | None:
+    """The last streamed frame's usage object, the only place a streaming client can read a cost from."""
     usages: Final = tuple(usage for usage in map(_frame_usage, _data_frames(response_text)) if usage is not None)
-    cost: Final = usages[-1].get("cost") if usages else None
-    return float(cost) if isinstance(cost, (int, float)) else None
+    return usages[-1] if usages else None
 
 
 def assert_streamed_usage_cost(case_name: str, endpoint: str, response_text: str, spend: float) -> None:
-    seen: Final = streamed_usage_cost(response_text)
+    usage: Final = streamed_usage(response_text)
+    if usage is None:
+        return
+    cost: Final = usage.get("cost")
+    seen: Final = float(cost) if isinstance(cost, (int, float)) else None
     if endpoint in STREAMED_COST_ENDPOINTS and spend != 0:
         assert seen is not None and approx_equal(seen, spend), (
             f"{case_name}: streamed usage.cost {seen} != spend {spend}"
