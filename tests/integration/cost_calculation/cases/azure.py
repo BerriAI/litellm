@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
     with_usage,
     BinaryResponse,
     CostTrackingTestCase,
@@ -18,7 +19,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -5574,6 +5575,270 @@ AZURE_GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
     ),
 )
 
+AZURE_GPT_6_1_SOL_CACHE_READ: Final = AZURE_GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "azure/gpt-6.1-sol-cache_read",
+        "model": "azure/gpt-6.1-sol",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "c3a6bc6e3512 summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "choices": [
+                    {
+                        "content_filter_results": _GPT_6_CONTENT_FILTER_RESULTS,
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "annotations": [],
+                            "content": "scripted answer c3a6bc6e3512",
+                            "refusal": None,
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1792042948,
+                "id": "chatcmpl-$REQUEST_ID",
+                "model": "gpt-6.1-sol-2026-09-29",
+                "object": "chat.completion",
+                "prompt_filter_results": _GPT_6_PROMPT_FILTER_RESULTS,
+                "routing": {"serving_pipereplica": "d20260929042311-28ecf0ee-prefill-r1-dp0-prefill"},
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 23,
+                        "engine_ttft_ms": 484,
+                        "engine_ttlt_ms": 999,
+                        "pre_inference_ms": 151,
+                        "service_tbt_ms": 25,
+                        "service_ttft_ms": 1085,
+                        "service_ttlt_ms": 1610,
+                        "user_visible_ttft_ms": 934,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.00904512,
+            input_cost=0.00448512,
+            output_cost=0.00456,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+AZURE_GPT_6_LUNA_CACHE_READ: Final = AZURE_GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "azure/gpt-6-luna-cache_read",
+        "model": "azure/gpt-6-luna",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "67d7b9931ce9 summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "choices": [
+                    {
+                        "content_filter_results": _GPT_6_CONTENT_FILTER_RESULTS,
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "annotations": [],
+                            "content": "scripted answer 67d7b9931ce9",
+                            "refusal": None,
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1792042952,
+                "id": "chatcmpl-$REQUEST_ID",
+                "model": "gpt-6-luna-2026-09-22",
+                "object": "chat.completion",
+                "prompt_filter_results": _GPT_6_PROMPT_FILTER_RESULTS,
+                "routing": {"serving_pipereplica": "d20260919024711-372ad1ad-prefill-r2-dp0-prefill"},
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 7,
+                        "engine_ttft_ms": 110,
+                        "engine_ttlt_ms": 706,
+                        "pre_inference_ms": 254,
+                        "service_tbt_ms": 7,
+                        "service_ttft_ms": 647,
+                        "service_ttlt_ms": 1238,
+                        "user_visible_ttft_ms": 393,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.000489944,
+            input_cost=0.000242944,
+            output_cost=0.000247,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
+AZURE_GPT_6_ASTRA_CACHE_READ: Final = AZURE_GPT_5_6_CACHE_READ.model_copy(
+    update={
+        "name": "azure/gpt-6-astra-cache_read",
+        "model": "azure/gpt-6-astra",
+        "request": {
+            "model": "$MODEL",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "84f5db610aa3 summarize the attached material in one line and name the city weather",
+                        }
+                    ],
+                },
+            ],
+            "stream": False,
+            "allowed_openai_params": [],
+        },
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "choices": [
+                    {
+                        "content_filter_results": _GPT_6_CONTENT_FILTER_RESULTS,
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "annotations": [],
+                            "content": "scripted answer 84f5db610aa3",
+                            "refusal": None,
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1792042958,
+                "id": "chatcmpl-$REQUEST_ID",
+                "model": "gpt-6-astra-2026-09-03",
+                "object": "chat.completion",
+                "prompt_filter_results": _GPT_6_PROMPT_FILTER_RESULTS,
+                "routing": {"serving_pipereplica": "d20260930073654-95d85d6a-prefill-r29-dp0-prefill"},
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 380,
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                    "latency_checkpoint": {
+                        "engine_tbt_ms": 25,
+                        "engine_ttft_ms": 697,
+                        "engine_ttlt_ms": 1373,
+                        "pre_inference_ms": 142,
+                        "service_tbt_ms": 26,
+                        "service_ttft_ms": 1289,
+                        "service_ttlt_ms": 1956,
+                        "user_visible_ttft_ms": 1147,
+                    },
+                    "prompt_tokens": 12928,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
+                    "total_tokens": 13308,
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.04711,
+            input_cost=0.02336,
+            output_cost=0.02375,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+
 AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_SOL_INPUT_TEXT.model_copy(
     update={
         "name": "azure-gpt-6-sol-messages_bridged_json",
@@ -5852,6 +6117,92 @@ AZURE_GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
     ExactExpected(spend=1.449888, input_cost=1.44, output_cost=0.009888, prompt_tokens=300000, completion_tokens=412),
 )
 
+AZURE_GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_1_SOL_CACHE_READ,
+    "azure/gpt-6.1-sol-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 15,
+            "engine_ttft_ms": 1118,
+            "engine_ttlt_ms": 1221,
+            "pre_inference_ms": 172,
+            "service_tbt_ms": 15,
+            "service_ttft_ms": 1562,
+            "service_ttlt_ms": 1652,
+            "user_visible_ttft_ms": 1390,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.04296, input_cost=0.0384, output_cost=0.00456, prompt_tokens=12928, completion_tokens=380),
+)
+AZURE_GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_LUNA_CACHE_READ,
+    "azure/gpt-6-luna-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 7,
+            "engine_ttft_ms": 143,
+            "engine_ttlt_ms": 309,
+            "pre_inference_ms": 132,
+            "service_tbt_ms": 8,
+            "service_ttft_ms": 566,
+            "service_ttlt_ms": 748,
+            "user_visible_ttft_ms": 434,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.002327, input_cost=0.00208, output_cost=0.000247, prompt_tokens=12928, completion_tokens=380),
+    choice_updates={
+        "content_filter_result": {"error": {"code": "content_filter_error", "message": "The contents are not filtered"}}
+    },
+)
+AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_ASTRA_CACHE_READ,
+    "azure/gpt-6-astra-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 36,
+            "engine_ttft_ms": 537,
+            "engine_ttlt_ms": 751,
+            "pre_inference_ms": 356,
+            "service_tbt_ms": 41,
+            "service_ttft_ms": 1166,
+            "service_ttlt_ms": 1371,
+            "user_visible_ttft_ms": 810,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.22375, input_cost=0.2, output_cost=0.02375, prompt_tokens=12928, completion_tokens=380),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
@@ -5947,6 +6298,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_INPUT_TEXT_ROLLUPS,
     AZURE_GPT_6_SOL_TOOL_CALL,
     AZURE_GPT_6_LUNA_TOOL_CALL,
+    AZURE_GPT_6_1_SOL_CACHE_READ,
+    AZURE_GPT_6_LUNA_CACHE_READ,
+    AZURE_GPT_6_ASTRA_CACHE_READ,
+    AZURE_GPT_6_1_SOL_CACHE_WRITE_5M,
+    AZURE_GPT_6_LUNA_CACHE_WRITE_5M,
+    AZURE_GPT_6_ASTRA_CACHE_WRITE_5M,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -5962,6 +6319,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs((AZURE_GPT_5_6_INPUT_TEXT, AZURE_GPT_5_6_CACHE_READ, AZURE_GPT_5_6_STREAM), ("/v1/messages",)),
+    *bridge_pairs(
+        (AZURE_GPT_5_6_REASONING,),
+        ("/v1/messages",),
+        known_bug=(
+            "the /v1/messages -> chat bridge usually drops completion_tokens_details.reasoning_tokens on azure, so"
+            " reasoning tokens bill at output_cost_per_token instead of output_cost_per_reasoning_token"
+            " (output_cost 0.058176 instead of 0.065484)"
+        ),
+    ),
     BridgeCostParityTestCase(native=AZURE_GPT_6_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),

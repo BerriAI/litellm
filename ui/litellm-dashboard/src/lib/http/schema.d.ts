@@ -8565,7 +8565,8 @@ export interface paths {
          *           hour), so subtracting budget_duration from it does not give the window's start
          *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-         *           the key has per-model budgets
+         *           the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+         *           window ends and its spend resets, or None when no window is open or it ends after year 9999
          *         - budget_limits: list | None - Concurrent budget windows, exactly as stored
          *         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
          *           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -13438,6 +13439,9 @@ export interface paths {
          *
          *     If an agent has `inherit_credentials_from_provider`, the provider's credential
          *     fields are automatically appended to the agent's credential_fields.
+         *
+         *     Reads from the bundled local files. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_agent_fields_public_agents_fields_get"];
         put?: never;
@@ -13659,6 +13663,9 @@ export interface paths {
         /**
          * Get Provider Fields
          * @description Return provider metadata required by the dashboard create-model flow.
+         *
+         *     Reads from the bundled local file. Result is cached in-process for the
+         *     lifetime of the server process.
          */
         get: operations["get_provider_fields_public_providers_fields_get"];
         put?: never;
@@ -15627,6 +15634,11 @@ export interface paths {
         /**
          * View Spend Tags
          * @description LiteLLM Enterprise - View Spend Per Request Tag
+         *
+         *     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+         *       across every spend log.
+         *     - All other callers see aggregates over their own spend logs and those of
+         *       teams they may view, exactly like ``/spend/logs/ui``.
          *
          *     Example Request:
          *     ```
@@ -23604,6 +23616,7 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         blocked: Filter by routing status (false = active, true = paused).
          *         access_group: Only return deployments in this model access group.
          *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
@@ -83113,6 +83126,8 @@ export interface operations {
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;
+                /** @description Filter by routing status: false = active deployments, true = paused (blocked) deployments. Omit to return both. */
+                blocked?: boolean | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
                 /** @description Only return deployments whose `model_info.access_groups` contains this access group */

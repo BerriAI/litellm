@@ -1184,7 +1184,7 @@ GPT_6_ASTRA_CONTENT_FILTERS: Final[JsonValue] = [
             "violence": {"filtered": False, "severity": "safe"},
             "self_harm": {"filtered": False, "severity": "safe"},
         },
-        "content_filter_offsets": {"start_offset": 0, "end_offset": 567, "check_offset": 0},
+        "content_filter_offsets": {"start_offset": 0, "end_offset": 507, "check_offset": 0},
     },
 ]
 

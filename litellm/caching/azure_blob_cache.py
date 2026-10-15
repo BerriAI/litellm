@@ -65,7 +65,7 @@ class AzureBlobCache(BaseCache):
             print_verbose(f"Get Azure Blob Cache: key: {key}")
             as_bytes: Final = self.container_client.download_blob(key).readall()
             as_str: Final = as_bytes.decode("utf-8")
-            cached_response: Final = json.loads(as_str)
+            cached_response: Final[object] = json.loads(as_str)
 
             verbose_logger.debug(
                 "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
@@ -86,7 +86,7 @@ class AzureBlobCache(BaseCache):
             blob: Final = await self.async_container_client.download_blob(key)
             as_bytes: Final = await blob.readall()
             as_str: Final = as_bytes.decode("utf-8")
-            cached_response: Final = json.loads(as_str)
+            cached_response: Final[object] = json.loads(as_str)
             verbose_logger.debug(
                 "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
                 key,
