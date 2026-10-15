@@ -5,6 +5,8 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
+from pydantic import TypeAdapter
+
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
@@ -46,7 +48,7 @@ from litellm.main import (
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import ImageEditOptionalRequestParams, ImageGenerationProviderHints
 from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -62,6 +64,7 @@ from litellm.utils import (
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+_IMAGE_GENERATION_PROVIDER_HINTS: Final = TypeAdapter(ImageGenerationProviderHints)
 
 
 def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
@@ -101,10 +104,11 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
+        provider_hints: Final = _IMAGE_GENERATION_PROVIDER_HINTS.validate_python(kwargs)
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
-            custom_llm_provider=kwargs.get("custom_llm_provider"),
-            api_base=kwargs.get("api_base", None),
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
         )
 
         # Await normally
