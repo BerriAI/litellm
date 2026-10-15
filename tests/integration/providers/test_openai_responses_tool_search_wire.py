@@ -3,7 +3,8 @@ import itertools
 import json
 import threading
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import SimpleQueue
@@ -18,6 +19,7 @@ import yaml
 from _pytest.mark.structures import ParameterSet
 from integration._support import responses_vendor as rv
 from integration._support.aws_control_plane import ControlPlane, ControlPlaneRequest, Responder, control_plane
+from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
@@ -754,6 +756,14 @@ def _open_tunnels(pid: int, openai_api: ControlPlane) -> int:
     )
 
 
+@contextmanager
+def _released_on_exit(release: threading.Event) -> Generator[None]:
+    try:
+        yield
+    finally:
+        release.set()
+
+
 async def test_a_worker_killed_mid_burst_leaves_the_survivor_mapping_the_search_tool(
     openai_api: ControlPlane, tmp_path: Path
 ) -> None:
@@ -767,7 +777,7 @@ async def test_a_worker_killed_mid_burst_leaves_the_survivor_mapping_the_search_
         marker: Final = rv.newest_marker(request.body.decode())
         if marker in markers:
             held.put(marker)
-            assert release.wait(timeout=60), "The burst was never released"
+            assert release.wait(timeout=readiness_seconds(1) + 60), "The burst was never released"
         return vendor.respond(request)
 
     with (
@@ -775,6 +785,7 @@ async def test_a_worker_killed_mid_burst_leaves_the_survivor_mapping_the_search_
         owned_proxy_process(parent, tmp_path, openai_api.environment(), workers=2) as owned,
         owned.gateway.scenario() as scenario,
         openai_api.answering(key, _answered_as_openai_api(respond)),
+        _released_on_exit(release),
     ):
         model: Final = scenario.model(model=_RESPONSES_MODEL, api_base=_OPENAI_API_BASE, api_key=key)
         workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)
