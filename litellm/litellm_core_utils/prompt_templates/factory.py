@@ -5133,7 +5133,9 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     return isinstance(tool, dict) and ("systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool)
 
 
-def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockToolBlock]:
+def _bedrock_tools_pt(
+    tools: list, model: str | None = None, cache_point_model: str | None = None
+) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5253,7 +5255,7 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
+        cache_point_tool_block = add_cache_point_tool_block(tool, model=cache_point_model or model)
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 

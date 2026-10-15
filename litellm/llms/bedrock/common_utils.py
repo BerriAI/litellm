@@ -820,6 +820,14 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
     return model
 
 
+def bedrock_cache_point_model(model: str, base_model: object) -> str:
+    """The model id to decide ``cachePoint`` support by: a deployment that declares
+    ``supports_prompt_cache_breakpoint`` itself keeps that answer, else its capability model."""
+    if bedrock_declared_cache_point_support(model) is not None:
+        return model
+    return bedrock_capability_model(model, base_model)
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:

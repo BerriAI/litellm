@@ -571,8 +571,8 @@ _PROFILE_ARN_CONVERSE_URL: Final = (
 )
 
 
-def _routed_profile_request_fields(
-    respx_mock: respx.Router, litellm_params: dict, model_info: dict, thinking: dict
+def _routed_profile_request_body(
+    respx_mock: respx.Router, litellm_params: dict, model_info: dict, **completion_kwargs: object
 ) -> dict:
     route: Final = respx_mock.post(_PROFILE_ARN_CONVERSE_URL).mock(
         return_value=httpx.Response(
@@ -601,13 +601,20 @@ def _routed_profile_request_fields(
     )
     router.completion(
         model="claude",
-        messages=[{"role": "user", "content": "hi"}],
         max_tokens=16000,
-        thinking=thinking,
         drop_params=True,
         client=HTTPHandler(),
+        **{"messages": [{"role": "user", "content": "hi"}], **completion_kwargs},
     )
-    return json.loads(route.calls[0].request.content).get("additionalModelRequestFields", {})
+    return json.loads(route.calls[0].request.content)
+
+
+def _routed_profile_request_fields(
+    respx_mock: respx.Router, litellm_params: dict, model_info: dict, thinking: dict
+) -> dict:
+    return _routed_profile_request_body(respx_mock, litellm_params, model_info, thinking=thinking).get(
+        "additionalModelRequestFields", {}
+    )
 
 
 @pytest.mark.parametrize(
@@ -651,6 +658,43 @@ def test_application_profile_arn_without_base_model_warns_when_adaptive_thinking
     assert any(
         _PROFILE_ARN in record.getMessage() and "`base_model`" in record.getMessage() for record in caplog.records
     )
+
+
+_CACHED_EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected_cache_points"),
+    [
+        ({"base_model": "us.anthropic.claude-opus-4-8"}, 3),
+        ({"base_model": "us.anthropic.claude-opus-4-8", "supports_prompt_cache_breakpoint": False}, 0),
+        ({"base_model": "us.meta.llama3-3-70b-instruct-v1:0"}, 0),
+        ({"base_model": "us.meta.llama3-3-70b-instruct-v1:0", "supports_prompt_cache_breakpoint": True}, 3),
+    ],
+    ids=["base_model_allows", "deployment_disables", "base_model_disallows", "deployment_enables"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_cache_points_follow_deployment_setting_before_base_model(
+    model_info: dict, expected_cache_points: int, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    body: Final = _routed_profile_request_body(
+        respx_mock,
+        {},
+        model_info,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": _CACHED_EPHEMERAL}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _CACHED_EPHEMERAL}]},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+                "cache_control": _CACHED_EPHEMERAL,
+            }
+        ],
+    )
+
+    assert json.dumps(body).count('"cachePoint"') == expected_cache_points, body
 
 
 @pytest.mark.respx(assert_all_called=True)
