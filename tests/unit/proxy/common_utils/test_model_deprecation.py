@@ -431,7 +431,7 @@ class TestSuccessorModel:
 
         assert [m.successor_model for m in snapshot.imminent] == [None, None]
 
-    def test_should_keep_the_deployment_naming_a_successor_when_deduping(self, monkeypatch):
+    def test_should_keep_the_first_deployment_and_carry_the_group_successor_when_deduping(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
         router = _make_router(
             [
@@ -445,12 +445,64 @@ class TestSuccessorModel:
                     "litellm_params": {"model": "openai/b"},
                     "model_info": {"id": "2", "deprecation_date": "2026-06-10", "successor_model": "alias-v2"},
                 },
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "openai/c"},
+                    "model_info": {"id": "3", "deprecation_date": "2026-06-10", "successor_model": "alias-v3"},
+                },
             ]
         )
 
         snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
 
-        assert [m.successor_model for m in snapshot.imminent] == ["alias-v2"]
+        assert [(m.litellm_model, m.successor_model) for m in snapshot.imminent] == [("openai/a", "alias-v2")]
+
+    def test_should_let_a_blank_deployment_successor_hide_the_cost_map_one(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "new-model"}}},
+        )
+        router = _make_router(
+            [
+                {
+                    "model_name": "hidden",
+                    "litellm_params": {"model": "old-model"},
+                    "model_info": {"successor_model": ""},
+                },
+                {
+                    "model_name": "unset",
+                    "litellm_params": {"model": "old-model"},
+                    "model_info": {"successor_model": None},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert {m.model_name: m.successor_model for m in snapshot.imminent} == {"hidden": None, "unset": "new-model"}
+
+    def test_should_report_the_cost_map_successor_under_the_model_name_that_serves_it(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"provider/old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "provider/new-model"}}},
+        )
+        router = _make_router(
+            [
+                {"model_name": "old", "litellm_params": {"model": "provider/old-model"}, "model_info": {"id": "1"}},
+                {"model_name": "new", "litellm_params": {"model": "provider/new-model"}, "model_info": {"id": "2"}},
+                {
+                    "model_name": "new-copy",
+                    "litellm_params": {"model": "provider/new-model"},
+                    "model_info": {"id": "3"},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert [(m.model_name, m.successor_model) for m in snapshot.imminent] == [("old", "new")]
 
     def test_should_name_the_successor_in_the_slack_entry_and_escape_it(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})

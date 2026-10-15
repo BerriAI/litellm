@@ -16846,7 +16846,9 @@ async def model_deprecations(
 
     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
     (and any per-deployment `model_info.deprecation_date` overrides) for the
-    models configured on this proxy.
+    models configured on this proxy. Each entry also names its `successor_model`
+    from `model_info.successor_model`, or else from the cost map's
+    `metadata.successor`.
 
     Parameters:
         warn_within_days: Window (in days) used to bucket "imminent" models,

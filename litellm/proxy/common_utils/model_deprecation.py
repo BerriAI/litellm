@@ -74,8 +74,30 @@ def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, o
     return value if isinstance(value, Mapping) else _NO_MODEL_METADATA
 
 
+def _resolve_successor(
+    model_info: Mapping[str, object],
+    cost_map_keys: Sequence[str],
+    served_model_names: Mapping[str, str],
+) -> str | None:
+    """The deployment's own successor_model when set, blank meaning none, else the cost map's under its served name"""
+    configured: Final = model_info.get("successor_model")
+    if isinstance(configured, str):
+        return configured.strip() or None
+    from_cost_map: Final = next(
+        (named for key in cost_map_keys if (named := _cost_map_successor(key)) is not None), None
+    )
+    return None if from_cost_map is None else served_model_names.get(from_cost_map, from_cost_map)
+
+
+def _served_model(deployment: Mapping[str, object]) -> tuple[str, str] | None:
+    model: Final = _mapping_field(deployment, "litellm_params").get("model")
+    model_name: Final = deployment.get("model_name")
+    return (model, model_name) if isinstance(model, str) and isinstance(model_name, str) else None
+
+
 def _resolve_deployment_deprecation(
     deployment: Mapping[str, object],
+    served_model_names: Mapping[str, str],
 ) -> _ResolvedDeprecation | None:
     """Resolve a deployment's deprecation date and successor, preferring its explicit overrides field by field"""
     model_info: Final = _mapping_field(deployment, "model_info")
@@ -87,9 +109,7 @@ def _resolve_deployment_deprecation(
     from_cost_map: Final = next(
         (resolved for key in cost_map_keys if (resolved := _cost_map_deprecation(key)) is not None), None
     )
-    successor: Final = _successor_model(model_info.get("successor_model")) or next(
-        (named for key in cost_map_keys if (named := _cost_map_successor(key)) is not None), None
-    )
+    successor: Final = _resolve_successor(model_info, cost_map_keys, served_model_names)
 
     override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
     if override is not None:
@@ -111,12 +131,17 @@ def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     return "upcoming"
 
 
-def _build_info(deployment: Mapping[str, object], today: date, warn_within_days: int) -> ModelDeprecationInfo | None:
+def _build_info(
+    deployment: Mapping[str, object],
+    today: date,
+    warn_within_days: int,
+    served_model_names: Mapping[str, str],
+) -> ModelDeprecationInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
         return None
 
-    resolved: Final = _resolve_deployment_deprecation(deployment)
+    resolved: Final = _resolve_deployment_deprecation(deployment, served_model_names)
     if resolved is None:
         return None
 
@@ -132,15 +157,30 @@ def _build_info(deployment: Mapping[str, object], today: date, warn_within_days:
     )
 
 
+def _merge_group(group: Sequence[ModelDeprecationInfo]) -> ModelDeprecationInfo:
+    """Keep the group's first deployment in config order, naming the first successor any of its deployments names"""
+    first: Final = group[0]
+    successors: Final = tuple(model.successor_model for model in group if model.successor_model is not None)
+    if not successors:
+        return first
+    if len(frozenset(successors)) > 1:
+        verbose_logger.warning(
+            "model_deprecation: %s names several successors %s, reporting %s",
+            first.model_name,
+            sorted(frozenset(successors)),
+            successors[0],
+        )
+    return first.model_copy(update={"successor_model": successors[0]})
+
+
 def _dedupe(
     models: Sequence[ModelDeprecationInfo],
 ) -> tuple[ModelDeprecationInfo, ...]:
-    """Report a model group carrying the same date on several deployments once, keeping one that names a successor"""
-    ordered: Final = sorted(
-        models, key=lambda model: (model.model_name, model.deprecation_date, model.successor_model is None)
-    )
+    """Report a model group carrying the same date on several deployments once"""
+    ordered: Final = sorted(models, key=lambda model: (model.model_name, model.deprecation_date))
     return tuple(
-        next(group) for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
+        _merge_group(tuple(group))
+        for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
     )
 
 
@@ -162,11 +202,17 @@ def collect_model_deprecations(
     snapshot_time: Final = datetime.now(timezone.utc)
     effective_today: Final = today or snapshot_time.date()
     deployments: Final = (llm_router.get_model_list() or ()) if llm_router is not None else ()
+    served_model_names: Final = MappingProxyType(
+        dict(served for served in map(_served_model, reversed(deployments)) if served is not None)
+    )
 
     deduped: Final = _dedupe(
         tuple(
             info
-            for info in (_build_info(deployment, effective_today, warn_within_days) for deployment in deployments)
+            for info in (
+                _build_info(deployment, effective_today, warn_within_days, served_model_names)
+                for deployment in deployments
+            )
             if info is not None
         )
     )
