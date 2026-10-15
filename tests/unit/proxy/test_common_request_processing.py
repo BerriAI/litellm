@@ -6149,6 +6149,10 @@ class TestAllmPassthroughStreamingProviderGate:
         guardrail.streaming_buffer_release_on_scan = True
         return guardrail
 
+    @classmethod
+    def _parallel_guardrail(cls):
+        return cls._apply_guardrail(run_in_parallel=True)
+
     @staticmethod
     def _holding_release_on_scan_guardrail():
         from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -6237,6 +6241,7 @@ class TestAllmPassthroughStreamingProviderGate:
             "_mask_response_guardrail",
             "_release_on_scan_guardrail",
             "_holding_release_on_scan_guardrail",
+            "_parallel_guardrail",
         ],
     )
     async def test_bedrock_converse_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(

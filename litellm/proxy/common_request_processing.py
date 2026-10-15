@@ -3440,8 +3440,8 @@ class ProxyBaseLLMRequestProcessing:
 
         A guardrail relays when ``post_call_success_hook`` would scan it through ``apply_guardrail``. One that runs
         its own ``async_post_call_success_hook``, masks responses with ``mask_response_content``, releases a held
-        stream as each scan passes, or is a step of a post_call policy pipeline still needs the whole response, so
-        its stream stays buffered.
+        stream as each scan passes, runs with ``run_in_parallel`` after the sequential guardrails, or is a step of a
+        post_call policy pipeline still needs the whole response, so its stream stays buffered.
         """
         from litellm.proxy.proxy_server import llm_router
         from litellm.proxy.utils import pipeline_managed_guardrail_names
@@ -3468,6 +3468,7 @@ class ProxyBaseLLMRequestProcessing:
                 "apply_guardrail" not in leaf_attrs
                 or cb.use_native_lifecycle_hooks
                 or cb.mask_response_content
+                or cb.run_in_parallel
                 or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
             ):
                 return None

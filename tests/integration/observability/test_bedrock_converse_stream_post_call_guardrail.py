@@ -46,6 +46,8 @@ END_ONLY: Final = "relay-end-only"
 OUTAGE: Final = "relay-outage"
 STACKED: Final = "relay-stacked"
 RELEASE_ON_SCAN: Final = "relay-release-on-scan"
+PARALLEL: Final = "relay-parallel"
+PARALLEL_FIRST: Final = "relay-parallel-first"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
@@ -116,6 +118,14 @@ def verdict(request: Request) -> Reply:
     if any(MASKED_WORD in text for text in texts):
         masked: Final = [text.replace(MASKED_WORD, MASK) for text in texts]
         return Reply(body=json.dumps({"action": "GUARDRAIL_INTERVENED", "texts": masked}).encode())
+    return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+
+def parallel_verdict(request: Request) -> Reply:
+    """A block-only check that rejects ``MASKED_WORD`` it sees unmasked."""
+    texts: Final = [str(text) for text in json.loads(request.body)["texts"]]
+    if any(MASKED_WORD in text for text in texts):
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": BLOCK_REASON}).encode())
     return Reply(body=json.dumps({"action": "NONE"}).encode())
 
 
@@ -234,6 +244,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
         if request.target.startswith(f"/{RELEASE_ON_SCAN}/"):
             return bedrock_verdict(request)
+        if request.target.startswith(f"/{PARALLEL}/"):
+            return parallel_verdict(request)
         return verdict(request)
 
     with httpx.Client(base_url=os.environ["INTEGRATION_PROXY_URL"], timeout=30, trust_env=False) as root_client:
@@ -246,6 +258,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         with wire_server(provider) as upstream, wire_server(vendor) as sink:
             config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
             config["guardrails"] = [
+                _guardrail(PARALLEL, sink, run_in_parallel=True),
                 _guardrail(SAMPLED, sink),
                 _guardrail(BUFFERED, sink, streaming_buffer_until_moderated=True),
                 _guardrail(FAILING, sink),
@@ -309,6 +322,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         {
                             **{name: scenario.key(guardrails=[name]) for name in single},
                             STACKED: scenario.key(guardrails=[SAMPLED, BUFFERED]),
+                            PARALLEL_FIRST: scenario.key(guardrails=[PARALLEL, BUFFERED]),
                         },
                         outage,
                     )
@@ -623,6 +637,17 @@ def test_sampled_and_held_guardrails_on_one_key_hold_the_stream_and_mask_it(rig:
         request.target.split("/")[1] for request in rig.sink.drain() if marker.encode() in request.body
     }
     assert scanned_by == {SAMPLED, BUFFERED}, scanned_by
+
+
+def test_parallel_guardrail_listed_before_a_masker_still_scans_the_masked_text(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"{MASKED_WORD} {marker} ", "is the capital"))
+    )
+    status, content_type, body = _stream(rig, PARALLEL_FIRST, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert block_texts(decode(body)) == {0: f"{MASK} {marker} is the capital"}, decode(body)
+    assert rig.scans(PARALLEL, marker) == ((f"{MASK} {marker} is the capital",),)
 
 
 def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:
