@@ -1,0 +1,46 @@
+{
+  "head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
+  "base": "b22a0bd9e5531d443da2945951f99573c0a02413",
+  "files": {
+    "litellm/decisions/call.py": {
+      "changed_executable_lines": [
+        36
+      ],
+      "missing_changed_lines": [],
+      "missing_changed_branches": []
+    },
+    "litellm/llms/base_llm/decisions/transformation.py": {
+      "changed_executable_lines": [
+        258,
+        259,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        268,
+        272,
+        273,
+        274,
+        275
+      ],
+      "missing_changed_lines": [],
+      "missing_changed_branches": []
+    },
+    "litellm/llms/nace/decisions/transformation.py": {
+      "changed_executable_lines": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        9
+      ],
+      "missing_changed_lines": [],
+      "missing_changed_branches": []
+    }
+  },
+  "command": "PYTHONPATH=$PWD PYTHON_DOTENV_DISABLED=1 LITELLM_LOCAL_MODEL_COST_MAP=True python -m pytest tests/unit/llms/base_llm/decisions tests/unit/decisions/test_main.py tests/unit/proxy/public_endpoints/test_public_endpoints.py --cov=litellm.llms.base_llm.decisions.transformation --cov=litellm.llms.nace.decisions.transformation --cov=litellm.decisions.call --cov-branch --cov-report=json:coverage.json",
+  "result": "265 passed"
+}
