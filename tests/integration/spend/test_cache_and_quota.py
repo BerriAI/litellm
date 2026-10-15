@@ -448,9 +448,11 @@ def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completi
             [{"role": "user", "content": prompt}]
         ]
         assert count.status_code == 200, count.text
-        assert count.json() == {"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}, (
-            count.text
-        )
+        assert count.json() == {
+            "totalTokens": 12,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}],
+            "litellm_count_source": "provider",
+        }, count.text
         provider_calls: Final = wire.drain()
         assert [(call.method, call.target) for call in provider_calls] == [
             ("POST", "/v1beta/models/gemini-3.8-flash:countTokens")

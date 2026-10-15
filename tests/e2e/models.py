@@ -677,11 +677,37 @@ class AnthropicMessagesResponse(BaseModel):
     usage: Usage | None = None
 
 
-class CountTokensResponse(BaseModel):
+TokenCountSource = Literal["provider", "fallback_model", "local_estimate"]
+
+
+class LitellmCountSource(BaseModel, frozen=True):
+    litellm_count_source: TokenCountSource | None = None
+    litellm_count_fallback_model: str | None = None
+
+
+class CountTokensResponse(LitellmCountSource, frozen=True):
     """`/v1/messages/count_tokens` answer. `input_tokens` is required so a 200
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+class ResponsesInputTokensResponse(LitellmCountSource, frozen=True):
+    object: str
+    input_tokens: int
+
+
+class TokenCounterBody(BaseModel, frozen=True):
+    model: str
+    messages: list[ChatMessage]
+
+
+class TokenCounterResponse(BaseModel, frozen=True):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    count_source: TokenCountSource | None = None
 
 
 class AnthropicErrorBody(BaseModel):
@@ -1437,6 +1463,7 @@ class ModelInfoBody(BaseModel):
     team_id: str | None = None
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
+    token_count_fallback_model: str | None = None
 
 
 class ModelNewBody(BaseModel):

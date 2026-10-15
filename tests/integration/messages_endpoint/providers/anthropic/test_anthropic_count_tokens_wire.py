@@ -104,7 +104,7 @@ def test_anthropic_count_tokens_forwards_body_and_refuses_a_key_without_model_ac
 
             client: Final = _client(gateway, gateway.key)
             result: Final = _sdk_count(client, model, spelling, _COUNT_BETA)
-            assert result.model_dump() == {"input_tokens": _COUNTED_INPUT_TOKENS}
+            assert result.model_dump() == {"input_tokens": _COUNTED_INPUT_TOKENS, "litellm_count_source": "provider"}
             requests: Final = wire.drain()
             assert len(requests) == 1, requests
 
@@ -236,5 +236,5 @@ def test_anthropic_count_tokens_merges_the_client_beta_with_the_token_counting_b
                 num_retries=0,
             )
             result: Final = _sdk_count(_client(gateway, gateway.key), model, spelling, _CLIENT_BETA)
-            assert result.model_dump() == {"input_tokens": _COUNTED_INPUT_TOKENS}
+            assert result.model_dump() == {"input_tokens": _COUNTED_INPUT_TOKENS, "litellm_count_source": "provider"}
             assert len(wire.drain()) == 1
