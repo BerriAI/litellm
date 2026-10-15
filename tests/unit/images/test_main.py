@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from openai import AsyncOpenAI
 from openai.types.image import Image
 
 import litellm
@@ -36,6 +37,30 @@ def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_r
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "_litellm_undeclared_sentinel" not in sent, sent
     assert sent["prompt"] == "a red circle"
+
+
+@pytest.mark.asyncio
+async def test_aimage_generation_routes_a_bare_model_name_to_its_explicit_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12348/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    response: Final = await litellm.aimage_generation(
+        model="Qwen-Image",
+        prompt="a red circle",
+        custom_llm_provider="openai",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["model"] == "Qwen-Image"
+    assert response.data[0].b64_json == "aW1n"
 
 
 def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
