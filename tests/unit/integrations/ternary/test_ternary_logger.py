@@ -22,6 +22,7 @@ from litellm.integrations.ternary.export_engine import (
     _keep_window_days,
     _merge_token_tags,
     _partition_by_day,
+    usage_days,
 )
 from litellm.integrations.ternary.ternary_logger import (
     TERNARY_USAGE_DATA_JOB_NAME,
@@ -666,3 +667,13 @@ async def test_a_bounded_export_window_uploads_only_the_days_it_covers():
     await TernaryExportEngine.export_window(engine, window=window, limit=None)
 
     assert captured["data"]["date"].to_list() == ["2026-09-01"]
+
+
+def test_usage_days_lists_each_utc_day_once_in_order():
+    data = pl.DataFrame({"date": ["2026-10-14", "2026-10-02", "2026-10-14", None, "not-a-date"]})
+
+    assert usage_days(data) == ("2026-10-02", "2026-10-14")
+
+
+def test_usage_days_is_empty_without_a_date_column():
+    assert usage_days(pl.DataFrame({"spend": [1.0]})) == ()
