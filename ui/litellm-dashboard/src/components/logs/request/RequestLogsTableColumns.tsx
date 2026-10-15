@@ -10,7 +10,7 @@ import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "../batchLogUtils";
 import type { LogEntry } from "../types";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { isAgentLog, MCP_CALL_TYPES } from "../constants";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
@@ -94,7 +94,7 @@ export const getRequestLogsTableColumns = ({
       const log = row.original;
       const sessionCount = log.session_total_count || 1;
       const isMcp = MCP_CALL_TYPES.includes(log.call_type);
-      const isAgent = AGENT_CALL_TYPES.includes(log.call_type);
+      const isAgent = isAgentLog(log);
       const sessionLlmCount = log.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);

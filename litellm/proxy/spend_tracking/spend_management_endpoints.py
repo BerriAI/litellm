@@ -91,20 +91,24 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+_BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
+_AGENT_ROW_SQL: Final = (
+    f"(call_type = {_AGENT_CALL_TYPE_SQL} OR (COALESCE(agent_id, '') <> '' "
+    f"AND call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type NOT IN {_BATCH_CALL_TYPES_SQL}))"
+)
 _SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
     f"(call_type = {_AGENT_CALL_TYPE_SQL}) DESC, "
     f'CASE WHEN call_type = {_AGENT_CALL_TYPE_SQL} THEN "endTime" END DESC NULLS LAST, '
     f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
 )
-_BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
-        "agent": f"call_type = {_AGENT_CALL_TYPE_SQL}",
+        "agent": _AGENT_ROW_SQL,
         "batch": f"call_type IN {_BATCH_CALL_TYPES_SQL}",
         "llm": (
-            f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL} "
-            f"AND call_type NOT IN {_BATCH_CALL_TYPES_SQL})"
+            f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type NOT IN {_BATCH_CALL_TYPES_SQL} "
+            f"AND NOT {_AGENT_ROW_SQL})"
         ),
     }
 )
@@ -4729,9 +4733,9 @@ async def _build_ui_spend_logs_response(
                            ), 0)::double precision AS mcp_tool_call_spend,
                            COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count,
                            COUNT(*) FILTER (
-                               WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
+                               WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND NOT {_AGENT_ROW_SQL}
                            )::int AS session_llm_count,
-                           COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
+                           COUNT(*) FILTER (WHERE {_AGENT_ROW_SQL})::int AS session_agent_count,
                            COALESCE(SUM(prompt_tokens), 0)::bigint AS session_total_prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0)::bigint AS session_total_completion_tokens,
                            COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens

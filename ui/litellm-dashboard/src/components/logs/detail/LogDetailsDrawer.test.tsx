@@ -80,8 +80,8 @@ const sessionLogs = [
   }),
 ];
 
-const renderSessionDrawer = () => {
-  vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: sessionLogs, total: 4, total_pages: 1 });
+const renderSessionDrawer = (logs: LogEntry[] = sessionLogs) => {
+  vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: logs, total: logs.length, total_pages: 1 });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const drawer = (open: boolean) => (
     <QueryClientProvider client={queryClient}>
@@ -126,6 +126,67 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
     rerender(drawer(true));
 
     await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+});
+
+describe("LogDetailsDrawer agent-bound logs", () => {
+  it("counts agent-key completions as Agent while keeping ordinary LLM and MCP rows separate", async () => {
+    const agentBoundLog: Partial<LogEntry> = {
+      request_id: "agent-bound",
+      model: "agent-bound-model",
+      call_type: "acompletion",
+      agent_id: "agent-1",
+    };
+    const ordinaryLlmLog: Partial<LogEntry> = {
+      request_id: "ordinary-llm",
+      model: "ordinary-llm-model",
+      call_type: "acompletion",
+    };
+    const mcpLogWithAgentId: Partial<LogEntry> = {
+      request_id: "mcp-agent-id",
+      model: "mcp-model",
+      call_type: "call_mcp_tool",
+      agent_id: "agent-2",
+    };
+    renderSessionDrawer([makeLog(agentBoundLog), makeLog(ordinaryLlmLog), makeLog(mcpLogWithAgentId)]);
+
+    expect(await screen.findByText("agent-bound-model")).toBeInTheDocument();
+    expect(screen.getByText("1 LLM")).toBeInTheDocument();
+    expect(screen.getByText("1 Agent")).toBeInTheDocument();
+    expect(screen.getByText("1 MCP")).toBeInTheDocument();
+
+    const agentRow = screen.getByRole("button", { name: /agent-bound-model/ });
+    const llmRow = screen.getByRole("button", { name: /ordinary-llm-model/ });
+    const mcpRow = screen.getByRole("button", { name: /mcp-model/ });
+    expect(agentRow.querySelector(".lucide-bot")).not.toBeNull();
+    expect(llmRow.querySelector(".lucide-sparkles")).not.toBeNull();
+    expect(mcpRow.querySelector(".lucide-wrench")).not.toBeNull();
+  });
+
+  it("keeps batch and empty-agent-id completions out of the Agent count", async () => {
+    const batchLogWithAgentId: Partial<LogEntry> = {
+      request_id: "batch-agent-id",
+      model: "batch-model",
+      call_type: "acreate_batch",
+      agent_id: "agent-2",
+    };
+    const completionWithEmptyAgentId: Partial<LogEntry> = {
+      request_id: "empty-agent-id",
+      model: "empty-agent-id-model",
+      call_type: "acompletion",
+      agent_id: "",
+    };
+    const agentBoundLog: Partial<LogEntry> = {
+      request_id: "agent-bound",
+      model: "agent-bound-model",
+      call_type: "acompletion",
+      agent_id: "agent-1",
+    };
+    renderSessionDrawer([makeLog(batchLogWithAgentId), makeLog(completionWithEmptyAgentId), makeLog(agentBoundLog)]);
+
+    expect(await screen.findByText("batch-model")).toBeInTheDocument();
+    expect(screen.getByText("2 LLM")).toBeInTheDocument();
+    expect(screen.getByText("1 Agent")).toBeInTheDocument();
   });
 });
 
