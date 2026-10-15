@@ -1807,18 +1807,62 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     )
 
 
-LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
+    {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
+)
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | {"reasoning_content"}
+
+
+def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
+    if not isinstance(tool_call, dict):
+        return tool_call
+    fields: Final = cast(dict[str, object], tool_call)  # cast-ok: untyped JSON tool call, keys forwarded verbatim
+    function_fields: Final = (
+        cast("dict[str, object]", fields.get("function"))  # cast-ok: untyped JSON function chunk
+        if isinstance(fields.get("function"), dict)
+        else None
+    )
+    if "provider_specific_fields" not in fields and (
+        function_fields is None or "provider_specific_fields" not in function_fields
+    ):
+        return cast("dict[str, object]", tool_call)  # cast-ok: untyped JSON tool call, no strip needed
+    return {
+        key: (
+            {fkey: fvalue for fkey, fvalue in function_fields.items() if fkey != "provider_specific_fields"}
+            if key == "function" and function_fields is not None
+            else value
+        )
+        for key, value in fields.items()
+        if key != "provider_specific_fields"
+    }
+
+
+def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
+    kept: Final = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
+    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+        AllMessageValues,
+        {
+            **kept,
+            "tool_calls": [
+                _tool_call_without_provider_specific_fields(tool_call)
+                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
+            ],
+        },
+    )
+
+
+def strip_litellm_response_only_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to a returned message (e.g. Anthropic thinking blocks or Responses
+    API items) that no OpenAI-compatible endpoint accepts back, so a reply can be sent to a strict one."""
+    return _message_without_fields(message, LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS)
 
 
 def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
-    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
-    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
-    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
-        return message
-    return cast(  # cast-ok: same TypedDict minus internal keys
-        AllMessageValues,
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
-    )
+    """``strip_litellm_response_only_fields`` plus ``reasoning_content``, for endpoints that reject it too."""
+    return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:

@@ -19,13 +19,18 @@ __all__ = [
     "answers_tool_search",
     "anthropic_tool_search_chat_tool",
     "build_tool_search_call",
+    "chat_config_builds_anthropic_request",
+    "chat_messages_without_tool_search_calls",
+    "chat_route_rejects_unanswered_tool_calls",
     "has_server_tool_search",
     "holds_tool_search_use",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
+    "runs_tool_search_on_the_server",
     "tool_search_call_ids",
+    "unanswered_tool_search_call_ids",
     "without_tool_search_calls",
     "without_tool_search_uses",
 ]
@@ -35,6 +40,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
 
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MESSAGE_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class _ToolSearchFields(LiteLLMBaseModel):
@@ -52,6 +58,14 @@ def is_server_tool_search_tool(tool: object) -> bool:
     return parsed.type == "tool_search" and parsed.execution != "client"
 
 
+def runs_tool_search_on_the_server(tool: object) -> bool:
+    try:
+        parsed: Final = _ToolSearchFields.model_validate(tool)
+    except ValidationError:
+        return False
+    return parsed.type == "tool_search" and parsed.execution in (None, "server")
+
+
 def has_server_tool_search(tools: Sequence[object] | None) -> bool:
     return any(is_server_tool_search_tool(tool) for tool in tools or ())
 
@@ -66,8 +80,6 @@ def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.utils import ProviderConfigManager
 
     _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
@@ -75,8 +87,27 @@ def provider_builds_anthropic_request(model: str, custom_llm_provider: str | Non
         llm_provider: Final = LlmProviders(provider)
     except ValueError:
         return False
-    chat_config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    return chat_config_builds_anthropic_request(
+        ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    )
+
+
+def chat_config_builds_anthropic_request(chat_config: object) -> bool:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
+
+
+_PROVIDERS_REJECTING_UNANSWERED_TOOL_CALLS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
+
+
+def chat_route_rejects_unanswered_tool_calls(custom_llm_provider: str | None, chat_config: object) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    return custom_llm_provider in _PROVIDERS_REJECTING_UNANSWERED_TOOL_CALLS or isinstance(
+        chat_config, AmazonConverseConfig
+    )
 
 
 class CompletionRoute(LiteLLMBaseModel):
@@ -165,6 +196,60 @@ def without_tool_search_uses(message: Message) -> Message | None:
     if not kept and not message.content:
         return None
     return message.model_copy(update={"tool_calls": list(kept) or None})
+
+
+def _is_assistant_message(message: object) -> bool:
+    match message:
+        case {"role": "assistant"}:
+            return True
+        case Mapping():
+            return False
+        case _:
+            return _session_message_fields(message).role == "assistant"
+
+
+def _tool_result_ids(messages: Iterable[object]) -> frozenset[str]:
+    return frozenset(
+        tool_call_id
+        for message in messages
+        if (tool_call_id := _session_message_fields(message).tool_call_id) is not None
+    )
+
+
+def unanswered_tool_search_call_ids(messages: Sequence[object]) -> frozenset[str]:
+    search_call_ids: Final = tool_search_call_ids(message for message in messages if _is_assistant_message(message))
+    if not search_call_ids:
+        return search_call_ids
+    return search_call_ids - _tool_result_ids(messages)
+
+
+def _assistant_mapping_with_tool_calls(
+    message: Mapping[str, object], tool_calls: tuple[object, ...]
+) -> Mapping[str, object] | None:
+    if not tool_calls and not message.get("content"):
+        return None
+    without_calls: Final = {key: value for key, value in message.items() if key != "tool_calls"}
+    return {**without_calls, "tool_calls": list(tool_calls)} if tool_calls else without_calls
+
+
+def _without_tool_search_calls(message: object, call_ids: Set[str]) -> object | None:
+    tool_calls: Final = _assistant_tool_calls(message)
+    kept_calls: Final = tuple(tool_call for tool_call in tool_calls if _tool_search_call_id(tool_call) not in call_ids)
+    if len(kept_calls) == len(tool_calls):
+        return message
+    match message:
+        case Message():
+            if not kept_calls and not message.content:
+                return None
+            return message.model_copy(update={"tool_calls": list(kept_calls) or None})
+        case Mapping():
+            return _assistant_mapping_with_tool_calls(_MESSAGE_FIELDS_ADAPTER.validate_python(message), kept_calls)
+        case _:
+            return message
+
+
+def chat_messages_without_tool_search_calls(messages: Sequence[object], call_ids: Set[str]) -> tuple[object, ...]:
+    return tuple(kept for message in messages if (kept := _without_tool_search_calls(message, call_ids)) is not None)
 
 
 def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:

@@ -488,6 +488,46 @@ def test_transform_request_keeps_reasoning_content_strips_internal_fields():
     _assert_internal_fields_stripped_reasoning_kept(request["messages"])
 
 
+def test_tool_search_reply_sent_to_together_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = TogetherAIChatConfig().transform_request(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "together_ai"},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
+
+
 async def test_async_transform_request_keeps_reasoning_content_strips_internal_fields():
     request = await TogetherAIChatConfig().async_transform_request(
         model=REASONING_MODEL,
