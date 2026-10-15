@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Final, List
 from unittest.mock import MagicMock, patch
@@ -68,31 +69,54 @@ from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
+READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
+USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
+HELPFUL_PART: Final[dict[str, object]] = {"type": "text", "text": "You are helpful."}
+
+
+def _ollama_function_call_prompt(
+    messages: list[dict[str, object]], functions: list[object], drop_params: bool = False
+) -> list[dict[str, object]]:
+    return function_call_prompt(messages, functions, model="llama3", llm_provider="ollama", drop_params=drop_params)
+
+
+def _read_file_prompt() -> object:
+    prompt: Final = _ollama_function_call_prompt([USER_TURN], READ_FILE)[-1]["content"]
+    assert "Read the contents of a file." in str(prompt)
+    return prompt
+
+
 @pytest.mark.parametrize(
-    "system_messages",
+    ("history", "expected"),
     (
-        (),
-        ({"role": "system", "content": "You are helpful."},),
-        ({"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},),
+        ((USER_TURN,), lambda prompt: [USER_TURN, {"role": "system", "content": prompt}]),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN),
+            lambda prompt: [{"role": "system", "content": f"You are helpful. {prompt}"}, USER_TURN],
+        ),
+        (
+            ({"role": "system", "content": [HELPFUL_PART]}, USER_TURN),
+            lambda prompt: [
+                {"role": "system", "content": [HELPFUL_PART, {"type": "text", "text": f" {prompt}"}]},
+                USER_TURN,
+            ],
+        ),
     ),
     ids=("no_system", "string_content", "list_content"),
 )
 def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
-    system_messages: tuple[dict[str, object], ...],
+    history: tuple[dict[str, object], ...],
+    expected: Callable[[object], list[dict[str, object]]],
 ) -> None:
-    history: Final = (*system_messages, {"role": "user", "content": "Read the file."})
     reused_history: Final = deepcopy(list(history))
-    functions: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
 
-    turns: Final = tuple(function_call_prompt(reused_history, functions) for _ in range(3))
+    turns: Final = tuple(_ollama_function_call_prompt(reused_history, READ_FILE) for _ in range(3))
 
     assert reused_history == list(history)
-    assert all(turn == turns[0] for turn in turns)
-    assert json.dumps(turns[0]).count("Read the contents of a file.") == 1
-    assert json.dumps(turns[0]).count("You are helpful.") == json.dumps(history).count("You are helpful.")
+    assert all(turn == expected(_read_file_prompt()) for turn in turns)
 
 
-@pytest.mark.parametrize(
+UNREADABLE_SYSTEM_CONTENT: Final = pytest.mark.parametrize(
     "content",
     (
         None,
@@ -103,17 +127,32 @@ def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history
     ),
     ids=("none", "dict", "tuple", "set", "generator"),
 )
-def test_function_call_prompt_rejects_unreadable_system_content_without_echoing_it(content: object) -> None:
-    with pytest.raises(TypeError) as error:
-        function_call_prompt([{"role": "system", "content": content}], [{"name": "read_file"}])
 
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_answers_400_for_unreadable_system_content_without_echoing_it(content: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as error:
+        _ollama_function_call_prompt([{"role": "system", "content": content}, USER_TURN], READ_FILE)
+
+    assert error.value.status_code == 400
     assert "private system prompt" not in str(error.value)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_sends_only_the_function_prompt_for_unreadable_content_under_drop_params(
+    content: object,
+) -> None:
+    prompted: Final = _ollama_function_call_prompt(
+        [{"role": "system", "content": content}, USER_TURN], READ_FILE, drop_params=True
+    )
+
+    assert prompted == [{"role": "system", "content": _read_file_prompt()}, USER_TURN]
 
 
 def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
     messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
 
-    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+    prompted: Final = _ollama_function_call_prompt(messages, [{"name": "get_weather"}])
 
     system: Final = str(prompted[0]["content"])
     assert "JSON OUTPUT ONLY" not in system

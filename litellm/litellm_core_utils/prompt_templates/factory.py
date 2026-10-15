@@ -5443,20 +5443,33 @@ def _is_system_message(message: Mapping[str, object]) -> bool:
 _CONTENT_BLOCKS: Final = TypeAdapter(list[object])
 
 
-def _content_with_function_prompt(content: object, function_prompt: str) -> str | Sequence[object]:
+def _content_with_function_prompt(
+    content: object, function_prompt: str, *, model: str, llm_provider: str, drop_params: bool
+) -> str | Sequence[object]:
     if isinstance(content, str):
         return f"{content} {function_prompt}"
-    if not isinstance(content, list):
-        raise TypeError(
-            f"system message content must be a string or a list of content parts, got {type(content).__name__}"
-        )
-    return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
+    if isinstance(content, list):
+        return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
+    if drop_params:
+        return function_prompt
+    raise litellm.BadRequestError(
+        message=(
+            f"system message content must be a string or a list of content parts, got {type(content).__name__}. "
+            "Pass drop_params=True to send the function prompt in its place"
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
 
 
 # Function call template
 def function_call_prompt(
     messages: list[dict[str, object]],
     functions: list[object],
+    *,
+    model: str,
+    llm_provider: str,
+    drop_params: bool,
 ) -> list[dict[str, object]]:
     header: Final = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
     function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
@@ -5464,7 +5477,16 @@ def function_call_prompt(
         return [*messages, {"role": "system", "content": function_prompt}]
     return [
         (
-            {**message, "content": _content_with_function_prompt(message.get("content"), function_prompt)}
+            {
+                **message,
+                "content": _content_with_function_prompt(
+                    message.get("content"),
+                    function_prompt,
+                    model=model,
+                    llm_provider=llm_provider,
+                    drop_params=drop_params,
+                ),
+            }
             if _is_system_message(message)
             else message
         )
