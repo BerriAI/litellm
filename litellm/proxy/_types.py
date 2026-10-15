@@ -3360,26 +3360,9 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
         if self.before_value is not None:
-            json_before_value: dict | None = None
-            if isinstance(self.before_value, str):
-                json_before_value = json.loads(self.before_value)
-            elif isinstance(self.before_value, dict):
-                json_before_value = self.before_value
-
-            if json_before_value is not None:
-                json_before_value = masker.mask_dict(json_before_value)
-                self.before_value = json.dumps(json_before_value, default=str)
-
+            self.before_value = json.dumps(masker.mask(self.before_value), default=str)
         if self.updated_values is not None:
-            json_updated_values: dict | None = None
-            if isinstance(self.updated_values, str):
-                json_updated_values = json.loads(self.updated_values)
-            elif isinstance(self.updated_values, dict):
-                json_updated_values = self.updated_values
-
-            if json_updated_values is not None:
-                json_updated_values = masker.mask_dict(json_updated_values)
-                self.updated_values = json.dumps(json_updated_values, default=str)
+            self.updated_values = json.dumps(masker.mask(self.updated_values), default=str)
 
         return self
 
