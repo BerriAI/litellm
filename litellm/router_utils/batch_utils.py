@@ -1,11 +1,16 @@
 import io
 import json
+from collections.abc import Iterable
 from os import PathLike
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes
+
+_DECODED_JSONL_ROW: Final = TypeAdapter(object)
 
 
 class InMemoryFile(io.BytesIO):
@@ -41,7 +46,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         if char == "\n":
             # Try to parse what we have so far
             try:
-                json_object = json.loads(buffer.strip())
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
                 json_objects.append(json_object)
                 buffer = ""  # Reset buffer for next JSON object
             except json.JSONDecodeError:
@@ -51,7 +56,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
     # Handle any remaining content in buffer
     if buffer.strip():
         try:
-            json_object = json.loads(buffer.strip())
+            json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
             verbose_logger.error("error parsing final buffer: %s..., error: %s", buffer[:100], e)
@@ -73,7 +78,7 @@ def should_replace_model_in_jsonl(
     return purpose == "batch" and not passthrough
 
 
-def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> FileTypes:
+def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_line_numbers: bool = False) -> FileTypes:
     try:
         ## if pathlike, return the original file content
         if isinstance(file_content, PathLike):
@@ -83,17 +88,17 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # spooled upload handle (managed batches stream from it) is read straight
         # off its backing; bytes/str are wrapped so they iterate line-by-line.
         source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
-        if hasattr(source, "read"):
+        if isinstance(source, (bytes, bytearray)):
+            line_iter: Iterable[bytes] | Iterable[str] = io.BytesIO(bytes(source))
+        elif isinstance(source, str):
+            line_iter = io.StringIO(source)
+        elif hasattr(source, "read") and not isinstance(source, PathLike):
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)
                 except (OSError, ValueError):
                     pass
-            line_iter: object = source
-        elif isinstance(source, (bytes, bytearray)):
-            line_iter = io.BytesIO(bytes(source))
-        elif isinstance(source, str):
-            line_iter = io.StringIO(source)
+            line_iter = source
         else:
             return file_content
 
@@ -105,24 +110,37 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # multiple physical lines still parse. Streaming the handle also means
         # the model rewrite is actually applied to tuple-wrapped upload handles;
         # otherwise a restricted body.model would survive and bypass the batch
-        # model allowlist (which validates the upload target alias).
+        # model allowlist (which validates the upload target alias). With
+        # keep_line_numbers each row is written on the line it ends on, blank
+        # lines included, so a row error naming a line still points into the
+        # caller's file; otherwise rows go back to back, since OpenAI rejects a
+        # batch file whose first line is empty.
         output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
-        wrote_any = False
+        last_written_line = 0
         buffer = ""
-        for raw_line in line_iter:
-            buffer += raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+        for line_number, raw_line in enumerate(line_iter, start=1):
+            buffer += (
+                raw_line.decode("utf-8-sig")
+                if isinstance(raw_line, (bytes, bytearray))
+                else raw_line.removeprefix("\ufeff")
+            )
             stripped = buffer.strip()
             if not stripped:
                 buffer = ""
                 continue
             try:
-                json_object = json.loads(stripped)
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
             if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
                 json_object["body"]["model"] = new_model_name
-            output.write((("\n" if wrote_any else "") + json.dumps(json_object)).encode("utf-8"))
-            wrote_any = True
+            output.write(
+                (
+                    "\n" * (line_number - max(last_written_line, 1) if keep_line_numbers else min(last_written_line, 1))
+                    + json.dumps(json_object)
+                ).encode("utf-8")
+            )
+            last_written_line = line_number
             buffer = ""
 
         if buffer.strip():
@@ -139,7 +157,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             return file_content
 
         # If no valid JSON objects were found, return the original content
-        if not wrote_any:
+        if not last_written_line:
             return file_content
 
         output.seek(0)
@@ -150,7 +168,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         return file_content
 
 
-def _get_router_metadata_variable_name(function_name: str | None) -> str:
+def get_router_metadata_variable_name(function_name: str | None) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
@@ -171,6 +189,9 @@ def _get_router_metadata_variable_name(function_name: str | None) -> str:
         return "litellm_metadata"
     else:
         return "metadata"
+
+
+_get_router_metadata_variable_name = get_router_metadata_variable_name
 
 
 BATCH_RETRIEVE_CALL_TYPES: Final = frozenset(

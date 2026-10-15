@@ -1,19 +1,27 @@
 import json
+from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ValidationError
 
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -143,7 +151,7 @@ def test_search_uses_registry_credentials():
     litellm.vector_store_registry = registry
     try:
         logger = MagicMock()
-        logger._response_cost_calculator.return_value = 0
+        logger.response_cost_calculator.return_value = 0
 
         # Mock the search response
         mock_search_response = {
@@ -249,3 +257,120 @@ async def test_config_owned_store_survives_db_liveness_check_while_missing_db_st
     prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_awaited_once_with(
         where={"vector_store_id": "vs_from_db"}
     )
+
+
+_INDEX_PARAMS: Final = {"vector_store_index": "real-index-name", "vector_store_name": "azure-ai-search-store"}
+_INDEX_CREATED_AT: Final = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+_INDEX_ROW: Final = {
+    "id": "idx-1",
+    "index_name": "team-docs",
+    "litellm_params": _INDEX_PARAMS,
+    "index_info": {"dimensions": 1536},
+    "created_at": _INDEX_CREATED_AT,
+    "created_by": "user-1",
+    "updated_at": _INDEX_CREATED_AT,
+    "updated_by": "user-2",
+}
+
+
+class GeneratedIndexRow(BaseModel):
+    id: str
+    index_name: str
+    litellm_params: dict[str, str]
+    index_info: dict[str, int] | None = None
+    created_at: datetime
+    created_by: str | None = None
+    updated_at: datetime
+    updated_by: str | None = None
+
+
+def _database_listing_index_rows(rows: Sequence[object]) -> SimpleNamespace:
+    async def find_many(order: Mapping[str, str]) -> Sequence[object]:
+        return rows if order == {"created_at": "desc"} else []
+
+    return SimpleNamespace(
+        db=SimpleNamespace(litellm_managedvectorstoreindextable=SimpleNamespace(find_many=find_many))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "row",
+    [
+        _INDEX_ROW,
+        GeneratedIndexRow(**_INDEX_ROW),
+        list(_INDEX_ROW.items()),
+        {**_INDEX_ROW, "column_added_by_a_later_migration": "ignored"},
+    ],
+)
+async def test_vector_store_index_rows_from_the_db_are_returned_as_indexes(row: object) -> None:
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
+        _database_listing_index_rows([row])
+    )
+
+    assert [index.model_dump() for index in indexes] == [_INDEX_ROW]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_index_row_without_optional_columns_gets_empty_defaults() -> None:
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
+        _database_listing_index_rows([{"id": "idx-1", "index_name": "team-docs", "litellm_params": _INDEX_PARAMS}])
+    )
+
+    assert [index.model_dump() for index in indexes] == [
+        {
+            "id": "idx-1",
+            "index_name": "team-docs",
+            "litellm_params": _INDEX_PARAMS,
+            "index_info": None,
+            "created_at": None,
+            "created_by": None,
+            "updated_at": None,
+            "updated_by": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"index_name": "team-docs", "litellm_params": _INDEX_PARAMS},
+        {**_INDEX_ROW, "id": 7},
+        {**_INDEX_ROW, "litellm_params": None},
+        {**_INDEX_ROW, "litellm_params": {"vector_store_index": "real-index-name"}},
+        {**_INDEX_ROW, "index_info": ["not", "a", "mapping"]},
+        {**_INDEX_ROW, 7: "column names must be strings"},
+        {**_INDEX_ROW, b"index_name": "column names are not decoded"},
+    ],
+)
+async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
+    with pytest.raises(ValidationError):
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+
+
+class TestRegistriesDoNotShareDefaultState:
+    def test_adding_to_one_registry_leaves_the_next_one_empty(self):
+        VectorStoreRegistry().add_vector_store_to_registry(
+            LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock")
+        )
+        assert VectorStoreRegistry().vector_stores == []
+
+    def test_upserting_into_one_index_registry_leaves_the_next_one_empty(self):
+        VectorStoreIndexRegistry().upsert_vector_store_index(
+            LiteLLM_ManagedVectorStoreIndex(
+                id="idx-leak",
+                index_name="leak",
+                litellm_params=IndexCreateLiteLLMParams(vector_store_index="vs-leak", vector_store_name="leak"),
+            )
+        )
+        assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
+
+
+def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
+    registry: Final = VectorStoreRegistry()
+    first: Final = registry.get_vector_store_ids_to_run(
+        {"vector_store_ids": ["vs-a"]}, tools=[{"type": "file_search", "vector_store_ids": ["vs-b", "vs-a"]}]
+    )
+    second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
+    assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])

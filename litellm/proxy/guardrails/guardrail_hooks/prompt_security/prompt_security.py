@@ -50,7 +50,7 @@ def _inputs_with_structured_messages(
         return inputs
     patched: Final[GenericGuardrailAPIInputs] = {
         **inputs,
-        "structured_messages": list(rewritten_messages),  # mutable-ok: the TypedDict field is declared as a list
+        "structured_messages": list(rewritten_messages),
     }
     return patched
 
@@ -377,15 +377,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 status_code=400,
                 detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
             )
-        returned_texts: Final = [  # mutable-ok: GenericGuardrailAPIInputs.texts is list[str]
+        returned_texts: Final = [
             _modified_or_original(text, verdict) for text, verdict in zip(texts, verdicts, strict=True)
         ]
         patched: Final[GenericGuardrailAPIInputs] = {
             **inputs,
             "texts": returned_texts,
-            "stream_holdback_chars": [  # mutable-ok: GenericGuardrailAPIInputs.stream_holdback_chars is list[int]
-                len(text) for text in returned_texts
-            ],
+            "stream_holdback_chars": [len(text) for text in returned_texts],
         }
         return patched
 

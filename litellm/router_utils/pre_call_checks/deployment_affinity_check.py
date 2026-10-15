@@ -14,12 +14,18 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import claim_affinity_pin, claim_affinity_pin_in_memory, set_local_affinity_pin
+from litellm.caching.affinity_cache import (
+    ROUTER_SESSION_PINS_TARGET,
+    claim_affinity_pin,
+    claim_affinity_pin_in_memory,
+    set_local_affinity_pin,
+)
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
@@ -345,6 +351,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 return deployment
         return None
 
+    @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_filter_deployments(
         self,
         model: str,
@@ -475,7 +482,9 @@ class DeploymentAffinityCheck(CustomLogger):
         )
         return [deployment]
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         """
         Persist/update the API-key -> deployment mapping for this request.
 

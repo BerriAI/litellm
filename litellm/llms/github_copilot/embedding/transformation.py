@@ -8,12 +8,19 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -24,7 +31,9 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -32,6 +41,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_RESPONSE_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
@@ -58,6 +69,15 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Validate environment and set up headers for GitHub Copilot API.
         """
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        if user_session is not None:
+            session_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**get_copilot_default_headers(user_session.token), **headers}
+            )
+            pin_session_authorization(session_headers, user_session.token)
+            return session_headers
         try:
             # Get GitHub Copilot API key via OAuth
             api_key = self.authenticator.get_api_key()
@@ -98,9 +118,12 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         effective_api_base = (
-            api_base
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
@@ -154,7 +177,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # GitHub Copilot returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
+        response_json: Final = _RESPONSE_OBJECT.validate_python(raw_response.json())
 
         return convert_to_model_response_object(
             response_object=response_json,
@@ -182,7 +205,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
         from litellm.llms.openai.openai import OpenAIConfig
 
         return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

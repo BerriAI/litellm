@@ -33,9 +33,9 @@ Usage:
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from functools import partial
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -79,7 +79,7 @@ async def acreate(
     # System instruction
     system_instruction: str | None = None,
     # Generation config
-    generation_config: dict[str, Any] | None = None,
+    generation_config: Mapping[str, object] | None = None,
     # Streaming
     stream: bool | None = None,
     # Storage
@@ -90,13 +90,13 @@ async def acreate(
     environment: InteractionEnvironment | None = None,
     # Response format
     response_modalities: list[str] | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: Mapping[str, object] | None = None,
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
@@ -175,7 +175,7 @@ async def acreate(
         else:
             response = init_response
 
-        maybe_schedule_background_interaction_cost_polling(
+        await maybe_schedule_background_interaction_cost_polling(
             response=response,
             create_kwargs=kwargs,
             custom_llm_provider=custom_llm_provider,
@@ -204,7 +204,7 @@ def create(
     # System instruction
     system_instruction: str | None = None,
     # Generation config
-    generation_config: dict[str, Any] | None = None,
+    generation_config: Mapping[str, object] | None = None,
     # Streaming
     stream: bool | None = None,
     # Storage
@@ -215,13 +215,13 @@ def create(
     environment: InteractionEnvironment | None = None,
     # Response format
     response_modalities: list[str] | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: Mapping[str, object] | None = None,
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
@@ -359,7 +359,7 @@ def create(
 @client
 async def aget(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -402,7 +402,7 @@ async def aget(
 @client
 def get(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -461,10 +461,10 @@ def get(
 @client
 async def adelete(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteInteractionResult:
     """Async: Delete an interaction by its ID."""
     local_vars: Final = locals()
@@ -472,7 +472,7 @@ async def adelete(
         loop: Final = asyncio.get_event_loop()
         kwargs["adelete_interaction"] = True
 
-        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id)
+        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id, delete_kwargs=kwargs)
 
         func: Final = partial(
             delete,
@@ -506,7 +506,7 @@ async def adelete(
 @client
 def delete(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -565,7 +565,7 @@ def delete(
 @client
 async def acancel(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -608,7 +608,7 @@ async def acancel(
 @client
 def cancel(
     interaction_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,

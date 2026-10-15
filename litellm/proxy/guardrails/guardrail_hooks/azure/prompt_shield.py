@@ -6,7 +6,7 @@ Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 import math
 from collections.abc import Mapping, MutableMapping
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, cast
 
 from fastapi import HTTPException
 
@@ -27,9 +27,15 @@ from litellm.types.utils import (
     GuardrailTracingDetail,
 )
 
-from .base import AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH, AzureGuardrailBase
+from .base import (  # noqa: F401  # legacy module exports
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH,
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import LitellmParams
@@ -235,10 +241,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
-        cache: Any,
-        data: dict[str, Any],
+        cache: "DualCache",
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 
@@ -249,6 +255,9 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
+        if call_type not in RESPONSES_API_CALL_TYPES and data.get("messages") is None:
+            verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
+            return data
         user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:
@@ -294,7 +303,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _record_billing_usage(self, usage: Mapping[str, int]) -> None:
         """Stash this invocation's usage counters for the ``_process_*`` call the
         decorator runs next in the same asyncio task; overwrites any leftover."""
-        _billing_usage_stash.set(dict(usage) if usage else None)  # mutable-ok: fresh snapshot, popped by _process_*
+        _billing_usage_stash.set(dict(usage) if usage else None)
 
     def _pop_billing_tracing_detail(self) -> GuardrailTracingDetail | None:
         """Build the billing tracing detail from the stashed usage counters, priced

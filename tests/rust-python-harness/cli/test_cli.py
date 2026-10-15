@@ -464,3 +464,12 @@ def test_runner_interrupt_skips_the_completion_report(
     assert exit_code == 130
     assert "Rust <-> Python parity report" not in captured.out
     assert captured.err == "Interrupted\n"
+
+
+def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(["run", "unit_tests_rust", "--function", "messages"])
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 0
+    assert "- messages: not_implemented" in captured.out
+    assert "unit_tests_rust:messages: not_implemented" not in captured.out

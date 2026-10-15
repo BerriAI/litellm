@@ -10,7 +10,7 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -18,6 +18,23 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
+
+MCP_SERVERS_TARGET: Final = "mcp_servers"
+MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+
+
+class ASGIScopeFields(Protocol):
+    @overload
+    def get(
+        self, key: Literal["headers"], default: Sequence[tuple[bytes, bytes]], /
+    ) -> Sequence[tuple[bytes, bytes]]: ...
+
+    @overload
+    def get(self, key: Literal["path", "method"], default: str, /) -> str: ...
+
+
+def asgi_scope_fields(scope: ASGIScopeFields) -> ASGIScopeFields:
+    return scope
 
 
 class _McpServerLike(Protocol):
@@ -40,14 +57,6 @@ class McpServerPayloadLike(Protocol):
     def tool_name_to_display_name(self) -> Mapping[str, str] | None: ...
 
 
-# Constants
-#
-# NOTE: The environment-backed values below are read once, when this module is
-# first imported, and cached for the lifetime of the process. Changing the
-# corresponding environment variables after import has no effect unless the
-# module is reloaded (e.g. ``importlib.reload``). Tests that override these
-# variables must reload this module — see
-# ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
 LITELLM_MCP_SERVER_NAME: Final = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION: Final = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION: Final = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
@@ -81,7 +90,7 @@ MCP_TOOL_PREFIX_FORMAT: Final = "{server_name}{separator}{tool_name}"
 #     principle hash to the same three chars; that natural-hash collision
 #     IS a routing-correctness issue (the second registrant would otherwise
 #     have its tools misrouted to the first), so registration goes through
-#     ``MCPServerManager._assign_unique_short_prefix`` which rehashes with
+#     ``MCPServerManager.assign_unique_short_prefix`` which rehashes with
 #     a deterministic attempt counter until it finds an unused prefix and
 #     caches the result on ``MCPServer.short_prefix``.  A collision is
 #     logged at INFO when it happens.
@@ -114,7 +123,7 @@ def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     and whose remaining characters are drawn from the full base62
     alphabet.  Pass ``attempt > 0`` to rehash to a different prefix when
     the natural hash collides with a prefix already assigned to another
-    server (see ``MCPServerManager._assign_unique_short_prefix``).  An
+    server (see ``MCPServerManager.assign_unique_short_prefix``).  An
     empty ``server_id`` raises ``ValueError`` — short prefixes require a
     stable identifier to be deterministic.
     """
@@ -314,7 +323,7 @@ def get_server_prefix(server: object) -> str:
     When the short-prefix mode is enabled (``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``)
     a three-character base62 ID is returned.  We prefer the cached
     ``server.short_prefix`` value when set — that field is populated at
-    registration time by ``MCPServerManager._assign_unique_short_prefix``
+    registration time by ``MCPServerManager.assign_unique_short_prefix``
     and resolves natural-hash collisions deterministically — and only fall
     back to the natural hash for ad-hoc / temp-server objects without a
     cached value.  In default mode the historical behaviour is preserved:
@@ -691,7 +700,7 @@ def parse_admin_env_vars(
     Unknown / malformed entries are skipped silently.
     """
     global_values: Final[dict[str, str]] = {}
-    user_specs: Final[list[dict[str, Any]]] = []
+    user_specs: Final[list[dict[str, object]]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ from typing import Annotated, Final, Literal
 
 import httpx
 import httpx2
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -54,9 +55,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     HeaderCarrier,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TokenEndpointSuccess(BaseModel):
+class TokenEndpointSuccess(LiteLLMBaseModel):
     """The endpoint returned a JSON object; field validation is the caller's job."""
 
     model_config = ConfigDict(frozen=True)
@@ -64,7 +66,7 @@ class TokenEndpointSuccess(BaseModel):
     body: dict[str, object]
 
 
-class TokenEndpointDenied(BaseModel):
+class TokenEndpointDenied(LiteLLMBaseModel):
     """The endpoint answered but did not grant a token (an HTTP error or a non-JSON body)."""
 
     model_config = ConfigDict(frozen=True)
@@ -73,7 +75,7 @@ class TokenEndpointDenied(BaseModel):
     detail: str
 
 
-class TokenEndpointUnreachable(BaseModel):
+class TokenEndpointUnreachable(LiteLLMBaseModel):
     """The endpoint could not be reached (DNS, TLS, connect/read failure)."""
 
     model_config = ConfigDict(frozen=True)
@@ -351,11 +353,20 @@ class ClientCredentialsBearerAuth(httpx2.Auth):
         access_token: str,
         refetch: Callable[[str], Awaitable[str | None]],
         carrier: HeaderCarrier,
+        *,
+        granted_scopes: tuple[str, ...] | None = None,
     ) -> None:
         self._carrier = carrier
         self.header_name = carrier.header_name
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
+        self.subscription_identity: str | None = (
+            hashlib.sha256(
+                json.dumps((_identity_key(carrier), sorted(set(granted_scopes)), carrier.value_prefix)).encode()
+            ).hexdigest()
+            if isinstance(carrier, ClientCredentialsConfig) and granted_scopes is not None
+            else None
+        )
 
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token: Final = self._access_token.get_secret_value()

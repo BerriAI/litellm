@@ -1,5 +1,5 @@
 import { CircleMinus, Plus } from "lucide-react";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   useFieldArray,
   type Control,
@@ -8,12 +8,13 @@ import {
   type FieldValues,
   type UseFormGetValues,
 } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export interface MetadataPair {
@@ -56,7 +57,7 @@ export function metadataObjectToPairs(
   excludedKeys: ReadonlySet<string> = new Set(),
 ): MetadataPair[] {
   return Object.entries(metadata ?? {})
-    .filter(([key]) => !excludedKeys.has(key))
+    .filter(([key]) => key !== "" && !excludedKeys.has(key))
     .map(([key, value]) => ({ key, value: formatMetadataValue(value) }));
 }
 
@@ -78,6 +79,64 @@ interface MetadataKeyValueFieldsProps<TFieldValues extends FieldValues> {
   schemaLoading?: boolean;
 }
 
+interface MetadataRowProps<TFieldValues extends FieldValues> {
+  control: Control<TFieldValues>;
+  name: FieldArrayPath<TFieldValues>;
+  index: number;
+  rowId: string;
+  schemaLabel: string | undefined;
+  onRemove: () => void;
+}
+
+const MetadataRow = <TFieldValues extends FieldValues>({
+  control,
+  name,
+  index,
+  rowId,
+  schemaLabel,
+  onRemove,
+}: MetadataRowProps<TFieldValues>) => {
+  return (
+    <div className="mb-2 flex items-start gap-2">
+      {schemaLabel === undefined ? (
+        <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
+          {({ ref, value, ...rest }) => <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />}
+        </FormField>
+      ) : (
+        <Label
+          htmlFor={`${rowId}-value`}
+          data-testid="metadata-schema-label"
+          className="h-9 w-full items-center truncate px-3 font-medium"
+        >
+          {schemaLabel}
+        </Label>
+      )}
+      <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
+        {({ ref, value, id, ...rest }) => (
+          <Input
+            {...rest}
+            id={schemaLabel === undefined ? id : `${rowId}-value`}
+            ref={ref}
+            value={(value as string) ?? ""}
+            placeholder="Value"
+          />
+        )}
+      </FormField>
+      {schemaLabel === undefined && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Remove key-value pair"
+          className="mt-1 text-destructive"
+          onClick={onRemove}
+        >
+          <CircleMinus className="size-4" />
+        </Button>
+      )}
+    </div>
+  );
+};
+
 const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   control,
   getValues,
@@ -87,6 +146,24 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
 }: MetadataKeyValueFieldsProps<TFieldValues>) => {
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
+  const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
+  const schemaReady = !schemaLoading && schemaFields.length > 0;
+  const livePairs: readonly (Partial<MetadataPair> | undefined)[] =
+    getValues(name as unknown as FieldPath<TFieldValues>) ?? [];
+  const [keysAtMount, setKeysAtMount] = useState<ReadonlyMap<string, string | undefined>>(() => new Map());
+  const unseenKeys = schemaReady
+    ? fields.flatMap((field, index) => (keysAtMount.has(field.id) ? [] : [[field.id, livePairs[index]?.key] as const]))
+    : [];
+  if (unseenKeys.length > 0) {
+    setKeysAtMount(new Map([...keysAtMount, ...unseenKeys]));
+  }
+  const rowKeysAtMount = fields.map((field, index) =>
+    keysAtMount.has(field.id) || !schemaReady ? keysAtMount.get(field.id) : livePairs[index]?.key,
+  );
+  const schemaLabelAt = (index: number): string | undefined => {
+    const key = rowKeysAtMount[index];
+    return key === undefined || rowKeysAtMount.indexOf(key) !== index ? undefined : schemaLabelsByKey.get(key);
+  };
 
   useEffect(() => {
     if (seededRef.current || schemaLoading || schemaFields.length === 0) return;
@@ -115,27 +192,15 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   return (
     <>
       {fields.map((field, index) => (
-        <div key={field.id} className="mb-2 flex items-start gap-2">
-          <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
-            {({ ref, value, ...rest }) => (
-              <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />
-            )}
-          </FormField>
-          <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
-            {({ ref, value, ...rest }) => (
-              <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Value" />
-            )}
-          </FormField>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Remove key-value pair"
-            className="mt-1 text-destructive"
-            onClick={() => remove(index)}
-          >
-            <CircleMinus className="size-4" />
-          </Button>
-        </div>
+        <MetadataRow
+          key={field.id}
+          control={control}
+          name={name}
+          index={index}
+          rowId={field.id}
+          schemaLabel={schemaLabelAt(index)}
+          onRemove={() => remove(index)}
+        />
       ))}
       <Button
         variant="outline"

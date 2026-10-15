@@ -618,6 +618,24 @@
         "interactions": true
       }
     },
+    "coralbricks": {
+      "display_name": "CoralBricks (`coralbricks`)",
+      "url": "https://docs.litellm.ai/docs/providers/coralbricks",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "cortecs": {
       "display_name": "Cortecs (`cortecs`)",
       "url": "https://docs.litellm.ai/docs/providers/cortecs",
@@ -2064,6 +2082,24 @@
         "search": true
       }
     },
+    "scaledown": {
+      "display_name": "ScaleDown (`scaledown`)",
+      "url": "https://docs.litellm.ai/docs/providers/scaledown",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
@@ -2100,6 +2136,24 @@
         "interactions": true
       }
     },
+    "reka": {
+      "display_name": "Reka (`reka`)",
+      "url": "https://docs.litellm.ai/docs/providers/reka",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "scaleway": {
       "display_name": "Scaleway (`scaleway`)",
       "url": "https://docs.litellm.ai/docs/providers/scaleway",
@@ -2133,6 +2187,24 @@
         "batches": false,
         "rerank": false,
         "a2a": false
+      }
+    },
+    "inferenceapis": {
+      "display_name": "Inference APIs (`inferenceapis`)",
+      "url": "https://docs.litellm.ai/docs/providers/inferenceapis",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "snowflake": {
@@ -2336,7 +2408,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,

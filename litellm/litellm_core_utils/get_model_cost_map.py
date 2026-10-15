@@ -21,12 +21,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
 
@@ -83,7 +85,7 @@ class GetModelCostMap:
     @staticmethod
     def load_local_model_cost_map_with_revision() -> "ModelCostMapReloaded":
         body: Final = GetModelCostMap.read_local_model_cost_map_bytes()
-        content: Final = json.loads(body)
+        content: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(json.loads(body))
         return ModelCostMapReloaded(model_cost_map=content, revision=git_blob_id(body))
 
     @staticmethod
@@ -92,6 +94,7 @@ class GetModelCostMap:
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
 
     _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
+    _loaded_catalog_fields: frozenset[str] = frozenset()
 
     @classmethod
     def loaded_model_cost_map(cls) -> Mapping[str, Mapping[str, object]]:
@@ -99,17 +102,25 @@ class GetModelCostMap:
         return cls._loaded_catalog
 
     @classmethod
+    def loaded_model_cost_map_fields(cls) -> frozenset[str]:
+        """Every field name that at least one entry of the loaded catalog carries."""
+        return cls._loaded_catalog_fields
+
+    @classmethod
     def _snapshot_loaded_catalog(cls, model_cost: Mapping[str, object]) -> None:
         raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
+        cls._loaded_catalog_fields = frozenset(chain.from_iterable(entry.keys() for entry in raw.values()))
 
     @classmethod
-    def _get_backup_model_count(cls) -> int:
+    def get_backup_model_count(cls) -> int:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup: Final = cls.load_local_model_cost_map()
             cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
+
+    _get_backup_model_count = get_backup_model_count
 
     @staticmethod
     def _check_is_valid_dict(fetched_map: dict) -> bool:
@@ -230,8 +241,9 @@ class _FetchAttemptRetryable:
 
 
 def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
-    header: Final = response.headers.get("Retry-After")
-    if header is None:
+    try:
+        header: Final = response.headers["Retry-After"]
+    except KeyError:
         return None
     try:
         seconds: Final = float(header)
@@ -243,7 +255,7 @@ def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
 def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: random.Random) -> float:
     if outcome.retry_after_seconds is not None:
         return min(outcome.retry_after_seconds, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-    return min(float(2**attempt) + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
+    return min(2.0**attempt + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
 
 
 class _AsyncGetClient(Protocol):
@@ -401,7 +413,7 @@ async def refetch_model_cost_map(
         return result
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=result.model_cost_map,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.get_backup_model_count(),
     ):
         return ModelCostMapReloadUnavailable(reason=f"model cost map from {url} failed integrity validation")
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
@@ -599,7 +611,7 @@ def _retry_remote_fetch_in_background(
         _litellm_import_complete.wait()
         if not GetModelCostMap.validate_model_cost_map(
             fetched_map=result.model_cost_map,
-            backup_model_count=GetModelCostMap._get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
+            backup_model_count=GetModelCostMap.get_backup_model_count(),
         ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
@@ -656,7 +668,7 @@ def get_model_cost_map(
     if isinstance(outcome, _FetchAttemptRetryable) and max_attempts > 1:
         threading.Thread(
             target=_retry_remote_fetch_in_background,
-            kwargs={  # mutable-ok: threading requires a mutable keyword-arguments mapping
+            kwargs={
                 "url": url,
                 "timeout": timeout,
                 "max_attempts": max_attempts,
@@ -682,7 +694,7 @@ def get_model_cost_map(
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=content,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.get_backup_model_count(),
     ):
         verbose_logger.warning(
             "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",

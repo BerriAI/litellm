@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -88,6 +89,8 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
@@ -115,7 +118,7 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return None
     if isinstance(litellm_params, str):
         try:
-            parsed: Final[object] = json.loads(litellm_params)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             return REDACTED_BY_LITELM_STRING
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
@@ -369,6 +372,11 @@ async def list_vector_stores(
     - page: int - Page number for pagination (default: 1)
     - page_size: int - Number of items per page (default: 100)
     """
+    if page_size < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page_size must be >= 1, got page_size={page_size}",
+        )
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
 
     from litellm.proxy.proxy_server import prisma_client
@@ -378,7 +386,7 @@ async def list_vector_stores(
 
     try:
         # Get vector stores from database first (source of truth)
-        vector_stores_from_db: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
+        vector_stores_from_db: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
 
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:

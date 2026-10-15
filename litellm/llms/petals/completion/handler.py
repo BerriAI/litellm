@@ -1,5 +1,6 @@
 import time
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import litellm
@@ -10,7 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.utils import ModelResponse, Usage
 
@@ -32,7 +33,7 @@ def completion(
     client: HTTPHandler | AsyncHTTPHandler | None = None,
 ):
     ## Load Config
-    config: Final = litellm.PetalsConfig.get_config()
+    config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.PetalsConfig.get_config())
     for k, v in config.items():
         if (
             k not in optional_params
@@ -66,7 +67,7 @@ def completion(
 
         ## COMPLETION CALL
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         response: Final = client.post(api_base, data=data)
 
         ## LOGGING
@@ -128,7 +129,8 @@ def completion(
         model_response.choices[0].message.content = output_text
 
     prompt_tokens: Final = len(encoding.encode(prompt))
-    completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"].get("content")))
+    response_message: Final = model_response.choices[0].message
+    completion_tokens: Final = len(encoding.encode(response_message.content))
 
     model_response.created = int(time.time())
     model_response.model = model

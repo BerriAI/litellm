@@ -87,6 +87,13 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    github_copilot_auth_type: str | None = None
+    github_copilot_user_session: object | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
+    fireworks_forward_user_id: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -105,9 +112,40 @@ class BedrockBatchConnection:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AnthropicFederationConnection:
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OpenAIFederationConnection:
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectionSettings:
     provider: ProviderConnection
     bedrock_batch: BedrockBatchConnection
+    anthropic_federation: AnthropicFederationConnection
+    openai_federation: OpenAIFederationConnection
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -151,6 +189,7 @@ class DeploymentOptions:
     order: int | None = None
     tag_regex: Sequence[str] | None = None
     max_file_size_mb: float | None = None
+    silent_model: str | Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -316,14 +355,23 @@ class AgenticLoopState:
     code_interpreter_converted_stream: bool | None = field(
         default=None, metadata=wire("_code_interpreter_interception_converted_stream")
     )
+    code_interpreter_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_stream_options")
+    )
     websearch_emit_native_blocks: bool | None = field(
         default=None, metadata=wire("_websearch_interception_emit_native_blocks")
     )
     websearch_converted_stream: bool | None = field(
         default=None, metadata=wire("_websearch_interception_converted_stream")
     )
+    websearch_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_websearch_interception_stream_options")
+    )
     headroom_converted_stream: bool | None = field(
         default=None, metadata=wire("_headroom_interception_converted_stream")
+    )
+    headroom_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_headroom_interception_stream_options")
     )
 
 

@@ -60,7 +60,7 @@ def openai_error_param(exc: object) -> str | None:
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers
     if litellm_call_id is None:
         return None
-    return {LITELLM_CALL_ID_HEADER: litellm_call_id}  # mutable-ok: ProxyException mutates its headers dict
+    return {LITELLM_CALL_ID_HEADER: litellm_call_id}
 
 
 def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> ProxyException:

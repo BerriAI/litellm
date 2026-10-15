@@ -1,10 +1,12 @@
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -64,6 +66,61 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "model_armor"
+_RESPONSE_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _AwaitableJSON(Protocol):
+    def __await__(self) -> Generator[object, None, object]: ...
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MatchResult(TypedDict):
+    matchState: NotRequired[ReadOnly[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _DeidentifyData(TypedDict):
+    text: NotRequired[ReadOnly[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _DeidentifyResult(TypedDict):
+    matchState: NotRequired[ReadOnly[str]]
+    data: NotRequired[ReadOnly[_DeidentifyData]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SdpResult(TypedDict):
+    inspectResult: NotRequired[ReadOnly[_MatchResult]]
+    deidentifyResult: NotRequired[ReadOnly[_DeidentifyResult]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Filter(TypedDict):
+    raiFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    piAndJailbreakFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    maliciousUriFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    csamFilterFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    virusScanFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    sdpFilterResult: NotRequired[ReadOnly[_SdpResult | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SanitizationResult(TypedDict):
+    filterResults: NotRequired[ReadOnly[Mapping[str, _Filter] | Sequence[_Filter] | str | int | float | bool | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _ModelArmorResponse(TypedDict):
+    sanitizationResult: NotRequired[ReadOnly[_SanitizationResult]]
+    sanitizedText: NotRequired[ReadOnly[str | None]]
+    text: NotRequired[ReadOnly[str | None]]
+
+
+class _ModelArmorResponseRoot(RootModel[_ModelArmorResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
 
 # Only these carry the finished output; response.created carries an empty body
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
@@ -99,10 +156,11 @@ class ModelArmorAPIError(Exception):
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
+
 RedactablePayload = dict | list | str | int | float | bool | None
 
 
-def _redact_scanned_content(payload: RedactablePayload, depth: int = 0) -> RedactablePayload:
+def _redact_scanned_content(payload: object, depth: int = 0) -> object:
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return "[REDACTED]"
     if isinstance(payload, dict):
@@ -223,12 +281,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return f"Model Armor API error (upstream {status_code})"
         return f"Model Armor API error (upstream {status_code}): {response_text}"
 
-    def _build_block_error_detail(self, message: str, armor_response: RedactablePayload) -> dict:
+    def _build_block_error_detail(self, message: str, armor_response: Mapping[str, object]) -> dict:
         if self.sanitize_error_detail:
             return {"error": message}
         return {"error": message, "model_armor_response": armor_response}
 
-    def _build_logging_response(self, armor_response: RedactablePayload) -> RedactablePayload:
+    def _build_logging_response(self, armor_response: Mapping[str, object]) -> object:
         if self.sanitize_error_detail:
             return _redact_scanned_content(armor_response)
         return armor_response
@@ -286,7 +344,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         request_data: dict | None = None,
         file_bytes: bytes | None = None,
         file_type: str | None = None,
-    ) -> dict:
+    ) -> _ModelArmorResponse:
         """
         Make request to Model Armor API. Supports both text and file prompt sanitization.
         If file_bytes and file_type are provided, file prompt sanitization is performed.
@@ -359,10 +417,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             raise ModelArmorAPIError(detail)
 
-        json_response: Final = response.json()
-        if hasattr(json_response, "__await__"):
-            return await json_response
-        return json_response
+        json_response: Final = _RESPONSE_JSON.validate_python(response.json())
+        if isinstance(json_response, _AwaitableJSON):
+            return _ModelArmorResponseRoot.model_validate(await json_response).root
+        return _ModelArmorResponseRoot.model_validate(json_response).root
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """
@@ -378,7 +436,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: Mapping[str, object], allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: _ModelArmorResponse, allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
@@ -404,7 +462,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Fallback dict code removed; all cases handled above
         return False
 
-    def _get_sanitized_content(self, armor_response: Mapping[str, Any]) -> str | None:
+    def _get_sanitized_content(self, armor_response: _ModelArmorResponse) -> str | None:
         """
         Get the sanitized content from a Model Armor response, if available.
         Looks for sanitized text in deidentifyResult, and falls back to root-level fields if not found.
@@ -434,7 +492,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return armor_response.get("sanitizedText") or armor_response.get("text")
 
     @staticmethod
-    def _filter_result_items(armor_response: Mapping[str, Any]) -> Sequence[Any]:
+    def _filter_result_items(armor_response: _ModelArmorResponse) -> Sequence[_Filter]:
         """Every filter result in a scan response.
 
         filterResults is a dict of named filters on most templates and a list on some, so both
@@ -447,7 +505,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return filter_results
         return []
 
-    def _has_deidentify_match(self, armor_response: Mapping[str, object]) -> bool:
+    def _has_deidentify_match(self, armor_response: _ModelArmorResponse) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
             sdp = filter_entry.get("sdpFilterResult")
@@ -457,7 +515,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _resolve_streaming_outcome(
         self,
-        armor_response: Mapping[str, object],
+        armor_response: _ModelArmorResponse,
         assembled_response: object,
         content: str,
     ) -> tuple[bool, str | None]:
@@ -489,7 +547,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return False, sanitized_content
 
     @staticmethod
-    def _append_armor_response(existing: object, armor_response: Mapping[str, object]) -> object:
+    def _append_armor_response(existing: object, armor_response: object) -> object:
         """Accumulate scan responses so a later text scan does not drop an earlier file scan.
 
         Returns the single response on its own (backward compatible) and a list once a request
@@ -500,8 +558,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if existing is None:
             return armor_response
         if isinstance(existing, list):
-            return [*existing, armor_response]  # mutable-ok: logging pipeline requires list[dict], not tuple
-        return [existing, armor_response]  # mutable-ok: logging pipeline requires list[dict], not tuple
+            return [*existing, armor_response]
+        return [existing, armor_response]
 
     def _process_response(
         self,
@@ -985,8 +1043,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 output_item=output_item,
                 output_idx=output_idx,
                 texts_to_check=texts,
-                images_to_check=[],  # mutable-ok: the extractor's images sink, unused here
-                task_mappings=[],  # mutable-ok: the extractor's task-mapping sink, unused here
+                images_to_check=[],
+                task_mappings=[],
                 tool_calls_to_check=tool_calls,
             )
         return "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))
