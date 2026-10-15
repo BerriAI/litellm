@@ -1956,14 +1956,12 @@ class TestOCIStreamWrapperTerminalChunk:
 # ---------------------------------------------------------------------------
 # BerriAI/litellm#31449: mixed tool lists and reasoning_effort gating
 #
-# 1. Non-function tools follow the unsupported-param contract: 400 without
-#    ``drop_params``, dropped with it, and a ``tool_choice`` that forces one of
-#    the dropped tools is dropped too, like any value OCI cannot take.
+# 1. Non-function tools answer 400 without ``drop_params`` and are dropped
+#    with it, unless the request depends on them: when no function tool is
+#    left, or ``tool_choice`` forces a dropped tool, it still answers 400.
 # 2. ``reasoning_effort`` is withheld from OCI models whose catalog entry
 #    declares no reasoning effort levels (xAI Grok 4.20), so ``drop_params``
 #    works and callers get a clear error otherwise.
-# 3. Only OpenAI models other than gpt-oss take ``maxCompletionTokens``; OCI
-#    accepts but ignores that cap for Gemini.
 # ---------------------------------------------------------------------------
 from litellm.llms.oci.chat.transformation import get_vendor_from_model
 
@@ -1980,7 +1978,6 @@ SERVER_TOOL = {"type": "computer_use_preview", "display_width": 1024}
 FORCE_BUILTIN = {"type": "function", "function": {"name": "web_search_preview"}}
 FORCE_FUNCTION = {"type": "function", "function": {"name": "get_weather"}}
 
-GEMINI_MODELS = ["google.gemini-2.5-flash", "google.gemini-2.5-pro", "google.gemini-2.5-flash-lite"]
 GPT_OSS_MODELS = ["openai.gpt-oss-120b", "openai.gpt-oss-20b"]
 
 
@@ -2019,19 +2016,20 @@ class TestNonFunctionTools:
         params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], "required", drop_params=True)
         assert params["toolChoice"] == {"type": "REQUIRED"}
 
-    def test_drop_params_sends_plain_chat_when_no_function_tools_remain(self):
-        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL], "required", drop_params=True)
-        assert "tools" not in params
-        assert "toolChoice" not in params
+    @pytest.mark.parametrize("tool_choice", [None, "auto", "required"])
+    def test_drop_params_rejects_a_request_with_no_function_tool_left(self, tool_choice):
+        with pytest.raises(OCIError, match="every tool") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, SERVER_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize(
         "tool_choice",
         [FORCE_BUILTIN, "web_search_preview", {"type": "web_search_preview"}],
     )
-    def test_forcing_a_dropped_tool_drops_tool_choice(self, tool_choice):
-        params = _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], tool_choice, drop_params=True)
-        assert [tool.name for tool in params["tools"]] == ["get_weather"]
-        assert "toolChoice" not in params
+    def test_forcing_a_dropped_tool_is_rejected(self, tool_choice):
+        with pytest.raises(OCIError, match="tool_choice forces `web_search_preview`") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize(
         ("dropped_tool", "tool_choice"),
@@ -2041,10 +2039,10 @@ class TestNonFunctionTools:
             ({"type": "custom", "custom": {"name": "code_exec"}}, {"type": "function", "function": {"name": "code_exec"}}),
         ],
     )
-    def test_forcing_a_dropped_tool_by_name_drops_tool_choice(self, dropped_tool, tool_choice):
-        params = _oci_tool_params("xai.grok-4.20", [dropped_tool, FUNCTION_TOOL], tool_choice, drop_params=True)
-        assert [tool.name for tool in params["tools"]] == ["get_weather"]
-        assert "toolChoice" not in params
+    def test_forcing_a_dropped_tool_by_name_is_rejected(self, dropped_tool, tool_choice):
+        with pytest.raises(OCIError, match="tool_choice forces") as exc_info:
+            _oci_tool_params("xai.grok-4.20", [dropped_tool, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize("tool_choice", [FORCE_FUNCTION, "get_weather"])
     def test_forcing_a_kept_tool_is_preserved(self, tool_choice):
@@ -2155,9 +2153,9 @@ def _oci_chat_request(model, optional_params):
     )["chatRequest"]
 
 
-class TestCatalogFlagsDoNotMoveMaxTokens:
-    @pytest.mark.parametrize("model", GEMINI_MODELS + GPT_OSS_MODELS)
-    def test_reasoning_models_outside_openai_commercial_keep_max_tokens(self, local_model_cost_map, model):
+class TestOpenAIPrefixMaxTokensKey:
+    @pytest.mark.parametrize("model", GPT_OSS_MODELS)
+    def test_gpt_oss_keeps_max_tokens(self, local_model_cost_map, model):
         chat_request = _oci_chat_request(model, {"max_tokens": 64})
         assert chat_request["maxTokens"] == 64
         assert "maxCompletionTokens" not in chat_request

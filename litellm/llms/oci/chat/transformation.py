@@ -65,6 +65,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
+from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -82,16 +83,13 @@ STREAMING_TIMEOUT: Final = 60 * 5
 def _model_uses_max_completion_tokens(model: str) -> bool:
     """Return True for OCI-hosted models that require ``maxCompletionTokens``.
 
-    Only OpenAI commercial models proxied through OCI (``openai.*``) take it:
-    the reasoning families (gpt-5.x, o-series) reject ``maxTokens`` with HTTP
-    400 and every ``openai.*`` chat model accepts ``maxCompletionTokens``, so
-    route the whole vendor prefix to it rather than chasing each new release in
+    OpenAI commercial models proxied through OCI (``openai.*``) reject
+    ``maxTokens`` with HTTP 400 on the reasoning families (gpt-5.x, o-series)
+    and accept ``maxCompletionTokens`` everywhere, so route the whole vendor
+    prefix to it rather than chasing each new release in
     ``model_prices_and_context_window.json``. The ``openai.gpt-oss-*`` open
-    weights are served by OCI's own stack and keep ``maxTokens``. Every other
-    vendor keeps ``maxTokens`` regardless of the catalog's ``supports_reasoning``
-    flag: OCI-hosted Llama rejects ``maxCompletionTokens`` with HTTP 400 and
-    Gemini 2.5 accepts but ignores it, so the output cap would silently vanish
-    (verified against the service, 2026-09).
+    weights are served by OCI's own stack and keep ``maxTokens``. Any other
+    vendor falls back to the catalog's ``supports_reasoning`` flag.
     """
     if not model:
         return False
@@ -99,7 +97,7 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     lowered: Final = name.lower()
     if lowered.startswith("openai."):
         return not lowered.startswith("openai.gpt-oss")
-    return False
+    return supports_reasoning(model=name, custom_llm_provider="oci")
 
 
 def _iter_sse_events(stream: Iterator[str]) -> Iterator[str]:
@@ -235,10 +233,12 @@ def _without_non_function_tools(params: Mapping[str, object], drop_params: bool)
             status_code=400,
             message=f"OCI only supports function tools, got {dropped_types}; set drop_params=True to skip them",
         )
-    verbose_logger.warning("OCI only supports function tools; dropping tools of type %s", dropped_types)
     kept: Final = [tool for tool in tools if tool.get("type") == "function"]
     if not kept:
-        return {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, and every tool in this request is one of {dropped_types}",
+        )
     forced: Final = _forced_tool_name(params.get("tool_choice"))
     forces_dropped_tool: Final = (
         forced is not None
@@ -246,7 +246,11 @@ def _without_non_function_tools(params: Mapping[str, object], drop_params: bool)
         and not any(forced in _tool_identifiers(tool) for tool in kept)
     )
     if forces_dropped_tool:
-        return {**{key: value for key, value in params.items() if key != "tool_choice"}, "tools": kept}
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, and tool_choice forces `{forced}`, one of {dropped_types}",
+        )
+    verbose_logger.warning("OCI only supports function tools; dropping tools of type %s", dropped_types)
     return {**params, "tools": kept}
 
 
@@ -544,7 +548,8 @@ class OCIChatConfig(BaseConfig):
 
         # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
         # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
-        # Cohere's endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
+        # Driven by the supports_reasoning flag in the model catalog. Cohere's
+        # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key: Final = (
             "maxCompletionTokens"
             if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
