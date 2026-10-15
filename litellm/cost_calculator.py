@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -1516,6 +1516,9 @@ def completion_cost(
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         custom_priced_request_model: Final = model if custom_pricing is True else None
+        configured_cost_per_query: Final = (
+            _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
+        )
         base_model_provider: Final = (
             _base_model_pricing_provider(
                 base_model,
@@ -1762,11 +1765,15 @@ def completion_cost(
                     (
                         prompt_cost,
                         completion_cost_result,
-                    ) = search_provider_cost_per_query(
-                        model=search_model,
-                        custom_llm_provider=custom_llm_provider,
-                        number_of_queries=number_of_queries,
-                        optional_params=optional_params,
+                    ) = (
+                        (number_of_queries * configured_cost_per_query, 0.0)
+                        if configured_cost_per_query is not None
+                        else search_provider_cost_per_query(
+                            model=search_model,
+                            custom_llm_provider=custom_llm_provider,
+                            number_of_queries=number_of_queries,
+                            optional_params=optional_params,
+                        )
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
@@ -2150,6 +2157,17 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+_LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if logged_params is None:
+        return None
+    cost_per_query: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("input_cost_per_query")
+    return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
 def _deployment_model_info(

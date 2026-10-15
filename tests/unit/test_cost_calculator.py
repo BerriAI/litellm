@@ -9054,3 +9054,28 @@ def test_live_session_uses_latest_snapshot_when_closed_usage_is_missing(_local_m
     )
 
     assert cost == pytest.approx(15 * rate)
+
+
+@pytest.mark.parametrize("query, expected_queries", [("litellm release notes", 1), (["a", "b", "c"], 3)])
+def test_completion_cost_search_uses_search_tool_input_cost_per_query(
+    _local_model_cost_map: None, query: str | list[str], expected_queries: int
+) -> None:
+    map_cost: Final = completion_cost(
+        completion_response=None,
+        model="agentcore/search",
+        custom_llm_provider="agentcore",
+        call_type="asearch",
+        optional_params={"query": query},
+    )
+    configured_cost: Final = completion_cost(
+        completion_response=None,
+        model="agentcore/search",
+        custom_llm_provider="agentcore",
+        call_type="asearch",
+        optional_params={"query": query},
+        custom_pricing=True,
+        litellm_logging_obj=SimpleNamespace(litellm_params={"input_cost_per_query": 0.05}),
+    )
+
+    assert map_cost == pytest.approx(expected_queries * litellm.model_cost["agentcore/search"]["input_cost_per_query"])
+    assert configured_cost == pytest.approx(expected_queries * 0.05)

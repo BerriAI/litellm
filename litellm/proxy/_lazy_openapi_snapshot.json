@@ -54325,6 +54325,17 @@
               ],
               "title": "Api Key"
             },
+            "input_cost_per_query": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Cost Per Query"
+            },
             "max_retries": {
               "anyOf": [
                 {
