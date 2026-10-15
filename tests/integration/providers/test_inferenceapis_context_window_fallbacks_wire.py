@@ -2,6 +2,7 @@ import json
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -158,6 +159,13 @@ class _HeldPeer:
         self.held.put(request.target)
         assert self.release.wait(timeout=120), "The burst was never released"
         return Reply(body=_completion(f"chatcmpl-held-{uuid4().hex}", "held"))
+
+    @contextmanager
+    def released_on_exit(self) -> Iterator[None]:
+        try:
+            yield
+        finally:
+            self.release.set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,12 +377,13 @@ def test_a_slow_vendor_under_a_burst_answers_every_request_once(rig: Rig) -> Non
 
 def test_killing_one_worker_mid_burst_leaves_the_sibling_serving_and_logging_once(rig: Rig) -> None:
     workers: Final = eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool, rig.held.released_on_exit():
         in_flight: Final = tuple(pool.submit(_post_chat, rig, "ia_held") for _ in range(12))
         eventually(rig.held.held.qsize, lambda size: size == len(in_flight), seconds=120)
         held_by: Final = MappingProxyType({pid: open_connections_to(pid, rig.peers["ia_held"].url) for pid in workers})
         assert sum(held_by.values()) == len(in_flight), held_by
-        survivor_pid, victim_pid = sorted(workers, key=held_by.__getitem__)
+        victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
+        assert held_by[survivor_pid] >= 1, held_by
         with rig.owned.replacing_worker(victim_pid) as kill:
             kill()
             rig.held.release.set()
