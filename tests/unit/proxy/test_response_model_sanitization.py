@@ -510,3 +510,158 @@ def test_restamp_streaming_chunk_rewrites_nested_response_model():
 
     assert result.response.model == "client-model"
     assert chunk.response.model == "hosted_vllm/some-model"
+
+
+def _make_response_completed_event(model: str):
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    return ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(id="resp_test", created_at=0, output=[], model=model),
+    )
+
+
+def test_restamp_streaming_chunk_rewrites_nested_model_on_completed_event():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_response_completed_event("hosted_vllm/some-model")
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result.response.model == "client-model"
+    assert chunk.response.model == "hosted_vllm/some-model", "the priced original must not change"
+
+
+def test_restamp_streaming_chunk_rewrites_nested_model_in_dict_event():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = {"type": "response.created", "response": {"id": "resp_test", "model": "hosted_vllm/some-model"}}
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result["response"]["model"] == "client-model"
+    assert chunk["response"]["model"] == "hosted_vllm/some-model", "the priced original must not change"
+
+
+def test_restamp_streaming_chunk_leaves_nested_none_model_untouched():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = {"type": "response.created", "response": {"id": "resp_test", "model": None}}
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result["response"]["model"] is None
+
+
+def test_restamp_streaming_chunk_does_not_add_nested_response_to_other_events():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = {"type": "response.output_text.delta", "delta": "hi"}
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert "response" not in result
+
+
+def test_restamp_streaming_chunk_keeps_nested_model_when_raw_name_requested():
+    from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_response_created_event("hosted_vllm/some-model")
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}},
+        model_mismatch_logged=False,
+    )
+
+    assert result.response.model == "hosted_vllm/some-model"
+
+
+def test_restamp_streaming_chunk_uses_fallback_model_for_nested_response():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_response_created_event("hosted_vllm/some-model")
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+        fallback_was_attempted=True,
+        fallback_model_from_metadata="fallback-public",
+    )
+
+    assert result.response.model == "fallback-public"
+
+
+@pytest.mark.asyncio
+async def test_proxy_responses_stream_reports_requested_model_in_nested_response(monkeypatch):
+    """
+    End-to-end regression for /v1/responses streaming:
+
+    The nested `response.model` on lifecycle events reaching the wire must report the
+    client-requested model, not the provider-prefixed deployment name.
+    """
+    client_model = "vllm-model"
+    internal_model = f"hosted_vllm/{client_model}"
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def _iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        yield _make_response_created_event(model=internal_model)
+
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+    for name in ("has_streaming_callbacks", "needs_iterator_wrap", "needs_per_chunk_streaming_hook"):
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, name, MagicMock(return_value=True))
+
+    gen = proxy_server.async_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key=MASTER_KEY),
+        request_data={"model": client_model},
+        responses_stream_errors=True,
+    )
+
+    payloads = []
+    async for item in gen:
+        text = _decode_sse_chunk(item)
+        for line in text.splitlines():
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                payloads.append(json.loads(line[len("data: ") :].strip()))
+
+    created = next(p for p in payloads if p.get("type") == "response.created")
+    assert created["response"]["model"] == client_model
+    assert not created["response"]["model"].startswith("hosted_vllm/")
