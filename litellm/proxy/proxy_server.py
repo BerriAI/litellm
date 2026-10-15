@@ -16493,35 +16493,17 @@ def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
-def _get_v1_model_info_allowed_model_names(
-    user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Router,
-) -> set[str] | None:
-    """Return key/team allowlisted public model names, or None if unrestricted."""
+def _v1_model_info_lists_every_deployment(user_api_key_dict: UserAPIKeyAuth, llm_router: Router) -> bool:
     model_access_groups: Final = llm_router.get_model_access_groups()
     proxy_model_list: Final = llm_router.get_model_names()
-    key_models: Final = get_key_models(
+    return not get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
-    )
-    team_models: Final = get_team_models(
+    ) and not get_team_models(
         team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
-    )
-    if not key_models and not team_models:
-        return None
-    return set(
-        get_complete_model_list(
-            key_models=key_models,
-            team_models=team_models,
-            proxy_model_list=proxy_model_list,
-            user_model=user_model,
-            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-            llm_router=llm_router,
-            return_wildcard_routes=False,
-        )
     )
 
 
@@ -16532,7 +16514,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
     user_api_key_cache: UserApiKeyCache | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> frozenset[str] | None:
-    if _get_v1_model_info_allowed_model_names(user_api_key_dict=user_api_key_dict, llm_router=llm_router) is None:
+    if _v1_model_info_lists_every_deployment(user_api_key_dict=user_api_key_dict, llm_router=llm_router):
         return None
 
     from litellm.proxy.utils import (

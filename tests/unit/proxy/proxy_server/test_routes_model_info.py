@@ -463,7 +463,7 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     _invalidate_model_cost_lowercase_map()
 
 
-def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
+async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
 
@@ -483,12 +483,15 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
     expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
-    allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
+    allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
             models=[SpecialModelNames.all_proxy_models.value],
         ),
         llm_router=router,
+        prisma_client=None,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
     )
 
     result = proxy_server._filter_v1_model_info_deployments(
@@ -643,7 +646,15 @@ def access_group_team(monkeypatch, mock_prisma):
     return seed_team
 
 
-@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+@pytest.mark.parametrize(
+    ("path", "name_field"),
+    [
+        ("/v1/model/info", "model_name"),
+        ("/model/info", "model_name"),
+        ("/v1/models", "id"),
+        ("/model_group/info", "model_group"),
+    ],
+)
 @pytest.mark.parametrize(
     ("key_models", "team_models", "expected_names"),
     [
@@ -653,8 +664,8 @@ def access_group_team(monkeypatch, mock_prisma):
     ],
     ids=["team-key-gets-access-group-models", "team-models-plus-access-group", "key-own-list-stays-narrow"],
 )
-def test_model_info_lists_team_access_group_models_the_key_can_call(
-    client, auth_as, access_group_team, path, key_models, team_models, expected_names
+def test_model_listing_routes_list_team_access_group_models_the_key_can_call(
+    client, auth_as, access_group_team, path, name_field, key_models, team_models, expected_names
 ):
     from litellm.proxy._types import LitellmUserRoles
 
@@ -669,7 +680,7 @@ def test_model_info_lists_team_access_group_models_the_key_can_call(
         response: Final = client.get(path)
 
     assert response.status_code == 200, response.text
-    assert sorted(model["model_name"] for model in response.json()["data"]) == expected_names
+    assert sorted(model[name_field] for model in response.json()["data"]) == expected_names
 
 
 # ---------------------------------------------------------------------------
