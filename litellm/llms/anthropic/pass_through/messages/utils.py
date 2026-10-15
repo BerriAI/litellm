@@ -128,6 +128,13 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
+def normalize_native_messages(messages: Sequence[object]) -> list[Any]:
+    """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
+    return flatten_unencrypted_web_search_results_in_anthropic_messages(
+        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+    )
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -139,13 +146,7 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
-    normalized: Final = (
-        messages
-        if presanitized
-        else flatten_unencrypted_web_search_results_in_anthropic_messages(
-            sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
-        )
-    )
+    normalized: Final = messages if presanitized else normalize_native_messages(messages)
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(

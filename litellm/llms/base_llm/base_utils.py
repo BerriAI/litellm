@@ -30,6 +30,7 @@ class BaseTokenCounter(ABC):
         tools: list[dict[str, Any]] | None = None,
         system: Any | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         pass
 

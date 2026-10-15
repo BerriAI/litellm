@@ -5,10 +5,11 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
@@ -168,6 +169,7 @@ async def _sent_count_body(
     messages: list[dict[str, object]],
     system: object,
     messages_format: TokenCountMessagesFormat,
+    output_format: JsonValue = None,
 ) -> object:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -180,6 +182,7 @@ async def _sent_count_body(
             request_model="openai/gpt-4o",
             system=system,
             messages_format=messages_format,
+            output_format=output_format,
         )
         return json.loads(route.calls.last.request.content)
 
@@ -241,6 +244,125 @@ async def test_openai_format_keeps_the_chat_conversion(monkeypatch: pytest.Monke
             {"type": "function_call_output", "call_id": "call_1", "output": "found"},
         ],
         "instructions": "Be brief.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_sends_affinity_wrapped_reasoning_unwrapped_as_inference_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapped: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAoriginal", "deployment-1")
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{wrapped}"},
+                {"type": "text", "text": "OK"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    sent: Final = await _sent_count_body(monkeypatch, messages, system=None, messages_format="anthropic")
+
+    assert sent == {
+        "model": "gpt-4o",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAoriginal"},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_counts_the_structured_output_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    schema: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        [{"role": "user", "content": "Answer in JSON."}],
+        system=None,
+        messages_format="anthropic",
+        output_format={"type": "json_schema", "schema": schema},
+    )
+
+    assert sent == {
+        "model": "gpt-4o",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Answer in JSON."}]}],
+        "text": {"format": {"type": "json_schema", "name": "structured_output", "schema": schema, "strict": False}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_sends_a_replayed_web_search_result_as_its_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "What is new?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "news"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://docs.litellm.ai/release_notes",
+                            "title": "Release notes",
+                            "encrypted_content": "",
+                            "snippet": snippet,
+                        }
+                    ],
+                },
+            ],
+        },
+        {"role": "user", "content": "Thanks."},
+    ]
+
+    sent: Final = json.dumps(await _sent_count_body(monkeypatch, messages, system=None, messages_format="anthropic"))
+
+    assert snippet in sent
+    assert "https://docs.litellm.ai/release_notes" in sent
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_message_without_a_role_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}, {"content": "no role"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            messages_format="anthropic",
+        )
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message) == (True, 400, "messages.1.role: Field required")
+
+
+@pytest.mark.asyncio
+async def test_openai_format_sends_a_list_system_as_its_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        [{"role": "user", "content": "hi"}],
+        system=[{"type": "text", "text": "Be brief."}, {"type": "text", "text": "Answer in English."}],
+        messages_format="openai",
+    )
+
+    assert sent == {
+        "model": "gpt-4o",
+        "input": [{"role": "user", "content": "hi"}],
+        "instructions": "Be brief.\nAnswer in English.",
     }
 
 

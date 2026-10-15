@@ -577,6 +577,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             result["summary"] = "detailed"
         return result
 
+    @classmethod
+    def system_blocks_to_instructions(cls, system: object) -> str:
+        return "\n".join(
+            text
+            for block in cls._content_blocks(system)
+            if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
+        )
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -626,9 +634,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
             elif isinstance(system, list):
-                responses_kwargs["instructions"] = "\n".join(
-                    filter(None, (b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"))
-                )
+                responses_kwargs["instructions"] = self.system_blocks_to_instructions(system)
 
         # max_tokens -> max_output_tokens
         max_tokens: Final = anthropic_request.get("max_tokens")

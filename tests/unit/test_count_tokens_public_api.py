@@ -97,7 +97,7 @@ def test_acount_tokens_with_tools():
         assert result.total_tokens == 30
         mock_handler.assert_called_once()
         call_kwargs = mock_handler.call_args
-        assert call_kwargs.kwargs.get("tools") == tools
+        assert list(call_kwargs.kwargs.get("tools")) == tools
 
 
 def test_acount_tokens_with_system():
@@ -155,5 +155,3 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     # Should fall back to local tokenizer since no API key
     assert result.total_tokens > 0
     assert result.tokenizer_type == "local_tokenizer"
-
-
