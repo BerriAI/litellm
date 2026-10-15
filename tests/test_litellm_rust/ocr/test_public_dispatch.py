@@ -128,27 +128,6 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
     assert call_kwargs["document"] is document
 
 
-def test_aocr_marker_cannot_be_served_without_python() -> None:
-    document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
-    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", document)
-    kwargs: Final[Mapping[str, object]] = {"aocr": True}
-
-    def native(
-        request: NativeCall,
-    ) -> OCRResponse:
-        pytest.fail("the aocr bypass marker must not reach native")
-
-    with pytest.raises(runtime.NoPythonImplementationError, match="bypass"):
-        _DISPATCH.run(
-            args,
-            kwargs,
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
-        )
-
-
 def test_missing_native_binding_is_a_required_rust_error() -> None:
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
 
@@ -298,3 +277,28 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         NATIVE_AOCR.reset()
     assert result is expected
     assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
+
+
+@pytest.mark.asyncio
+async def test_aocr_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
+    captured: Final[list[NativeCall]] = []
+    expected: Final = response()
+
+    async def native(request: NativeCall) -> OCRResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_AOCR.override(native)
+    NATIVE_OCR.override(lambda request: pytest.fail("a coroutine-returning call must use the async binding"))
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_ocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.ocr)
+    try:
+        result: Final = await public_ocr(model="mistral/mistral-ocr-latest", document=document, aocr=True)
+    finally:
+        NATIVE_AOCR.reset()
+        NATIVE_OCR.reset()
+    assert result is expected
+    assert [dict(request.kwargs) for request in captured] == [
+        {"model": "mistral/mistral-ocr-latest", "document": document}
+    ]

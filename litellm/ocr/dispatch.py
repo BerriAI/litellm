@@ -59,7 +59,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("ocr", args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -73,6 +72,10 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    if kwargs.get("aocr") is True:
+        return _DISPATCH.defer(
+            args, kwargs, flag="aocr", python=runtime.NO_PYTHON, binding=NATIVE_AOCR, native=native_call_hook
+        )
     return _DISPATCH.run(
         args,
         kwargs,

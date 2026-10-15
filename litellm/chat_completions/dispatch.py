@@ -73,7 +73,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("acompletion") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -88,6 +87,10 @@ def completion(
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
     python: Final = _PYTHON_COMPLETION
+    if kwargs.get("acompletion") is True:
+        return _DISPATCH.defer(
+            args, kwargs, flag="acompletion", python=python, binding=NATIVE_ACOMPLETION, native=native_call_hook
+        )
     return _DISPATCH.run(
         args,
         kwargs,

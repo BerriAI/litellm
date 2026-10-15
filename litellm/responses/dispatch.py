@@ -71,7 +71,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aresponses") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -86,6 +85,10 @@ def responses(
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
     python: Final = _PYTHON_RESPONSES
+    if kwargs.get("aresponses") is True:
+        return _DISPATCH.defer(
+            args, kwargs, flag="aresponses", python=python, binding=NATIVE_ARESPONSES, native=native_call_hook
+        )
     return _DISPATCH.run(
         args,
         kwargs,

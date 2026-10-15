@@ -181,35 +181,6 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     assert call_kwargs["litellm_metadata"] is metadata
 
 
-def test_internal_async_marker_bypasses_native() -> None:
-    args: Final[tuple[object, ...]] = (INPUT, "gpt-4o")
-    kwargs: Final[Mapping[str, object]] = {"aresponses": True}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    response: Final = _response()
-
-    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records call shape
-        captured.append((call_args, call_kwargs))
-        return response
-
-    def native(
-        request: NativeCall,
-    ) -> ResponsesAPIResponse:
-        pytest.fail("aresponses' inner responses call must stay on Python")
-
-    assert (
-        _DISPATCH.run(
-            args,
-            kwargs,
-            python=python,
-            binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
-        )
-        is response
-    )
-    assert captured == [(args, kwargs)]
-
-
 @pytest.mark.parametrize(
     ("args", "kwargs"),
     (
@@ -310,3 +281,25 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     assert request.resolved["include"] is include
     assert request.resolved["instructions"] == "Be brief"
     assert request.resolved["max_output_tokens"] == 16
+
+
+@pytest.mark.asyncio
+async def test_aresponses_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[NativeCall]] = []
+    expected: Final = _response()
+
+    async def native(request: NativeCall) -> ResponsesAPIResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_ARESPONSES.override(native)
+    NATIVE_RESPONSES.override(lambda request: pytest.fail("a coroutine-returning call must use the async binding"))
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_responses: Final = cast(Callable[..., Awaitable[ResponsesAPIResponse]], litellm.responses)
+    try:
+        result: Final = await public_responses(input=INPUT, model="gpt-4o", aresponses=True)
+    finally:
+        NATIVE_ARESPONSES.reset()
+        NATIVE_RESPONSES.reset()
+    assert result is expected
+    assert [dict(request.kwargs) for request in captured] == [{"input": INPUT, "model": "gpt-4o"}]
