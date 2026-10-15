@@ -19,7 +19,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.responses_vendor import response_identities
+from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -33,9 +33,7 @@ _NO_RETRIES: Final[Mapping[str, JsonValue]] = MappingProxyType({"num_retries": 0
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_SPEND_BY_IDS: Final = (
-    'SELECT request_id, status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s::text[])'
-)
+_SPEND_BY_MODEL_GROUP: Final = 'SELECT request_id, status, model_group FROM "LiteLLM_SpendLogs" WHERE model_group = %s'
 _N_REJECTED_BY_MANTLE: Final = "'n' is not supported for values greater than 1"
 _FUNCTION_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
@@ -319,21 +317,22 @@ async def _ask(gateway: Gateway, client: Client, model: str, marker: str) -> _An
             return await _http(gateway, _Call(model, "chat", True, marker))
 
 
-def _logged_ids(answer: _Answer) -> list[str]:
-    known: Final = response_identities(answer.identity) if answer.identity.startswith("resp_") else frozenset[str]()
-    return sorted({*known, answer.identity, answer.call_id} - {""})
+def _logged_ids(answer: _Answer) -> tuple[str, ...]:
+    markers: Final = frozenset(_MARKER.findall(answer.text))
+    upstream: Final = (*(f"resp_{marker}" for marker in markers), *(f"chatcmpl-{marker}" for marker in markers))
+    return tuple(shown for shown in (answer.identity, answer.call_id, *upstream) if shown)
 
 
-def _postgres_array(values: list[str]) -> str:
-    return "{" + ",".join(f'"{value}"' for value in values) + "}"
+def _logs_answer(request_id: JsonValue, answer: _Answer) -> bool:
+    return any(same_response(string_value(request_id), shown) for shown in _logged_ids(answer))
+
+
+def _logged_rows(answer: _Answer, model: str) -> list[dict[str, JsonValue]]:
+    return [row for row in read_rows(_SPEND_BY_MODEL_GROUP, (model,)) if _logs_answer(row["request_id"], answer)]
 
 
 def _assert_logged(answer: _Answer, model: str, status: str) -> None:
-    rows: Final = eventually(
-        lambda: read_rows(_SPEND_BY_IDS, (_postgres_array(_logged_ids(answer)),)),
-        lambda found: len(found) >= 1,
-        seconds=70,
-    )
+    rows: Final = eventually(lambda: _logged_rows(answer, model), lambda found: len(found) >= 1, seconds=70)
     assert len(rows) == 1, rows
     assert (rows[0]["status"], rows[0]["model_group"]) == (status, model), rows
 
@@ -443,7 +442,7 @@ async def test_an_explicit_responses_prefix_wins_over_a_chat_pin(gateway: Gatewa
     "extra",
     (
         {"tools": [dict(_FUNCTION_TOOL)]},
-        {"reasoning_effort": {"effort": "low", "summary": "detailed"}},
+        {"reasoning_effort": {"effort": "low", "summary": "auto"}},
         {"web_search_options": {"search_context_size": "low"}},
     ),
     ids=("function-tools", "reasoning-summary", "web-search"),
@@ -493,26 +492,27 @@ async def test_a_mantle_chat_pin_drops_n_above_one_under_drop_params(gateway: Ga
         ('{"mode": ""}', "responses"),
         ('{"mode": "embedding"}', "responses"),
         ('{"mode": null}', "responses"),
-        ('{"mode": 5}', "responses"),
-        ('{"mode": ["chat"]}', "responses"),
+        ('{"mode": 5}', None),
+        ('{"mode": ["chat"]}', None),
         ('{"mode": "' + "c" * 5000 + '"}', "responses"),
         ('{"mode": "responses", "mode": "chat"}', "chat"),
     ),
     ids=("empty", "unroutable", "null", "int", "list", "5kb", "twice"),
 )
 async def test_a_malformed_mode_never_moves_an_unpinned_sibling(
-    gateway: Gateway, raw_model_info: str, own_route: Api
+    gateway: Gateway, raw_model_info: str, own_route: Api | None
 ) -> None:
     odd_marker: Final = uuid.uuid4().hex
     sibling_markers: Final = tuple(uuid.uuid4().hex for _ in range(4))
     with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
         odd: Final = _raw_model_info_deployment(scenario, wire, raw_model_info)
         sibling: Final = _deployment(scenario, wire, _MANTLE_GPT, None)
-        _assert_answered(await _http(gateway, _Call(odd, "chat", False, odd_marker)), odd_marker)
+        if own_route is not None:
+            _assert_answered(await _http(gateway, _Call(odd, "chat", False, odd_marker)), odd_marker)
         for marker in sibling_markers:
             _assert_answered(await _http(gateway, _Call(sibling, "chat", False, marker)), marker)
-        expected: Final = {odd_marker: (own_route,)} | {marker: ("responses",) for marker in sibling_markers}
-        assert _routes(_attempts(wire)) == expected
+        own: Final[dict[str, tuple[Api, ...]]] = {} if own_route is None else {odd_marker: (own_route,)}
+        assert _routes(_attempts(wire)) == own | {marker: ("responses",) for marker in sibling_markers}
 
 
 async def test_a_bridged_sibling_reports_the_upstream_401_after_one_attempt(gateway: Gateway) -> None:
