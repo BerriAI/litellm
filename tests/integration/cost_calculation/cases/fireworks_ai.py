@@ -1097,6 +1097,138 @@ FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_CACHE_READ: Final = CostTrackingT
     ),
 )
 
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_CACHE_READ: Final = CostTrackingTestCase(
+    name="fireworks_ai-accounts-fireworks-models-kimi-k3-messages_stream_cache_read",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 380,
+        "messages": [{"role": "user", "content": "3e7a1c5d9b02 summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "scripted answer 3e7a1c5d9b02"},
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288},
+                },
+            },
+            done=True,
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00207128, input_cost=0.00112128, output_cost=0.00095, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_CACHE_READ_CHOICE_BEARING_USAGE: Final = (
+    CostTrackingTestCase(
+        name="fireworks_ai-accounts-fireworks-models-kimi-k3-messages_stream_cache_read_choice_bearing_usage",
+        covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        endpoint="/v1/messages",
+        request={
+            "model": "$MODEL",
+            "max_tokens": 380,
+            "messages": [{"role": "user", "content": "9b4d2f8e1a67 summarize the attached material in one line"}],
+            "stream": True,
+        },
+        response=SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1789788231,
+                    "model": "accounts/fireworks/models/kimi-k3",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1789788231,
+                    "model": "accounts/fireworks/models/kimi-k3",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "scripted answer 9b4d2f8e1a67"},
+                            "finish_reason": None,
+                        }
+                    ],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1789788231,
+                    "model": "accounts/fireworks/models/kimi-k3",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1789788231,
+                    "model": "accounts/fireworks/models/kimi-k3",
+                    "choices": [{"index": 0, "delta": {}}],
+                    "usage": {
+                        "prompt_tokens": 12928,
+                        "completion_tokens": 380,
+                        "total_tokens": 13308,
+                        "prompt_tokens_details": {"cached_tokens": 12288},
+                    },
+                },
+                done=True,
+            ),
+        ),
+        expected=ExactExpected(
+            spend=0.00207128, input_cost=0.00112128, output_cost=0.00095, prompt_tokens=12928, completion_tokens=380
+        ),
+    )
+)
+
 FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM: Final = CostTrackingTestCase(
     name="fireworks_ai-accounts-fireworks-models-kimi-k3-stream",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
@@ -2971,6 +3103,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_STREAM_FULL_USAGE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_INPUT_TEXT,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_CACHE_READ,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_CACHE_READ,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_CACHE_READ_CHOICE_BEARING_USAGE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_TOOL_CALL,
