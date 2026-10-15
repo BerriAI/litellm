@@ -10,9 +10,24 @@ const buildSkill = (source: Plugin["source"]): Plugin => ({
   name: "my-skill",
   source,
   enabled: true,
+  version: null,
+  description: null,
+  created_at: null,
+  updated_at: null,
 });
 
 describe("SkillDetail source", () => {
+  it("renders a skill whose API metadata is null", () => {
+    render(
+      <SkillDetail
+        skill={{ ...buildSkill({ source: "github", repo: "org/repo" }), keywords: null, author: null, category: null }}
+        onBack={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "my-skill" })).toBeInTheDocument();
+    expect(screen.getByText("Public")).toBeInTheDocument();
+  });
+
   it("links a github source to the repository", () => {
     render(<SkillDetail skill={buildSkill({ source: "github", repo: "org/repo" })} onBack={vi.fn()} />);
     expect(screen.getByRole("link", { name: "github.com/org/repo" })).toHaveAttribute(

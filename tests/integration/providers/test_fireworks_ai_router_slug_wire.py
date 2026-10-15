@@ -44,6 +44,35 @@ def _catalog_cost(model: str, field: str) -> float:
 
 
 _ROUTED_MODEL: Final = _pick_routed_model()
+_FIREWORKS_MODEL_PREFIX: Final = "fireworks_ai/accounts/fireworks/models/"
+
+
+def _pick_open_model_key() -> str:
+    catalog: Final = _COST_MAP.validate_json(_COST_MAP_PATH.read_bytes())
+    return next(
+        key
+        for key, entry in catalog.items()
+        if key.startswith(_FIREWORKS_MODEL_PREFIX)
+        and _positive_rate(entry, "input_cost_per_token")
+        and _positive_rate(entry, "output_cost_per_token")
+    )
+
+
+_SERVED_OPEN_MODEL_KEY: Final = _pick_open_model_key()
+_ROUTERS_ACCEPTING_TOOL_CHOICE_AND_REASONING: Final = (
+    "auto",
+    "auto-instant",
+    "firerouter",
+    "firerouter/opus",
+    "firerouter/auto",
+)
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
 
 
 def _approx(value: float) -> object:
@@ -189,6 +218,51 @@ def test_fireworks_firerouter_claude_leg_is_charged_at_the_routed_models_own_rat
         )
         assert expected_cost > 0
         assert float(response.headers["x-litellm-response-cost"]) == _approx(expected_cost)
+        rows: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        spend: Final = rows[0]["spend"]
+    assert isinstance(spend, (int, float, str))
+    assert float(spend) == _approx(expected_cost)
+
+
+@pytest.mark.parametrize("router", _ROUTERS_ACCEPTING_TOOL_CHOICE_AND_REASONING)
+def test_fireworks_router_forwards_tool_choice_and_reasoning_and_bills_the_served_open_model(
+    gateway: Gateway, router: str
+) -> None:
+    identity: Final = f"fw-{router.replace('/', '-')}-{uuid.uuid4().hex}"
+    served_resource: Final = _SERVED_OPEN_MODEL_KEY.removeprefix("fireworks_ai/")
+
+    def respond(request: Request) -> Reply:
+        body: Final = _provider_body(request, "/chat/completions")
+        assert body["model"] == f"accounts/fireworks/routers/{router}", body
+        assert body["tools"] == [_WEATHER_TOOL], body
+        assert body["tool_choice"] == "any", body
+        assert body["reasoning_effort"] == "low", body
+        return Reply(body=_chat_completion(identity, served_resource, 23, 41))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fireworks_ai/{router}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": _PROMPT}],
+                "tools": [_WEATHER_TOOL],
+                "tool_choice": "required",
+                "reasoning_effort": "low",
+            },
+        )
+        assert response.status_code == 200, response.text
+        expected_cost: Final = 23 * _catalog_cost(_SERVED_OPEN_MODEL_KEY, "input_cost_per_token") + 41 * _catalog_cost(
+            _SERVED_OPEN_MODEL_KEY, "output_cost_per_token"
+        )
+        assert expected_cost > 0
+        assert float(response.headers["x-litellm-response-cost"]) == _approx(expected_cost)
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
         rows: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)),
             lambda values: len(values) == 1,

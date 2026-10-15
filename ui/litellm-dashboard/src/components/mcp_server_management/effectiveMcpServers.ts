@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { MCP_ALL_TOOLS_WILDCARD } from "../mcp_tools/constants";
 

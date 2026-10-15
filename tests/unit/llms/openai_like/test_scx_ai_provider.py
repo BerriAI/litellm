@@ -140,10 +140,13 @@ class TestSCXAIProviderConfig:
 
 class TestSCXAIModelMetadata:
     SCX_MODELS = (
+        "scx-ai/DeepSeek-V4.1-flash",
         "scx-ai/GLM-5.2",
+        "scx-ai/GLM-5.3",
+        "scx-ai/Kimi-K3",
         "scx-ai/Qwen3.8-Max",
     )
-    VISION_MODELS = ("scx-ai/Qwen3.8-Max",)
+    VISION_MODELS = ("scx-ai/DeepSeek-V4.1-flash", "scx-ai/Qwen3.8-Max")
 
     @staticmethod
     def _load(path_parts):

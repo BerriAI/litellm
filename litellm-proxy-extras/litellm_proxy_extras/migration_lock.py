@@ -7,26 +7,33 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.prisma_toolchain import MIGRATION_LOCK_TIMEOUT_ENV_VAR, migration_lock_timeout
+from litellm_proxy_extras.prisma_toolchain import (
+    MIGRATION_LOCK_TIMEOUT_ENV_VAR,
+    migration_lock_timeout,
+)
 
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"llm_mig2", "big")
+PRISMA_ADVISORY_LOCK_KEY: Final = 72707369
 
 if TYPE_CHECKING:
     import psycopg
 
 
-def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
-    database_url: Final = environment.get("DATABASE_URL")
-    direct_url: Final = environment.get("DIRECT_URL")
-    if not database_url or not direct_url:
-        return environment
+def _migration_url(database_url: str, direct_url: "str | None") -> str:
+    if not direct_url:
+        return database_url
     schema: Final = next((value for key, value in parse_qsl(urlsplit(database_url).query) if key == "schema"), "public")
     direct: Final = urlsplit(direct_url)
     parameters: Final = tuple((key, value) for key, value in parse_qsl(direct.query) if key != "schema")
-    return {
-        **environment,
-        "DATABASE_URL": urlunsplit(direct._replace(query=urlencode((*parameters, ("schema", schema))))),
-    }
+    return urlunsplit(direct._replace(query=urlencode((*parameters, ("schema", schema)))))
+
+
+def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
+    database_url: Final = environment.get("DATABASE_URL")
+    if not database_url:
+        return environment
+    migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
+    return {**environment, "DATABASE_URL": migration_url, "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK": "1"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +56,15 @@ class MigrationCoordinator:
     def check_connection(self) -> None:
         self.connection.execute("SELECT 1")
 
+    def release_statement_snapshot(self) -> None:
+        # a parameterized statement leaves its portal snapshot registered on the backend until the
+        # next statement, and CREATE INDEX CONCURRENTLY waits for every such snapshot to go away
+        self.connection.execute("SELECT 1")
+
     def acquire_prisma_lock(self) -> None:
         deadline: Final = time.monotonic() + migration_lock_timeout()
         while time.monotonic() < deadline:
-            if _try_lock(self.connection, 72707369):
+            if _try_lock(self.connection, PRISMA_ADVISORY_LOCK_KEY):
                 return
             time.sleep(min(random.uniform(0.5, 1.5), max(0.0, deadline - time.monotonic())))
         raise RuntimeError(
@@ -87,3 +99,32 @@ def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, N
         f"Timed out waiting for another v2 migration resolver after {wait_seconds}s. "
         f"Check the running migration or increase {MIGRATION_LOCK_TIMEOUT_ENV_VAR}."
     )
+
+
+@contextmanager
+def prisma_migration_lock(database_url: str) -> Generator[None, None, None]:
+    """Hold the coordinator lock and Prisma's own lock key as transaction-level locks on one
+    pinned connection while a Prisma command runs with its session advisory lock disabled, so a
+    transaction pooler can never strand that lock on an idle backend after the command exits."""
+    with migration_lock(database_url) as coordinator:
+        coordinator.acquire_prisma_lock()
+        coordinator.release_statement_snapshot()
+        yield
+
+
+@contextmanager
+def held_migration_lock(connection: "psycopg.Connection[tuple[object, ...]]") -> Generator[bool, None, None]:
+    """A session-level, non-blocking hold of the migration coordinator lock on an autocommit
+    connection, for DDL that cannot run inside a transaction (`CREATE INDEX CONCURRENTLY`).
+    Yields whether the lock was acquired; a v2 resolver or another migration job's index build
+    holding it yields False. Released on exit."""
+    from psycopg.rows import class_row
+
+    with connection.cursor(row_factory=class_row(_LockResult)) as cursor:
+        row: Final = cursor.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (MIGRATION_LOCK_KEY,)).fetchone()
+    acquired: Final = row is not None and row.acquired
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            connection.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))

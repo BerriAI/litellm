@@ -1,3 +1,4 @@
+use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -13,12 +14,10 @@ use futures_util::{StreamExt, stream};
 use http::{StatusCode, header::CONTENT_TYPE};
 use litellm_host::{
     call::{CallOutput, hosted_call},
-    event::{CallEvent, MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-    lifecycle::CallObserver,
+    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    lifecycle::{CallEvent, CallObserver},
     machine::MachineFault,
-    protocol::Protocol,
-    protocol::Reply,
+    protocol::{Protocol, Reply},
 };
 use litellm_host_http::{Error, ResponseEncoder, StreamEncoder, Unary, serve, serve_unary};
 use rstest::{fixture, rstest};
@@ -71,7 +70,7 @@ impl ResponseEncoder for Adapter {
     }
 }
 
-impl litellm_host::services::HostCallHandler<TestProtocol> for Adapter {
+impl litellm_host_native::services::HostCallHandler<TestProtocol> for Adapter {
     async fn handle_host_call(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
         if self.0 == Rejection::Custom {
             return Err(TestError::Adapter);
@@ -109,11 +108,40 @@ impl StreamEncoder for Adapter {
 }
 
 #[derive(Default)]
-struct Observer(Mutex<Vec<CallEvent>>);
+struct Observer(Observations);
+struct Observations {
+    sender: litellm_host::observation::ObservationSender,
+    receiver: Mutex<tokio::sync::mpsc::Receiver<CallEvent>>,
+    recorded: Mutex<Vec<CallEvent>>,
+}
+
+impl Default for Observations {
+    fn default() -> Self {
+        let (sender, receiver) = litellm_host::observation::observation_channel(
+            std::num::NonZeroUsize::new(128).unwrap(),
+        );
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            recorded: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Observations {
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<CallEvent>>> {
+        let mut events = self.recorded.lock()?;
+        let mut receiver = self.receiver.lock().unwrap();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        Ok(events)
+    }
+}
 
 impl CallObserver for Observer {
     fn observe(&self, event: CallEvent) {
-        self.0.lock().unwrap().push(event);
+        self.0.sender.emit(event);
     }
 }
 
@@ -122,11 +150,7 @@ struct Hooks {
     reject: bool,
 }
 
-impl RouteHooks<TestError> for Hooks {
-    fn observer(&self) -> Option<Arc<dyn CallObserver>> {
-        Some(self.observer.clone())
-    }
-
+impl Interceptors<TestError> for Hooks {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -141,11 +165,13 @@ impl RouteHooks<TestError> for Hooks {
         })
     }
 
-    async fn on_event(&self, event: MachineEvent) -> Result<(), TestError> {
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), TestError> {
         if self.reject {
             return Err(TestError::Hook);
         }
-        self.observer.observe(CallEvent::Machine(event));
+        self.observer.observe(CallEvent::Execution(
+            litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+        ));
         Ok(())
     }
 }
@@ -156,7 +182,7 @@ fn observer() -> Arc<Observer> {
 }
 
 #[fixture]
-fn hooks(observer: Arc<Observer>) -> Hooks {
+fn interceptors(observer: Arc<Observer>) -> Hooks {
     Hooks {
         observer,
         reject: false,
@@ -165,11 +191,12 @@ fn hooks(observer: Arc<Observer>) -> Hooks {
 
 #[rstest]
 #[tokio::test]
-async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Hooks) {
-    let observer = hooks.observer.clone();
+async fn projection_custom_operations_and_hooks_feed_the_http_response(interceptors: Hooks) {
+    let observer = interceptors.observer.clone();
     let machine = hosted_call::<TestProtocol, _, _>(
         "projected",
-        |request, services, route_hooks| async move {
+        None,
+        |request, services, route_hooks, _observations| async move {
             let custom = services.call(|reply| reply).await?;
             let wire = route_hooks
                 .before_provider_request(
@@ -188,10 +215,8 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Ho
                 )
                 .await?;
             route_hooks
-                .on_event(MachineEvent::ResponseReceived {
-                    raw: RawResponse {
-                        body: wire.url.clone(),
-                    },
+                .after_provider_response(RawResponse {
+                    body: wire.url.clone(),
                 })
                 .await?;
             Ok(CallOutput::Complete(Bytes::from(wire.url)))
@@ -200,8 +225,9 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Ho
     let response = serve(
         machine,
         Adapter(Rejection::None),
-        hooks,
+        interceptors,
         Adapter(Rejection::None),
+        Some(observer.0.sender.clone()),
     )
     .await
     .unwrap();
@@ -214,7 +240,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Ho
     let events = observer.0.lock().unwrap();
     assert!(matches!(events.as_slice(), [
         CallEvent::Started { .. },
-        CallEvent::Machine(MachineEvent::ResponseReceived { raw }),
+        CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }),
         CallEvent::Succeeded { .. },
     ] if raw.body == "projected/custom"));
 }
@@ -234,32 +260,36 @@ impl Drop for Release {
 #[case::dropped_before_eof(Some(2))]
 #[tokio::test]
 async fn body_demand_controls_polling_and_lifecycle(
-    hooks: Hooks,
+    observer: Arc<Observer>,
     #[case] drop_after: Option<usize>,
 ) {
-    let observer = hooks.observer.clone();
     let polls = Arc::new(AtomicUsize::new(0));
     let released = Arc::new(AtomicBool::new(false));
     let provider_polls = polls.clone();
     let release = Release(released.clone());
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, _| async move {
-        let chunks = stream::unfold((0, release), move |(index, release)| {
-            provider_polls.fetch_add(1, Ordering::SeqCst);
-            async move {
-                (index < 2).then(|| (Ok(Bytes::from(index.to_string())), (index + 1, release)))
-            }
-        })
-        .boxed();
-        Ok(CallOutput::Stream {
-            head: "text/event-stream",
-            chunks,
-        })
-    });
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, _, _observations| async move {
+            let chunks = stream::unfold((0, release), move |(index, release)| {
+                provider_polls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    (index < 2).then(|| (Ok(Bytes::from(index.to_string())), (index + 1, release)))
+                }
+            })
+            .boxed();
+            Ok(CallOutput::Stream {
+                head: "text/event-stream",
+                chunks,
+            })
+        },
+    );
     let response = serve(
         machine,
         Adapter(Rejection::None),
-        hooks,
+        (),
         Adapter(Rejection::None),
+        Some(observer.0.sender.clone()),
     )
     .await
     .unwrap();
@@ -299,32 +329,42 @@ async fn body_demand_controls_polling_and_lifecycle(
 #[case::encoding(Rejection::Chunk, TestError::Adapter, 1)]
 #[tokio::test]
 async fn stream_failure_emits_one_error_frame_and_stops(
-    hooks: Hooks,
+    interceptors: Hooks,
     #[case] rejection: Rejection,
     #[case] expected: TestError,
     #[case] expected_polls: usize,
 ) {
-    let observer = hooks.observer.clone();
+    let observer = interceptors.observer.clone();
     let polls = Arc::new(AtomicUsize::new(0));
     let provider_polls = polls.clone();
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, _| async move {
-        let chunks = stream::iter([
-            Ok(Bytes::from_static(b"first")),
-            Err(TestError::Provider),
-            Ok(Bytes::from_static(b"must not be delivered")),
-        ])
-        .inspect(move |_| {
-            provider_polls.fetch_add(1, Ordering::SeqCst);
-        })
-        .boxed();
-        Ok(CallOutput::Stream {
-            head: "text/event-stream",
-            chunks,
-        })
-    });
-    let response = serve(machine, Adapter(rejection), hooks, Adapter(rejection))
-        .await
-        .unwrap();
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, _, _observations| async move {
+            let chunks = stream::iter([
+                Ok(Bytes::from_static(b"first")),
+                Err(TestError::Provider),
+                Ok(Bytes::from_static(b"must not be delivered")),
+            ])
+            .inspect(move |_| {
+                provider_polls.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+            Ok(CallOutput::Stream {
+                head: "text/event-stream",
+                chunks,
+            })
+        },
+    );
+    let response = serve(
+        machine,
+        Adapter(rejection),
+        interceptors,
+        Adapter(rejection),
+        Some(observer.0.sender.clone()),
+    )
+    .await
+    .unwrap();
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     let prefix = if rejection == Rejection::Chunk {
         ""
@@ -351,28 +391,38 @@ async fn stream_failure_emits_one_error_frame_and_stops(
 #[case::custom_operation(Rejection::Custom)]
 #[case::response_conversion(Rejection::Complete)]
 #[tokio::test]
-async fn failures_before_open_return_an_error(hooks: Hooks, #[case] rejection: Rejection) {
-    let observer = hooks.observer.clone();
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, services, _| async move {
-        services.call(|reply| reply).await?;
-        match rejection {
-            Rejection::Head => Ok(CallOutput::Stream {
-                head: "text/event-stream",
-                chunks: stream::pending().boxed(),
-            }),
-            Rejection::None => Err(TestError::Provider),
-            _ => Ok(CallOutput::Complete(Bytes::new())),
-        }
-    });
+async fn failures_before_open_return_an_error(interceptors: Hooks, #[case] rejection: Rejection) {
+    let observer = interceptors.observer.clone();
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, services, _, _observations| async move {
+            services.call(|reply| reply).await?;
+            match rejection {
+                Rejection::Head => Ok(CallOutput::Stream {
+                    head: "text/event-stream",
+                    chunks: stream::pending().boxed(),
+                }),
+                Rejection::None => Err(TestError::Provider),
+                _ => Ok(CallOutput::Complete(Bytes::new())),
+            }
+        },
+    );
     let expected = if rejection == Rejection::None {
         TestError::Provider
     } else {
         TestError::Adapter
     };
     assert_eq!(
-        serve(machine, Adapter(rejection), hooks, Adapter(rejection))
-            .await
-            .unwrap_err(),
+        serve(
+            machine,
+            Adapter(rejection),
+            interceptors,
+            Adapter(rejection),
+            Some(observer.0.sender.clone())
+        )
+        .await
+        .unwrap_err(),
         Error::Call(expected)
     );
     assert!(matches!(
@@ -385,30 +435,38 @@ async fn failures_before_open_return_an_error(hooks: Hooks, #[case] rejection: R
 #[case::before_headers(false)]
 #[case::awaiting_chunk(true)]
 #[tokio::test]
-async fn cancelling_pending_work_releases_the_machine(hooks: Hooks, #[case] streaming: bool) {
-    let observer = hooks.observer.clone();
+async fn cancelling_pending_work_releases_the_machine(
+    interceptors: Hooks,
+    #[case] streaming: bool,
+) {
+    let observer = interceptors.observer.clone();
     let released = Arc::new(AtomicBool::new(false));
     let release = Release(released.clone());
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, _| async move {
-        if !streaming {
-            let _release = release;
-            return std::future::pending().await;
-        }
-        let chunks = stream::once(async move {
-            let _release = release;
-            std::future::pending().await
-        })
-        .boxed();
-        Ok(CallOutput::Stream {
-            head: "text/event-stream",
-            chunks,
-        })
-    });
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, _, _observations| async move {
+            if !streaming {
+                let _release = release;
+                return std::future::pending().await;
+            }
+            let chunks = stream::once(async move {
+                let _release = release;
+                std::future::pending().await
+            })
+            .boxed();
+            Ok(CallOutput::Stream {
+                head: "text/event-stream",
+                chunks,
+            })
+        },
+    );
     let mut response = Box::pin(serve(
         machine,
         Adapter(Rejection::None),
-        hooks,
+        interceptors,
         Adapter(Rejection::None),
+        Some(observer.0.sender.clone()),
     ));
     if streaming {
         let mut body = response.await.unwrap().into_body().into_data_stream();
@@ -437,37 +495,39 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
 ) {
     let continued = Arc::new(AtomicBool::new(false));
     let executed = continued.clone();
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, route_hooks| async move {
-        if event {
-            route_hooks
-                .on_event(MachineEvent::ResponseReceived {
-                    raw: RawResponse {
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, route_hooks, _observations| async move {
+            if event {
+                route_hooks
+                    .after_provider_response(RawResponse {
                         body: "response".into(),
-                    },
-                })
-                .await?;
-        } else {
-            route_hooks
-                .before_provider_request(
-                    WireRequest {
-                        url: "url".into(),
-                        headers: Vec::new(),
-                        body: json!({}),
-                    },
-                    RequestContext {
-                        model: "model".into(),
-                        custom_llm_provider: "provider".into(),
-                        optional_params: json!({}),
-                        secret_fields: Vec::new(),
-                        api_key: None,
-                    },
-                )
-                .await?;
-        }
-        executed.store(true, Ordering::SeqCst);
-        Ok(CallOutput::Complete(Bytes::new()))
-    });
-    let hooks = Hooks {
+                    })
+                    .await?;
+            } else {
+                route_hooks
+                    .before_provider_request(
+                        WireRequest {
+                            url: "url".into(),
+                            headers: Vec::new(),
+                            body: json!({}),
+                        },
+                        RequestContext {
+                            model: "model".into(),
+                            custom_llm_provider: "provider".into(),
+                            optional_params: json!({}),
+                            secret_fields: Vec::new(),
+                            api_key: None,
+                        },
+                    )
+                    .await?;
+            }
+            executed.store(true, Ordering::SeqCst);
+            Ok(CallOutput::Complete(Bytes::new()))
+        },
+    );
+    let interceptors = Hooks {
         observer: observer.clone(),
         reject: true,
     };
@@ -475,8 +535,9 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
         serve(
             machine,
             Adapter(Rejection::None),
-            hooks,
-            Adapter(Rejection::None)
+            interceptors,
+            Adapter(Rejection::None),
+            Some(observer.0.sender.clone()),
         )
         .await
         .unwrap_err(),
@@ -499,19 +560,22 @@ enum InvalidFlow {
 #[case::deliver_before_open(InvalidFlow::DeliverBeforeOpen)]
 #[case::open_twice(InvalidFlow::OpenTwice)]
 #[tokio::test]
-async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] flow: InvalidFlow) {
+async fn invalid_host_operations_fail_without_panicking(
+    interceptors: Hooks,
+    #[case] flow: InvalidFlow,
+) {
     use litellm_host::{call::HostedCompletion, machine::CallMachine};
 
-    let observer = hooks.observer.clone();
-    let machine = CallMachine::<TestProtocol, HostedCompletion<Bytes>>::new(move |host| {
+    let observer = interceptors.observer.clone();
+    let machine = CallMachine::<TestProtocol, HostedCompletion<Bytes>>::new(None, move |host| {
         Box::pin(async move {
             match flow {
                 InvalidFlow::DeliverBeforeOpen => {
-                    host.stream.send_chunk(Bytes::new()).await?;
+                    let _ = host.stream.send_chunk(Bytes::new()).await?;
                 }
                 InvalidFlow::OpenTwice => {
-                    host.stream.open_stream("text/event-stream").await?;
-                    host.stream.open_stream("text/event-stream").await?;
+                    let _ = host.stream.open_stream("text/event-stream").await?;
+                    let _ = host.stream.open_stream("text/event-stream").await?;
                 }
             }
             Ok(HostedCompletion::StreamEnded)
@@ -520,8 +584,9 @@ async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] fl
     let result = serve(
         machine,
         Adapter(Rejection::None),
-        hooks,
+        interceptors,
         Adapter(Rejection::None),
+        Some(observer.0.sender.clone()),
     )
     .await;
     if matches!(flow, InvalidFlow::OpenTwice) {
@@ -549,10 +614,12 @@ impl Protocol for UnaryProtocol {
 
 #[rstest]
 #[tokio::test]
-async fn unary_calls_use_into_response_after_hooks_and_before_success(hooks: Hooks) {
-    let observer = hooks.observer.clone();
-    let machine =
-        hosted_call::<UnaryProtocol, _, _>("projected", |request, _, route_hooks| async move {
+async fn unary_calls_use_into_response_after_hooks_and_before_success(interceptors: Hooks) {
+    let observer = interceptors.observer.clone();
+    let machine = hosted_call::<UnaryProtocol, _, _>(
+        "projected",
+        None,
+        |request, _, route_hooks, _observations| async move {
             let wire = route_hooks
                 .before_provider_request(
                     WireRequest {
@@ -570,25 +637,25 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(hooks: Hoo
                 )
                 .await?;
             route_hooks
-                .on_event(MachineEvent::ResponseReceived {
-                    raw: RawResponse {
-                        body: wire.url.clone(),
-                    },
+                .after_provider_response(RawResponse {
+                    body: wire.url.clone(),
                 })
                 .await?;
             Ok(CallOutput::Complete(json!({"url": wire.url})))
-        });
+        },
+    );
     let response = serve_unary(
         machine,
         (),
-        hooks,
+        interceptors,
         Unary::new(|value| {
             assert!(matches!(
                 observer.0.lock().unwrap().as_slice(),
-                [CallEvent::Started { .. }, CallEvent::Machine(_),]
+                [CallEvent::Started { .. }, CallEvent::Execution(_),]
             ));
             (StatusCode::CREATED, [("x-converted", "yes")], Json(value))
         }),
+        Some(observer.0.sender.clone()),
     )
     .await
     .unwrap();
@@ -602,7 +669,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(hooks: Hoo
         observer.0.lock().unwrap().as_slice(),
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(_),
             CallEvent::Succeeded { .. },
         ]
     ));
@@ -617,15 +684,17 @@ async fn unary_failure_preserves_the_error_without_converting(
     #[case] reject_hook: bool,
     #[case] expected: TestError,
 ) {
-    let machine = hosted_call::<UnaryProtocol, _, _>("input", |_, _, route_hooks| async move {
-        route_hooks
-            .on_event(MachineEvent::ResponseReceived {
-                raw: RawResponse { body: "raw".into() },
-            })
-            .await?;
-        Err(TestError::Provider)
-    });
-    let hooks = Hooks {
+    let machine = hosted_call::<UnaryProtocol, _, _>(
+        "input",
+        None,
+        |_, _, route_hooks, _observations| async move {
+            route_hooks
+                .after_provider_response(RawResponse { body: "raw".into() })
+                .await?;
+            Err(TestError::Provider)
+        },
+    );
+    let interceptors = Hooks {
         observer: observer.clone(),
         reject: reject_hook,
     };
@@ -633,11 +702,12 @@ async fn unary_failure_preserves_the_error_without_converting(
     let result = serve_unary(
         machine,
         (),
-        hooks,
+        interceptors,
         Unary::new(|value| {
             converted.store(true, Ordering::SeqCst);
             Json(value)
         }),
+        Some(observer.0.sender.clone()),
     )
     .await;
     assert_eq!(result.unwrap_err(), Error::Call(expected));
@@ -650,23 +720,28 @@ async fn unary_failure_preserves_the_error_without_converting(
 
 #[rstest]
 #[tokio::test]
-async fn cancelling_unary_execution_releases_work_without_converting(hooks: Hooks) {
-    let observer = hooks.observer.clone();
+async fn cancelling_unary_execution_releases_work_without_converting(interceptors: Hooks) {
+    let observer = interceptors.observer.clone();
     let released = Arc::new(AtomicBool::new(false));
     let release = Release(released.clone());
-    let machine = hosted_call::<UnaryProtocol, _, _>("input", move |_, _, _| async move {
-        let _release = release;
-        std::future::pending().await
-    });
+    let machine = hosted_call::<UnaryProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, _, _observations| async move {
+            let _release = release;
+            std::future::pending().await
+        },
+    );
     let converted = AtomicBool::new(false);
     let mut call = Box::pin(serve_unary(
         machine,
         (),
-        hooks,
+        interceptors,
         Unary::new(|value| {
             converted.store(true, Ordering::SeqCst);
             Json(value)
         }),
+        Some(observer.0.sender.clone()),
     ));
     assert!(futures_util::poll!(&mut call).is_pending());
     assert!(!released.load(Ordering::SeqCst));
@@ -709,7 +784,7 @@ impl ResponseEncoder for CustomUnaryAdapter {
 
 struct Credentials(bool);
 
-impl litellm_host::services::HostCallHandler<CustomUnaryProtocol> for Credentials {
+impl litellm_host_native::services::HostCallHandler<CustomUnaryProtocol> for Credentials {
     async fn handle_host_call(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
         if self.0 {
             return Err(TestError::Adapter);
@@ -725,11 +800,10 @@ impl litellm_host::services::HostCallHandler<CustomUnaryProtocol> for Credential
 #[case::response_conversion_fails(false, true)]
 #[tokio::test]
 async fn unary_custom_operations_and_conversion_finish_before_terminal_observation(
-    hooks: Hooks,
+    observer: Arc<Observer>,
     #[case] reject_op: bool,
     #[case] reject_response: bool,
 ) {
-    let observer = hooks.observer.clone();
     let continued = Arc::new(AtomicBool::new(false));
     let executed = continued.clone();
     let released = Arc::new(AtomicBool::new(false));
@@ -737,7 +811,8 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
     let converted = Arc::new(AtomicBool::new(false));
     let machine = hosted_call::<CustomUnaryProtocol, _, _>(
         "request",
-        move |request, services, _| async move {
+        None,
+        move |request, services, _, _observations| async move {
             let _release = release;
             let credential = services.call(|reply| reply).await?;
             executed.store(true, Ordering::SeqCst);
@@ -749,11 +824,12 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
     let result = serve_unary(
         machine,
         Credentials(reject_op),
-        hooks,
+        (),
         CustomUnaryAdapter {
             reject_response,
             converted: converted.clone(),
         },
+        Some(observer.0.sender.clone()),
     )
     .await;
     assert_eq!(continued.load(Ordering::SeqCst), !reject_op);

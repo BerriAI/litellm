@@ -2,7 +2,8 @@ mod support;
 
 use axum::{body::Body, http::Request};
 use litellm_gateway_inference::Error;
-use litellm_llms::base_llm::ocr::{error::Error as OcrError, transformation::OcrDocument};
+use litellm_llms::base_llm::ocr::{error::Error as OcrError, transformation::decode_request_value};
+use litellm_llms_types::formats::ocr::OcrDocument;
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -146,7 +147,7 @@ async fn malformed_multipart_uses_an_openai_error_envelope(
 #[rstest]
 #[case::missing_document(
     "/v1/ocr", "mistral/test-ocr", "",
-    Error::Ocr(OcrDocument::try_from(Value::Null).unwrap_err()),
+    Error::Ocr(decode_request_value::<OcrDocument>(Value::Null, "document").unwrap_err()),
 )]
 #[case::empty_document(
     "/v1/ocr",

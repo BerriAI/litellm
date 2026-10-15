@@ -4,7 +4,7 @@
 #
 # Usage:
 #   $env:LITELLM_BASE_URL="https://litellm.example.com"
-#   $env:LITELLM_API_KEY="your-api-key"
+#   $env:LITELLM_API_KEY="<your-virtual-key>"
 #   .\run_parallel_health_checks.ps1 [num_parallel_jobs] [image_name]
 #
 # Defaults:
@@ -17,15 +17,14 @@ param(
     [string]$ContainerRuntime = "docker"
 )
 
-# Set defaults for environment variables if not provided
+# Require credentials for the target proxy
 if (-not $env:LITELLM_BASE_URL) {
     $env:LITELLM_BASE_URL = "https://litellm-perf-cache-and-router.onrender.com"
     Write-Warning "LITELLM_BASE_URL not set, using default: $env:LITELLM_BASE_URL"
 }
 
 if (-not $env:LITELLM_API_KEY) {
-    $env:LITELLM_API_KEY = "sk-1234"
-    Write-Warning "LITELLM_API_KEY not set, using default: $env:LITELLM_API_KEY"
+    throw "LITELLM_API_KEY must be set"
 }
 
 # Check if container runtime is available

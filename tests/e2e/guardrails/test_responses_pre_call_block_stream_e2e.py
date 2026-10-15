@@ -7,11 +7,14 @@ from typing import Final
 import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import CustomCodeParamsBody, GuardrailsClient
 from lifecycle import ResourceManager
 from pydantic import BaseModel, TypeAdapter
 
 pytestmark = pytest.mark.e2e
+
+BACKEND_MODEL: Final = "openai/gpt-4.1-mini"
 
 DENIAL: Final = "This model is not currently available. Please contact support if you think this is a mistake."
 
@@ -109,12 +112,21 @@ class TestResponsesPreCallBlock:
         return name
 
     @pytest.mark.covers("guardrail.custom_code.pre_call.blocks", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_stream_block_is_sse_with_completed_assistant_message(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         name: Final = self._register_block(client, resources)
         model: Final = client.create_backend_model(
-            resources, prefix="e2e-responses-block", backend="openai/gpt-4.1-mini", api_key="os.environ/OPENAI_API_KEY"
+            resources, prefix="e2e-responses-block", backend=BACKEND_MODEL, api_key="os.environ/OPENAI_API_KEY"
         )
 
         result: Final = _poll_for_block(
@@ -137,12 +149,21 @@ class TestResponsesPreCallBlock:
         _assert_blocked_response(completed[0].response)
 
     @pytest.mark.covers("guardrail.custom_code.pre_call.blocks", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_non_stream_block_is_schema_valid_json(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         name: Final = self._register_block(client, resources)
         model: Final = client.create_backend_model(
-            resources, prefix="e2e-responses-block", backend="openai/gpt-4.1-mini", api_key="os.environ/OPENAI_API_KEY"
+            resources, prefix="e2e-responses-block", backend=BACKEND_MODEL, api_key="os.environ/OPENAI_API_KEY"
         )
 
         result: Final = _poll_for_block(lambda: client.responses(scoped_key, model, "say hi", guardrails=[name]))

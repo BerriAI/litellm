@@ -7,7 +7,7 @@ from litellm.llms.openai.videos.guardrail_translation.handler import (
 )
 from litellm.types.utils import CallTypes
 
-guardrail_translation_mappings: Final = {  # mutable-ok: discover_guardrail_translation_mappings only accepts isinstance(mappings, dict)
+guardrail_translation_mappings: Final = {
     CallTypes.video_generation: OpenAIVideoGenerationHandler,
     CallTypes.avideo_generation: OpenAIVideoGenerationHandler,
     CallTypes.create_video: OpenAIVideoGenerationHandler,

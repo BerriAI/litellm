@@ -1,9 +1,10 @@
+import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -12,14 +13,18 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -42,9 +47,15 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..common_utils import (
     BedrockError,
+    BedrockEventStreamResponseDict,
+    bedrock_event_stream_header,
+    bedrock_event_stream_response,
+    bedrock_stream_event_error_status,
     build_bedrock_stream_error,
+    build_bedrock_stream_event_error,
     error_response_text,
     get_bedrock_response_stream_shape,
+    get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
 )
 
@@ -53,6 +64,7 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
+    from botocore.model import Shape
 
 converse_config: Final = AmazonConverseConfig()
 _STREAM_HEAD_BYTES: Final = 200
@@ -166,15 +178,34 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
+    if not json_mode:
+        return None
+    try:
+        body: Final = _REQUEST_BODY.validate_python(json.loads(data))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    return JsonModeRequest.model_validate(body).tool_schema()
+
+
 def _stream_decoder(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None,
     *,
     model: str,
     json_mode: bool | None,
     sync_stream: bool,
+    response_format_schema: ResponseFormatSchema | None = None,
 ) -> "AWSEventStreamDecoder":
     if bedrock_invoke_provider == "anthropic":
-        return AmazonAnthropicClaudeStreamDecoder(model=model, sync_stream=sync_stream, json_mode=json_mode)
+        return AmazonAnthropicClaudeStreamDecoder(
+            model=model,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+            response_format_schema=response_format_schema,
+        )
     if bedrock_invoke_provider == "deepseek_r1":
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
@@ -194,6 +225,7 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
@@ -212,6 +244,7 @@ async def make_call(
             data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -240,7 +273,11 @@ async def make_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=False
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=False,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -255,7 +292,7 @@ async def make_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -284,10 +321,11 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            client = _get_httpx_client(
+            client = get_httpx_client(
                 params=(
                     {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
                     if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
@@ -301,6 +339,7 @@ def make_sync_call(
             data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -329,7 +368,11 @@ def make_sync_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=True
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=True,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.iter_bytes(
                 response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -344,7 +387,7 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -365,10 +408,14 @@ def _response_header(response_headers: Mapping[str, str] | None, name: str) -> s
 
 
 class _EventStreamTally:
-    def __init__(self) -> None:
+    def __init__(self, event_statuses: Mapping[str, int | None] | None) -> None:
+        self.event_statuses = event_statuses
         self.bytes_received = 0
         self.bytes_decoded = 0
         self.events = 0
+        self.recognized_events = 0
+        self.unrecognized_event_types: frozenset[str] = frozenset()
+        self.unrecognized_head = b""
         self.head = b""
 
     def add_chunk(self, chunk: bytes) -> None:
@@ -376,13 +423,24 @@ class _EventStreamTally:
         if len(self.head) < _STREAM_HEAD_BYTES:
             self.head = (self.head + chunk)[:_STREAM_HEAD_BYTES]
 
-    def add_event(self, event: "EventStreamMessage") -> None:
+    def add_event(self, event: "EventStreamMessage", headers: Mapping[str, object]) -> None:
         self.events += 1
         self.bytes_decoded += event.prelude.total_length
+        event_type: Final = bedrock_event_stream_header(headers, ":event-type")
+        if (
+            self.event_statuses is None
+            or bedrock_event_stream_header(headers, ":message-type") != "event"
+            or (event_type is not None and event_type in self.event_statuses)
+        ):
+            self.recognized_events += 1
+            return
+        self.unrecognized_event_types = self.unrecognized_event_types | {event_type or "<missing>"}
+        if not self.unrecognized_head:
+            self.unrecognized_head = event.payload[:_STREAM_HEAD_BYTES]
 
     def undecoded_stream_error(self, response_headers: Mapping[str, str] | None) -> BedrockError | None:
         undecoded: Final = self.bytes_received - self.bytes_decoded
-        if self.events and not undecoded:
+        if self.recognized_events and not undecoded:
             return None
         detail: Final = (
             f"content-type={_response_header(response_headers, 'content-type')!r}, "
@@ -397,6 +455,15 @@ class _EventStreamTally:
                     f"({detail}, first bytes={self.head!r})"
                 ),
             )
+        if not self.recognized_events:
+            return BedrockError(
+                status_code=502,
+                message=(
+                    f"Bedrock answered the stream with HTTP 200 but none of its {self.events} events carried a known "
+                    f"event type (event types={sorted(self.unrecognized_event_types)}, {detail}, "
+                    f"first payload={self.unrecognized_head!r})"
+                ),
+            )
         return BedrockError(
             status_code=502,
             message=f"Bedrock stream ended with {undecoded} undecoded bytes after {self.events} events ({detail})",
@@ -405,6 +472,7 @@ class _EventStreamTally:
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
@@ -415,6 +483,8 @@ class AWSEventStreamDecoder:
         self.json_mode = json_mode
         self._current_tool_name: str | None = None
         self._thinking_ran = False
+        self._thinking_block_index = -1
+        self._thinking_content_block_index: int | None = None
         self._provider_reasoning_tokens: int | None = None
 
     def check_empty_tool_call_args(self) -> bool:
@@ -446,8 +516,14 @@ class AWSEventStreamDecoder:
             return reasoning_content_block["text"]
         return None
 
+    def _thinking_block_index_for(self, content_block_index: int) -> int:
+        if self._thinking_content_block_index != content_block_index:
+            self._thinking_content_block_index = content_block_index
+            self._thinking_block_index += 1
+        return self._thinking_block_index
+
     def translate_thinking_blocks(
-        self, thinking_block: BedrockConverseReasoningContentBlockDelta
+        self, thinking_block: BedrockConverseReasoningContentBlockDelta, content_block_index: int = 0
     ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None:
         """
         Translate the thinking blocks to a string
@@ -455,17 +531,20 @@ class AWSEventStreamDecoder:
 
         thinking_blocks_list: Final[list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = []
         _thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None = None
+        index: Final = self._thinking_block_index_for(content_block_index)
 
         if "text" in thinking_block:
-            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking", index=index)
             _thinking_block["thinking"] = thinking_block["text"]
         elif "signature" in thinking_block:
-            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking", index=index)
             _thinking_block["signature"] = thinking_block["signature"]
             _thinking_block["thinking"] = ""  # consistent with anthropic response
         elif "redactedContent" in thinking_block:
             _thinking_block = ChatCompletionRedactedThinkingBlock(
-                type="redacted_thinking", data=thinking_block["redactedContent"]
+                type="redacted_thinking",
+                data=native_redacted_thinking_data(thinking_block["redactedContent"]),
+                index=index,
             )
         if _thinking_block is not None:
             thinking_blocks_list.append(_thinking_block)
@@ -485,6 +564,7 @@ class AWSEventStreamDecoder:
     def _handle_converse_start_event(
         self,
         start_obj: ContentBlockStartEvent,
+        content_block_index: int = 0,
     ) -> tuple[
         ChatCompletionToolCallChunk | None,
         dict,
@@ -521,7 +601,7 @@ class AWSEventStreamDecoder:
             elif (
                 "reasoningContent" in start_obj and start_obj["reasoningContent"] is not None
             ):  # redacted thinking can be in start object
-                thinking_blocks = self.translate_thinking_blocks(start_obj["reasoningContent"])
+                thinking_blocks = self.translate_thinking_blocks(start_obj["reasoningContent"], content_block_index)
                 provider_specific_fields = {
                     "reasoningContent": start_obj["reasoningContent"],
                 }
@@ -568,7 +648,7 @@ class AWSEventStreamDecoder:
                 "reasoningContent": delta_obj["reasoningContent"],
             }
             reasoning_content = self.extract_reasoning_content_str(delta_obj["reasoningContent"])
-            thinking_blocks = self.translate_thinking_blocks(delta_obj["reasoningContent"])
+            thinking_blocks = self.translate_thinking_blocks(delta_obj["reasoningContent"], index)
             if thinking_blocks and len(thinking_blocks) > 0 and reasoning_content is None:
                 reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
         elif "citationsContent" in delta_obj:
@@ -630,7 +710,7 @@ class AWSEventStreamDecoder:
                     tool_use,
                     provider_specific_fields,
                     thinking_blocks,
-                ) = self._handle_converse_start_event(start_obj)
+                ) = self._handle_converse_start_event(start_obj, content_block_index)
             elif "delta" in chunk_data:
                 delta_obj: Final = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (
@@ -742,6 +822,12 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
+    def chunk_parser(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._chunk_parser(chunk_data)
+
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict]:
@@ -749,17 +835,16 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally()
+        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
             for event in event_stream_buffer:
-                tally.add_event(event)
-                message = self._parse_message_from_event(event)
+                message = self._decode_event(event, tally)
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -771,21 +856,20 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally()
+        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
             for event in event_stream_buffer:
-                tally.add_event(event)
-                message = self._parse_message_from_event(event)
+                message = self._decode_event(event, tally)
                 if message:
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _response_stream_shape(self) -> "Shape":
         response_stream_shape: Final = get_bedrock_response_stream_shape()
         if response_stream_shape is None:
             raise BedrockError(
@@ -795,11 +879,29 @@ class AWSEventStreamDecoder:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict: Final = event.to_response_dict()
+        return response_stream_shape
+
+    def _decode_event(self, event: "EventStreamMessage", tally: _EventStreamTally) -> str | None:
+        response_stream_shape: Final = self._response_stream_shape()
+        response_dict: Final = bedrock_event_stream_response(event)
+        tally.add_event(event, response_dict["headers"])
+        return self._parse_message_from_response(response_dict, response_stream_shape)
+
+    def _parse_message_from_event(self, event: "EventStreamMessage") -> str | None:
+        response_stream_shape: Final = self._response_stream_shape()
+        return self._parse_message_from_response(bedrock_event_stream_response(event), response_stream_shape)
+
+    def _parse_message_from_response(
+        self, response_dict: BedrockEventStreamResponseDict, response_stream_shape: "Shape"
+    ) -> str | None:
         parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
+        event_type: Final = bedrock_event_stream_header(response_dict["headers"], ":event-type")
+        event_error_status: Final = bedrock_stream_event_error_status(event_type)
+        if event_type is not None and event_error_status is not None:
+            raise build_bedrock_stream_event_error(event_type, event_error_status, response_dict["body"])
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
@@ -819,6 +921,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
         json_mode: bool | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -830,6 +933,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             streaming_response=None,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            response_format_schema=response_format_schema,
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
@@ -904,7 +1008,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: ChatCompletionToolCallChunk | None = None
         if self.json_mode is True and tool_calls is not None:
-            message: Final = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
+            message: Final = litellm.AnthropicConfig().convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None

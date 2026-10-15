@@ -12,9 +12,7 @@ import sys
 import os
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -68,10 +66,7 @@ class TestMessageSanitization:
         assert sanitized[1]["role"] == "assistant"
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "toolu_01Kus2cC3ydjBW7UK4GJqBP4"
-        assert (
-            "skipped" in sanitized[2]["content"].lower()
-            or "interrupted" in sanitized[2]["content"].lower()
-        )
+        assert "skipped" in sanitized[2]["content"].lower() or "interrupted" in sanitized[2]["content"].lower()
         assert "get_weather" in sanitized[2]["content"]
 
     def test_case_a_orphaned_tool_call_multiple(self):
@@ -115,12 +110,8 @@ class TestMessageSanitization:
         assert len(sanitized) == 4
         assert sanitized[0]["role"] == "user"
         assert sanitized[1]["role"] == "assistant"
-        assert (
-            sanitized[2]["tool_call_id"] == "call_1"
-        )  # Original tool result (first in tool_calls)
-        assert (
-            sanitized[3]["tool_call_id"] == "call_2"
-        )  # Dummy added for missing call_2
+        assert sanitized[2]["tool_call_id"] == "call_1"  # Original tool result (first in tool_calls)
+        assert sanitized[3]["tool_call_id"] == "call_2"  # Dummy added for missing call_2
 
     def test_case_b_orphaned_tool_result(self):
         """
@@ -188,10 +179,7 @@ class TestMessageSanitization:
 
         assert len(sanitized) == 2
         assert sanitized[0]["role"] == "user"
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
 
     def test_case_c_whitespace_only_content(self):
         """
@@ -206,14 +194,8 @@ class TestMessageSanitization:
         sanitized = sanitize_messages_for_tool_calling(messages)
 
         assert len(sanitized) == 2
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
-        assert (
-            sanitized[1]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
+        assert sanitized[1]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
 
     def test_case_c_valid_content_preserved(self):
         """
@@ -270,10 +252,7 @@ class TestMessageSanitization:
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "call_1"  # Dummy added
         assert sanitized[3]["role"] == "user"
-        assert (
-            sanitized[3]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[3]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
         assert sanitized[4]["role"] == "assistant"
 
     def test_modify_params_false_no_sanitization(self):
@@ -329,9 +308,7 @@ class TestMessageSanitization:
         ]
 
         # This should not raise an error and should add dummy tool result
-        result = anthropic_messages_pt(
-            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
-        )
+        result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic")
 
         # Should have at least 2 messages (user and assistant)
         # The tool result will be merged into user content
@@ -355,23 +332,17 @@ class TestMessageSanitization:
             {"role": "user", "content": ""},
         ]
 
-        result = anthropic_messages_pt(
-            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
-        )
+        result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic")
 
         # All three user messages get merged into one user turn for Anthropic.
         assert len(result) == 1
         assert result[0]["role"] == "user"
-        text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        text_blocks = [b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"]
         assert len(text_blocks) == 3
         # No text block may be empty — that's the contract Anthropic enforces.
         for block in text_blocks:
             assert block["text"].strip() != ""
-        assert text_blocks[2]["text"] == (
-            "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert text_blocks[2]["text"] == ("[System: Empty message content sanitised to satisfy protocol]")
 
     def test_empty_text_block_in_list_content_sanitized(self):
         """
@@ -392,14 +363,10 @@ class TestMessageSanitization:
             },
         ]
 
-        result = anthropic_messages_pt(
-            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
-        )
+        result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic")
 
         assert len(result) == 1
-        text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        text_blocks = [b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"]
         assert len(text_blocks) == 3
         assert text_blocks[0]["text"] == "real content"
         for block in text_blocks[1:]:
@@ -418,9 +385,7 @@ class TestMessageSanitization:
             {"role": "user", "content": "How are you?"},
         ]
 
-        result = anthropic_messages_pt(
-            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
-        )
+        result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic")
 
         # Two user turns + one assistant turn (alternation preserved).
         assert len(result) == 3

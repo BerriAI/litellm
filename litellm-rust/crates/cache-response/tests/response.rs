@@ -18,7 +18,7 @@ use litellm_cache_response::{
     WriteBuffer, cache_key,
 };
 use redis_test::MockCmd;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use support::{keyed, memory, redis, request};
 
@@ -647,4 +647,130 @@ async fn write_buffer_clear_drops_pending_entries(memory: Memory, request: Respo
 
     assert_eq!(memory.lookup(&request, now).unwrap(), None);
     assert_eq!(memory.lookup(&other, now).unwrap(), None);
+}
+
+#[rstest]
+#[case::python_sync("{'timestamp': 100.0, 'response': '{\"answer\": 7}'}")]
+#[case::python_async(r#"{"timestamp":100.0,"response":{"answer":7}}"#)]
+#[case::bare_response(r#"{"answer":7}"#)]
+#[tokio::test]
+async fn gcs_reads_python_entries_and_writes_python_compatible_envelopes(
+    #[case] encoded: &str,
+    #[values(false, true)] asynchronous: bool,
+    #[future(awt)] gcs: (wiremock::MockServer, Gcs),
+) {
+    use wiremock::{
+        Mock, ResponseTemplate,
+        matchers::{body_json, header, method, path, query_param},
+    };
+
+    let (server, cache) = gcs;
+    let response = json!({"answer": 7});
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fpython"))
+        .and(query_param("alt", "media"))
+        .and(header("authorization", "Bearer token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(encoded))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload/storage/v1/b/bucket/o"))
+        .and(query_param("uploadType", "media"))
+        .and(query_param("name", "cache/native"))
+        .and(header("authorization", "Bearer token"))
+        .and(header("content-type", "application/json"))
+        .and(body_json(json!({"timestamp": 102.0, "response": response})))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let lookup = if asynchronous {
+        cache
+            .async_lookup(&keyed("python"), Duration::from_secs(102))
+            .await
+    } else {
+        cache.lookup(&keyed("python"), Duration::from_secs(102))
+    };
+    assert_eq!(lookup.unwrap(), Some(response.clone()));
+    let request = ResponseCacheRequest {
+        context: litellm_cache::ExactCacheContext {
+            ttl: Some(Duration::from_secs(12)),
+        },
+        ..keyed("native")
+    };
+    let stored = if asynchronous {
+        cache
+            .async_store(&request, response, Duration::from_secs(102))
+            .await
+    } else {
+        cache.store(&request, response, Duration::from_secs(102))
+    };
+    assert_eq!(stored, Ok(()));
+    let requests = server.received_requests().await.unwrap();
+    let upload = requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        upload.url.query(),
+        Some("uploadType=media&name=cache%2Fnative")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn gcs_batch_reads_preserve_order_and_treat_invalid_entries_as_misses(
+    #[future(awt)] gcs: (wiremock::MockServer, Gcs),
+) {
+    use wiremock::{
+        Mock, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let (server, cache) = gcs;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fhit"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"timestamp": 100.0, "response": {"answer":7}})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Finvalid"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not an entry"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fmissing"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let requests = [keyed("hit"), keyed("missing"), keyed("invalid")];
+    let partial = cache
+        .async_lookup_batch(&requests, Duration::from_secs(102))
+        .await
+        .unwrap();
+    assert_eq!(partial.values, vec![Some(json!({"answer":7})), None, None]);
+    assert_eq!(partial.missing_indices, vec![1, 2]);
+}
+
+type Gcs = ResponseCache<litellm_cache_gcs::GcsCache<litellm_cache_response::ResponseCacheCodec>>;
+
+#[fixture]
+async fn gcs() -> (wiremock::MockServer, Gcs) {
+    let server = wiremock::MockServer::start().await;
+    let cache = ResponseCache::new(Arc::new(litellm_cache_gcs::GcsCache::with_token_source(
+        litellm_cache_gcs::GcsConfig {
+            bucket_name: "bucket".into(),
+            gcs_path: Some("cache".into()),
+            path_service_account: None,
+            endpoint: server.uri(),
+        },
+        litellm_http::Client::plain_for_test(),
+        litellm_cache_response::ResponseCacheCodec,
+        Arc::new(litellm_cache_gcs::StaticTokenSource("token".into())),
+    )));
+    (server, cache)
 }
