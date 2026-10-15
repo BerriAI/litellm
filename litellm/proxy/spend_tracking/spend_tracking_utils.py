@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import re
@@ -32,7 +33,11 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
+from litellm.litellm_core_utils.classifier_logging import (
+    CLASSIFIER_AUDIT_FIELDS,
+    classifier_audit_fields,
+    without_classifier_audit,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
@@ -787,6 +792,15 @@ def get_logging_payload(
             if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
+    drop_requester_ip_address: Final = requester_ip_address_logging_disabled()
+    error_information: Final = clean_metadata["error_information"]
+    if drop_requester_ip_address:
+        clean_metadata["requester_ip_address"] = None
+    if drop_requester_ip_address and isinstance(error_information, Mapping):
+        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
+            StandardLoggingPayloadErrorInformation,
+            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
+        )
 
     if litellm.cache is None:
         cache_key = "Cache OFF"
@@ -848,6 +862,7 @@ def get_logging_payload(
                     else litellm_params
                 ),
                 kwargs=kwargs,
+                drop_requester_ip_address=drop_requester_ip_address,
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -1474,7 +1489,12 @@ def sanitize_error_information_for_spend_logs(
                 sanitized[field] = _redact_prompt_leaks_in_error_string(value)
 
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
-    return cast(StandardLoggingPayloadErrorInformation, sanitized)
+    return cast(
+        StandardLoggingPayloadErrorInformation,
+        _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(sanitized))
+        if requester_ip_address_logging_disabled()
+        else sanitized,
+    )
 
 
 _sanitize_error_information_for_spend_logs: Final = sanitize_error_information_for_spend_logs
@@ -1597,10 +1617,146 @@ def _placeholder_stored_request_body(
     )
 
 
+_CLIENT_IP_HEADERS: Final = frozenset(
+    {
+        "x-forwarded-for",
+        "x-real-ip",
+        "forwarded",
+        "true-client-ip",
+        "cf-connecting-ip",
+        "x-client-ip",
+        "x-cluster-client-ip",
+        "fastly-client-ip",
+        "x-original-forwarded-for",
+        "x-envoy-external-address",
+        "x-azure-clientip",
+        "cloudfront-viewer-address",
+        "fly-client-ip",
+        "cf-connecting-ipv6",
+        "cf-pseudo-ipv4",
+        "x-appengine-user-ip",
+        "x-vercel-forwarded-for",
+        "x-arr-clientip",
+    }
+)
+_REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
+_MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
+_LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
+_IPV6_ADDRESS_CANDIDATE: Final = re.compile(
+    r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
+)
+
+
+def _masked_ipv6_address(candidate: re.Match[str]) -> str:
+    """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
+    text: Final = candidate.group(0)
+    unlabelled: Final = text.partition(":")[2]
+    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
+        try:
+            ipaddress.IPv6Address(address)
+        except ValueError:
+            continue
+        return REDACTED_BY_LITELM_STRING
+    return text
+
+
+def _without_ip_addresses(text: str) -> str:
+    return _IPV6_ADDRESS_CANDIDATE.sub(_masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
+
+
+def _is_ip_address_piece(piece: str) -> bool:
+    return any(char.isdigit() or char == ":" for char in piece)
+
+
+def _without_ip_piece_before_cut(text: str) -> str:
+    run: Final = text[len(text.rstrip(_IP_ADDRESS_CHARACTERS)) :]
+    long_groups: Final = list(_LONG_HEX_GROUP.finditer(run))
+    piece: Final = run[long_groups[-1].end() if long_groups else 0 :][-_MAX_IP_ADDRESS_LENGTH:].lstrip(".:")
+    return text[: len(text) - len(piece)] + REDACTED_BY_LITELM_STRING if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_piece_after_cut(text: str) -> str:
+    run: Final = text[: len(text) - len(text.lstrip(_IP_ADDRESS_CHARACTERS))]
+    long_group: Final = _LONG_HEX_GROUP.search(run)
+    piece: Final = run[: long_group.start() if long_group else len(run)][:_MAX_IP_ADDRESS_LENGTH].rstrip(".:")
+    return REDACTED_BY_LITELM_STRING + text[len(piece) :] if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_pieces_beside_cuts(text: str, *, after_cut: bool, before_cut: bool) -> str:
+    after: Final = _without_ip_piece_after_cut(text) if after_cut else text
+    return _without_ip_piece_before_cut(after) if before_cut else after
+
+
+def _masked_ip_text(text: str) -> str:
+    """The text with every IP address masked, plus the run of short hex, digit, dot and colon groups beside each
+    truncation marker when that run holds a digit or a colon."""
+    parts: Final = _TRUNCATION_MARKER_GROUP.split(_without_ip_addresses(text))
+    last: Final = len(parts) - 1
+    return "".join(
+        part if index % 2 else _without_ip_pieces_beside_cuts(part, after_cut=index > 0, before_cut=index < last)
+        for index, part in enumerate(parts)
+    )
+
+
+def _error_information_without_ip_addresses(error_information: Mapping[object, object]) -> Mapping[object, object]:
+    """The error information with every IP address in its error message and traceback masked."""
+    return {
+        key: _masked_ip_text(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
+        for key, value in error_information.items()
+    }
+
+
+def _stored_value_without_requester_ip_address(key: object, value: object) -> object:
+    if key == "requester_ip_address":
+        return None
+    if key == "error_information" and isinstance(value, Mapping):
+        return _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(value))
+    return _without_requester_ip_address(value, headers=key == "headers")
+
+
+def _without_requester_ip_address(value: object, *, headers: bool = False) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _masked_ip_text(item)
+            if headers and isinstance(item, str)
+            else _stored_value_without_requester_ip_address(key, item)
+            for key, item in _OBJECT_MAPPING.validate_python(value).items()
+            if not (headers and isinstance(key, str) and key.lower() in _CLIENT_IP_HEADERS)
+        }
+    if isinstance(value, list):
+        return [_without_requester_ip_address(item) for item in _OBJECT_LIST.validate_python(value)]
+    return value
+
+
+def _request_metadata_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+    return {
+        key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
+        for key, value in request_body.items()
+    }
+
+
+def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+    """The request body, and the classifier input and originating request a classifier row stores in it, with
+    `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP address in the other header
+    values and in the error text masked inside their metadata."""
+    return {
+        key: _request_metadata_without_requester_ip_address(_OBJECT_MAPPING.validate_python(value))
+        if key in CLASSIFIER_AUDIT_FIELDS and isinstance(value, Mapping)
+        else value
+        for key, value in _request_metadata_without_requester_ip_address(request_body).items()
+    }
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: Mapping[str, object],
     kwargs: dict | None = None,
+    drop_requester_ip_address: bool = False,
 ) -> str:
     """
     Only store if should_store_prompts_and_responses_in_spend_logs() is True
@@ -1641,7 +1797,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
-            _request_body_json_str: Final = safe_dumps(_request_body)
+            stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
+            _request_body_json_str: Final = safe_dumps(
+                _stored_request_without_requester_ip_address(stored_request_body)
+                if drop_requester_ip_address
+                else stored_request_body
+            )
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
                     "Spend Log: request body was truncated before storing in DB. %s",
@@ -1764,6 +1925,22 @@ def configured_spend_logs_metadata_fields() -> SpendLogsMetadataFields | None:
     except ValidationError as e:
         verbose_proxy_logger.error("Ignoring invalid general_settings.spend_logs_metadata_fields: %s", e)
         return None
+
+
+_OPTIONAL_BOOL_ADAPTER: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def requester_ip_address_logging_disabled() -> bool:
+    """True when `general_settings.disable_requester_ip_address_logging` holds a value the settings API accepts as true."""
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return (
+            _OPTIONAL_BOOL_ADAPTER.validate_python(general_settings_view().get("disable_requester_ip_address_logging"))
+            is True
+        )
+    except ValidationError:
+        return False
 
 
 def spend_log_row_with_retained_metadata(

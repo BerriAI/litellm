@@ -585,9 +585,12 @@ async def _read_twice_on_two_pods(
         background=True,
     )
 
+    router: Final = _configured_deployment_router(finished)
+    router.aget_responses = AsyncMock(side_effect=AssertionError("billing must not read the provider again"))
+
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
     ):
