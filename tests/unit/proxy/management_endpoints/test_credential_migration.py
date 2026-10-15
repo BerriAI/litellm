@@ -277,6 +277,48 @@ async def test_check_reports_residual_legacy(salt_key, monkeypatch):
     client.db.litellm_config.update.assert_not_awaited()  # read-only
 
 
+class _NoRows:
+    async def find_many(self, *args: object, **kwargs: object) -> list[object]:
+        return []
+
+    async def find_unique(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+class _ConfigRows:
+    def __init__(self, rows: dict[str, dict[str, str]]) -> None:
+        self.rows: Final = rows
+
+    async def find_unique(self, where: dict[str, str]) -> SimpleNamespace | None:
+        name: Final = where["param_name"]
+        return SimpleNamespace(param_value=self.rows[name]) if name in self.rows else None
+
+
+class _Db:
+    def __init__(self, config: _ConfigRows) -> None:
+        self.litellm_config: Final = config
+
+    def __getattr__(self, table: str) -> _NoRows:
+        return _NoRows()
+
+
+class _Client:
+    def __init__(self, config_rows: dict[str, dict[str, str]]) -> None:
+        self.db: Final = _Db(_ConfigRows(config_rows))
+
+
+@pytest.mark.asyncio
+async def test_check_covers_the_ternary_settings_api_key(salt_key: str, monkeypatch: pytest.MonkeyPatch):
+    legacy_api_key: Final = _legacy_ct("ternary-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+
+    report: Final = await cm.check_encryption(
+        _Client({"ternary_settings": {"api_key": legacy_api_key, "connection_id": "conn-123"}})
+    )
+
+    assert report.residual_legacy == 1
+
+
 @pytest.mark.asyncio
 async def test_check_reports_zero_after_migration(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
