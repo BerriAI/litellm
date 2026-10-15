@@ -1,11 +1,14 @@
 import logging
+from itertools import chain
 from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
@@ -20,7 +23,8 @@ from litellm.router_utils.common_utils import (
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
-from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.router import Deployment, FallbackSkipReason, LiteLLM_Params, ModelInfo, SkippedFallbackTarget
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class TestFilterTeamBasedModels:
@@ -846,3 +850,97 @@ class TestWarnOnProviderCredentialMismatch:
 def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
     assert provider_for_generic_call(litellm_params) == expected
+
+
+def test_router_warns_only_for_a_capability_flag_set_under_litellm_params(caplog):
+    bedrock_model: Final = "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "flag-in-litellm-params",
+                    "litellm_params": {"model": bedrock_model, "supports_max_reasoning_effort": False},
+                },
+                {
+                    "model_name": "flag-in-model-info",
+                    "litellm_params": {"model": bedrock_model},
+                    "model_info": {"supports_max_reasoning_effort": False},
+                },
+                {
+                    "model_name": "declared-litellm-param",
+                    "litellm_params": {"model": bedrock_model, "supports_system_message": False},
+                },
+            ]
+        )
+
+    capability_warnings: Final = [r.getMessage() for r in caplog.records if "model_info" in r.getMessage()]
+    assert len(capability_warnings) == 1, capability_warnings
+    assert "flag-in-litellm-params" in capability_warnings[0]
+    assert "supports_max_reasoning_effort" in capability_warnings[0]
+
+
+def test_router_serves_deployments_without_model_capability_flags():
+    capability_flags: Final = frozenset(ProviderSpecificModelInfo.__annotations__) | frozenset(
+        key for key in chain.from_iterable(GetModelCostMap.loaded_model_cost_map().values()) if key.startswith("supports_")
+    )
+    declared_params: Final = {"supports_system_message": False, "supports_system_prompt": True}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "every-flag",
+                "litellm_params": {
+                    "model": "replicate/meta/meta-llama-3-8b-instruct",
+                    **dict.fromkeys(capability_flags - declared_params.keys(), True),
+                    **declared_params,
+                },
+            }
+        ]
+    )
+
+    served_params: Final = router.get_model_list()[0]["litellm_params"]
+    assert sorted(capability_flags & served_params.keys() - declared_params.keys()) == []
+    assert {key: served_params.get(key) for key in declared_params} == declared_params
+
+
+def test_router_keeps_a_provider_param_that_another_deployments_model_info_names():
+    Router(
+        model_list=[
+            {
+                "model_name": "registers-the-name",
+                "litellm_params": {"model": "openai/litellm-qa-registered-capability"},
+                "model_info": {"supports_system_prompt": True},
+            }
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "replicate-system-prompt",
+                "litellm_params": {"model": "replicate/meta/meta-llama-3-8b-instruct", "supports_system_prompt": True},
+            }
+        ]
+    )
+
+    assert router.get_model_list()[0]["litellm_params"].get("supports_system_prompt") is True
+
+
+def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_db(caplog):
+    router: Final = Router(model_list=[])
+    db_deployment: Final = Deployment(
+        model_name="db-model",
+        litellm_params=LiteLLM_Params(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            supports_max_reasoning_effort=False,
+        ),
+        model_info=ModelInfo(id="db-model-id"),
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        first_sync: Final = router.upsert_deployment(db_deployment)
+        second_sync: Final = router.upsert_deployment(db_deployment)
+
+    capability_warnings: Final = [r.getMessage() for r in caplog.records if "model_info" in r.getMessage()]
+    assert first_sync is not None
+    assert second_sync is None
+    assert len(capability_warnings) == 1, capability_warnings
+    assert "db-model" in capability_warnings[0]
+    assert "supports_max_reasoning_effort" not in router.get_model_list()[0]["litellm_params"]
