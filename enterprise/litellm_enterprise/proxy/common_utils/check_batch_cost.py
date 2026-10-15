@@ -1031,6 +1031,10 @@ class CheckBatchCost:
         try:
             deployment_info: Final = self.llm_router.get_deployment(model_id=model_id)
             if deployment_info is None:
+                verbose_proxy_logger.error(
+                    f"CheckBatchCost: deployment {model_id} is no longer in the router, so the line items of batch "
+                    f"{batch_id} (job {job.id}) were not stored"
+                )
                 return
             litellm_model_name: Final = deployment_info.litellm_params.model
             model_name, llm_provider, _, _ = get_llm_provider(

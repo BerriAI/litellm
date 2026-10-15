@@ -3732,6 +3732,30 @@ class TestBatchLineItemsFromThePoller:
         assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_a_deployment_removed_before_the_lines_are_stored_leaves_the_batch_billed_and_logs_an_error(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        deployment = instance.llm_router.get_deployment.return_value
+        instance.llm_router.get_deployment = MagicMock(
+            side_effect=lambda **_: None if instance._poll_idle.is_set() else deployment
+        )
+
+        with self._provider(journal), caplog.at_level(logging.ERROR):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert logger.payloads == []
+        assert (row.batch_processed, row.status) == (True, "complete")
+        assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_a_batch_bigger_than_one_part_reaches_the_callbacks_as_numbered_parts(self, monkeypatch):
         import litellm
         from litellm_enterprise.proxy.common_utils import check_batch_cost
