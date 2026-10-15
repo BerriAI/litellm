@@ -141,7 +141,9 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
 
 
 def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
-    async def ordered(scope: Scope, receive: Receive, send: Send) -> None:
+    in_flight: Final[dict[bytes, set[asyncio.Event]]] = {}
+
+    async def dispatch(scope: Scope, receive: Receive, send: Send, dispatched: asyncio.Event | None = None) -> None:
         if scope["type"] != "http" or scope["method"] != "POST":
             await app(scope, receive, send)
             return
@@ -162,12 +164,40 @@ def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
             else:
                 await send(message)
 
-        await app(scope, receive, capture)
+        try:
+            await app(scope, receive, capture)
+        finally:
+            if dispatched is not None:
+                dispatched.set()
         if pending:
             if len(pending) != 2:
                 raise RuntimeError("MCP notification acknowledgement did not complete")
             for message in pending:
                 await send(message)
+
+    async def ordered(scope: Scope, receive: Receive, send: Send) -> None:
+        session: Final = next(
+            (value for name, value in scope.get("headers", ()) if name.lower() == b"mcp-session-id"), None
+        )
+        if scope["type"] != "http" or session is None:
+            await dispatch(scope, receive, send)
+            return
+        if scope["method"] == "DELETE":
+            while pending := tuple(done for done in in_flight.get(session, ()) if not done.is_set()):
+                await asyncio.gather(*(done.wait() for done in pending))
+        if scope["method"] != "POST":
+            await dispatch(scope, receive, send)
+            return
+        done: Final = asyncio.Event()
+        active: Final = in_flight.setdefault(session, set())
+        active.add(done)
+        try:
+            await dispatch(scope, receive, send, done)
+        finally:
+            active.remove(done)
+            if not active:
+                del in_flight[session]
+            done.set()
 
     return ordered
 
