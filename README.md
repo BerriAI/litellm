@@ -410,6 +410,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Sambanova (`sambanova`)](https://docs.litellm.ai/docs/providers/sambanova) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [ScaleDown (`scaledown`)](https://docs.litellm.ai/docs/providers/scaledown) | ✅ |  |  |  |  |  |  |  |  |  |
 | [Snowflake (`snowflake`)](https://docs.litellm.ai/docs/providers/snowflake) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [STACKIT (`stackit`)](https://docs.litellm.ai/docs/providers/stackit) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |  |
 | [Strands Decider (`strands_decider`)](https://docs.litellm.ai/docs/providers) |  |  |  |  |  |  |  |  |  |  |
 | [Text Completion Codestral (`text-completion-codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Text Completion OpenAI (`text-completion-openai`)](https://docs.litellm.ai/docs/providers/text_completion_openai) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ | ✅ | ✅ |  |
