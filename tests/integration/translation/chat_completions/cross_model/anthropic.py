@@ -17,6 +17,7 @@ from integration.translation.chat_completions.bases.anthropic import (
 )
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
+    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
 )
 from integration.translation.templates.anthropic import (
@@ -348,6 +349,16 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01324ezmdSmGSpmxGX55GvYF", "toolu_01MxHYehH7UYVY2A8WkRJZPu"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -578,6 +589,16 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01UXBJZGdCaY4vxon1j4uapy", "toolu_0124RYbAPnwVoGtdzfPCNPc6"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -1099,6 +1120,34 @@ CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01LQnJgiochDrKWke4nfjbS7", "toolu_01SVGxc454FPrL4yRwc3QMV7"),
+        reasoning_content=(
+            "The user wants me to:\n"
+            "1. Search for other callers of retries_remaining\n"
+            "2. Run the tests to see the failure\n"
+            "\n"
+            "These are independent, so I can do both together."
+        ),
+        thinking_blocks=(
+            {
+                "type": "thinking",
+                "thinking": "The user wants me to:\n"
+                "1. Search for other callers of retries_remaining\n"
+                "2. Run the tests to see the failure\n"
+                "\n"
+                "These are independent, so I can do both together.",
+                "signature": "synthetic-signature",
+            },
+        ),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1237,
+        "completion_tokens": 147,
+        "total_tokens": 1384,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 46},
+    },
 )
 
 
@@ -1426,6 +1475,16 @@ CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_0177HUb25ArysRAu8eF3u4DJ", "toolu_011gegGWvYoxPwxWY7LSK4Uk"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -1753,6 +1812,16 @@ CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_013mPRCxrKKH6KzYGHKPukwv", "toolu_01FkXiaw4cTiXua3PoMd4wCu"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -1988,4 +2057,14 @@ CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_017r3PoQsgodP2mgcgDnDLxU", "toolu_01T8ECEb4XwFyozSnCKUiuB2"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1180,
+        "completion_tokens": 105,
+        "total_tokens": 1285,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )

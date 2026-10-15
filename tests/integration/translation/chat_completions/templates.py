@@ -1,9 +1,40 @@
+import json
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import ANY
 
 from integration.translation.templates.anthropic import CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0
 from pydantic import JsonValue
+
+
+def coding_agent_stream_message(
+    tool_ids: tuple[str, str],
+    *,
+    arguments: tuple[Mapping[str, JsonValue], Mapping[str, JsonValue]] = (
+        {"query": "retries_remaining"},
+        {"path": "tests/test_retry.py"},
+    ),
+    content: str | None = None,
+    reasoning_content: str | None = None,
+    thinking_blocks: tuple[Mapping[str, JsonValue], ...] = (),
+    reasoning_items: tuple[Mapping[str, JsonValue], ...] = (),
+) -> Mapping[str, JsonValue]:
+    return {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": [
+            {
+                "id": tool_id,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+            for tool_id, name, args in zip(tool_ids, ("search_code", "run_tests"), arguments, strict=True)
+        ],
+        "reasoning_content": reasoning_content,
+        "thinking_blocks": [dict(block) for block in thinking_blocks],
+        "reasoning_items": [dict(item) for item in reasoning_items],
+    }
+
 
 CODING_AGENT_REQUEST: Final[Mapping[str, JsonValue]] = {
     "cache": {"no-cache": True},

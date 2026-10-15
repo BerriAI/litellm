@@ -15,6 +15,7 @@ from integration.translation.chat_completions.bases.azure_ai import (
 )
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
+    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
 )
 from integration.translation.templates.anthropic import (
@@ -347,6 +348,16 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01PfMSQLj6cQzebc2vGbdsV8", "toolu_01SVc4RwmEaMiDK33hUEbTZW"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -575,6 +586,16 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01DprHn2GeJDAWFEyTqBzy2Z", "toolu_016kava9hqtKw71W4vBEedfW"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -1121,6 +1142,34 @@ CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01WZqSaeccXLYKfSvcihGBVb", "toolu_019gRbhpTDQDLs6Dvp7kmkYi"),
+        reasoning_content=(
+            "The user wants me to:\n"
+            "1. Search for other callers of retries_remaining\n"
+            "2. Run the tests in tests/test_retry.py to see the failure\n"
+            "\n"
+            "These are independent, so I can call both together."
+        ),
+        thinking_blocks=(
+            {
+                "type": "thinking",
+                "thinking": "The user wants me to:\n"
+                "1. Search for other callers of retries_remaining\n"
+                "2. Run the tests in tests/test_retry.py to see the failure\n"
+                "\n"
+                "These are independent, so I can call both together.",
+                "signature": "synthetic-signature",
+            },
+        ),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1237,
+        "completion_tokens": 155,
+        "total_tokens": 1392,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 54},
+    },
 )
 
 
@@ -1533,4 +1582,32 @@ CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         ),
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01B7tauZtVgnVUmrvUE2Wykb", "toolu_01MFTSxJgqqX3MimPYpa5pHs"),
+        reasoning_content=(
+            "I'll run the search and test in parallel. I'm spotting the bug now: the function returns limit + "
+            "attempts instead of max(0, limit - attempts), so for (3,1) it should give 2 but gives 4, and for "
+            "(3,5) it should give 0 but gives 8 — the test will fail as written. Let me make those calls "
+            "now.\n"
+            "\n"
+        ),
+        thinking_blocks=(
+            {
+                "type": "thinking",
+                "thinking": "I'll run the search and test in parallel. I'm spotting the bug now: the function "
+                "returns limit + attempts instead of max(0, limit - attempts), so for (3,1) it "
+                "should give 2 but gives 4, and for (3,5) it should give 0 but gives 8 — the test "
+                "will fail as written. Let me make those calls now.\n"
+                "\n",
+                "signature": "synthetic-signature",
+            },
+        ),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 196,
+        "total_tokens": 1380,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 90},
+    },
 )

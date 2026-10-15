@@ -252,5 +252,6 @@ CASES: Final = (*SMALL, *MID, *HIGH)
 def reference_for(case: TranslationTestCase) -> TranslationTestCase:
     model: Final = str(case.litellm_request["model"])
     provider: Final = "anthropic/" if model.startswith("openai/") else "openai/"
-    tier: Final = next(group for group in TIERS if any(row[0] is case for row in group))
-    return next(row[0] for row in tier if str(row[0].litellm_request["model"]).startswith(provider))
+    tier: Final = next(group for group in TIERS if any(row[0] is case or row[1] is case for row in group))
+    reference: Final = next(row for row in tier if str(row[0].litellm_request["model"]).startswith(provider))
+    return reference[1] if any(row[1] is case for row in tier) else reference[0]

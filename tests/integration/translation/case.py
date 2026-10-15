@@ -41,7 +41,7 @@ class EventStreamFrame:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StreamingTranslationTestCase:
-    """The stream request, provider frames, and optional exact LiteLLM frames and assembled response."""
+    """Provider frames with optional exact responses or independently expected message and usage values."""
 
     scenario: str
     litellm_endpoint: str
@@ -52,6 +52,8 @@ class StreamingTranslationTestCase:
     mock_provider_frames: tuple[SSEFrame | EventStreamFrame, ...]
     expected_litellm_frames: tuple[SSEFrame, ...] | None = None
     expected_litellm_response: Mapping[str, JsonValue] | None = None
+    expected_litellm_message: Mapping[str, JsonValue] | None = None
+    expected_litellm_usage: Mapping[str, JsonValue] | None = None
 
     @property
     def id(self) -> str:

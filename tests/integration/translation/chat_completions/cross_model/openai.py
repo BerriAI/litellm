@@ -20,6 +20,7 @@ from integration.translation.chat_completions.bases.openai import (
 )
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
+    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
 )
 from integration.translation.templates.openai import (
@@ -535,6 +536,22 @@ GPT_5_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data="[DONE]"),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_cfsTFwIpo5Pw1Ycjne6cu6rd", "call_w0dR7zl3FEWVVOUvxe2qRhw3"),
+        arguments=({"query": "retries_remaining("}, {"path": "tests/test_retry.py"}),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 529,
+        "completion_tokens": 53,
+        "total_tokens": 582,
+        "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+        "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+    },
 )
 
 
@@ -1193,6 +1210,18 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_8ucGVxGVa1SVMbD1mwPwwE3c", "call_NyYyHGphM3cB0Z3KkJRhhIfB"),
+        arguments=({"query": "retries_remaining("}, {"path": "tests/test_retry.py"}),
+        content="I’ll search for callers and run the targeted test to reproduce the failure.",
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 76,
+        "total_tokens": 524,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -1698,6 +1727,25 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_caBz8iaQgGxQPczEdr5gE18A", "call_Bg8gxxs2CV57YzN0vxup4DvY"),
+        reasoning_items=(
+            {
+                "id": "rs_02bfb16fa00695cf006ad04a8f621887d0bc262e1d904dd464",
+                "type": "reasoning",
+                "content": [],
+                "encrypted_content": "synthetic-signature",
+                "summary": [],
+            },
+        ),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 67,
+        "total_tokens": 515,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 12},
+    },
 )
 
 
@@ -2147,6 +2195,16 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_RHePNBeoQ4fn5WnJUzavuVVF", "call_1h6M2yMno8h8DYlCJsImg3N4"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -2596,6 +2654,16 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_xDdtGVzn464uEE7X8AuVRiHJ", "call_yPhpkZWP5B2zJo4SPhCEAxW4"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -3043,6 +3111,16 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_rdLoAf1TMckmLuY7a9q3qGV2", "call_BCEXFCGlvI1hhltFXxKMhOQj"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -3492,6 +3570,16 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_BXnB0UfiU2LW63KiDbncliyC", "call_rN9W4duhkWVD0ycWn3xo03Dl"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -3836,6 +3924,16 @@ GPT_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_ISAnqtLEGvg6OfXg9D16OBHr", "call_h6Z6YQpd9m7NsG5iiF05Wue9"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
 
 
@@ -4283,4 +4381,14 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             event="response.completed",
         ),
     ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_dRjirW1hJv1g0OIFLZi21Ssq", "call_4Rb17RKwt3mIAswOKn3gi8Im"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
 )
