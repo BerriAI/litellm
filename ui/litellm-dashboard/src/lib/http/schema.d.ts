@@ -15947,8 +15947,8 @@ export interface paths {
          *     `legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of
          *     what `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe
          *     takes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`
-         *     contain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box
-         *     questions. Requests that break these rules are rejected with a 400 before any provider
+         *     contain. TypeSafe answers both only when the request carries its `TypeSafe-Danger-Zone-Images: true` header,
+         *     sent through `extra_headers`. Requests that break these rules are rejected with a 400 before any provider
          *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
@@ -22233,8 +22233,8 @@ export interface paths {
          *     `legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of
          *     what `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe
          *     takes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`
-         *     contain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box
-         *     questions. Requests that break these rules are rejected with a 400 before any provider
+         *     contain. TypeSafe answers both only when the request carries its `TypeSafe-Danger-Zone-Images: true` header,
+         *     sent through `extra_headers`. Requests that break these rules are rejected with a 400 before any provider
          *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *

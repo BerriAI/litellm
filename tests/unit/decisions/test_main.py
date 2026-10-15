@@ -312,7 +312,7 @@ _BOX_RESPONSE: Final[Mapping[str, object]] = {
     ),
     ids=("box", "box-and-assets", "assets"),
 )
-def test_typesafe_gets_box_questions_and_assets_with_the_images_header(
+def test_typesafe_gets_box_questions_assets_and_the_callers_images_header_unchanged(
     questions: Mapping[str, object], assets: Mapping[str, object] | None, respx_mock: respx.MockRouter
 ) -> None:
     route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
@@ -323,6 +323,7 @@ def test_typesafe_gets_box_questions_and_assets_with_the_images_header(
         questions=questions,
         assets=assets,
         api_key="k",
+        extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
     )
 
     assert route.calls[0].request.headers.get("typesafe-danger-zone-images") == "true"
@@ -332,6 +333,20 @@ def test_typesafe_gets_box_questions_and_assets_with_the_images_header(
         "questions": questions,
         **({} if assets is None else {"assets": assets}),
     }
+
+
+def test_litellm_adds_no_typesafe_images_header_the_caller_did_not_send(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
+
+    litellm.systemone(
+        model="typesafe/jev-1.14.0",
+        state={"photo": "a3f1c2e8-kitchen"},
+        questions={"mug": {"type": "box", "instructions": "the mug in `photo`"}},
+        assets=_KITCHEN_ASSETS,
+        api_key="k",
+    )
+
+    assert "typesafe-danger-zone-images" not in route.calls[0].request.headers
 
 
 def test_a_typesafe_box_answer_reaches_the_caller(respx_mock: respx.MockRouter) -> None:
@@ -346,33 +361,6 @@ def test_a_typesafe_box_answer_reaches_the_caller(respx_mock: respx.MockRouter) 
     )
 
     assert response.model_dump(mode="json") == _BOX_RESPONSE
-
-
-def test_typesafe_text_requests_carry_no_danger_zone_header(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_RESPONSE)
-
-    litellm.systemone(
-        model="typesafe/jev-1.14.0",
-        state="review",
-        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-        api_key="k",
-    )
-
-    assert "typesafe-danger-zone-images" not in route.calls[0].request.headers
-
-
-def test_a_caller_header_overrides_the_typesafe_images_header(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
-
-    litellm.systemone(
-        model="typesafe/jev-1.14.0",
-        state={"photo": "a3f1c2e8-kitchen"},
-        questions={"mug": {"type": "box", "instructions": "the mug in `photo`"}},
-        api_key="k",
-        extra_headers={"TypeSafe-Danger-Zone-Images": "false"},
-    )
-
-    assert route.calls[0].request.headers["typesafe-danger-zone-images"] == "false"
 
 
 @pytest.mark.parametrize(

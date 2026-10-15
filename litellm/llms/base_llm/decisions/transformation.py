@@ -531,9 +531,6 @@ class BaseDecisionsConfig(ABC):
     def request_model(self, model: str) -> str:
         return model
 
-    def request_headers(self, request: DecisionsIRRequest) -> Mapping[str, str]:
-        return {}
-
     def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
         return {
             **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},

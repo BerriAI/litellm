@@ -429,7 +429,7 @@ def prepare_call(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
-        headers={**provider_config.request_headers(ir_request), **(extra_headers or {})},
+        headers=extra_headers or {},
         timeout=timeout,
         litellm_params=kwargs,
     )

@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.decisions.transformation import (
     ir_to_systemone_request,
@@ -280,3 +280,28 @@ def test_a_box_answer_reaches_the_caller_unchanged_with_provider_extras() -> Non
     response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == payload
+
+
+@pytest.mark.parametrize(
+    "assets",
+    [
+        {"   ": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+        {"r" * 1025: {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+        {"ref": {"type": "image", "format": "png", "data_base64": "not base64!"}},
+        {"ref": {"type": "image", "format": "gif", "data_base64": "R0lGOD"}},
+        {"ref": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo=", "part": "photo"}},
+    ],
+    ids=["blank-reference", "reference-over-1024-bytes", "bad-base64", "gif", "multipart-part"],
+)
+def test_assets_typesafe_would_reject_are_rejected_by_validation(assets: Mapping[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _SYSTEMONE_BODY.validate_python({**_BOX_AND_ASSET_REQUEST, "assets": assets})
+
+
+def test_an_asset_reference_of_exactly_1024_bytes_is_accepted() -> None:
+    reference: Final = "r" * 1024
+    body: Final = _SYSTEMONE_BODY.validate_python(
+        {**_BOX_AND_ASSET_REQUEST, "assets": {reference: {"type": "image", "format": "png", "data_base64": "iVBO"}}}
+    )
+
+    assert tuple(body.assets or {}) == (reference,)

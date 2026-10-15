@@ -1,7 +1,4 @@
-from collections.abc import Mapping
-
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, has_box_questions
-from litellm.types.decisions import DecisionsIRRequest
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
 
 class TypeSafeDecisionsConfig(BaseDecisionsConfig):
@@ -12,8 +9,3 @@ class TypeSafeDecisionsConfig(BaseDecisionsConfig):
 
     def get_default_api_base(self) -> str | None:
         return "https://api.typesafe.ai"
-
-    def request_headers(self, request: DecisionsIRRequest) -> Mapping[str, str]:
-        if request.assets or has_box_questions(request):
-            return {"TypeSafe-Danger-Zone-Images": "true"}
-        return {}
