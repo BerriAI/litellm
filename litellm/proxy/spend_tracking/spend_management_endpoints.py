@@ -2918,7 +2918,7 @@ async def ui_view_spend_logs(
         if exclude_key_alias:
             sql_conditions.append(f"metadata->>'user_api_key_alias' IS DISTINCT FROM ${p}")
             sql_params.append(exclude_key_alias)
-            p += 1
+            p += 1  # rebind-ok: advances the existing shared SQL placeholder counter
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
             sql_params.append(error_code)

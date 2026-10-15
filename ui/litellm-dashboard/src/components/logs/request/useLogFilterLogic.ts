@@ -176,7 +176,7 @@ export function useLogFilterLogic({
 
       const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
 
-      return await uiSpendLogsCall({
+      const spendLogsRequest: Parameters<typeof uiSpendLogsCall>[0] = {
         accessToken,
         start_date: window.start_date,
         end_date: window.end_date,
@@ -206,7 +206,8 @@ export function useLogFilterLogic({
           group_by_session: true,
           session_cursor: sessionCursor,
         },
-      });
+      };
+      return await uiSpendLogsCall(spendLogsRequest);
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: getLiveTailRefetchInterval(isLiveTail, pagination.pageIndex),
