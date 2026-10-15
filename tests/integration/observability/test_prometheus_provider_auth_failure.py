@@ -50,7 +50,16 @@ ENDPOINT_CELLS: Final = (
     "responses-stream",
     "embeddings",
 )
-REJECTED_CELLS: Final = (*ENDPOINT_CELLS, "sdk-sync", "sdk-async", "repeated", "fallback", "burst", "caller-api-key")
+REJECTED_CELLS: Final = (
+    *ENDPOINT_CELLS,
+    "sdk-sync",
+    "sdk-async",
+    "repeated",
+    "fallback",
+    "burst",
+    "caller-api-key",
+    "caller-header",
+)
 GATED_CELLS: Final = ("invalid-key", "missing-key", "expired-key", "blocked-key", "no-model-access")
 HEALTHY_CELLS: Final = (*GATED_CELLS, "healthy", "key-rpm-limit")
 GUARDRAIL_ROWS: Final = (
@@ -402,6 +411,23 @@ def test_a_provider_401_on_an_api_key_the_caller_sent_stays_out_of_the_deploymen
 def anthropic_messages(gateway: Gateway, cell: str, key: str, headers: dict[str, str]) -> httpx.Response:
     body: Final[dict[str, JsonValue]] = {"model": name(cell), "max_tokens": 16, "messages": messages(cell)}
     return gateway.request("POST", "/v1/messages", body, key=key, headers=headers)
+
+
+def test_a_provider_401_on_an_authorization_header_the_caller_sends_counts_against_the_deployment(rig: Rig) -> None:
+    caller_header: Final = f"Bearer sk-caller-header-{uuid.uuid4().hex}"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": name("caller-header"),
+            "messages": messages("caller-header"),
+            "extra_headers": {"Authorization": caller_header},
+        },
+    )
+    assert response.status_code == 401, response.text
+    assert [request.headers["authorization"] for request in rig.upstream.drain()] == [caller_header]
+    assert_recorded_as_a_deployment_failure(rig, "caller-header", "401")
 
 
 def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:

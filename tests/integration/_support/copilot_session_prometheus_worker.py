@@ -1,6 +1,6 @@
 """One SDK process for the SDK provider-401 metric cells: a provider 401 on a caller's own Copilot session, one on
-the router deployment's own key and one on a direct call's own key, then a report of the deployment series on that
-process's default registry. Run as a script by ``run_copilot_session_worker`` so each process registers the
+the router deployment's own key, one on a key the router caller passes and one on a direct call's own key, then a
+report of the deployment series on that process's default registry. Run as a script by ``run_copilot_session_worker`` so each process registers the
 Prometheus metrics exactly once."""
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ COPILOT_DEPLOYMENT: Final = "copilot-per-user-deployment"
 OPERATOR_DEPLOYMENT: Final = "operator-key-deployment"
 CALLER_SESSION_TOKEN: Final = "caller-copilot-session-token"
 OPERATOR_KEY: Final = "rotated-operator-key"
+ROUTER_CALLER_KEY: Final = "rotated-router-caller-key"
 DIRECT_CALL: Final = "direct-sdk-call"
 DIRECT_KEY: Final = "rotated-direct-call-key"
 FAILURES: Final = "litellm_deployment_failure_responses_total"
@@ -62,8 +63,11 @@ class WorkerReport:
         )
 
     def outside_the_router(self, metric: str) -> tuple[float, ...]:
-        router_ids: Final = (COPILOT_DEPLOYMENT, OPERATOR_DEPLOYMENT)
-        return tuple(s.value for s in self.series if s.metric == metric and s.model_id not in router_ids)
+        return tuple(s.value for s in self.series if s.metric == metric and not s.model_id)
+
+    def on_a_one_off_deployment(self, metric: str) -> tuple[float, ...]:
+        named_ids: Final = ("", COPILOT_DEPLOYMENT, OPERATOR_DEPLOYMENT)
+        return tuple(s.value for s in self.series if s.metric == metric and s.model_id not in named_ids)
 
 
 _REPORT: Final = TypeAdapter(WorkerReport)
@@ -146,6 +150,7 @@ async def main(api_base: str) -> None:
     outcomes: Final = (
         await _attempt(router, COPILOT_DEPLOYMENT, github_copilot_user_session=session),
         await _attempt(router, OPERATOR_DEPLOYMENT),
+        await _attempt(router, OPERATOR_DEPLOYMENT, api_key=ROUTER_CALLER_KEY),
         await _direct_attempt(api_base),
     )
     report: Final = WorkerReport(api_base=api_base, outcomes=outcomes, series=_deployment_series())
