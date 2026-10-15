@@ -77,6 +77,82 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "bedrock/invoke/us.anthropic.claude-haiku-5-5",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/model/us.anthropic.claude-haiku-5-5/invoke",
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
+    expected_provider_request={
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
+        "max_tokens": 64,
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+        "anthropic_version": "bedrock-2023-05-31",
+    },
+    mock_provider_response={
+        "model": "claude-haiku-5-5",
+        "id": "msg_bdrk_prp4tfjg2ibow6km7wkqw5euejxxssl2ngm6wbgjxyg7xd32tkja",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello."}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+        },
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "created": ANY,
+        "model": "bedrock/invoke/us.anthropic.claude-haiku-5-5",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 6,
+            "prompt_tokens": 23,
+            "total_tokens": 29,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 6},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 23,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "service_tier": "standard",
+        },
+    },
+)
+
+
 CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",

@@ -48,6 +48,52 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={
+        "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+        "max_tokens": 64,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/model/us.anthropic.claude-haiku-5-5/converse",
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
+    expected_provider_request={
+        "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
+        "inferenceConfig": {"maxTokens": 64},
+        "system": [{"text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "metrics": {"latencyMs": 954},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
+        "stopReason": "end_turn",
+        "usage": {
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+            "inputTokens": 23,
+            "outputTokens": 6,
+            "serverToolUsage": {},
+            "totalTokens": 29,
+        },
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "type": "message",
+        "role": "assistant",
+        "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 23, "output_tokens": 6},
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn",
+        "stop_details": None,
+    },
+)
+
+
 CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",

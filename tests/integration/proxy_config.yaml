@@ -4,6 +4,11 @@ model_list:
       model: anthropic/claude-haiku-4-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-haiku-5-5
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
   - model_name: anthropic/claude-sonnet-5
     litellm_params:
       model: anthropic/claude-sonnet-5
@@ -49,6 +54,11 @@ model_list:
       model: azure_ai/claude-haiku-4-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-haiku-5-5
+    litellm_params:
+      model: azure_ai/claude-haiku-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
   - model_name: azure_ai/claude-sonnet-4-6
     litellm_params:
       model: azure_ai/claude-sonnet-4-6
@@ -77,6 +87,12 @@ model_list:
   - model_name: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-haiku-5-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-haiku-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
@@ -190,6 +206,12 @@ model_list:
   - model_name: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
       model: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-haiku-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-haiku-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
