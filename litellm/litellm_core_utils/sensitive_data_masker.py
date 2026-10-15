@@ -168,7 +168,7 @@ def mask_sensitive_structure(data: object) -> object:
     return _error_masker.mask(data)
 
 
-def mask_credentials_in_payload(data: object) -> object:
+def mask_credentials_in_payload(data: object, masker: SensitiveDataMasker = _default_masker) -> object:
     """Return a copy of ``data`` where string values under sensitive-named keys
     are masked but every other value (``None``, ``int``, ``float``, ``bool``,
     ``bytes``, ``datetime``, tuples, sets, typed objects) is preserved by
@@ -189,18 +189,19 @@ def mask_credentials_in_payload(data: object) -> object:
     Sensitive-key detection is delegated to the shared
     :class:`SensitiveDataMasker` so pattern updates stay in one place.
     """
-    return _PayloadWalker().walk(data, key_is_sensitive=False, depth=0)
+    return _PayloadWalker(masker).walk(data, key_is_sensitive=False, depth=0)
 
 
 @dataclass(frozen=True, slots=True)
 class _PayloadWalker:
+    masker: SensitiveDataMasker = _default_masker
     _memo: dict[tuple[int, bool], tuple[object, object]] = field(  # mutable-ok: memo of one walk, pins each keyed node
         default_factory=dict
     )
 
     def walk(self, node: object, key_is_sensitive: bool, depth: int) -> object:
         if not isinstance(node, (Mapping, list, tuple, BaseModel)):
-            return _default_masker.mask_value(node) if key_is_sensitive and isinstance(node, str) and node else node
+            return self.masker.mask_value(node) if key_is_sensitive and isinstance(node, str) and node else node
         if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
             return REDACTED
         memo_key: Final = (id(node), key_is_sensitive and not isinstance(node, Mapping))
@@ -218,7 +219,7 @@ class _PayloadWalker:
         if isinstance(node, BaseModel):
             return self.walk(node.model_dump(), key_is_sensitive, depth)
         if isinstance(node, Mapping):
-            return {k: self.walk(v, _default_masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
+            return {k: self.walk(v, self.masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
         if isinstance(node, tuple):
             return tuple(self.walk(item, key_is_sensitive, depth + 1) for item in node)
         return [self.walk(item, key_is_sensitive, depth + 1) for item in node]
