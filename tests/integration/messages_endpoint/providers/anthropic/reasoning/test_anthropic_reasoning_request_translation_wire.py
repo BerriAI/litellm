@@ -443,10 +443,23 @@ def _tool_loop(assistant_content: list[JsonValue]) -> dict[str, JsonValue]:
                 {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/repo/config.yaml"}},
             ],
             [
+                {"type": "thinking", "thinking": "", "signature": "EqQBCkgIBRABGAIiQM"},
                 {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix"},
                 {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/repo/config.yaml"}},
             ],
-            id="empty-thinking-stripped-redacted-thinking-kept",
+            id="signed-empty-thinking-and-redacted-thinking-kept",
+        ),
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": ""},
+                {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix"},
+                {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/repo/config.yaml"}},
+            ],
+            [
+                {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix"},
+                {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/repo/config.yaml"}},
+            ],
+            id="unsigned-empty-thinking-stripped-redacted-thinking-kept",
         ),
     ),
 )
