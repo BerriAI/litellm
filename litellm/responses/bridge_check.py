@@ -178,6 +178,11 @@ def responses_api_bridge_check(
         _mantle_responses_series_name(model) if custom_llm_provider == "bedrock_mantle" else None
     )
     on_mantle_responses_endpoint: Final = mantle_series_name is not None
+    summary_requested: Final = reasoning_summary is not None or (
+        on_mantle_responses_endpoint
+        and isinstance(reasoning_effort, Mapping)
+        and reasoning_effort.get("summary") is not None
+    )
     gpt_series_name: Final = mantle_series_name or model
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure"
@@ -203,9 +208,10 @@ def responses_api_bridge_check(
         and OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(gpt_series_name)
         and (
-            (reasoning_effort is not None and reasoning_summary is not None)
+            (reasoning_effort is not None and summary_requested)
             or chat_rejects_function_tools
             or (carries_tool_search and on_constraint_enforcing_endpoint)
+            or (web_search_options is not None and on_mantle_responses_endpoint)
         )
     ):
         model_info["mode"] = "responses"

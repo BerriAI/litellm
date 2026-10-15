@@ -749,8 +749,8 @@ class LiteLLMCompletionResponsesConfig:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
 
-        Delegates to the same check ``litellm.completion`` itself runs, and is asked with the
-        params this transform is about to emit, so the two cannot reach different answers.
+        Delegates to the same check ``litellm.completion`` itself runs, asked with the params this
+        transform is about to emit. A deployment's own ``model_info.mode`` pin is not passed here.
         """
         from litellm.main import responses_api_bridge_check
 

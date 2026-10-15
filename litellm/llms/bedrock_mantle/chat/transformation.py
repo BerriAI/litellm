@@ -11,12 +11,14 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
@@ -42,6 +44,36 @@ def _with_chat_reasoning_effort(non_default_params: Mapping[str, object]) -> Map
     effort: Final = get_effort_level(reasoning_effort)
     rest: Final = {key: value for key, value in non_default_params.items() if key != "reasoning_effort"}
     return rest if effort is None else {**rest, "reasoning_effort": effort}
+
+
+def _unsupported_chat_values(non_default_params: Mapping[str, object]) -> tuple[str, ...]:
+    n: Final = non_default_params.get("n")
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, Mapping) else None
+    return tuple(
+        value
+        for value, unsupported in (
+            (f"n={n}", isinstance(n, int) and n > 1),
+            (f"reasoning summary {summary}", summary is not None),
+        )
+        if unsupported
+    )
+
+
+def _chat_servable_params(non_default_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    unsupported: Final = _unsupported_chat_values(non_default_params)
+    if unsupported and not (drop_params or litellm.drop_params):
+        raise UnsupportedParamsError(
+            message=f"Bedrock Mantle Chat Completions does not support {', '.join(unsupported)}. To drop unsupported "
+            "openai params from the call, set `litellm.drop_params = True`",
+            llm_provider="bedrock_mantle",
+            status_code=400,
+        )
+    servable: Final = _with_chat_reasoning_effort(non_default_params)
+    n: Final = servable.get("n")
+    return MappingProxyType(
+        {key: value for key, value in servable.items() if not (key == "n" and isinstance(n, int) and n > 1)}
+    )
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -149,7 +181,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
         mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
-            dict(_with_chat_reasoning_effort(non_default_params)),
+            dict(_chat_servable_params(non_default_params, drop_params)),
             optional_params,
             model,
             drop_params,

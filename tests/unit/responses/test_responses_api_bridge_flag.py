@@ -654,15 +654,31 @@ def test_a_chat_pinned_mantle_deployment_sends_function_tools_to_the_responses_a
     assert (info["mode"], routed_model) == ("responses", model)
 
 
-def test_a_chat_pinned_mantle_deployment_sends_a_reasoning_summary_to_the_responses_api() -> None:
+@pytest.mark.parametrize(
+    "reasoning_effort, reasoning_summary",
+    [("low", "auto"), ({"effort": "low", "summary": "auto"}, None)],
+)
+def test_a_chat_pinned_mantle_deployment_sends_a_reasoning_summary_to_the_responses_api(
+    reasoning_effort: str | Mapping[str, JsonValue], reasoning_summary: str | None
+) -> None:
     info, _ = responses_api_bridge_check(
         model="openai.gpt-5.6-terra",
         custom_llm_provider="bedrock_mantle",
-        reasoning_effort="low",
-        reasoning_summary="auto",
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
         deployment_model_info=_CHAT,
     )
     assert info["mode"] == "responses"
+
+
+def test_a_chat_pinned_mantle_deployment_sends_web_search_to_the_responses_api() -> None:
+    info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-terra",
+        custom_llm_provider="bedrock_mantle",
+        web_search_options={"search_context_size": "medium"},
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "openai.gpt-5.6-terra")
 
 
 @pytest.mark.parametrize(

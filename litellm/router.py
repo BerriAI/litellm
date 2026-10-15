@@ -10685,7 +10685,7 @@ class Router:
             return {key: value for key, value in shared_model_info.items() if key != "mode"}
         if registered_mode is None or registered_mode == deployment_mode:
             return shared_model_info
-        verbose_router_logger.warning(
+        verbose_router_logger.debug(
             "Router: keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
             registered_mode,
             registration_key,

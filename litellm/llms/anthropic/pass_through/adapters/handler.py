@@ -465,6 +465,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
+        client_summary: Final = thinking.get("summary")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
@@ -472,7 +473,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
             ),
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=effort if client_summary is None else {"effort": effort, "summary": client_summary},
             api_base=resolved_api_base,
             deployment_model_info=bridge_deployment_info(completion_kwargs.get("model_info")),
         )

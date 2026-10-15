@@ -282,10 +282,24 @@ class TestBedrockMantleConfig:
         optional_params = litellm.get_optional_params(
             model="openai.gpt-5.6-terra",
             custom_llm_provider="bedrock_mantle",
-            drop_params=False,
+            drop_params=True,
             reasoning_effort=reasoning_effort,
         )
         assert optional_params.get("reasoning_effort") == expected
+
+    @pytest.mark.parametrize("params", [{"n": 2}, {"reasoning_effort": {"effort": "low", "summary": "auto"}}])
+    def test_chat_completions_answers_400_for_what_mantle_chat_cannot_serve_without_drop_params(self, params) -> None:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=False, **params
+            )
+
+    @pytest.mark.parametrize("n, drop_params, expected", [(1, False, 1), (2, True, None)])
+    def test_chat_completions_sends_n_only_where_mantle_chat_serves_it(self, n, drop_params, expected) -> None:
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=drop_params, n=n
+        )
+        assert optional_params.get("n") == expected
 
     def test_non_gpt_reasoning_models_keep_the_openai_compatible_max_tokens(self):
         optional_params = litellm.get_optional_params(
