@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 import litellm
 from litellm.proxy._types import (
     BlockUsers,
+    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LitellmUserRoles,
     ProxyException,
@@ -1510,6 +1512,43 @@ def test_customer_block_requires_loaded_hook_before_writing(
     assert response.status_code == 400
     assert response.json() == {"detail": {"error": "Blocked user check was never set. This call has no effect."}}
     upsert.assert_not_awaited()
+    assert cache.deleted == []
+    publish.assert_not_awaited()
+
+
+@pytest.mark.parametrize("route", ("/customer/block", "/customer/unblock"))
+def test_customer_block_without_enterprise_package_rejects_before_writing(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, route: str
+) -> None:
+    upsert: Final = AsyncMock()
+    update_many: Final = AsyncMock()
+    mock_prisma_client.db = SimpleNamespace(
+        litellm_endusertable=SimpleNamespace(upsert=upsert, update_many=update_many)
+    )
+    with (
+        patch.dict(sys.modules, {"enterprise.enterprise_hooks.blocked_user_list": None}),
+        _end_user_cache_doubles() as (cache, publish),
+    ):
+        response: Final = client.post(route, json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "error": "Blocked user check was never set. This call has no effect."
+            + CommonProxyErrors.missing_enterprise_package_docker.value
+        }
+    }
+    upsert.assert_not_awaited()
+    update_many.assert_not_awaited()
+    assert cache.deleted == []
+    publish.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("configured_block_hook")
+def test_customer_block_without_database_fails_without_evicting_caches(mock_user_api_key_auth: object) -> None:
+    with patch("litellm.proxy.proxy_server.prisma_client", None), _end_user_cache_doubles() as (cache, publish):
+        response: Final = client.post("/customer/block", json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+    assert response.status_code == 500
+    assert "Postgres DB Not connected" in response.text
     assert cache.deleted == []
     publish.assert_not_awaited()
 
