@@ -8,7 +8,7 @@ from typing import Final, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -17,16 +17,17 @@ from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
     wrap_sse_stream_with_keepalive_pings,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
 
-class ChatMessage(BaseModel):
+class ChatMessage(LiteLLMBaseModel):
     role: Literal["user", "assistant"]
     content: str
 
 
-class UsageAIChatRequest(BaseModel):
+class UsageAIChatRequest(LiteLLMBaseModel):
     messages: list[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
     model: str | None = Field(default=None, description="Model to use for AI chat")
 
@@ -46,14 +47,14 @@ async def usage_ai_chat(
     The AI agent has access to tools that query aggregated daily activity data.
     """
     from litellm.proxy.management_endpoints.common_utils import (
-        _user_has_admin_view,
         require_caller_user_id_for_non_admin,
+        user_api_key_has_admin_view,
     )
     from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
         stream_usage_ai_chat,
     )
 
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
     if is_admin:
         user_id = user_api_key_dict.user_id
     else:

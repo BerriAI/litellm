@@ -5,8 +5,9 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -19,13 +20,16 @@ from openai.types.responses.response_input_param import (
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -38,12 +42,12 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
-    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
+    PromptCacheBreakpoint,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -52,7 +56,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
-    from openai.types.responses import ResponseInputImageParam
+    from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
     from openai.types.responses.response_text_config_param import (
         ResponseTextConfigParam as ResponseText,
     )
@@ -70,13 +74,126 @@ if TYPE_CHECKING:
         ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
-    from litellm.types.utils import Choices
+    from litellm.types.utils import Choices, Message
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+
+
+def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    content_block: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms the content block is a mapping
+    return {key: item for key, item in content_block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
+    if isinstance(value, list):
+        list_content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+        return [_strip_prompt_cache_breakpoint_from_content_block(item) for item in list_content]
+    if isinstance(value, tuple):
+        tuple_content: Final = cast(tuple[object, ...], value)  # cast-ok: isinstance confirms a tuple of content blocks
+        return tuple(_strip_prompt_cache_breakpoint_from_content_block(item) for item in tuple_content)
+    return _strip_prompt_cache_breakpoint_from_content_block(value)
+
+
+def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
+    return {
+        key: _strip_prompt_cache_breakpoints_from_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
+    return [_strip_prompt_cache_breakpoints_from_item(item) for item in input_items]
+
+
+def _is_audio_input_part(part: object) -> bool:
+    if not isinstance(part, dict):
+        return False
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("type") == "input_audio"
+
+
+def _breakpoint_of(part: object) -> object:
+    if not isinstance(part, dict):
+        return None
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("prompt_cache_breakpoint")
+
+
+def _pending_audio_breakpoint(pending: object, part: object) -> object:
+    if not _is_audio_input_part(part):
+        return None
+    return pending if pending is not None else _breakpoint_of(part)
+
+
+def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
+    seeded_from_the_end: Final = chain((None,), reversed(content))
+    pending_after_each: Final = tuple(accumulate(seeded_from_the_end, _pending_audio_breakpoint))
+    return tuple(reversed(pending_after_each[:-1]))
+
+
+def _with_carried_breakpoint(part: object, marker: object) -> object:
+    if marker is None or not isinstance(part, dict) or _breakpoint_of(part) is not None:
+        return part
+    kept_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return {**kept_part, "prompt_cache_breakpoint": marker}
+
+
+def _without_audio_input_parts_in_content(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+    if not any(_is_audio_input_part(part) for part in content):
+        return value
+    return [
+        _with_carried_breakpoint(part, marker)
+        for part, marker in zip(content, _carried_breakpoints(content))
+        if not _is_audio_input_part(part)
+    ]
+
+
+def _without_audio_input_parts_in_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
+    return {
+        key: _without_audio_input_parts_in_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+    }
+
+
+def _without_audio_input_parts(input_items: list[object]) -> list[object]:
+    return [_without_audio_input_parts_in_item(item) for item in input_items]
+
+
+def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
+def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    provider: Final = _served_provider(litellm_params)
+    base_model: Final = litellm_params.get("base_model")
+    return litellm.supports_audio_input(model=model, custom_llm_provider=provider) or (
+        isinstance(base_model, str)
+        and bool(base_model)
+        and litellm.supports_audio_input(model=base_model, custom_llm_provider=provider)
+    )
+
+
+def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    if not (litellm_params.get("drop_params") or litellm.drop_params):
+        return False
+    return not _supports_audio_input(model, litellm_params)
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -124,13 +241,13 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     blocks are the fallback for turns that arrived over another API surface.
     """
     items: Final = _get_reasoning_items(msg)
-    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
-    return [dict(item) for item in replayed]  # mutable-ok: API message payload
+    return [dict(item) for item in replayed]
 
 
 def _build_reasoning_item(
@@ -188,19 +305,132 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
 
 
 def _as_chat_reasoning_items(
-    reasoning_items: Sequence[_BuiltReasoningItem],
+    reasoning_items: Sequence[_BuiltReasoningItem | ChatCompletionReasoningItem],
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
-    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
-    # describes, and TypedDict invariance is what stops the two from unifying here.
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
+
+
+def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
+    shifted: Final = {
+        key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
+        for key, value in annotation.items()
+    }
+    return cast(ChatCompletionAnnotation, shifted)
+
+
+def _message_annotations(message: "Message") -> Sequence[ChatCompletionAnnotation]:
+    annotations: Sequence[ChatCompletionAnnotation] | None = getattr(message, "annotations", None)
+    return annotations or ()
+
+
+def _message_reasoning_content(message: "Message") -> str | None:
+    reasoning_content: str | None = getattr(message, "reasoning_content", None)
+    return reasoning_content
+
+
+def _message_reasoning_items(message: "Message") -> Sequence[ChatCompletionReasoningItem]:
+    reasoning_items: Sequence[ChatCompletionReasoningItem] | None = getattr(message, "reasoning_items", None)
+    return reasoning_items or ()
+
+
+def _shifted_annotations(messages: Sequence["Message"], offsets: Sequence[int]) -> Iterator[ChatCompletionAnnotation]:
+    for message, offset in zip(messages, offsets):
+        for annotation in _message_annotations(message):
+            yield _shift_annotation(annotation, offset)
+
+
+def _fold_choices_into_one(
+    choices: Sequence["Choices"],
+    tool_calls: Sequence[Mapping[str, object]],
+    trailing_reasoning_content: str | None,
+    trailing_reasoning_item: _BuiltReasoningItem | None,
+    structured_output: bool = False,
+) -> "Choices":
+    """Clients that only read choices[0] must still see every text and tool call.
+
+    Under a structured ``response_format`` each message item is a complete document, so
+    ``content`` is the first one, the same item the openai SDK returns as ``output_parsed``.
+    """
+    from litellm.types.utils import Choices, Message
+
+    messages: Final = tuple(choice.message for choice in choices)
+    content_messages: Final = messages[:1] if structured_output else messages
+    texts: Final = tuple(str(message.content or "") for message in content_messages)
+    offsets: Final = (0, *accumulate(len(text) for text in texts))
+    annotations: Final = tuple(_shifted_annotations(content_messages, offsets))
+    reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
+    reasoning_items: Final = (
+        *chain.from_iterable(_message_reasoning_items(m) for m in messages),
+        *(() if trailing_reasoning_item is None else (trailing_reasoning_item,)),
+    )
+    return Choices(
+        message=Message(
+            role=messages[0].role if messages else "assistant",
+            content="".join(texts) if messages else None,
+            annotations=list(annotations) or None,
+            tool_calls=list(tool_calls) or None,
+            reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
+            reasoning_items=_as_chat_reasoning_items(reasoning_items),
+        ),
+        finish_reason="tool_calls" if tool_calls else "stop",
+        index=0,
+    )
+
+
+def _responses_event_type(chunk: Mapping[str, object]) -> object:
+    event_type: Final = chunk.get("type")
+    return event_type.value if isinstance(event_type, ResponsesAPIStreamEvents) else event_type
+
+
+class _TypedPayload(BaseModel):
+    """The ``type`` discriminator of a response_format dict or a Responses output item."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    type: str | None = None
+
+
+_TYPED_PAYLOAD: Final = TypeAdapter(_TypedPayload)
+
+
+def _payload_type(payload: object) -> str | None:
+    try:
+        return _TYPED_PAYLOAD.validate_python(payload).type
+    except ValidationError:
+        return None
+
+
+def _is_message_item_done(chunk: Mapping[str, object]) -> bool:
+    if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+        return False
+    return _payload_type(chunk.get("item")) == "message"
+
+
+def is_structured_output_request(optional_params: Mapping[str, object]) -> bool:
+    return _payload_type(optional_params.get("response_format")) in ("json_schema", "json_object")
+
+
+_ToolChoiceT = TypeVar("_ToolChoiceT")
 
 
 def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Literal["length", "content_filter"]:
     if incomplete_reason == "content_filter":
         return "content_filter"
     return "length"
+
+
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+
+
+def _prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    try:
+        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        verbose_logger.debug("Chat provider: dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+        return None
 
 
 def _input_file_from_file_value(file_value: object) -> dict[str, object]:
@@ -244,7 +474,7 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     name: Final = item.get("name") or ("custom_tool" if is_custom else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
     tool_call_dict: Final = _ChatToolCallDict(
-        id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
+        id=LiteLLMCompletionResponsesConfig.tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
         type="function",
         function=function_chunk,
         index=index,
@@ -271,16 +501,64 @@ def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFuncti
 def _reasoning_item_to_response_input(
     r_item: ChatCompletionReasoningItem,
 ) -> dict[str, object]:
-    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
-    r_input: Final[dict[str, object]] = {
+    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item.
+
+    An item without an id is sent without one: the Responses API accepts that and
+    verifies the encrypted content on its own, while it rejects any id it did not mint.
+    """
+    item_id: Final = r_item.get("id")
+    encrypted_content: Final = r_item.get("encrypted_content")
+    return {
         "type": "reasoning",
-        "id": r_item.get("id") or f"rs_{id(r_item)}",
+        **({"id": item_id} if item_id else {}),
         # summary is always required by the Responses API, even when empty
         "summary": r_item.get("summary") or [],
+        **({"encrypted_content": encrypted_content} if encrypted_content else {}),
     }
-    if r_item.get("encrypted_content"):
-        r_input["encrypted_content"] = r_item["encrypted_content"]
-    return r_input
+
+
+def _requested_defer_loading(tool: Mapping[str, object], function_tool: Mapping[str, object]) -> object:
+    tool_level: Final = tool.get("defer_loading")
+    return tool_level if tool_level is not None else function_tool.get("defer_loading")
+
+
+def _defer_loading_field(
+    tool: Mapping[str, object],
+    function_tool: Mapping[str, object],
+    *,
+    tool_search: Literal["hosted", "client", "absent"],
+    drop_params: bool,
+) -> Mapping[str, bool]:
+    defer_loading: Final = _requested_defer_loading(tool, function_tool)
+    if defer_loading is None or (defer_loading is False and tool_search == "absent"):
+        return {}
+    if tool_search == "client":
+        verbose_logger.debug(
+            "Chat provider: dropping defer_loading=%r beside a client-executed tool_search", defer_loading
+        )
+        return {}
+    if isinstance(defer_loading, bool) and tool_search == "hosted":
+        return {"defer_loading": defer_loading}
+    if drop_params:
+        verbose_logger.debug("Chat provider: dropping defer_loading=%r under drop_params", defer_loading)
+        return {}
+    problem: Final = (
+        'defer_loading needs a {"type": "tool_search"} tool in the same request'
+        if isinstance(defer_loading, bool)
+        else f"defer_loading must be a boolean, got {defer_loading!r}"
+    )
+    raise litellm.UnsupportedParamsError(
+        message=f"{problem}. To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
+    )
+
+
+def _without_dropped_defer_loading(
+    tool: Mapping[str, object], *, tool_search: Literal["hosted", "client", "absent"], drop_params: bool
+) -> Mapping[str, object]:
+    if tool.get("type") != "function" or "defer_loading" not in tool:
+        return tool
+    kept: Final = _defer_loading_field(tool, {}, tool_search=tool_search, drop_params=drop_params)
+    return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -291,7 +569,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
-    def _normalize_tool_choice_for_responses_api(self, tool_choice: Any) -> Any:
+    def _normalize_tool_choice_for_responses_api(
+        self, tool_choice: _ToolChoiceT
+    ) -> _ToolChoiceT | ToolChoiceFunctionParam | ToolChoiceCustomParam | Literal["auto", "none", "required"]:
         """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
         if not isinstance(tool_choice, dict):
             return tool_choice
@@ -356,7 +636,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return None, index
 
     def convert_chat_completion_messages_to_responses_api(
-        self, messages: list["AllMessageValues"]
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        drop_params: bool = False,
+        keep_prompt_cache_breakpoints: bool = False,
+    ) -> tuple[list[object], str | None]:
+        converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
+            messages, drop_params=drop_params
+        )
+        return (
+            converted_input_items
+            if keep_prompt_cache_breakpoints
+            else _strip_prompt_cache_breakpoints(converted_input_items),
+            instructions,
+        )
+
+    def _convert_chat_completion_messages_to_responses_input(
+        self, messages: list["AllMessageValues"], *, drop_params: bool = False
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
         instructions: str | None = None
@@ -397,6 +694,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "content": self._convert_content_to_responses_format(
                                 content,
                                 role,
+                                drop_params=drop_params,
                             ),
                         }
                     )
@@ -415,6 +713,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     tool_output = self._convert_content_to_responses_format(
                         content,
                         "user",  # Use "user" role to get input_* types
+                        drop_params=drop_params,
                     )
                 else:
                     # Fallback: convert unexpected types to input_text
@@ -439,10 +738,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "assistant",
-                            "content": self._convert_content_to_responses_format(content, "assistant"),
+                            "content": self._convert_content_to_responses_format(
+                                content, "assistant", drop_params=drop_params
+                            ),
                         }
                     )
                 for tool_call in tool_calls:
@@ -473,10 +774,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {  # mutable-ok: API message payload
+                    {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),
+                        "content": self._convert_content_to_responses_format(
+                            content, cast(str, role), drop_params=drop_params
+                        ),
                     }
                 )
             elif role == "assistant":
@@ -488,6 +791,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
+        drop_params: bool = False,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -497,12 +801,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 responses_api_request["tools"] = self._convert_tools_to_responses_format(
-                    cast(list[dict[str, Any]], value)
+                    cast(list[dict[str, object]], value), drop_params=drop_params
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format
+                    responses_api_request["text"] = self._merge_text(responses_api_request, text_format)
+            elif key == "verbosity":
+                responses_api_request["text"] = self._merge_text(
+                    responses_api_request,
+                    MappingProxyType({"verbosity": value}),  # pyright: ignore[reportUnknownArgumentType]  # untyped value
+                )
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
@@ -514,9 +823,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+                responses_api_request["reasoning"] = self.map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
+
+    @staticmethod
+    def _merge_text(
+        responses_api_request: "ResponsesAPIOptionalRequestParams", update: Mapping[str, object]
+    ) -> "ResponseText":
+        existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
+            "dict[str, object]",
+            dict(responses_api_request).get("text") or {},
+        )
+        return cast(  # cast-ok: merged mapping is a valid ResponseText shape
+            "ResponseText",
+            {**existing, **update},
+        )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
@@ -563,29 +885,45 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         model: str,
         messages: list["AllMessageValues"],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
-        (
-            input_items,
-            instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
-
+        provider: Final = _served_provider(litellm_params)
+        base_model: Final = litellm_params.get("base_model")
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
+            isinstance(base_model, str)
+            and bool(base_model)
+            and supports_openai_prompt_cache_breakpoint(base_model, provider)
+        )
+        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
+            messages,
+            drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+            keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+        )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
-        if not input_items and instructions is not None:
-            input_items = [
+        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        target_input_items: Final = (
+            _without_audio_input_parts(converted_input_items)
+            if _drops_audio_input(model, litellm_params)
+            else converted_input_items
+        )
+        input_items: Final = (
+            [
                 {
                     "type": "message",
                     "role": "system",
-                    "content": [{"type": "input_text", "text": instructions}],
+                    "content": [{"type": "input_text", "text": converted_instructions}],
                 }
             ]
-            instructions = None
+            if is_system_only_request
+            else target_input_items
+        )
+        instructions: Final = None if is_system_only_request else converted_instructions
 
         optional_params = self._extract_extra_body_params(optional_params)
 
@@ -596,7 +934,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if instructions:
             responses_api_request["instructions"] = instructions
 
-        self._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+        self._map_optional_params_to_responses_api_request(
+            optional_params,
+            responses_api_request,
+            drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+        )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)
@@ -642,6 +984,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_response_output_to_choices(
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
+        structured_output: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -649,6 +992,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Args:
             output_items: List of items from ResponsesAPIResponse.output
             handle_raw_dict_callback: Optional callback for handling raw dict items
+            structured_output: The chat request carried a json response_format, so only the
+                first message item becomes content
 
         Returns:
             List of Choices objects
@@ -764,22 +1109,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        # If we accumulated tool calls, create a single choice with all of them
-        if accumulated_tool_calls:
-            msg = Message(
-                content=None,
+        if not choices and not accumulated_tool_calls:
+            return choices
+        return [
+            _fold_choices_into_one(
+                choices=choices,
                 tool_calls=accumulated_tool_calls,
-                reasoning_content=reasoning_content,
-                reasoning_items=cast(
-                    list[ChatCompletionReasoningItem] | None,
-                    ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                ),
+                trailing_reasoning_content=reasoning_content,
+                trailing_reasoning_item=pending_reasoning_item,
+                structured_output=structured_output,
             )
-            choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
-            reasoning_content = None
-            pending_reasoning_item = None
-
-        return choices
+        ]
 
     @staticmethod
     def _build_empty_incomplete_choice(
@@ -810,7 +1150,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         response_output: Final = response_payload.get("output")
         if not isinstance(response_output, list) or len(response_output) == 0:
             return None
-        return cast(list[dict[str, Any]], response_output)
+        return cast(list[dict[str, object]], response_output)
 
     @classmethod
     def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
@@ -893,10 +1233,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         output_items = raw_response.output
         if len(output_items) == 0:
-            recovered_output_items: Final = self._recover_output_items_from_logging(logging_obj)
+            recovered_output_items: Final[list[ResponseOutputItem | dict[str, object]]] = [
+                *self._recover_output_items_from_logging(logging_obj)
+            ]
             if recovered_output_items:
-                output_items = cast(Any, recovered_output_items)
-                raw_response.output = cast(Any, recovered_output_items)
+                output_items = recovered_output_items
+                raw_response.output = recovered_output_items
                 verbose_logger.warning(
                     "Recovered empty Responses API output from raw SSE for model=%s",
                     model,
@@ -906,6 +1248,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final = self._convert_response_output_to_choices(
             output_items=output_items,
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
+            structured_output=is_structured_output_request(
+                cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+            ),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
@@ -932,7 +1277,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         setattr(
             model_response,
             "usage",
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_response.usage),
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_response.usage),
         )
 
         model_response.id = _upstream_response_id(raw_response.id) or raw_response.id
@@ -941,20 +1286,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
-        raw_response_hidden_params: Final = getattr(raw_response, "_hidden_params", {})
+        raw_response_hidden_params: Final = get_hidden_params(raw_response) or {}
         if raw_response_hidden_params:
-            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-                model_response._hidden_params = {}
+            model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
-                if key == "additional_headers" and key in model_response._hidden_params:
-                    # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
-                    merged_headers = {**value, **existing_additional_headers}
-                    model_response._hidden_params[key] = merged_headers
+                if key == "additional_headers" and key in model_response_hidden_params:
+                    existing_additional_headers = model_response_hidden_params.get("additional_headers", {})
+                    merged_headers = {
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", value
+                        ),
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", existing_additional_headers
+                        ),
+                    }
+                    model_response_hidden_params[key] = merged_headers
                 else:
-                    model_response._hidden_params[key] = value
+                    model_response_hidden_params[key] = value
 
         return model_response
 
@@ -963,8 +1313,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"],
         sync_stream: bool,
         json_mode: bool | None = False,
+        structured_output: bool = False,
     ) -> BaseModelResponseIterator:
-        return OpenAiResponsesToChatCompletionStreamIterator(streaming_response, sync_stream, json_mode)
+        return OpenAiResponsesToChatCompletionStreamIterator(
+            streaming_response, sync_stream, json_mode, structured_output=structured_output
+        )
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
         if role in ("user", "system", "developer", "tool"):
@@ -1014,6 +1367,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         ]
         | None,
         role: str,
+        drop_params: bool = False,
     ) -> list[dict[str, object]]:
         """Convert chat completion content to responses API format"""
         from litellm.types.llms.openai import ChatCompletionImageObject
@@ -1038,19 +1392,32 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = cast(
-                            dict,
-                            self._convert_content_to_responses_format_image(
-                                cast(ChatCompletionImageObject, item), role
+                        converted = with_prompt_cache_breakpoint(
+                            cast(
+                                dict,
+                                self._convert_content_to_responses_format_image(
+                                    cast(ChatCompletionImageObject, item), role
+                                ),
                             ),
+                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
+                    elif original_type == "input_audio":
+                        converted = with_prompt_cache_breakpoint(
+                            {"type": "input_audio", "input_audio": item.get("input_audio")},
+                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                        )
+                        result.append(converted)
+                        verbose_logger.debug("Chat provider:   input_audio -> %s", converted)
                     else:
                         # Try to map other types to responses API format
                         item_type = original_type or "input_text"
@@ -1059,8 +1426,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            converted = _input_file_from_file_value(
-                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            converted = with_prompt_cache_breakpoint(
+                                _input_file_from_file_value(
+                                    cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                                ),
+                                _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
@@ -1082,7 +1452,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             verbose_logger.debug("Chat provider:   passthrough -> %s", item)
                         else:
                             # Default to input_text for unknown types
-                            converted = self._convert_content_str_to_input_text(str(item.get("text", item)), role)
+                            converted = with_prompt_cache_breakpoint(
+                                self._convert_content_str_to_input_text(str(item.get("text", item)), role),
+                                _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   unknown(%s) -> %s", original_type, converted)
             verbose_logger.debug("Chat provider: Final converted content: %s", result)
@@ -1092,13 +1465,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             verbose_logger.debug("Chat provider: Other content type -> %s", result)
             return result
 
-    def _convert_tools_to_responses_format(self, tools: list[dict[str, Any]]) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
+    def _convert_tools_to_responses_format(
+        self, tools: list[dict[str, object]], drop_params: bool = False
+    ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
+        tool_search: Final[Literal["hosted", "client", "absent"]] = (
+            "client"
+            if any(tool.get("type") == "tool_search" and tool.get("execution") == "client" for tool in tools)
+            else "hosted"
+            if any(tool.get("type") == "tool_search" for tool in tools)
+            else "absent"
+        )
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
-            if tool.get("type") == "function":
-                function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
+            if tool.get("type") == "function" and isinstance(function_payload := tool.get("function"), dict):
+                function_tool = cast(ChatCompletionToolParamFunctionChunk, function_payload)  # cast-ok: client tool
                 responses_tools.append(
                     FunctionToolParam(
                         name=function_tool["name"],
@@ -1106,14 +1488,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         strict=function_tool.get("strict"),
                         type="function",
                         description=function_tool.get("description"),
+                        **_defer_loading_field(tool, function_tool, tool_search=tool_search, drop_params=drop_params),
                     )
                 )
-            elif tool.get("type") == "custom" and isinstance(tool.get("custom"), dict):
+            elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     convert_custom_tool_format_to_responses_shape,
                 )
 
-                custom_payload = tool["custom"]
                 flat_custom = CustomToolParam(type="custom", name=custom_payload.get("name", ""))
                 if custom_payload.get("description") is not None:
                     flat_custom["description"] = custom_payload["description"]
@@ -1121,7 +1503,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     flat_custom["format"] = convert_custom_tool_format_to_responses_shape(custom_payload["format"])
                 responses_tools.append(flat_custom)
             else:
-                responses_tools.append(tool)
+                responses_tools.append(
+                    _without_dropped_defer_loading(tool, tool_search=tool_search, drop_params=drop_params)
+                )
 
         return cast(list["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
@@ -1154,10 +1538,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning | None:
+    def map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)
+            return Reasoning(
+                **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
+            )
 
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
@@ -1165,13 +1551,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        if reasoning_effort in get_args(REASONING_EFFORT):
-            return (
-                Reasoning(effort=reasoning_effort, summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort=reasoning_effort)
-            )
-        return None
+        return (
+            Reasoning(effort=reasoning_effort, summary="detailed")
+            if auto_summary_enabled
+            else Reasoning(effort=reasoning_effort)
+        )
+
+    _map_reasoning_effort = map_reasoning_effort
 
     def _add_web_search_tool(
         self,
@@ -1308,10 +1694,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"],
         sync_stream: bool,
         json_mode: bool | None = False,
+        structured_output: bool = False,
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
+        self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._structured_output: Final = structured_output
+        self._first_message_item_done: bool = False
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1345,7 +1735,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if tool_call_index_map is None:
             return output_index
         if output_index not in tool_call_index_map:
-            tool_call_index_map[output_index] = len(tool_call_index_map)  # mutable-ok: per-stream accumulator state
+            tool_call_index_map[output_index] = len(tool_call_index_map)
         return tool_call_index_map[output_index]
 
     @staticmethod
@@ -1482,7 +1872,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     # tool call; per-stream callers already received it via
                     # output_item.added and the argument delta events
                     return ModelResponseStream(
-                        choices=[  # mutable-ok: ModelResponseStream coerces only list choices
+                        choices=[
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(
@@ -1573,8 +1963,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if response_data.get("usage"):
                 from litellm.responses.utils import ResponseAPILoggingUtils
 
-                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
+                usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
+            served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1587,7 +1978,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
-                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                provider_specific_fields=dict(provider_metadata) or None,
+                **(
+                    MappingProxyType({"service_tier": served_service_tier})
+                    if isinstance(served_service_tier, str)
+                    else MappingProxyType({})
+                ),
             )
         else:
             pass
@@ -1616,11 +2012,45 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
-        return self._with_stream_scoped_id(
-            OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        self._remember_served_service_tier(chunk)
+        translated: Final = (
+            self._empty_content_chunk()
+            if self._is_text_delta_after_structured_answer(chunk)
+            else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk, tool_call_index_map=self._tool_call_index_map
             )
         )
+        if self._structured_output and _is_message_item_done(chunk):
+            self._first_message_item_done = True
+        return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+
+    def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
+        """Under a structured response_format the first message item is the whole answer, so
+        text from any later message item is dropped, matching the non-stream fold."""
+        return (
+            self._structured_output
+            and self._first_message_item_done
+            and _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+        )
+
+    @staticmethod
+    def _empty_content_chunk() -> "ModelResponseStream":
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
+
+    def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
+        response_payload: Final = chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return
+        served_tier: Final = response_payload.get("service_tier")
+        if isinstance(served_tier, str) and served_tier:
+            self._served_service_tier = served_tier
+
+    def _with_served_service_tier(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
+        if self._served_service_tier is not None and chunk.model_dump().get("service_tier") is None:
+            setattr(chunk, "service_tier", self._served_service_tier)  # noqa: B010  # pydantic extra, not a declared field
+        return chunk
 
     def _with_stream_scoped_id(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
         if self._chat_completion_id is None:

@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { teamsUserCanAssign } from "@/utils/roles";
 
 const toOptionalNumber = (raw: string): number | undefined => {
   if (raw.trim() === "") return undefined;
@@ -100,7 +101,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
     form.setValue("models", []);
   };
 
-  const teamOptions = (teams ?? []).map((team) => ({
+  const teamOptions = (teamsUserCanAssign(teams ?? null, userRole, userId) ?? []).map((team) => ({
     value: team.team_id,
     label: team.team_alias || team.team_id,
     sublabel: team.team_id,
@@ -205,8 +206,19 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                   type="number"
                   min={0}
                   placeholder="0.00"
-                  value={value ?? ""}
-                  onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  value={Number.isNaN(value) ? "" : value ?? ""}
+                  onInput={(event) => {
+                    if (event.currentTarget.validity.badInput || Number.isNaN(value)) {
+                      onChange(
+                        event.currentTarget.validity.badInput
+                          ? Number.NaN
+                          : toOptionalNumber(event.currentTarget.value) ?? null,
+                      );
+                    }
+                  }}
+                  onChange={(event) =>
+                    onChange(event.target.validity.badInput ? Number.NaN : toOptionalNumber(event.target.value) ?? null)
+                  }
                 />
               </InputGroup>
             )}

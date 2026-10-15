@@ -1,0 +1,13 @@
+# Wolfi's security database names zlib 1.3.3-r0 as the fix for CVE-2026-85091,
+# but the newest zlib published to the Wolfi apk repo is 1.3.2-r7, so every
+# wolfi-base digest reports it and no `apk upgrade` can clear it.
+# Drop this once Wolfi ships zlib >= 1.3.3-r0; expected by 2026-10-15.
+ignore:
+  - vulnerability: CVE-2026-85091
+    package:
+      name: zlib
+      type: apk
+  - vulnerability: GHSA-g5fp-32jq-cfw2
+    package:
+      name: zlib
+      type: apk

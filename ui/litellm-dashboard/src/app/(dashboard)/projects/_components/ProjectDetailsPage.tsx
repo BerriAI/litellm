@@ -1,5 +1,8 @@
+import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -14,16 +17,6 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
 import { ProjectKeysSection } from "./ProjectKeysSection";
 
-interface TeamInfoShape {
-  team_id: string;
-  team_alias?: string;
-  models?: string[];
-  max_budget?: number | null;
-  budget_duration?: string | null;
-  spend?: number;
-  members_with_roles?: { user_id: string; role: string }[];
-}
-
 interface ProjectDetailProps {
   projectId: string;
   onBack: () => void;
@@ -33,10 +26,11 @@ const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >
 
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
-  const { data: teamData } = useTeam(project?.team_id ?? undefined);
-  // teamInfoCall returns { team_id, team_info: {...}, keys, team_memberships }
-  const teamInfo: TeamInfoShape | undefined = ((teamData as unknown as { team_info?: TeamInfoShape })?.team_info ??
-    teamData) as TeamInfoShape | undefined;
+  const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
+  const { userId } = useAuthorized();
+  const canEditProject = useCanManageProjects(
+    isUserTeamAdminForSingleTeam(teamInfo?.members_with_roles ?? null, userId ?? ""),
+  );
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
   const spend = project?.spend ?? 0;
@@ -100,10 +94,12 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             </div>
           </div>
         </div>
-        <Button onClick={() => setIsEditModalVisible(true)}>
-          <EditIcon className="size-4" />
-          Edit Project
-        </Button>
+        {canEditProject && (
+          <Button onClick={() => setIsEditModalVisible(true)}>
+            <EditIcon className="size-4" />
+            Edit Project
+          </Button>
+        )}
       </div>
 
       <Card className="mb-6">

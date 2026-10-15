@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
@@ -57,7 +58,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         elif text_embedding_responses is not None:
             model_response.data = text_embedding_responses
 
-        response: Final = AzureAICohereConfig()._transform_response(response=model_response)
+        response: Final = AzureAICohereConfig().transform_response(response=model_response)
 
         return response
 
@@ -157,7 +158,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
+        ) = AzureAICohereConfig().transform_request(input=input, optional_params=optional_params, model=model)
 
         image_embedding_responses: list | None = None
         text_embedding_responses: list | None = None
@@ -218,6 +219,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         aembedding=None,
         max_retries: int | None = None,
         shared_session=None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text
@@ -244,7 +246,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
+        ) = AzureAICohereConfig().transform_request(input=input, optional_params=optional_params, model=model)
 
         image_embedding_responses: list | None = None
         text_embedding_responses: list | None = None

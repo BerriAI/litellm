@@ -1,12 +1,17 @@
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, cast
+from typing import Any, Final, TypeAlias, TypeVar, cast
 
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
+from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -75,6 +80,7 @@ class _GenAIContentPart(TypedDict, total=False):
 class _GenAIFunctionDeclaration(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
+    parameters: ReadOnly[object]
     parametersJsonSchema: ReadOnly[object]
 
 
@@ -95,6 +101,48 @@ class _GenAISystemInstruction(TypedDict, total=False):
 
 
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
+_RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
+_RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
+_TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
+_JSON_MIME_TYPE: Final = "application/json"
+_GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
+_CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
+_Validated: Final = TypeVar("_Validated")
+
+
+def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
+    return next((config[key] for key in keys if config.get(key) is not None), None)
+
+
+def _validated(adapter: TypeAdapter[_Validated], value: object) -> _Validated | None:
+    try:
+        return adapter.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _translate_response_format(config: object) -> Mapping[str, object] | None:
+    fields: Final = _validated(_CONFIG_FIELDS, config)
+    if fields is None or _first_present(fields, _RESPONSE_MIME_TYPE_KEYS) not in (None, _JSON_MIME_TYPE):
+        return None
+    schema: Final = _validated(
+        _JSON_OBJECT_SCHEMA, normalize_json_schema_types(_first_present(fields, _RESPONSE_SCHEMA_KEYS))
+    )
+    if schema is None or schema.get("type") != "object":
+        return None
+    for key in _GEMINI_ONLY_SCHEMA_KEYS:
+        filter_value_from_dict(schema, key)
+    return {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}}
+
+
+def _deployment_supports_response_format(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        provider_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except BadRequestError:
+        return True
+    supported_params: Final = get_supported_openai_params(model=provider_model, custom_llm_provider=provider)
+    return supported_params is None or "response_format" in supported_params
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
@@ -314,6 +362,11 @@ class GoogleGenAIAdapter:
                 pass
             if "stopSequences" in config:
                 completion_request["stop"] = config["stopSequences"]
+        response_format: Final = _translate_response_format(config)
+        if response_format is not None and _deployment_supports_response_format(
+            model, litellm_params.custom_llm_provider if litellm_params else None
+        ):
+            completion_request["response_format"] = response_format
 
         # Handle tools transformation
         if tools:
@@ -390,8 +443,9 @@ class GoogleGenAIAdapter:
 
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
-                    if "parametersJsonSchema" in func_decl:
-                        function_chunk["parameters"] = func_decl["parametersJsonSchema"]
+                    parameters = _validated(_JSON_OBJECT_SCHEMA, _first_present(func_decl, _TOOL_PARAMETERS_KEYS))
+                    if parameters is not None:
+                        function_chunk["parameters"] = parameters
 
                     openai_tool: _JsonDict = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
@@ -582,14 +636,6 @@ class GoogleGenAIAdapter:
             ),
         }
 
-        # Add text field for convenience (common in Google GenAI responses)
-        text_content = ""
-        for part in parts:
-            if isinstance(part, dict) and "text" in part:
-                text_content += part["text"]
-        if text_content:
-            generate_content_response["text"] = text_content
-
         return generate_content_response
 
     def translate_streaming_completion_to_generate_content(
@@ -655,14 +701,6 @@ class GoogleGenAIAdapter:
                 }
             )
             streaming_chunk["usageMetadata"] = usage_metadata
-
-        # Add text field for convenience (common in Google GenAI responses)
-        text_content = ""
-        for part in parts:
-            if isinstance(part, dict) and "text" in part:
-                text_content += part["text"]
-        if text_content:
-            streaming_chunk["text"] = text_content
 
         return streaming_chunk
 
