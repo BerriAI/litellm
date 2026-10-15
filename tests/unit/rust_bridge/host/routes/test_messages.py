@@ -5,8 +5,8 @@ import pytest
 
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from litellm.rust_bridge.messages import route_host
-from litellm.rust_bridge.messages.route_host import response
+from litellm.rust_bridge.host.routes import messages as messages_host
+from litellm.rust_bridge.host.routes.messages import response
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -36,7 +36,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
     monkeypatch.setattr(litellm, "request_timeout", 1800)
     monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
 
-    projected: Final = route_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
+    projected: Final = messages_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
 
     assert projected == {
         "drop_params": True,
@@ -78,7 +78,7 @@ def test_drop_params_merges_the_global_flag_with_the_request(
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_flag)
 
-    assert route_host.settings(kwargs)["drop_params"] is expected
+    assert messages_host.settings(kwargs)["drop_params"] is expected
 
 
 @pytest.mark.parametrize(
@@ -90,7 +90,7 @@ def test_drop_params_merges_the_global_flag_with_the_request(
     ],
 )
 def test_additional_drop_params_keep_only_string_paths(configured: object, expected: tuple[str, ...]) -> None:
-    settings: Final = route_host.settings({"additional_drop_params": configured})
+    settings: Final = messages_host.settings({"additional_drop_params": configured})
 
     assert settings["additional_drop_params"] == expected
 
@@ -117,19 +117,19 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     rejected: Final = ValueError("claude-sonnet-5 does not support top_k=5")
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
 
-    mapped: Final = route_host.map_failure(rejected, request.resolved, "anthropic")
+    mapped: Final = messages_host.map_failure(rejected, request.resolved, "anthropic")
 
     assert isinstance(mapped, litellm.BadRequestError)
     assert mapped.status_code == 400
     assert "does not support top_k=5" in mapped.message
     assert mapped.model == "claude-sonnet-5"
     assert not isinstance(
-        route_host.map_failure(ValueError("plain"), request.resolved, "anthropic"), litellm.BadRequestError
+        messages_host.map_failure(ValueError("plain"), request.resolved, "anthropic"), litellm.BadRequestError
     )
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
-    hidden: Final = route_host.stream_hidden_params(
+    hidden: Final = messages_host.stream_hidden_params(
         (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41"))
     )
 
