@@ -30,7 +30,10 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,
@@ -83,7 +86,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
-def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
+def _strip_total_tokens_from_anthropic_response(response: object) -> None:
     """Remove the OpenAI-flavored `usage.total_tokens` field that LiteLLM
     injects into Anthropic /v1/messages responses.
 
@@ -145,7 +148,7 @@ async def anthropic_response(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result: Final = await base_llm_response_processor.base_process_llm_request(
@@ -319,7 +322,7 @@ async def count_tokens(
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
-        request_data: Final = await _read_request_body(request=request)
+        request_data: Final = await read_request_body(request=request)
         data: Final[dict] = {**request_data}
 
         # Extract required fields

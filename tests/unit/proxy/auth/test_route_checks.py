@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlencode
 
 import pytest
 from fastapi import HTTPException, Request
@@ -14,7 +16,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import _is_api_route_allowed
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
@@ -2561,12 +2563,14 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.parametrize("route,allowed", (("/lens/traces/findings", True), ("/lens/example/run", False)))
-def test_admin_viewer_can_read_trace_findings_but_cannot_start_investigations(route: str, allowed: bool) -> None:
+@pytest.mark.parametrize("route", ("/lens/traces/findings", "/lens/example/runs"), ids=("read", "write"))
+def test_admin_viewer_delegates_lens_authorization_to_service(route: str) -> None:
     request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
     auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
-    def check_access() -> None:
+    assert not RouteChecks.is_llm_api_route(route)
+
+    assert (
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
             _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
@@ -2575,13 +2579,8 @@ def test_admin_viewer_can_read_trace_findings_but_cannot_start_investigations(ro
             valid_token=auth,
             request_data={},
         )
-
-    if allowed:
-        assert check_access() is None
-    else:
-        with pytest.raises(HTTPException) as error:
-            check_access()
-        assert error.value.status_code == 403
+        is None
+    )
 
 
 # ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
@@ -2946,7 +2945,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
-# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+# ── user_is_org_admin tests ──────────────────────────────────────────────────
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2967,25 +2966,25 @@ def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
 def test_user_is_org_admin_with_organizations_list():
     """Org admin can be identified via the `organizations` list field (used by /user/new)."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
 
 
 def test_user_is_org_admin_with_singular_organization_id():
     """Backward-compat: org admin can still be identified via singular `organization_id`."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
+    assert user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
 
 
 def test_user_is_org_admin_organizations_list_wrong_org():
     """Non-member of the requested org is not considered an org admin for it."""
     user_obj = _make_org_admin_user("org-2")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_user_is_org_admin_no_org_fields():
     """Returns False when neither `organization_id` nor `organizations` is in the request."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({}, user_obj) is False
+    assert user_is_org_admin({}, user_obj) is False
 
 
 def test_non_org_admin_with_organizations_list():
@@ -3002,13 +3001,13 @@ def test_non_org_admin_with_organizations_list():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=[membership],
     )
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_org_admin_cannot_escalate_to_other_org():
     """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
     user_obj = _make_org_admin_user("org-A")
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
 
 
 def test_org_admin_of_multiple_orgs_can_operate_on_both():
@@ -3034,7 +3033,7 @@ def test_org_admin_of_multiple_orgs_can_operate_on_both():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=memberships,
     )
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
 # ── LIT-4221: /team/update org-context resolution from team_id ────────────────
@@ -3742,7 +3741,7 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     self_managed_routes entry is load-bearing rather than redundant.
 
     Query params do reach request_data, so the reason is not body-vs-query: it
-    is the key name. _user_is_org_admin reads ``organization_id`` (singular) and
+    is the key name. user_is_org_admin reads ``organization_id`` (singular) and
     ``organizations``, while this endpoint's filter is ``organization_ids``
     (plural), and the dashboard's first page load sends no organization filter
     at all. Both shapes are pinned below because renaming the query param would
@@ -3764,11 +3763,11 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     )
 
     # The dashboard's default page load: no organization filter at all.
-    assert not _user_is_org_admin(request_data={}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={}, user_object=user_obj)
     # The filtered load, naming an org this user really does administer.
-    assert not _user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
     # The key name the helper would have had to see to grant it.
-    assert _user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
+    assert user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
     assert not RouteChecks.check_route_access(
         route="/organization/daily/activity",
         allowed_routes=LiteLLMRoutes.org_admin_only_routes.value,
@@ -4702,9 +4701,7 @@ def test_is_llm_api_route():
     all_llm_api_routes = llm_passthrough_router.routes
 
     for route in all_llm_api_routes:
-        print("route", route)
         route_path = str(route.path)
-        print("route_path", route_path)
         assert RouteChecks.is_llm_api_route(route_path) is True
 
 
@@ -4720,3 +4717,188 @@ def test_route_matches_pattern():
         is False
     )
     assert RouteChecks._route_matches_pattern("/v1/{thread_id}/messages", "/v1/messages/thread_2345") is False
+
+
+def _scope_request(method: str, path: str) -> Request:
+    return Request({"type": "http", "method": method, "path": path, "query_string": b""})
+
+
+def _internal_user_check(route: str, method: str, role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> None:
+    user_obj = LiteLLM_UserTable(user_id="u", user_email="u@x", user_role=role.value)
+    valid_token = UserAPIKeyAuth(user_id="u", user_role=role)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role.value,
+        route=route,
+        request=_scope_request(method, route),
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+        ("DELETE", "/credentials/a/b/user_connection"),
+    ],
+)
+def test_internal_user_credential_connection_routes_allowed(method: str, route: str) -> None:
+    assert _internal_user_check(route, method) is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("PATCH", "/credentials/x/user_connection"),
+        ("GET", "/credentials/by_name/x/user_connection"),
+        ("PATCH", "/credentials/x/user_connection/start"),
+        ("GET", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/user_connections"),
+        ("PATCH", "/credentials/user_connections"),
+    ],
+)
+def test_internal_user_credential_connection_route_collisions_denied(method: str, route: str) -> None:
+    """A name colliding with the connection paths would fall through to the generic
+    credential CRUD handlers, so only the exact method/route pairs are allowed."""
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method)
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+    ],
+)
+def test_view_only_user_denied_credential_connection_routes(method: str, route: str) -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method, role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+def test_user_connection_route_registration_order_wins_over_generic_credential_routes() -> None:
+    """The :path placeholders in the generic CRUD routes could swallow the
+    user_connection paths; the concrete routes must register (and match) first."""
+    from starlette.routing import Match
+
+    from litellm.proxy.credential_endpoints import endpoints as credential_endpoints
+    from litellm.proxy.proxy_server import app
+
+    for method, path, expected in (
+        ("DELETE", "/credentials/foo/user_connection", credential_endpoints.delete_user_connection),
+        ("POST", "/credentials/foo/user_connection/start", credential_endpoints.start_user_connection),
+    ):
+        scope = {"type": "http", "method": method, "path": path}
+        match = next(
+            (
+                route
+                for route in app.router.routes
+                if hasattr(route, "matches") and route.matches(scope)[0] == Match.FULL
+            ),
+            None,
+        )
+        assert match is not None, f"no route matched {method} {path}"
+        assert getattr(match, "endpoint", None) is expected
+
+
+def _legacy_route_request(path: str, query_params: Mapping[str, str]) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "query_string": urlencode(query_params).encode(),
+            "headers": [],
+        }
+    )
+
+
+def test_llm_api_route() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1/chat/completions",
+            request=_legacy_route_request("/v1/chat/completions", {}),
+            valid_token=UserAPIKeyAuth(api_key="test_key"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_key_info_route_allowed() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/key/info",
+            request=_legacy_route_request("/key/info", {"key": "test_key"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_user_info_route_allowed() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/user/info",
+            request=_legacy_route_request("/user/info", {"user_id": "test_user"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_user_info_route_forbidden() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/user/info",
+            request=_legacy_route_request("/user/info", {"user_id": "wrong_user"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ],
+)
+@pytest.mark.parametrize(
+    ("method", "route"), [("POST", "/telemetry/ui_events"), ("GET", "/telemetry/ui_events/enabled")]
+)
+def test_every_dashboard_role_can_send_telemetry_ui_events(
+    user_role: LitellmUserRoles, method: str, route: str
+) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="u", user_role=user_role.value),
+            _user_role=user_role,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="u", user_role=user_role),
+            request_data={},
+        )
+    except HTTPException as exc:
+        pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")

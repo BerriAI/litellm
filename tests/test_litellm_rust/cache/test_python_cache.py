@@ -12,23 +12,22 @@ from litellm.caching.caching_handler import (
 )
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
-from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE
+from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -57,8 +56,8 @@ async def test_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     recorder: Final = RecordingLogger()
@@ -133,8 +132,8 @@ async def test_response_cache_backend_does_not_control_coordination(
     )
     recording_server.expected_requests = 2 if backend == "disabled" else 1
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     key_hash: Final = "b" * 64
@@ -350,8 +349,6 @@ async def test_cache_lookup_uses_backend_request_callback_semantics(
     route: Literal["chat", "messages", "responses"],
     legacy: bool,
 ) -> None:
-    from tests.test_litellm_rust.support.requests import request_body
-
     class Rewrite(RecordingLogger):
         temperature = 0.1
 
@@ -446,7 +443,7 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
     request: Final = NativeCall(
         args=(),
         kwargs=arguments,
-        bound={
+        base={
             "model": MESSAGES_MODEL,
             "messages": list(MESSAGES),
             "max_tokens": 32,

@@ -20,8 +20,10 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
+    _stream_decoder,
     make_call,
     make_sync_call,
+    response_format_schema_from_request,
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -39,13 +41,17 @@ def bedrock_transformer() -> AmazonInvokeConfig:
     return AmazonInvokeConfig()
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_block = {"redactedContent": "This is a redacted content"}
-    decoder = AWSEventStreamDecoder(model="test")
-    transformed_thinking_blocks = decoder.translate_thinking_blocks(thinking_block)
-    assert len(transformed_thinking_blocks) == 1
-    assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
-    assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+def test_transform_thinking_blocks_unwraps_converse_redacted_content_to_claude_native_data():
+    """Converse streams Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    decoder: Final = AWSEventStreamDecoder(model="test")
+
+    thinking_blocks: Final = decoder.translate_thinking_blocks(
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()}
+    )
+
+    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data}]
 
 
 def test_transform_tool_calls_index():
@@ -1052,6 +1058,180 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
     _assert_empty_stream_surfaced_as_bad_gateway(exc_info.value)
 
 
+def _assert_converse_stream_text_and_finish_reason(chunks: Sequence[ModelResponseStream]) -> None:
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Streamed reply"
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_converse_streaming_completion_yields_text_and_finish_reason(
+    _aws_test_credentials: None,
+    async_mode: bool,
+) -> None:
+    event_stream_body: Final = b"".join(
+        (
+            _converse_event_frame("messageStart", {"role": "assistant"}),
+            _converse_event_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "Streamed "}},
+            ),
+            _converse_event_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "reply"}},
+            ),
+            _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
+            _converse_event_frame(
+                "metadata",
+                {
+                    "usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5},
+                    "metrics": {"latencyMs": 1},
+                },
+            ),
+        )
+    )
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/converse-stream")
+        return httpx.Response(200, content=event_stream_body, headers=_event_stream_headers())
+
+    transport: Final = httpx.MockTransport(handle_request)
+    if async_mode:
+        async_client: Final = AsyncHTTPHandler(transport=transport)
+        async_stream: Final = await litellm.acompletion(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Say hello"}],
+            stream=True,
+            client=async_client,
+        )
+        async_chunks: Final = tuple([chunk async for chunk in async_stream])
+        _assert_converse_stream_text_and_finish_reason(async_chunks)
+    else:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=transport))
+        sync_stream: Final = litellm.completion(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Say hello"}],
+            stream=True,
+            client=sync_client,
+        )
+        sync_chunks: Final = tuple(sync_stream)
+        _assert_converse_stream_text_and_finish_reason(sync_chunks)
+
+
+def test_mistral_invoke_stream_yields_text_and_finish_reason(
+    _aws_test_credentials: None,
+) -> None:
+    event_stream_body: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            {"outputs": [{"text": "A court case moves ", "stop_reason": None}]},
+            {"outputs": [{"text": "through the courts.", "stop_reason": "stop"}]},
+        )
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/invoke-with-response-stream")
+        return httpx.Response(
+            200,
+            content=event_stream_body,
+            headers=_event_stream_headers(),
+        )
+
+    transport: Final = httpx.MockTransport(handle_request)
+    client: Final = HTTPHandler(client=httpx.Client(transport=transport))
+    stream: Final = litellm.completion(
+        model="bedrock/mistral.mixtral-8x7b-instruct-v0:1",
+        messages=[{"role": "user", "content": "Where does a court case go?"}],
+        stream=True,
+        client=client,
+    )
+    chunks: Final = tuple(stream)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
+        "A court case moves through the courts."
+    )
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
+        "stop"
+    ]
+
+
+def test_converse_streaming_tool_call_arguments_are_valid_json(
+    _aws_test_credentials: None,
+) -> None:
+    event_stream_body: Final = b"".join(
+        _converse_event_frame(event_type, body)
+        for event_type, body in (
+            ("messageStart", {"role": "assistant"}),
+            (
+                "contentBlockStart",
+                {
+                    "contentBlockIndex": 0,
+                    "start": {
+                        "toolUse": {
+                            "toolUseId": "toolu_weather",
+                            "name": "get_current_weather",
+                        }
+                    },
+                },
+            ),
+            (
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"location":"Bos'}}},
+            ),
+            (
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"toolUse": {"input": 'ton","unit":"fahrenheit"}'}}},
+            ),
+            ("contentBlockStop", {"contentBlockIndex": 0}),
+            ("messageStop", {"stopReason": "tool_use"}),
+            ("metadata", {"usage": {"inputTokens": 4, "outputTokens": 7}}),
+        )
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/converse-stream")
+        return httpx.Response(
+            200,
+            content=event_stream_body,
+            headers=_event_stream_headers(),
+        )
+
+    transport: Final = httpx.MockTransport(handle_request)
+    client: Final = HTTPHandler(client=httpx.Client(transport=transport))
+    messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
+    stream: Final = litellm.completion(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {"type": "string"},
+                        },
+                        "required": ["location", "unit"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        client=client,
+    )
+    chunks: Final = tuple(stream)
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=messages)
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert json.loads(assembled.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston",
+        "unit": "fahrenheit",
+    }
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
 _UPSTREAM_REJECTION: Final = "structured output schema uses unsupported regex negative look-ahead"
 _CUSTOMER_REJECTION_EVENT_TYPE: Final = "validationException"
 
@@ -1426,3 +1606,167 @@ def test_filter_headers_for_aws_signature():
     non_aws_headers = {"x-custom-trace": "trace-123", "x-user-context": "premium", "x-request-source": "mobile-app"}
     filtered_non_aws = aws_llm._filter_headers_for_aws_signature(non_aws_headers)
     assert filtered_non_aws == {}
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            AWSEventStreamDecoder(model="anthropic.claude-3-sonnet-20240229-v1:0")
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+_INVOKE_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+    "required": ["tier", "summary"],
+}
+_INVOKE_RISK_OBJECT: Final = {"tier": 2, "summary": "Weekend database migration with a tested rollback"}
+
+
+def _invoke_json_mode_request(tools: Sequence[Mapping[str, object]]) -> str:
+    return json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "messages": [{"role": "user", "content": "Assess this change request"}],
+            "tools": list(tools),
+            "tool_choice": {"type": "tool", "name": "json_tool_call"},
+        }
+    )
+
+
+def _invoke_json_tool_events(fragments: Sequence[str]) -> tuple[dict[str, object], ...]:
+    deltas = tuple(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
+        for fragment in fragments
+    )
+    return (
+        {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 0}}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "json_tool_call", "input": {}},
+        },
+        *deltas,
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}},
+    )
+
+
+def _invoke_streamed_json_mode_contents(data: str, fragments: Sequence[str], json_mode: bool = True) -> tuple[str, ...]:
+    decoder = _stream_decoder(
+        "anthropic",
+        model="anthropic.claude-sonnet-4",
+        json_mode=True,
+        sync_stream=True,
+        response_format_schema=response_format_schema_from_request(data, json_mode),
+    )
+    chunks = tuple(decoder._chunk_parser(event) for event in _invoke_json_tool_events(fragments))
+    assert all(not chunk.choices[0].delta.tool_calls for chunk in chunks)
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_invoke_streamed_json_mode_envelope_is_unwrapped_with_the_schema_from_the_request_body():
+    envelope: Final = json.dumps({"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT})
+    data: Final = _invoke_json_mode_request([{"name": "json_tool_call", "input_schema": _INVOKE_RISK_SCHEMA}])
+
+    contents = _invoke_streamed_json_mode_contents(data, (envelope[:17], envelope[17:48], envelope[48:]))
+
+    assert json.loads("".join(contents)) == _INVOKE_RISK_OBJECT
+
+
+@pytest.mark.parametrize(
+    ("data", "json_mode"),
+    [
+        pytest.param("not json", True, id="unparseable_body"),
+        pytest.param(json.dumps([1, 2]), True, id="body_is_not_an_object"),
+        pytest.param(
+            _invoke_json_mode_request([{"name": "other_tool", "input_schema": _INVOKE_RISK_SCHEMA}]),
+            True,
+            id="no_json_tool",
+        ),
+        pytest.param(
+            _invoke_json_mode_request([{"name": "json_tool_call", "input_schema": _INVOKE_RISK_SCHEMA}]),
+            False,
+            id="json_mode_off",
+        ),
+    ],
+)
+def test_invoke_stream_keeps_the_wrapper_when_the_request_body_carries_no_json_tool_schema(data: str, json_mode: bool):
+    envelope: Final = json.dumps({"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT})
+
+    assert response_format_schema_from_request(data, json_mode) is None
+    contents = _invoke_streamed_json_mode_contents(data, (envelope[:17], envelope[17:]), json_mode)
+
+    assert json.loads("".join(contents)) == {"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT}
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_thinking_merges_into_content_with_think_tags() -> None:
+    frames: Final = (
+        _converse_event_frame("messageStart", {"role": "assistant"}),
+        _converse_event_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "I am a helpful assistant, "}}},
+        ),
+        _converse_event_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "the user wants to know who I am"}}},
+        ),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "c2lnbmF0dXJl"}}}
+        ),
+        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}
+        ),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "I am a helpful assistant"}}
+        ),
+        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 1}),
+        _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
+        _converse_event_frame(
+            "metadata",
+            {"usage": {"inputTokens": 12, "outputTokens": 30, "totalTokens": 42}, "metrics": {"latencyMs": 100}},
+        ),
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            content=b"".join(frames),
+            headers={"content-type": "application/vnd.amazon.eventstream"},
+            request=request,
+        )
+
+    response: Final = await litellm.acompletion(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+        stream=True,
+        max_tokens=1080,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        merge_reasoning_content_in_choices=True,
+        aws_access_key_id="AKIATHINKINGKEY",
+        aws_secret_access_key="thinking-secret",
+        aws_region_name="us-west-2",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert requests[0].url.raw_path == b"/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse-stream"
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
+        "<think>I am a helpful assistant, the user wants to know who I am</think>"
+        "Hi I am Anthropic, I am a helpful assistant"
+    )
+    assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)

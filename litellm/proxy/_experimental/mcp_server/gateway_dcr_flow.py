@@ -59,8 +59,11 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
+    UPSTREAM_SCOPE_PREFIX,
+    UpstreamScope,
     canonical_resource_uri,
     canonicalize_url_identity,
+    decode_upstream_scope,
     get_request_base_url,
     is_loopback_redirect_host,
     validate_redirect_uri_shape,
@@ -253,7 +256,9 @@ class ConsentTeam(LiteLLMBaseModel):
 class LookupVendorCredential(Protocol):
     """Injected read of a user's vendor credential for one server."""
 
-    def __call__(self, user_id: str, server_id: str, /) -> Awaitable[VendorCredentialState]: ...
+    def __call__(
+        self, user_id: str, server_id: str, requested_scopes: tuple[str, ...] = (), /
+    ) -> Awaitable[VendorCredentialState]: ...
 
 
 class LookupServerReachability(Protocol):
@@ -276,7 +281,9 @@ async def _refuse_subject_token(subject_token: str, request: Request) -> Subject
     )
 
 
-async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
+async def _unavailable_vendor_credential(
+    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
+) -> VendorCredentialState:
     return "unavailable"
 
 
@@ -313,6 +320,8 @@ class _ConnectFlow(LiteLLMBaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    requested_scopes: tuple[str, ...] = ()
+    upstream_scopes: tuple[UpstreamScope, ...] = ()
 
 
 class _GatewayAuthCode(LiteLLMBaseModel):
@@ -558,6 +567,7 @@ def aggregate_authorize(
     response_type: str | None,
     session_user_id: str | None,
     resource: str | None = None,
+    scope: str | None = None,
 ) -> Response:
     """The aggregate authorize verb: validate the client, require S256 PKCE, interpose
     LiteLLM sign-in, and hand the browser to the connect page with the flow sealed into a
@@ -583,6 +593,13 @@ def aggregate_authorize(
     if session_user_id is None:
         return _login_redirect(base_url, request)
     scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    scope_tokens: Final = tuple(token for token in (scope or "").split() if token.startswith(UPSTREAM_SCOPE_PREFIX))
+    decoded_scopes: Final = tuple(decode_upstream_scope(token) for token in scope_tokens)
+    if any(item is None for item in decoded_scopes):
+        return _oauth_error(400, "invalid_scope", "invalid upstream permission scope")
+    upstream_scopes: Final = tuple(item for item in decoded_scopes if item is not None)
+    if scoped_server is not None and any(item.server_id != scoped_server.server_id for item in upstream_scopes):
+        return _oauth_error(400, "invalid_scope", "upstream permission does not match the requested resource")
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -592,6 +609,8 @@ def aggregate_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=scoped_server.server_id if scoped_server is not None else None,
         audience=None,
+        requested_scopes=tuple((scope or "").split()) if scoped_server is not None and not upstream_scopes else (),
+        upstream_scopes=upstream_scopes,
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
     response: Final = RedirectResponse(connect_url, status_code=303)
@@ -751,6 +770,8 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    requested_scopes: tuple[str, ...] = (),
+    upstream_scopes: tuple[UpstreamScope, ...] = (),
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -763,6 +784,8 @@ def _new_connect_flow(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
         audience=audience,
+        requested_scopes=requested_scopes,
+        upstream_scopes=upstream_scopes,
     )
 
 
@@ -818,20 +841,20 @@ def _open_flow_for(
 
 @catalog_operation(global_manager)
 async def _flow_target(
-    flow: _ConnectFlow, lookup_server_reachability: LookupServerReachability
+    user_id: str, server_id: str | None, lookup_server_reachability: LookupServerReachability
 ) -> tuple[Literal["unscoped", "interactive", "m2m", "stale"], MCPServer | None]:
-    if flow.resource_server_id is None:
+    if server_id is None:
         return "unscoped", None
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # import cycle
         MCPServerManager,
         global_mcp_server_manager,
     )
 
-    server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
     if (
         server is None
         or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server)
-        or not await lookup_server_reachability(flow.user_id, server.server_id)
+        or not await lookup_server_reachability(user_id, server.server_id)
     ):
         return "stale", None
     state: Final = (
@@ -850,6 +873,7 @@ class ConnectFlowDescription(TypedDict):
     server_id: ReadOnly[str | None]
     server_name: ReadOnly[str | None]
     connected: ReadOnly[bool | None]
+    requested_scopes: NotRequired[ReadOnly[tuple[str, ...]]]
 
 
 async def _describe_opened_flow(
@@ -857,19 +881,11 @@ async def _describe_opened_flow(
     lookup_vendor_credential: LookupVendorCredential,
     lookup_server_reachability: LookupServerReachability,
 ) -> ConnectFlowDescription | Response:
-    state, server = await _flow_target(flow, lookup_server_reachability)
+    if flow.upstream_scopes:
+        return await _describe_upstream_scope_flow(flow, lookup_vendor_credential, lookup_server_reachability)
+    state, server = await _flow_target(flow.user_id, flow.resource_server_id, lookup_server_reachability)
     if state == "interactive" and server is not None:
-        credential: Final = await lookup_vendor_credential(flow.user_id, server.server_id)
-        if credential == "unavailable":
-            return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
-        interactive_description: Final[ConnectFlowDescription] = {
-            "state": state,
-            "client_origin": _origin_only(flow.redirect_uri),
-            "server_id": server.server_id,
-            "server_name": server.server_name or server.alias or server.name,
-            "connected": credential == "present",
-        }
-        return interactive_description
+        return await _describe_interactive_target(flow, server, flow.requested_scopes, lookup_vendor_credential)
     described: Final[ConnectFlowDescription] = {
         "state": state,
         "client_origin": _origin_only(flow.redirect_uri),
@@ -878,6 +894,70 @@ async def _describe_opened_flow(
         "connected": state == "m2m" or None,
     }
     return described
+
+
+async def _describe_interactive_target(
+    flow: _ConnectFlow,
+    server: MCPServer,
+    scopes: tuple[str, ...],
+    lookup_vendor_credential: LookupVendorCredential,
+) -> ConnectFlowDescription | Response:
+    credential: Final = (
+        await lookup_vendor_credential(flow.user_id, server.server_id, scopes)
+        if scopes
+        else await lookup_vendor_credential(flow.user_id, server.server_id)
+    )
+    if credential == "unavailable":
+        return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+    described: Final[ConnectFlowDescription] = {
+        "state": "interactive",
+        "client_origin": _origin_only(flow.redirect_uri),
+        "server_id": server.server_id,
+        "server_name": server.server_name or server.alias or server.name,
+        "connected": credential == "present",
+    }
+    return {**described, "requested_scopes": scopes} if scopes else described
+
+
+async def _describe_upstream_scope_flow(
+    flow: _ConnectFlow,
+    lookup_vendor_credential: LookupVendorCredential,
+    lookup_server_reachability: LookupServerReachability,
+) -> ConnectFlowDescription | Response:
+    server_ids: Final = tuple(dict.fromkeys(item.server_id for item in flow.upstream_scopes))
+    targets: Final = tuple(
+        [await _flow_target(flow.user_id, server_id, lookup_server_reachability) for server_id in server_ids]
+    )
+    if any(state != "interactive" or server is None for state, server in targets):
+        return _oauth_error(400, "invalid_scope", "an upstream permission target is unavailable")
+    descriptions: Final = tuple(
+        [
+            await _describe_interactive_target(
+                flow,
+                server,
+                tuple(
+                    dict.fromkeys(
+                        item.permission for item in flow.upstream_scopes if item.server_id == server.server_id
+                    )
+                ),
+                lookup_vendor_credential,
+            )
+            for _, server in targets
+            if server is not None
+        ]
+    )
+    for description in descriptions:
+        if isinstance(description, Response) or not description["connected"]:
+            return description
+    if flow.resource_server_id is not None:
+        return descriptions[0]
+    return {
+        "state": "unscoped",
+        "client_origin": _origin_only(flow.redirect_uri),
+        "server_id": None,
+        "server_name": None,
+        "connected": None,
+    }
 
 
 async def describe_connect_flow(

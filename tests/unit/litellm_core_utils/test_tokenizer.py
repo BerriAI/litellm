@@ -401,3 +401,138 @@ def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface
     assert merged.offsets == type(expected).merge([expected, reference.encode("more")]).offsets
     with pytest.raises(ValueError, match="direction"):
         actual.pad(8, direction="sideways")
+
+
+@pytest.mark.parametrize("log_level", ["WARNING", "ERROR"])
+def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeypatch, log_level):
+    from unittest.mock import patch
+    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
+
+    monkeypatch.setenv("LITELLM_RUST", "false")
+    _load_huggingface_tokenizer.cache_clear()
+    with caplog.at_level(log_level, logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": None}):
+        result = _select_tokenizer_helper("llama-2")
+    assert result["type"] == "openai_tokenizer"
+    assert result["tokenizer"].encode("hello")
+    assert ("token counts may be approximate" in caplog.text) is (log_level == "WARNING")
+    assert ("install tokenizers" in caplog.text) is (log_level == "WARNING")
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_runtime_aliases_accept_available_tokenizer_instances(python_installed):
+    from contextlib import nullcontext
+    from unittest.mock import patch
+    from litellm.litellm_core_utils import tokenizer as types
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    python = ReferenceTokenizer.from_str(TOKENIZER_JSON)
+    with nullcontext() if python_installed else patch.dict(sys.modules, {"tokenizers": None}):
+        assert isinstance(native, types.HuggingFace)
+        assert isinstance(native, types.Tokenizer)
+        assert isinstance(tiktoken.get_encoding("cl100k_base"), types.Tokenizer)
+        assert isinstance(OpenAIEncoding.from_tiktoken("cl100k_base"), types.Tokenizer)
+        assert isinstance(python, types.HuggingFace) is python_installed
+        assert isinstance(python, types.Tokenizer) is python_installed
+
+
+def test_runtime_alias_does_not_hide_broken_tokenizer_installation():
+    from unittest.mock import patch
+    from litellm.litellm_core_utils import tokenizer as types
+
+    failure = ModuleNotFoundError("broken installation", name="tokenizer_dependency")
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ModuleNotFoundError) as error:
+            getattr(types, "Tokenizer")
+    assert error.value is failure
+
+
+def test_unknown_tokenizer_export_raises_attribute_error():
+    from litellm.litellm_core_utils import tokenizer as types
+
+    with pytest.raises(AttributeError, match="unknown_tokenizer"):
+        getattr(types, "unknown_tokenizer")
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_added_token_return_annotation_resolves_without_optional_import(python_installed):
+    from contextlib import nullcontext
+    from typing import get_type_hints
+    from unittest.mock import patch
+
+    with nullcontext() if python_installed else patch.dict(sys.modules, {"tokenizers": None}):
+        hints = get_type_hints(HuggingFaceTokenizer.get_added_tokens_decoder)
+    assert "return" in hints
+    decoder = HuggingFaceTokenizer.from_str(TOKENIZER_JSON).get_added_tokens_decoder()
+    for token in decoder.values():
+        assert isinstance(token.content, str)
+        assert isinstance(token.special, bool)
+
+
+def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
+
+    monkeypatch.setenv("LITELLM_RUST", "false")
+    _load_huggingface_tokenizer.cache_clear()
+    model = "llama-2\r\nforged-model\x1b[31m\u2028\u2029"
+    secret = "sk-" + "x" * 48
+    failure = OSError("download failed\r\nforged-error\x1b[31m api_key=" + secret)
+
+    def fail_download(*args, **kwargs):
+        raise failure
+
+    dependency = SimpleNamespace(Tokenizer=SimpleNamespace(from_pretrained=fail_download))
+    with caplog.at_level("WARNING", logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": dependency}):
+        result = _select_tokenizer_helper(model)
+    assert result["type"] == "openai_tokenizer"
+    assert result["tokenizer"].encode("hello")
+    message = next(record.getMessage() for record in caplog.records if "token counts may be approximate" in record.getMessage())
+    assert "llama-2" in message
+    assert "download failed" in message
+    assert "forged-model" in message and "forged-error" in message
+    assert message.isascii() and message.isprintable()
+    assert secret not in message
+    assert "REDACTED" in message
+    assert "install tokenizers and huggingface-hub" in message
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_native_added_token_decoder_preserves_fields_without_python_dependency(monkeypatch, python_installed):
+    from tokenizers import AddedToken
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    expected = ReferenceTokenizer.from_str(TOKENIZER_JSON).get_added_tokens_decoder()
+    if not python_installed:
+        monkeypatch.setitem(sys.modules, "tokenizers", None)
+    actual = native.get_added_tokens_decoder()
+    attributes = ("content", "single_word", "lstrip", "rstrip", "normalized", "special")
+    assert {
+        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()
+    } == {
+        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in expected.items()
+    }
+    assert {token_id: str(token) for token_id, token in actual.items()} == {
+        token_id: str(token) for token_id, token in expected.items()
+    }
+    if python_installed:
+        assert all(isinstance(token, AddedToken) for token in actual.values())
+
+
+def test_native_added_token_decoder_preserves_unrelated_import_failure():
+    import builtins
+    from unittest.mock import patch
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    failure = ModuleNotFoundError(name="broken_tokenizer_dependency")
+    original_import = builtins.__import__
+
+    def import_dependency(name, *args, **kwargs):
+        if name == "tokenizers":
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=import_dependency):
+        with pytest.raises(ModuleNotFoundError) as caught:
+            native.get_added_tokens_decoder()
+    assert caught.value is failure

@@ -120,3 +120,9 @@ def recording_service() -> Iterator[RecordingServer]:
         if recording_server.expected_requests is not None:
             assert len(recording_server.requests) == recording_server.expected_requests
         assert recording_server.responses == []
+
+
+def relaxed(server: RecordingServer) -> Iterator[RecordingServer]:
+    server.expected_requests = None
+    yield server
+    server.responses.clear()
