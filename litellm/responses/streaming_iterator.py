@@ -1602,22 +1602,22 @@ def _stamp_responses_usage_cost(
         setattr(usage_obj, "cost", cost)
 
 
-_ITEM_FIELDS_SENT_BY_LATER_EVENTS: Final[Mapping[object, Mapping[str, object]]] = MappingProxyType(
-    {
-        "message": MappingProxyType({"content": ()}),
-        "function_call": MappingProxyType({"arguments": ""}),
-    }
-)
-_PART_FIELDS_SENT_BY_LATER_EVENTS: Final[Mapping[object, Mapping[str, object]]] = MappingProxyType(
-    {"output_text": MappingProxyType({"text": ""})}
-)
+def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    match payload.get("type"):
+        case "message":
+            return {**payload, "content": [], "status": "in_progress"}
+        case "function_call":
+            return {**payload, "arguments": "", "status": "in_progress"}
+        case _:
+            return payload
 
 
-def _opening_payload(
-    payload: Mapping[str, object], fields_sent_later: Mapping[object, Mapping[str, object]]
-) -> Mapping[str, object]:
-    emptied_fields: Final = fields_sent_later.get(payload.get("type"))
-    return {**payload, **emptied_fields} if emptied_fields is not None else payload
+def opening_part_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    match payload.get("type"):
+        case "output_text":
+            return {**payload, "text": ""}
+        case _:
+            return payload
 
 
 def build_synthetic_response_events(
@@ -1645,9 +1645,7 @@ def build_synthetic_response_events(
             openai_types.OutputItemAddedEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(
-                    **_opening_payload(output_item_payload, _ITEM_FIELDS_SENT_BY_LATER_EVENTS)
-                ),
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_item_payload(output_item_payload)),
             )
         )
 
@@ -1661,9 +1659,7 @@ def build_synthetic_response_events(
                         item_id=item_id,
                         output_index=output_index,
                         content_index=content_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(
-                            **_opening_payload(part_payload, _PART_FIELDS_SENT_BY_LATER_EVENTS)
-                        ),
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_part_payload(part_payload)),
                     )
                 )
                 _add_text_like_part_events(

@@ -3329,6 +3329,43 @@ class TestBuildBlockSseChunks:
         assert completed["model"] == "gpt-5.4-mini"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
 
+    @pytest.mark.parametrize("stream_started", [False, True])
+    def test_block_message_reaches_an_sdk_reader_once(self, stream_started):
+        import httpx
+        import openai
+
+        created_event = {
+            "type": "response.created",
+            "response": {
+                "id": "resp_live",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5.4-mini",
+                "status": "in_progress",
+                "output": [],
+            },
+        }
+        yielded = [created_event] if stream_started else []
+        already_sent = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in yielded)
+        block_chunks = OpenAIResponsesHandler().build_block_sse_chunks(
+            self._exc(original_response=yielded), stream_started=stream_started, responses_so_far=yielded
+        )
+        sse_body = already_sent + b"".join(block_chunks)
+        client = openai.OpenAI(
+            api_key="sk-test",
+            base_url="http://guardrail.test/v1",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+                )
+            ),
+        )
+
+        with client.responses.stream(model="gpt-5.4-mini", input="hi") as stream:
+            text_snapshots = [event.snapshot for event in stream if event.type == "response.output_text.delta"]
+
+        assert text_snapshots[-1] == "Blocked by policy."
+
     def test_continuation_appends_item_at_next_output_index_with_real_usage(self):
         handler = OpenAIResponsesHandler()
         yielded = [

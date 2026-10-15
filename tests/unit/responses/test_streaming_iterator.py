@@ -2439,3 +2439,20 @@ def test_faked_stream_read_by_openai_sdk_accumulates_each_value_once():
     )
     assert text_snapshots[-1] == "Checking the weather."
     assert json.loads(argument_snapshots[-1]) == {"city": "Berlin"}
+
+
+def test_faked_stream_opens_items_in_progress_and_empty_like_a_real_stream():
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    added_items: Final = tuple(event.item for event in events if event.type == "response.output_item.added")
+    added_parts: Final = tuple(event.part for event in events if event.type == "response.content_part.added")
+
+    assert [(item.type, item.status) for item in added_items] == [
+        ("message", "in_progress"),
+        ("function_call", "in_progress"),
+    ]
+    assert added_items[0].content == []
+    assert added_items[1].arguments == ""
+    assert [part.text for part in added_parts] == [""]
+
