@@ -24,7 +24,6 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
-    safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1645,10 +1644,11 @@ class AmazonConverseConfig(BaseConfig):
         # ``_handle_reasoning_effort_parameter`` so it does not linger on the
         # caller's ``optional_params`` after the transformation returns.
         anthropic_output_config_already_normalized = bool(optional_params.pop("_output_config_normalized", False))
-        # Filter out exception objects before deepcopy to prevent deepcopy failures
-        # Exceptions should not be stored in optional_params (this is a defensive fix)
-        cleaned_params: Final = filter_exceptions_from_params(optional_params)
-        inference_params = safe_deep_copy(cleaned_params)
+        # Exceptions should not be stored in optional_params (this is a defensive fix).
+        # The filter rebuilds every dict and list it walks, so the result can be
+        # mutated without touching the caller's params; a deep copy on top of it
+        # only adds per-request allocations for large tool lists (#46519).
+        inference_params = filter_exceptions_from_params(optional_params)
         supported_converse_params: Final = list(AmazonConverseConfig.__annotations__.keys()) + ["top_k"]
         supported_tool_call_params: Final = ["tools", "tool_choice"]
         supported_config_params: Final = list(self.get_config_blocks().keys())
