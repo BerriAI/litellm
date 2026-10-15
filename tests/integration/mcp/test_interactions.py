@@ -397,6 +397,7 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
     "event_kind,access",
     [
         ("tools", "normal"),
+        ("tools", "modern-boundary"),
         ("prompts", "normal"),
         ("resources", "normal"),
         ("updated", "normal"),
@@ -410,6 +411,7 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("tools", "upstream-ended"),
         ("tools", "legacy-caller-isolation"),
         ("tools", "legacy-caller-no-notifications"),
+        ("updated", "legacy-caller-no-notifications"),
         ("tools", "legacy-caller-revoked"),
         ("tools", "legacy-sse"),
         ("updated", "legacy-sse"),
@@ -695,6 +697,13 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                         before = await session.list_tools()
                         assert "peer-added" not in {tool.name for tool in before.tools}
                         if event_kind == "updated":
+                            if access == "legacy-caller-no-notifications":
+                                with pytest.raises(MCPError):
+                                    await asyncio.wait_for(session.subscribe_resource("test://value"), 3)
+                                assert listener_credentials == []
+                                assert not active_listeners
+                                assert not (await session.call_tool("peer-change_tools", {})).is_error
+                                return
                             await session.subscribe_resource("test://value")
                         if access != "legacy-caller-no-notifications":
                             assert await asyncio.to_thread(connected.wait, 5)
@@ -767,6 +776,37 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     before = await session.list_tools()
                     assert "peer-change_tools" in {tool.name for tool in before.tools}
                     assert "peer-added" not in {tool.name for tool in before.tools}
+                    if access == "modern-boundary":
+                        for method, params in (
+                            ("notifications/initialized", {}),
+                            ("initialize", {"protocolVersion": "2026-07-28", "clientInfo": {"name": "boundary", "version": "1"}, "capabilities": {}}),
+                            ("resources/subscribe", {"uri": "test://value"}),
+                            ("resources/unsubscribe", {"uri": "test://value"}),
+                        ):
+                            notification = method == "notifications/initialized"
+                            response = await client.post(
+                                gateway_url + "/mcp/",
+                                headers={
+                                    "MCP-Protocol-Version": "2026-07-28",
+                                    "Mcp-Method": method,
+                                    "Mcp-Name": str(params.get("uri", "")),
+                                    "Accept": "application/json, text/event-stream",
+                                },
+                                json={
+                                    "jsonrpc": "2.0",
+                                    **({} if notification else {"id": "unsupported"}),
+                                    "method": method,
+                                    "params": {**params, "_meta": _META},
+                                },
+                                timeout=5,
+                            )
+                            if notification:
+                                assert response.status_code == 202
+                            else:
+                                assert response.status_code == 404, response.text
+                                assert response.json()["error"]["code"] == -32601
+                        assert listener_credentials == [], "Removed methods opened an implicit upstream listener"
+                        assert not active_listeners
                     async with listen(
                         session,
                         tools_list_changed=event_kind == "tools",
@@ -883,6 +923,10 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             assert "test://added" in {str(resource.uri) for resource in resources.resources}
                         else:
                             assert subscription.honored.resource_subscriptions == ["test://value"]
+                        if access == "modern-boundary":
+                            assert len(listener_credentials) == 1
+                            with pytest.raises(TimeoutError):
+                                await asyncio.wait_for(anext(subscription), 0.5)
                     assert await asyncio.to_thread(disconnected.wait, 3), "Upstream listener survived disconnect"
 
     app: Final = upstream.streamable_http_app(
