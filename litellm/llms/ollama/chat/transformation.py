@@ -487,10 +487,9 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
                             # Keep the id the provider sent (Ollama assigns one
-                            # per tool call); only mint one when it is missing.
-                            # Fixes: https://github.com/BerriAI/litellm/issues/46543
-                            if not tool_call.get("id"):
-                                tool_call["id"] = str(uuid.uuid4())
+                            # per tool call); only mint one when it is missing
+                            # (#46543, preserving the #11262 uuid fallback).
+                            tool_call["id"] = tool_call.get("id") or str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
