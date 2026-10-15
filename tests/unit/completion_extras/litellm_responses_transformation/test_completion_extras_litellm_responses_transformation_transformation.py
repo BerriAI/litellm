@@ -82,6 +82,59 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
     assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
 
 
+_MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "expected_summary"),
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, "auto"),
+        ("openai/responses/gpt-5.5", "https://api.openai.com/v1/responses", "detailed"),
+    ],
+)
+@pytest.mark.parametrize("endpoint", ["chat_completions", "responses"])
+def test_auto_summary_sends_the_level_the_target_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, expected_summary: str, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_auto_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_auto_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        if endpoint == "chat_completions":
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                reasoning_effort="low",
+                api_key="test-key",
+                aws_region_name="us-east-1",
+            )
+        else:
+            litellm.responses(
+                model=model, input="ping", reasoning_effort="low", api_key="test-key", aws_region_name="us-east-1"
+            )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,

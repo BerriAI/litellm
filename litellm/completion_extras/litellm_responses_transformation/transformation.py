@@ -41,7 +41,11 @@ from litellm.responses.sse_output_recovery import (
     record_output_item_chunk,
     record_output_text_chunk,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
+from litellm.responses.utils import (
+    ResponsesAPIRequestUtils,
+    auto_reasoning_summary,
+    normalize_responses_api_stream_options,
+)
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -953,6 +957,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
         drop_params: bool = False,
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -984,7 +990,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self.map_reasoning_effort(value)
+                responses_api_request["reasoning"] = self.map_reasoning_effort(value, model, custom_llm_provider)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
@@ -1100,6 +1106,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             optional_params,
             responses_api_request,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+            model=model,
+            custom_llm_provider=_served_provider(litellm_params),
         )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -1712,7 +1720,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
+    def map_reasoning_effort(
+        self, reasoning_effort: object, model: str | None = None, custom_llm_provider: str | None = None
+    ) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(
@@ -1726,7 +1736,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         return (
-            Reasoning(effort=reasoning_effort, summary="detailed")
+            Reasoning(
+                effort=reasoning_effort,
+                summary="detailed" if model is None else auto_reasoning_summary(model, custom_llm_provider),
+            )
             if auto_summary_enabled
             else Reasoning(effort=reasoning_effort)
         )

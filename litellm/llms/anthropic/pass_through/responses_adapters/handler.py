@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -32,7 +33,7 @@ from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import request_safeguards_evaluator
 from ..safeguards import with_safeguard_results
-from ..utils import auto_reasoning_summary, litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 

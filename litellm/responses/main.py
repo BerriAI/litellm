@@ -1434,7 +1434,7 @@ def responses(
         )
         reasoning_effort: Final = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
+            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort, model, custom_llm_provider)
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )

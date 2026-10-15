@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
+from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -73,7 +74,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
-    def auto_reasoning_summary(self) -> str:
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         return "auto" if self.use_openai_path else super().auto_reasoning_summary()
 
     def get_error_class(

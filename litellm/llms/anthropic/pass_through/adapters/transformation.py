@@ -10,10 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
-    auto_reasoning_summary,
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
 )
+from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names

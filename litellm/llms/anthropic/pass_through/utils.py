@@ -180,22 +180,6 @@ def is_reasoning_auto_summary_enabled() -> bool:
     return litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
 
 
-def auto_reasoning_summary(model: str, custom_llm_provider: object) -> str:
-    """The summary level the auto summary injects for a target, read from its Responses API config."""
-    from litellm.utils import ProviderConfigManager
-
-    try:
-        provider: Final = (
-            custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
-        )
-    except litellm.exceptions.BadRequestError:
-        return "detailed"
-    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        provider, local_model_name(model, provider)
-    )
-    return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()
-
-
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
