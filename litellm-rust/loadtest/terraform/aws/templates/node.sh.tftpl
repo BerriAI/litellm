@@ -1,0 +1,65 @@
+#!/bin/bash
+# Bootstrap for a ${role} node: Docker, kernel limits for tens of thousands of long-lived
+# connections, ECR login, then the role's containers.
+set -euxo pipefail
+
+dnf install -y docker jq
+systemctl enable --now docker
+
+cat > /etc/sysctl.d/90-loadtest.conf <<'SYSCTL'
+fs.file-max = 4194304
+fs.nr_open = 4194304
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+net.ipv4.ip_local_port_range = 1024 65000
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+SYSCTL
+sysctl --system
+
+aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}
+
+# Images may be pushed after the machines boot; keep trying for an hour.
+pull() {
+  for _ in $(seq 1 120); do
+    docker pull "$1" && return 0
+    aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry} || true
+    sleep 30
+  done
+  return 1
+}
+
+mkdir -p /opt/lt/out
+chmod 0777 /opt/lt /opt/lt/out
+pull ${tools_image}
+docker run --rm -v /opt/lt/out:/work/out ${tools_image} genconfig -out out \
+  -mocks '${mocks}' -chat-groups ${chat_groups} -messages-groups ${messages_groups} \
+  -deployments ${deployments} -chat-provider ${chat_provider} \
+  -keys ${key_count} -key-seed '${key_seed}' -master-key '${master_key}'
+
+LIMITS="--ulimit nofile=1048576:1048576 --network host --restart unless-stopped --log-opt max-size=100m --log-opt max-file=3"
+
+%{ if role == "mock" ~}
+docker run -d --name mockllm $LIMITS ${tools_image} mockllm -addr :9000 -faults '${mock_faults}'
+%{ endif ~}
+%{ if role == "gateway" ~}
+%{ if database_url != "" ~}
+docker run --rm -e DATABASE_URL='${database_url}' ${migrations_image}
+docker run --rm -v /opt/lt/out:/seed:ro public.ecr.aws/docker/library/postgres:16-alpine \
+  psql '${database_url}' -v ON_ERROR_STOP=1 -q -f /seed/keys.sql
+%{ endif ~}
+pull ${gateway_image}
+docker run -d --name gateway $LIMITS \
+  -e LITELLM_CONFIG=/config/config.yaml -e PORT=4000 \
+%{ if database_url != "" ~}
+  -e DATABASE_URL='${database_url}' \
+%{ endif ~}
+  -v /opt/lt/out:/config:ro ${gateway_image}
+# Gateway CPU, memory, fds and connections every 5 s: docker logs procmon.
+docker run -d --name procmon --restart unless-stopped --user 10001 --pid container:gateway \
+  ${tools_image} procmon -pid 1 -every 5s
+%{ endif ~}
+touch /opt/lt/ready

@@ -1,0 +1,8 @@
+region         = "us-east-1"
+ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
+allowed_cidrs  = ["203.0.113.7/32"]
+image_tag      = "customer-proxy-abc1234"
+
+# gateway_count   = 2      # >1 adds an internal NLB
+# mock_faults     = "chat-0-3=429:1.0"
+# create_postgres = true   # once the gateway reads virtual keys from Postgres

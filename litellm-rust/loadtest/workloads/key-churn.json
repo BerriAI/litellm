@@ -1,0 +1,18 @@
+{
+  "name": "many unique keys, short requests, some fresh connections: the auth cache miss path",
+  "stages": [{"duration_s": 300, "rps": 100}, {"duration_s": 300, "rps": 300}, {"duration_s": 300, "rps": 600}],
+  "warmup_s": 30,
+  "new_conn_fraction": 0.3,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"chat": {"prefix": "chat-", "count": 10}, "messages": {"prefix": "msg-", "count": 10}},
+  "classes": [
+    {"name": "tiny-chat", "weight": 1, "endpoint": "chat", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "const", "min": 10000},
+     "ttft_ms": {"dist": "const", "min": 200},
+     "duration_s": {"dist": "const", "min": 1}},
+    {"name": "tiny-messages", "weight": 1, "endpoint": "messages", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "const", "min": 10000},
+     "ttft_ms": {"dist": "const", "min": 200},
+     "duration_s": {"dist": "const", "min": 1}}
+  ]
+}
