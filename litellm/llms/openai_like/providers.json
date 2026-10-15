@@ -239,5 +239,15 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "engy": {
+    "base_url": "https://api.engy.ai/v1",
+    "api_key_env": "ENGY_API_KEY",
+    "api_base_env": "ENGY_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }
