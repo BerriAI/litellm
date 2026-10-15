@@ -3006,6 +3006,23 @@ def test_zero_usage_keeps_reservations_unless_measured_fallback_exists(
     assert tuple(operation["increment_value"] for operation in operations) == expected_increments
 
 
+def test_a_responses_reply_reporting_no_tokens_keeps_the_reservations(rate_limiter):
+    handler, _cache = rate_limiter
+    stash = get_or_create_request_stash()
+    stash.itpm_reserved_tokens = 100
+    stash.itpm_reserved_scopes = frozenset({(PROJECT_ITPM_DESCRIPTOR_KEY, "project:model")})
+    stash.otpm_reserved_tokens = 60
+    stash.otpm_reserved_scopes = frozenset({(PROJECT_OTPM_DESCRIPTOR_KEY, "project:model")})
+    response_obj = ResponsesAPIResponse(
+        id="resp_zero",
+        created_at=int(datetime.now().timestamp()),
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+    )
+
+    assert tuple(handler._build_io_token_reservation_ops({}, response_obj)) == ()
+
+
 @pytest.mark.parametrize(
     ("usage", "expected_increments"),
     [
