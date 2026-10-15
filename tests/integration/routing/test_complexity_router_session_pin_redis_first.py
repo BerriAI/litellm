@@ -144,6 +144,7 @@ def _config(
     router: str,
     redis: tuple[str, int] | None,
     settings: Mapping[str, JsonValue] = PLAIN_SETTINGS,
+    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Path:
     shared: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     judge, simple, complex_tier = wires
@@ -171,6 +172,7 @@ def _config(
                         "classification_mode": "user_turn",
                         "return_raw_model_name": True,
                         "session_affinity_ttl_seconds": PIN_TTL_SECONDS,
+                        **router_extras,
                         "tiers": {
                             "SIMPLE": SIMPLE_MODEL,
                             "MEDIUM": SIMPLE_MODEL,
@@ -841,6 +843,7 @@ def _own_rig(
     healthcheck: WorkerHealthcheck,
     overrides: dict[str, str],
     judging: Callable[[Request], Reply] = _judge,
+    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Iterator[tuple[OwnedProxy, Wire, Wire, Wire, str]]:
     with (
         gateway_from_environment() as lane,
@@ -849,7 +852,9 @@ def _own_rig(
         wire_server(_tier(COMPLEX_MODEL)) as complex_tier,
     ):
         router: Final = "own-" + uuid.uuid4().hex[:8]
-        config: Final = _config(directory, (judge.url, simple.url, complex_tier.url), router, redis, PLAIN_SETTINGS)
+        config: Final = _config(
+            directory, (judge.url, simple.url, complex_tier.url), router, redis, PLAIN_SETTINGS, router_extras
+        )
         with owned_proxy_process(
             lane, directory, overrides, config=config, workers=workers, healthcheck=healthcheck
         ) as owned:
