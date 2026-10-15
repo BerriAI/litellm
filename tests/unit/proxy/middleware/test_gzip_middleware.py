@@ -269,6 +269,21 @@ async def test_dashboard_reads_are_compressed_under_root_paths(path: str, root_p
     assert json.loads(gzip.decompress(_body(messages))) == LARGE_PAYLOAD
 
 
+@pytest.mark.parametrize("suffix", ["", "/keys", "/search", "/model_top_keys"])
+@pytest.mark.asyncio
+async def test_customer_analytics_aliases_have_equivalent_compressed_responses(suffix: str) -> None:
+    async def analytics(scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse(LARGE_PAYLOAD)(scope, receive, send)
+
+    app: Final = GZipBufferedResponseMiddleware(analytics)
+    customer: Final = await _send_messages(f"/customer/daily/activity/aggregated{suffix}", "gzip", app)
+    end_user: Final = await _send_messages(f"/end_user/daily/activity/aggregated{suffix}", "gzip", app)
+
+    assert _headers(customer)["content-encoding"] == _headers(end_user)["content-encoding"] == "gzip"
+    assert _headers(customer)["vary"] == _headers(end_user)["vary"] == "Accept-Encoding"
+    assert json.loads(gzip.decompress(_body(customer))) == json.loads(gzip.decompress(_body(end_user))) == LARGE_PAYLOAD
+
+
 @pytest.mark.parametrize(
     "path,method",
     [
@@ -281,6 +296,7 @@ async def test_dashboard_reads_are_compressed_under_root_paths(path: str, root_p
         ("/custom-passthrough", "GET"),
         ("/openapi.json", "GET"),
         ("/health/liveliness", "GET"),
+        ("/end_user/daily/activity/export", "GET"),
         ("/user/daily/activity/aggregated/unknown", "GET"),
         ("/prefix/user/daily/activity/aggregated", "GET"),
         ("/user/daily/activity/aggregated", "POST"),
