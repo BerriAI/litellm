@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures
 
@@ -9,7 +10,8 @@ from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
-from litellm.rust_bridge import catalog
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.chat_completions.entrypoints import (
@@ -313,3 +315,47 @@ async def test_acompletion_marker_on_sync_entry_serves_through_async_native(monk
         NATIVE_COMPLETION.reset()
     assert result is expected
     assert [dict(request.kwargs) for request in captured] == [{"model": "gpt-4o", "messages": MESSAGES}]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marker_binds_positionals_by_the_sync_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[NativeCall]] = []
+
+    async def native(call: NativeCall) -> ModelResponse:
+        captured.append(call)
+        return ModelResponse()
+
+    NATIVE_ACOMPLETION.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
+    try:
+        _ = await public_completion("gpt-4o", MESSAGES, 30.0, acompletion=True)
+    finally:
+        NATIVE_ACOMPLETION.reset()
+    assert [(request.resolved["timeout"], request.resolved["functions"]) for request in captured] == [(30.0, None)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marker_fallback_runs_legacy_setup_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_threads: Final[list[int]] = []
+
+    class SetupThread(CustomLogger):
+        def log_pre_api_call(self, model: str, messages: object, kwargs: object) -> None:
+            setup_threads.append(threading.get_ident())
+
+    NATIVE_ACOMPLETION.override(None)
+    monkeypatch.setattr(catalog, "RULES", (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_IN),))
+    configuration.rust(True)
+    public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
+    try:
+        result: Final = await public_completion(
+            model="gpt-4o", messages=MESSAGES, mock_response="served", callbacks=[SetupThread()], acompletion=True
+        )
+    finally:
+        configuration.rust(None)
+        NATIVE_ACOMPLETION.reset()
+    assert result.choices[0].message.content == "served"
+    assert setup_threads
+    assert threading.get_ident() not in setup_threads

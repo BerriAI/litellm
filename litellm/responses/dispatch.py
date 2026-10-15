@@ -9,6 +9,7 @@ from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
+    keyword_arguments,
     native_call,
     native_call_hook,
     optional_str,
@@ -86,9 +87,7 @@ def responses(
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
     python: Final = _PYTHON_RESPONSES
     if kwargs.get("aresponses") is True:
-        return _DISPATCH.defer(
-            args, kwargs, flag="aresponses", python=python, binding=NATIVE_ARESPONSES, native=native_call_hook
-        )
+        return aresponses(**keyword_arguments(_RESPONSES, args, kwargs, without="aresponses"))
     return _DISPATCH.run(
         args,
         kwargs,

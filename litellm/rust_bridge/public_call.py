@@ -113,6 +113,13 @@ def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Map
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
 
 
+def keyword_arguments(
+    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object], *, without: str
+) -> Mapping[str, object]:
+    named: Final = _without_bags(legacy, legacy.bind_partial(*args, **kwargs).arguments)
+    return MappingProxyType({name: value for name, value in {**named, **kwargs}.items() if name != without})
+
+
 def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
     positional: Final = legacy.bind_partial(*args)
     positional.apply_defaults()

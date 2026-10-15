@@ -16,6 +16,7 @@ from litellm.rust_bridge.messages.entrypoints import (
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
+    keyword_arguments,
     native_call,
     native_call_hook,
     optional_sequence,
@@ -123,9 +124,7 @@ def anthropic_messages_handler(
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _PYTHON_MESSAGES
     if kwargs.get("is_async") is True:
-        return _DISPATCH.defer(
-            args, kwargs, flag="is_async", python=python, binding=NATIVE_AMESSAGES, native=native_call_hook
-        )
+        return anthropic_messages(**keyword_arguments(_MESSAGES, args, kwargs, without="is_async"))
     return _DISPATCH.run(
         args,
         kwargs,
