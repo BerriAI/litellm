@@ -1,24 +1,31 @@
 import json
 import uuid
 from collections.abc import Iterator
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
 import pytest
 import yaml
 from integration._support.client import Gateway, gateway_from_environment, object_value
+from integration._support.openai_wire import answering_model_discovery, chat_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy
-from integration._support.wire import Request, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
+    ANTHROPIC_CACHE_CONTROL_CAP,
     ASK,
     ASK_LABEL,
     EPHEMERAL,
     POINTS,
+    PROVIDER_KEY,
     SYSTEM,
     SYSTEM_LABEL,
+    TOOL,
     anthropic_labels,
     anthropic_peer,
     ask,
+    bedrock_labels,
+    bedrock_peer,
     call_id,
     final_text,
     marker_of,
@@ -28,15 +35,15 @@ from integration.providers._cache_control_marks_support import (
 )
 from integration.providers._tool_search_support import (
     KEPT_FIELDS,
-    Event,
     MODEL,
     SEARCH_CALL,
     SEARCH_ID,
+    SEARCH_RESULT,
     SEARCH_TURN,
     SEARCH_USE,
-    SEARCH_RESULT,
     WEATHER_CALL,
     WEATHER_ID,
+    Event,
     answer,
     answer_text,
     answered_ids,
@@ -50,7 +57,7 @@ from integration.providers._tool_search_support import (
     scripted_peer,
     wire_assistant,
 )
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -224,6 +231,136 @@ def test_modify_params_client_answer_to_one_of_two_marked_search_calls_fills_the
     assert status == 200, text
     assert len(received) == 1, received
     assert anthropic_labels(received[0]) == expected_labels, received[0].body
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _chat_message_mark_labels(message: JsonValue) -> list[str]:
+    fields: Final = object_value(message)
+    role: Final = fields.get("role")
+    content: Final = fields.get("content")
+    calls: Final = fields.get("tool_calls")
+    blocks: Final = [object_value(block) for block in (content if isinstance(content, list) else [])]
+    marked_calls: Final = [object_value(call) for call in (calls if isinstance(calls, list) else [])]
+    return [
+        *([f"{role}:message"] if fields.get("cache_control") is not None else []),
+        *(f"{role}:text:{block.get('text')}" for block in blocks if block.get("cache_control") is not None),
+        *(f"{role}:tool_call:{call.get('id')}" for call in marked_calls if call.get("cache_control") is not None),
+    ]
+
+
+def _route_mark_labels(request: Request) -> list[str]:
+    if "/converse" in request.target:
+        return bedrock_labels(request)
+    messages: Final = _JSON_OBJECT.validate_json(request.body).get("messages")
+    return list(chain.from_iterable(map(_chat_message_mark_labels, messages if isinstance(messages, list) else [])))
+
+
+def _cache_capped_route_peer(request: Request) -> Reply:
+    if "/converse" in request.target:
+        return bedrock_peer(request)
+    found: Final = len(_route_mark_labels(request))
+    if found > ANTHROPIC_CACHE_CONTROL_CAP:
+        message: Final = (
+            f"A maximum of {ANTHROPIC_CACHE_CONTROL_CAP} blocks with cache_control may be provided. Found {found}."
+        )
+        return Reply(
+            status=400, body=json.dumps({"error": {"message": message, "type": "invalid_request_error"}}).encode()
+        )
+    return chat_reply(f"chatcmpl-{marker_of(request)}", "scripted", "sunny", stream=False)
+
+
+def _route_fields(model: str, wire_url: str) -> dict[str, JsonValue]:
+    if model.startswith("bedrock/"):
+        return {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": wire_url}
+    return {}
+
+
+def _two_answered_marked_searches_before_a_system_note(marker: str) -> list[JsonValue]:
+    second_result: Final[Event] = {**SEARCH_RESULT, "tool_use_id": _SECOND_SEARCH_ID}
+    return [
+        {"role": "system", "content": SYSTEM},
+        ask(marked=True),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_marked_search_call(SEARCH_ID), _marked_search_call(_SECOND_SEARCH_ID)],
+            "provider_specific_fields": {"tool_results": [SEARCH_RESULT, second_result]},
+        },
+        {"role": "tool", "tool_call_id": SEARCH_ID, "content": "found get_weather"},
+        {"role": "tool", "tool_call_id": _SECOND_SEARCH_ID, "content": "found get_weather"},
+        {"role": "system", "content": f"{_SYSTEM_NOTE} marker-{marker}"},
+    ]
+
+
+_ROUTE_SYSTEM_LABEL: Final = f"system:text:{SYSTEM}"
+_CHAT_ROUTE_LABELS: Final = [
+    _ROUTE_SYSTEM_LABEL,
+    ASK_LABEL,
+    f"assistant:tool_call:{SEARCH_ID}",
+    f"assistant:tool_call:{_SECOND_SEARCH_ID}",
+]
+_CONVERSE_LABELS: Final = [
+    _ROUTE_SYSTEM_LABEL,
+    ASK_LABEL,
+    f"assistant:toolUse:{SEARCH_ID}",
+    f"assistant:toolUse:{_SECOND_SEARCH_ID}",
+]
+
+
+@pytest.mark.parametrize(
+    ("model", "target", "expected_labels"),
+    [
+        pytest.param(
+            "databricks/databricks-claude-opus-5-5", "/chat/completions", _CHAT_ROUTE_LABELS, id="databricks-converts"
+        ),
+        pytest.param(
+            "databricks/databricks-claude-opus-5", "/chat/completions", _CHAT_ROUTE_LABELS, id="databricks-keeps"
+        ),
+        pytest.param(
+            "openrouter/anthropic/claude-sonnet-4.6", "/chat/completions", _CHAT_ROUTE_LABELS, id="openrouter-converts"
+        ),
+        pytest.param(
+            "openrouter/anthropic/claude-opus-5.5", "/chat/completions", _CHAT_ROUTE_LABELS, id="openrouter-keeps"
+        ),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-opus-4-7",
+            "/model/us.anthropic.claude-opus-4-7/converse",
+            _CONVERSE_LABELS,
+            id="converse-converts",
+        ),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "/model/us.anthropic.claude-opus-5-5/converse",
+            _CONVERSE_LABELS,
+            id="converse-keeps",
+        ),
+    ],
+)
+@pytest.mark.parametrize("modify_params", [False, True], ids=["modify-params-off", "modify-params-on"])
+def test_two_answered_marked_search_calls_before_a_system_message_stay_within_the_cache_mark_cap_off_anthropic(
+    gateway: Gateway,
+    modify_params_gateway: Gateway,
+    modify_params: bool,
+    model: str,
+    target: str,
+    expected_labels: list[str],
+) -> None:
+    proxy: Final = modify_params_gateway if modify_params else gateway
+    marker: Final = uuid.uuid4().hex
+    messages: Final = _two_answered_marked_searches_before_a_system_note(marker)
+    with wire_server(answering_model_discovery(_cache_capped_route_peer)) as wire, proxy.scenario() as scenario:
+        deployed: Final = scenario.model(
+            model=model, api_base=wire.url, api_key=PROVIDER_KEY, **_route_fields(model, wire.url)
+        )
+        status, _, text = post_chat(
+            proxy, chat_body(deployed, messages, stream=False, tools=[TOOL], cache_control_injection_points=POINTS)
+        )
+        posted: Final = [request for request in wire.drain() if request.method == "POST"]
+    assert status == 200, text
+    assert [(request.target, marker_of(request)) for request in posted] == [(target, marker)], posted
+    assert _route_mark_labels(posted[0]) == expected_labels, posted[0].body
 
 
 _STRAY_ANSWER: Final = "cloudy."
