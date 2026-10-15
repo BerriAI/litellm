@@ -13,6 +13,7 @@ from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -30,6 +31,8 @@ _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
+_OPENAPI_SPEC_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MAX_YAML_INT_LENGTH: Final = 1024
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -175,6 +178,55 @@ def load_openapi_spec(filepath: str) -> dict[str, object]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+def _validate_openapi_spec(value: object) -> Mapping[str, object]:
+    try:
+        return _OPENAPI_SPEC_ADAPTER.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError("OpenAPI spec must be a JSON or YAML object") from exc
+
+
+def _load_yaml_spec(content: str | bytes) -> Mapping[str, object]:
+    import yaml
+    from yaml.events import AliasEvent, MappingStartEvent, ScalarEvent, SequenceStartEvent
+    from yaml.nodes import ScalarNode
+
+    try:
+        loader: Final = yaml.SafeLoader(content)
+        try:
+            for event in yaml.parse(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped stubs
+                content, Loader=yaml.SafeLoader
+            ):
+                if isinstance(event, AliasEvent):
+                    raise TypeError("YAML aliases are not supported in OpenAPI specs")
+                if isinstance(event, (MappingStartEvent, SequenceStartEvent)) and event.tag == "tag:yaml.org,2002:int":
+                    raise ValueError("YAML integer must be a scalar in OpenAPI spec")
+                if (
+                    isinstance(event, ScalarEvent)
+                    and len(event.value) > _MAX_YAML_INT_LENGTH
+                    and (
+                        event.tag
+                        if event.tag not in (None, "!")
+                        else loader.resolve(  # pyright: ignore[reportUnknownMemberType]  # YAML resolver stub is untyped
+                            ScalarNode, event.value, event.implicit
+                        )
+                    )
+                    == "tag:yaml.org,2002:int"
+                ):
+                    raise ValueError("YAML integer is too long in OpenAPI spec")
+            return _validate_openapi_spec(loader.get_single_data())
+        finally:
+            loader.dispose()  # pyright: ignore[reportUnknownMemberType]  # PyYAML dispose stub is untyped
+    except yaml.YAMLError as exc:
+        raise ValueError("Invalid YAML OpenAPI spec") from exc
+
+
+def _parse_openapi_spec(content: str | bytes) -> Mapping[str, object]:
+    try:
+        return _validate_openapi_spec(json.loads(content))
+    except json.JSONDecodeError:
+        return _load_yaml_spec(content)
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -184,14 +236,14 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return dict(_parse_openapi_spec(r.content))
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return dict(_parse_openapi_spec(f.read()))
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:

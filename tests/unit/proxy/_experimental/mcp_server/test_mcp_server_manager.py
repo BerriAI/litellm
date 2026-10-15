@@ -5006,7 +5006,17 @@ class TestMCPServerManager:
             (
                 httpx.Response(200, text="secret invalid JSON body"),
                 "unhealthy",
-                "OpenAPI specification could not be loaded (JSONDecodeError)",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
+            (
+                httpx.Response(200, text="paths: &paths {self: *paths}"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (TypeError)",
+            ),
+            (
+                httpx.Response(200, content=b"openapi: 3.0.0\npaths: \x00"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
             ),
         ],
     )
