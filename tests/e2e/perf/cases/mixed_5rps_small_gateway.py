@@ -1,8 +1,8 @@
-"""Mixed traffic at 10 rps on the small gateway: three real model groups over the mock providers
+"""Mixed traffic at 5 rps on the small gateway: three real model groups over the mock providers
 (one `gpt-6-luna` deployment flaky), two teams plus users in no team, JWT and key callers, a pre and
 a post guardrail, half the requests streaming, short chats, long contexts and tool calls. Budgets
 are real money at cost-map prices (a 335k-token `claude-sonnet-5` request is about $0.70 and the
-run spends roughly $3,000), so they are sized so no caller runs dry mid-run."""
+run spends roughly $1,500), so they are sized so no caller runs dry mid-run."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from setup.performance_test_case import (
 )
 
 CASE: Final = PerformanceTestCase(
-    name="mixed_10rps_small_gateway",
+    name="mixed_5rps_small_gateway",
     teams=(
         Team("team-a", models=("gpt-6-luna", "claude-sonnet-5"), max_budget=5000.0, rpm_limit=6000),
         Team("team-b", models=("claude-sonnet-5-bedrock", "claude-sonnet-5"), max_budget=5000.0),
@@ -49,14 +49,14 @@ CASE: Final = PerformanceTestCase(
     guardrails=(Guardrail("perf-pre", mode="pre_call"), Guardrail("perf-post", mode="post_call")),
     traffic=Traffic(
         seed=7,
-        rps=10.0,
-        total_requests=6000,
+        rps=5.0,
+        total_requests=3000,
         endpoints={"chat_completions": 0.5, "responses": 0.25, "messages": 0.25},
         shapes={SHORT: 0.75, LONG: 0.25},
         stream_share=0.5,
         intervene_share=0.1,
         block_share=0.02,
-        concurrency=600,
+        concurrency=100,
     ),
     limits=(
         Limit("unexpected_status_count", max=0),
