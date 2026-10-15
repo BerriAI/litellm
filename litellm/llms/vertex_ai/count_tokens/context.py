@@ -153,7 +153,7 @@ def _chat_messages(
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
-) -> list[AllMessageValues]:
+) -> list[AllMessageValues]:  # mutable-ok: async_inline_remote_media and transform_messages take a list
     from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     match messages_format:
@@ -174,7 +174,7 @@ async def gemini_count_contents(
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
-) -> list[ContentType]:
+) -> list[ContentType]:  # mutable-ok: the token counters send contents as the list transform_messages returns
     from litellm.litellm_core_utils.asyncify import asyncify
     from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
