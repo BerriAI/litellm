@@ -588,7 +588,10 @@ def get_logging_payload(
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
-    litellm_params: Final = kwargs.get("litellm_params", {})
+    litellm_params_value: Final[object] = kwargs.get("litellm_params", {})
+    litellm_params: Final[dict[str, object]] = (
+        cast(dict[str, object], litellm_params_value) if isinstance(litellm_params_value, Mapping) else {}
+    )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
@@ -846,7 +849,7 @@ def get_logging_payload(
             metadata=metadata,
             requested_model=persisted_model_group,
             selected_model=model_name,
-            selected_provider=custom_llm_provider,
+            selected_provider=(custom_llm_provider if isinstance(custom_llm_provider, str) else None),
             router_correlation_id=litellm_call_id,
         ),
         used_client_oauth_token=resolve_used_client_oauth_token(

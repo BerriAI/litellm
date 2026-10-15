@@ -848,7 +848,7 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)  # rebind-ok: derive caller key
                 if cache_key is not None:
-                    cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
+                    cache_control_args: Final[DynamicCacheControl] = cast(DynamicCacheControl, kwargs.get("cache", {}))
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
                     cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                     if dynamic_cache_object is not None:
@@ -883,7 +883,7 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)  # rebind-ok: derive caller key
                 if cache_key is not None:
-                    cache_control_args: Final = kwargs.get("cache", {})
+                    cache_control_args: Final[DynamicCacheControl] = cast(DynamicCacheControl, kwargs.get("cache", {}))
                     max_age: Final = cache_control_args.get(
                         "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                     )
@@ -956,7 +956,7 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async implementation of add_cache
         """
