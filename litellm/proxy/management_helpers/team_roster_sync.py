@@ -12,15 +12,13 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._uuid import uuid
 from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
+    await_inflight_team_membership_load,
     delete_cache_key_objects,
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
-    invalidate_team_member_spend_state,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    PUBLISH_BACKLOG_SLICE,
-    await_publish_backlog,
-    evict_and_broadcast,
+    broadcast_evictions,
     evict_local,
     evict_shared,
 )
@@ -53,7 +51,7 @@ _DETACH_TEAM_SQL: Final = (
     " WHERE user_id = ANY($2::text[])"
 )
 _LOCK_MEMBER_ROWS_SQL: Final = (
-    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE'
+    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
 )
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
@@ -272,12 +270,13 @@ async def _settle_caches(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
-    settled_keys: Final = (
-        deleted_tokens + removal.jwt_mapping_cache_keys + tuple(_member_cache_keys(team.team_id, changed_user_ids))
+    _ = await asyncio.gather(
+        *(await_inflight_team_membership_load(user_id=user_id, team_id=team.team_id) for user_id in changed_user_ids)
     )
-    evict_local(cache_keys=settled_keys, user_api_key_cache=user_api_key_cache)
-    await evict_shared(cache_keys=settled_keys, user_api_key_cache=user_api_key_cache)
+    deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
+    member_keys: Final = (*removal.jwt_mapping_cache_keys, *_member_cache_keys(team.team_id, changed_user_ids))
+    evict_local(cache_keys=(*deleted_tokens, *member_keys), user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=member_keys, cache=user_api_key_cache)
     await delete_cache_team_object(
         team_id=team.team_id,
         team_alias=team.team_alias,
@@ -289,10 +288,7 @@ async def _settle_caches(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    await evict_and_broadcast(cache_keys=removal.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
-    for start in range(0, len(changed_user_ids), PUBLISH_BACKLOG_SLICE):
-        await await_publish_backlog()
-        await _settle_member_caches(team, changed_user_ids[start : start + PUBLISH_BACKLOG_SLICE], user_api_key_cache)
+    await broadcast_evictions(cache_keys=member_keys)
 
 
 def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
@@ -300,20 +296,6 @@ def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
         yield user_id
         yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
         yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
-
-
-async def _settle_member_caches(
-    team: LiteLLM_TeamTable, user_ids: Sequence[str], user_api_key_cache: UserApiKeyCache
-) -> None:
-    await evict_and_broadcast(cache_keys=user_ids, user_api_key_cache=user_api_key_cache)
-    await asyncio.gather(
-        *(
-            invalidate_team_member_spend_state(
-                user_id=user_id, team_id=team.team_id, user_api_key_cache=user_api_key_cache
-            )
-            for user_id in user_ids
-        )
-    )
 
 
 async def sync_team_roster(
@@ -334,8 +316,9 @@ async def sync_team_roster(
     has no row, and nothing was written. A delta naming nobody changes nothing, so it
     reads the team from the writer without the lock or a transaction, and a plan already
     matching the roster writes nothing and leaves every cache entry in place. Every user
-    row the plan touches is locked in id order before the first write, so two groups
-    trading members never wait on each other in opposite orders.
+    row the plan touches is locked in byte order of its id before the first write, the
+    order the spend writer updates them in, so neither another push nor the spend writer
+    ever waits on this one in the opposite order.
     """
     if _changes_nothing(plan):
         return await _unchanged_roster(prisma_client, team_id)

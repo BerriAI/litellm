@@ -9,16 +9,17 @@ import pytest
 from redis.asyncio import Redis
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
-    await_publish_backlog,
+    broadcast_evictions,
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 
 
 class _RecordingRedisClient(Redis):
@@ -56,12 +57,51 @@ class _SlowPublishRedisClient(Redis):
         return 1
 
 
+class _Pipeline:
+    def __init__(self, client: "_PipelinedRedisClient") -> None:
+        self._client = client
+        self._messages: list[str] = []
+
+    def publish(self, channel: str, message: str) -> "_Pipeline":
+        self._messages.append(message)
+        return self
+
+    async def execute(self) -> None:
+        await self._client.send(tuple(self._messages))
+
+
+class _PipelinedRedisClient:
+    def __init__(self, wedged: bool = False) -> None:
+        self.published: list[str] = []
+        self.round_trips = 0
+        self.release = asyncio.Event()
+        if not wedged:
+            self.release.set()
+
+    async def send(self, messages: tuple[str, ...]) -> None:
+        self.round_trips += 1
+        await self.release.wait()
+        self.published.extend(messages)
+
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _Pipeline(self)
+
+
 class _FailingPublishRedisClient(Redis):
     def __init__(self) -> None:
         pass
 
     async def publish(self, channel: str, message: str) -> int:
         raise ConnectionError("redis down")
+
+
+class _TargetRecordingRedisClient(Redis):
+    def __init__(self) -> None:
+        self.targets: list[str | None] = []
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.targets.append(current_service_target())
+        return 1
 
 
 class _QueuePubSub:
@@ -295,43 +335,57 @@ async def test_publish_holds_at_most_sixteen_redis_connections_while_redis_is_we
 
 
 @pytest.mark.asyncio
-async def test_await_publish_backlog_returns_once_every_pending_publish_reached_redis(
+async def test_broadcast_evictions_tells_redis_every_key_past_the_pending_publish_cap_in_one_round_trip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _SlowPublishRedisClient()
+    client = _PipelinedRedisClient()
+    cache_keys = tuple(f"user-{i}" for i in range(3000))
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
         return_value=_FakeRedisCache(client=client),
     ):
-        for i in range(100):
-            await publish_auth_cache_invalidation(cache_key=f"user-{i}")
-        assert len(client.published) < 100
-        await await_publish_backlog()
+        await broadcast_evictions(cache_keys=cache_keys)
 
-    assert len(client.published) == 100
+    assert [json.loads(message)["cache_key"] for message in client.published] == list(cache_keys)
+    assert client.round_trips == 1
 
 
 @pytest.mark.asyncio
-async def test_await_publish_backlog_gives_up_on_a_wedged_redis_within_its_bound(
+async def test_broadcast_evictions_returns_within_its_bound_while_redis_never_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.05)
-    client = _WedgedPublishRedisClient()
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.05)
+    client = _PipelinedRedisClient(wedged=True)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
         return_value=_FakeRedisCache(client=client),
     ):
-        await publish_auth_cache_invalidation(cache_key="user-1")
         started = time.monotonic()
-        await await_publish_backlog()
+        await broadcast_evictions(cache_keys=("user-1",))
         waited = time.monotonic() - started
+        assert client.published == []
         client.release.set()
         await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
     assert 0.05 <= waited < 1.0
+    assert client.published == [json.dumps({"cache_key": "user-1"})]
+
+
+@pytest.mark.asyncio
+async def test_evict_and_broadcast_publishes_under_the_auth_objects_service_target() -> None:
+    client = _TargetRecordingRedisClient()
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        await evict_and_broadcast(cache_keys=("user-a", "user-b"), user_api_key_cache=UserApiKeyCache())
+        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+    assert client.targets == [AUTH_OBJECTS_TARGET, AUTH_OBJECTS_TARGET]

@@ -429,12 +429,16 @@ async def _delete_users_tx(
 ) -> _UserBatchDeletion:
     """Rewrites every team the users belong to and deletes their rows in one transaction, so a
     failure anywhere rolls back the whole batch. Teams a user still names but which no longer exist
-    are skipped; the user row goes away regardless."""
+    are skipped; the user row goes away regardless. Every team lock is taken before the first user
+    row write: a SCIM group push holds its team's lock while it waits on its members' rows, so
+    taking one team's lock after writing a member it shares would deadlock against that push."""
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         team_rows: Final = await _team_tx_db(tx).find_many(
             where=_in_filter("team_id", frozenset(t for teams in teams_of.values() for t in teams))
         )
         team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
+        for team_id in team_ids:
+            _ = await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         removals: Final = MappingProxyType(
             {
                 tid: await _remove_members_from_team(

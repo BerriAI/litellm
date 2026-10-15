@@ -147,8 +147,9 @@ class _Tx:
         if "pg_advisory_xact_lock" in sql:
             if team_id in self._fail_locks:
                 raise RuntimeError("lock timeout")
-            self.locks.append(team_id)
-            self._on_lock(team_id)
+            if team_id not in self.locks:
+                self.locks.append(team_id)
+                self._on_lock(team_id)
             return []
         assert team_id in self.locks, "roster must be read under this team's advisory lock"
         self.roster_reads.append(team_id)
@@ -371,6 +372,25 @@ async def test_bulk_delete_reads_roster_under_lock_so_a_concurrent_add_survives(
 
     assert results[0].success is True
     assert _roster(prisma, "t1") == ["late"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_takes_every_team_lock_before_writing_a_user_row():
+    teams_when_locked: dict[str, list[str]] = {}
+
+    def snapshot_user_row(team_id: str) -> None:
+        teams_when_locked[team_id] = list(prisma.db.litellm_usertable.rows["u1"].teams)
+
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1", "t2")],
+        teams=[_team("t1", "u1"), _team("t2", "u1")],
+        on_lock=snapshot_user_row,
+    )
+
+    results = await _delete(prisma, ["u1"])
+
+    assert results[0].success is True
+    assert teams_when_locked == {"t1": ["t1", "t2"], "t2": ["t1", "t2"]}
 
 
 @pytest.mark.asyncio

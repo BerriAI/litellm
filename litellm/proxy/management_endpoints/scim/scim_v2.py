@@ -2716,11 +2716,7 @@ async def create_group(
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         team: Final = (
-            (
-                await _sync_group_roster(
-                    team_id, RosterDelta(add=frozenset(member_result.all_member_ids), remove=frozenset()), prisma_client
-                )
-            ).team
+            (await _fill_new_group(team_id, frozenset(member_result.all_member_ids), prisma_client)).team
             if member_result.all_member_ids
             else LiteLLM_TeamTable.model_validate(created_team)
         )
@@ -3093,6 +3089,17 @@ async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: Pri
             )
         case _:
             assert_never(outcome)
+
+
+async def _fill_new_group(group_id: str, member_ids: frozenset[str], prisma_client: PrismaClient) -> RosterSync:
+    """Write a just-created group's roster, deleting the empty team when the write fails so the
+    identity provider's retry creates the group again instead of getting a 409, or a second team
+    of the same name when the POST carried neither ``id`` nor ``externalId``."""
+    try:
+        return await _sync_group_roster(group_id, RosterDelta(add=member_ids, remove=frozenset()), prisma_client)
+    except Exception:
+        _ = await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
+        raise
 
 
 @scim_router.patch(

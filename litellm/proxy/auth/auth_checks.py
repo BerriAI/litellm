@@ -95,8 +95,7 @@ from litellm.proxy.auth.model_access_denied import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    PUBLISH_BACKLOG_SLICE,
-    await_publish_backlog,
+    broadcast_evictions,
     evict_local,
     evict_shared,
     publish_auth_cache_invalidation,
@@ -3137,6 +3136,16 @@ async def _invalidate_usage_cache_entry(
         )
 
 
+async def await_inflight_team_membership_load(user_id: str, team_id: str) -> None:
+    """Wait for a membership load already reading the DB, so a load that read the row before a
+    write committed cannot re-cache the old row after the write's eviction."""
+    inflight: Final[object] = _team_membership_inflight.pop(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+    )
+    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
+        await asyncio.wait((inflight,))
+
+
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_team_member_spend_state(
     user_id: str,
@@ -3194,11 +3203,7 @@ async def invalidate_team_member_spend_state(
         publish_auth_cache_invalidation,
     )
 
-    inflight: Final[object] = _team_membership_inflight.pop(
-        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
-    )
-    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
-        await asyncio.wait((inflight,))
+    await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
 
     if new_spend is not None:
         from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
@@ -3375,49 +3380,18 @@ async def delete_cache_key_objects(
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
 
-    Every token is dropped from this worker's memory first, then from the cache's Redis layer in
-    one round trip, so a deleted key stops authenticating here the instant its rows are gone
-    instead of refilling from Redis on the next miss. The broadcasts then go out in slices of
-    ``PUBLISH_BACKLOG_SLICE``, each slice waiting for the previous one to reach Redis: the
-    publisher drops a broadcast once too many are already pending, and a single burst of more than
-    that many evictions would leave the dropped keys authenticating on every other worker until
-    their TTL.
+    Every token is dropped from this worker's memory first, then from the auth cache and the
+    internal usage cache in one batch each, so a deleted key stops authenticating here the instant
+    its rows are gone instead of refilling from Redis on the next miss. Every other worker then
+    gets the eviction in one pipelined broadcast: a publish per key would pass the publisher's
+    pending cap on a bulk delete, and the dropped keys would keep authenticating there until their
+    TTL.
     """
     evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
-    await evict_shared(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
-    for start in range(0, len(hashed_tokens), PUBLISH_BACKLOG_SLICE):
-        await await_publish_backlog()
-        await _delete_cache_key_slice(
-            hashed_tokens=hashed_tokens[start : start + PUBLISH_BACKLOG_SLICE],
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-
-async def _delete_cache_key_slice(
-    hashed_tokens: Sequence[str],
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging | None,
-) -> None:
-    results: Final = await asyncio.gather(
-        *(
-            delete_cache_key_object(
-                hashed_token=hashed_token,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            for hashed_token in hashed_tokens
-        ),
-        return_exceptions=True,
-    )
-
-    for hashed_token, result in zip(hashed_tokens, results):
-        if isinstance(result, BaseException):
-            verbose_proxy_logger.warning(
-                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
-                hashed_token,
-                result,
-            )
+    await evict_shared(cache_keys=hashed_tokens, cache=user_api_key_cache)
+    if proxy_logging_obj is not None:
+        await evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
+    await broadcast_evictions(cache_keys=hashed_tokens)
 
 
 class _TeamNotFoundDetail(TypedDict):

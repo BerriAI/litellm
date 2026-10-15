@@ -2,7 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Final, Literal
@@ -195,7 +195,7 @@ class _Tx:
         if "pg_advisory_xact_lock" in sql:
             assert args == (TEAM,)
             return [{"locked": False}]
-        assert "ORDER BY user_id FOR UPDATE" in sql
+        assert 'ORDER BY user_id COLLATE "C" FOR UPDATE' in sql
         user_ids = _STRINGS.validate_python(args[0])
         self.ledger.locked_users.append(user_ids)
         return [{"user_id": user_id} for user_id in user_ids if user_id in self.litellm_usertable.rows]
@@ -515,24 +515,50 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
     assert cache.get_cache("k-alice") is not None
 
 
+class _Pipeline:
+    def __init__(self, send: Callable[[Sequence[str]], Awaitable[None]]) -> None:
+        self._send = send
+        self._messages: list[str] = []
+
+    def publish(self, channel: str, message: str) -> "_Pipeline":
+        self._messages.append(message)
+        return self
+
+    async def execute(self) -> None:
+        await self._send(tuple(self._messages))
+
+
 class _SlowPublishRedisClient:
-    def __init__(self) -> None:
+    def __init__(self, round_trip_seconds: float = 0.001) -> None:
         self.published: list[str] = []
+        self.round_trips = 0
+        self._round_trip_seconds = round_trip_seconds
+
+    async def _send(self, messages: Sequence[str]) -> None:
+        self.round_trips += 1
+        await asyncio.sleep(self._round_trip_seconds)
+        self.published.extend(messages)
 
     async def publish(self, channel: str, message: str) -> int:
-        await asyncio.sleep(0.001)
-        self.published.append(message)
+        await self._send((message,))
         return 1
+
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _Pipeline(self._send)
 
 
 class _PubSubRedisCache:
     namespace = None
 
-    def __init__(self, client: _SlowPublishRedisClient) -> None:
+    def __init__(self, client: "_SlowPublishRedisClient | _WedgedPublishRedisClient") -> None:
         self._client = client
 
-    def init_pubsub_client(self) -> _SlowPublishRedisClient:
+    def init_pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
         return self._client
+
+
+async def _drain_publishes() -> None:
+    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
 
 @pytest.mark.asyncio
@@ -555,7 +581,7 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
         return_value=_PubSubRedisCache(client),
     ):
         outcome = await _sync(prisma, RosterTarget(member_ids=frozenset()))
-        await pubsub_module.await_publish_backlog()
+        await _drain_publishes()
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     broadcast = {json.loads(message)["cache_key"] for message in client.published}
@@ -567,9 +593,15 @@ class _WedgedPublishRedisClient:
     def __init__(self) -> None:
         self.release = asyncio.Event()
 
-    async def publish(self, channel: str, message: str) -> int:
+    async def _send(self, messages: Sequence[str]) -> None:
         await self.release.wait()
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self._send((message,))
         return 1
+
+    def pipeline(self, transaction: bool = True) -> _Pipeline:
+        return _Pipeline(self._send)
 
 
 @pytest.mark.asyncio
@@ -578,7 +610,7 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(300)]
     token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
@@ -608,14 +640,14 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+        return_value=_PubSubRedisCache(client),
     ):
         sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
         await asyncio.sleep(0.1)
         still_cached = [key for key in seeded if cache.in_memory_cache_for(key).get_cache(key) is not None]
         client.release.set()
         outcome = await sync
-        await pubsub_module.await_publish_backlog()
+        await _drain_publishes()
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     assert seeded == member_keys
@@ -627,6 +659,7 @@ class _AuthRedisCache:
 
     def __init__(self, entries: dict[str, object]) -> None:
         self.entries = dict(entries)
+        self.round_trips = 0
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
         return self.entries.get(key)
@@ -641,9 +674,11 @@ class _AuthRedisCache:
         self.entries.pop(key, None)
 
     async def async_delete_cache(self, key: str) -> None:
+        self.round_trips += 1
         self.entries.pop(key, None)
 
     async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        self.round_trips += 1
         for key in keys:
             self.entries.pop(key, None)
 
@@ -654,7 +689,7 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(300)]
     token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
@@ -685,18 +720,87 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+        return_value=_PubSubRedisCache(client),
     ):
         sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
         await asyncio.sleep(0.1)
         refilled = [key for key in member_keys if await cache.async_get_cache(key=key) is not None]
         client.release.set()
         outcome = await sync
-        await pubsub_module.await_publish_backlog()
+        await _drain_publishes()
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     assert refilled == []
     assert not any(key in redis.entries for key in member_keys)
+
+
+def _removal_of(removed: Sequence[str]) -> tuple[_FakePrisma, set[str]]:
+    token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
+    prisma = _FakePrisma(
+        users=[_user(u, TEAM) for u in removed],
+        teams=[_team(*(_member(u) for u in removed))],
+        memberships=[(TEAM, u) for u in removed],
+        tokens=[{"token": token_of[u], "user_id": u, "team_id": TEAM} for u in removed],
+    )
+    evicted = {
+        key
+        for u in removed
+        for key in (
+            u,
+            token_of[u],
+            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
+            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+        )
+    }  # comprehension-ok: a test fixture listing each member's four cache keys
+    return prisma, evicted
+
+
+@pytest.mark.asyncio
+async def test_removing_hundreds_of_members_through_a_slow_redis_broadcasts_every_eviction(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.05)
+    client = _SlowPublishRedisClient(round_trip_seconds=0.05)
+    removed = [f"u{index:03d}" for index in range(600)]
+    prisma, evicted = _removal_of(removed)
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        outcome = await _sync(prisma, RosterTarget(member_ids=frozenset()))
+        await _drain_publishes()
+
+    assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
+    assert evicted <= {json.loads(message)["cache_key"] for message in client.published}
+
+
+@pytest.mark.asyncio
+async def test_the_redis_round_trips_do_not_grow_with_the_member_count(monkeypatch: pytest.MonkeyPatch):
+    """With a Redis-backed auth cache, removing 850 members used to cost a Redis delete per member."""
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    round_trips: dict[int, tuple[int, int]] = {}
+    for size in (5, 300):
+        removed = [f"u{index:03d}" for index in range(size)]
+        prisma, _ = _removal_of(removed)
+        redis = _AuthRedisCache({})
+        cache = UserApiKeyCache()
+        cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+        client = _SlowPublishRedisClient()
+
+        with patch(
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+            return_value=_PubSubRedisCache(client),
+        ):
+            outcome = await _sync(prisma, RosterTarget(member_ids=frozenset()), cache)
+            await _drain_publishes()
+
+        assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
+        round_trips[size] = (redis.round_trips, client.round_trips)
+    assert round_trips[300] == round_trips[5]
 
 
 @pytest.mark.asyncio
