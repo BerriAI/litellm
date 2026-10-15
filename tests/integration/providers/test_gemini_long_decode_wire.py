@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import itertools
 import json
@@ -22,6 +23,7 @@ from _pytest.mark.structures import ParameterSet
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, posted_targets
+from integration._support.otlp_sink import Span, owned_sinks, recorded_spans
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._gemini_long_decode_support import (
@@ -84,7 +86,7 @@ from integration.providers._gemini_long_decode_support import (
     text_of,
     upstream,
 )
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 Client = Literal["sdk_sync", "sdk_async", "httpx"]
 Failure = Literal["400", "500", "drop", "notjson", "errorframe"]
@@ -2024,3 +2026,81 @@ def test_gemini_pass_through_route_relays_googles_continuation_fields_as_sent_an
             opening_spend, rest_spend, other_spend = (number(row["spend"]) for row in rows)
             assert opening_spend == pytest.approx(other_spend), rows
             assert min(opening_spend, rest_spend) > 0, rows
+
+
+_LOGGED_CANDIDATES: Final = TypeAdapter(list[JsonValue])
+
+
+@dataclass(frozen=True, slots=True)
+class _Traced:
+    gateway: Gateway
+    sink: str
+
+
+def _traced_config(directory: Path, sink: str) -> Path:
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    settings: Final = JSON_OBJECT.validate_python(base.get("litellm_settings", {}))
+    path: Final = directory / "gemini-long-decode-otel.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                **base,
+                "litellm_settings": {**settings, "callbacks": ["otel"]},
+                "callback_settings": {
+                    "otel": {"exporter": "http/json", "endpoint": sink, "use_simple_processor": True}
+                },
+            }
+        )
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def traced(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Traced]:
+    directory: Final = tmp_path_factory.mktemp("long-decode-otel")
+    with owned_sinks(directory) as sinks:
+        overrides: Final = {"OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": sinks.operator}
+        config: Final = _traced_config(directory, sinks.operator)
+        with owned_proxy_process(session_gateway, directory, overrides, config=config) as owned:
+            yield _Traced(owned.gateway, sinks.operator)
+
+
+def _raw_request_spans(sink: str, provider: Provider, marker: str) -> tuple[Span, ...]:
+    return tuple(
+        span
+        for span in recorded_spans(sink)[1]
+        if span["name"] == "raw_gen_ai_request" and marker in str(span["attributes"].get(f"llm.{provider}.contents"))
+    )
+
+
+def _logged(span: Span, provider: Provider, field: str) -> str:
+    return string_value(span["attributes"][f"llm.{provider}.{field}"])
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+@pytest.mark.parametrize("last", (SECOND_HALF, CUT), ids=("finished", "cut"))
+@pytest.mark.parametrize(("provider", "endpoint"), tuple(itertools.product(PROVIDERS, ENDPOINTS)))
+def test_continued_answers_logged_raw_response_is_one_google_response_holding_the_whole_answer(
+    traced: _Traced, provider: Provider, endpoint: Endpoint, last: Hop
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    marker: Final = f"{PROMPT} {uuid.uuid4().hex}"
+    respond: Final = upstream(answers(first_id, FIRST_HALF), answers(f"last-{uuid.uuid4().hex}", last))
+    with wire_server(respond) as wire, traced.gateway.scenario() as scenario:
+        model: Final = register(traced.gateway, scenario, provider, wire)
+        response: Final = post(traced.gateway, endpoint, request_body(endpoint, model, False, prompt=marker))
+        assert response.status_code == 200, response.text
+        (span,) = eventually(
+            lambda: _raw_request_spans(traced.sink, provider, marker),
+            lambda found: len(found) >= 1,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert span["attributes"].get(f"llm.{provider}.responseId") == first_id, span
+        (candidate,) = _LOGGED_CANDIDATES.validate_python(ast.literal_eval(_logged(span, provider, "candidates")))
+        parts: Final = items_of(at(candidate, "content", "parts"))
+        assert "".join(text_of(at(part, "text")) for part in parts) == FIRST_HALF.text + last.text, candidate
+        ending: Final = (at(candidate, "finishReason"), at(candidate, "continuationToken"))
+        assert ending == (last.finish, last.token), candidate
+        usage: Final = JSON_OBJECT.validate_python(ast.literal_eval(_logged(span, provider, "usageMetadata")))
+        assert (at(usage, "promptTokenCount"), at(usage, "candidatesTokenCount")) == summed(FIRST_HALF, last), usage
