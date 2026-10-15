@@ -28,11 +28,20 @@ it above.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, get_args
+from typing import Final, Literal, TypeAlias, get_args
+
+from typing_extensions import assert_never
 
 import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.types.llms.openai import REASONING_EFFORT
+
+ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
+RequestedReasoningEffort: TypeAlias = str | Mapping[str, object] | None
 
 REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
 _EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -87,7 +96,7 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
-def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
+def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
     """The levels an entry declares, resolved from the model string a provider config holds rather
     than from a router deployment's model_info.
 
@@ -107,19 +116,182 @@ REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "x
 _STRENGTH_RANK: Final = MappingProxyType({effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)})
 
 
-def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -> str:
-    """Rounds a request up to the weakest declared level at least as strong as it, and down to the
-    strongest declared level when it asks for more than the model has, so the caller gets no less
-    reasoning than it asked for instead of a rejected call. none is the off switch rather than a
-    strength, so it is never rounded onto the ladder and no level is rounded down to it: a caller
-    who turned reasoning off must not be billed for it, and a model that cannot turn it off says so
-    itself. A level outside the strength order is likewise returned as is for upstream to judge."""
+def nearest_declared_reasoning_effort(
+    requested: str, declared: Sequence[str], rounding: ReasoningEffortRounding = "up"
+) -> str:
+    """Rounding up takes the weakest declared level at least as strong as the request, else the
+    strongest declared, so the caller gets no less reasoning than it asked for instead of a rejected
+    call. Rounding down mirrors it: the strongest declared level at most as strong, else the
+    weakest. none is the off switch rather than a strength, so it is never rounded onto the ladder
+    and no level is rounded to it: a caller who turned reasoning off must not be billed for it, and
+    a model that cannot turn it off says so itself. A level outside the strength order is likewise
+    returned as is for upstream to judge."""
     ranked: Final = sorted(
         (effort for effort in declared if effort in _STRENGTH_RANK), key=lambda effort: _STRENGTH_RANK[effort]
     )
     if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
         return requested
-    return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
+    strength: Final = _STRENGTH_RANK[requested]
+    match rounding:
+        case "up":
+            return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= strength), ranked[-1])
+        case "down":
+            return next((effort for effort in reversed(ranked) if _STRENGTH_RANK[effort] <= strength), ranked[0])
+        case _:
+            assert_never(rounding)
+
+
+_ROUNDING_KEY: Final = "reasoning_effort_rounding"
+_DEFAULT_EFFORT: Final = "default"
+_EFFORT_KEY: Final = "effort"
+
+
+def deployment_reasoning_effort_levels(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> tuple[str, ...] | None:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    own: Final = declared_reasoning_efforts(own_info) if own_info is not None else None
+    if own is not None:
+        return own
+    return declared_reasoning_efforts_for_model(model, custom_llm_provider)
+
+
+def deployment_rounds_reasoning_effort(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    declared: Final = deployment_reasoning_effort_levels(model, custom_llm_provider, deployment_model_info)
+    return declared is not None and any(level in _STRENGTH_RANK for level in declared)
+
+
+def _rounding(value: object) -> ReasoningEffortRounding | None:
+    match value:
+        case "up":
+            return "up"
+        case "down":
+            return "down"
+        case _:
+            return None
+
+
+def _deployment_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    own: Final = _rounding(own_info.get(_ROUNDING_KEY)) if own_info is not None else None
+    return own or _rounding(litellm.reasoning_effort_rounding) or "up"
+
+
+def _requested_level(requested: RequestedReasoningEffort) -> str | None:
+    if isinstance(requested, str):
+        return requested
+    fields: Final = as_str_mapping(requested)
+    if fields is None:
+        return None
+    level: Final = fields.get(_EFFORT_KEY)
+    return level if isinstance(level, str) else None
+
+
+def _with_level(requested: RequestedReasoningEffort, level: str | None) -> RequestedReasoningEffort:
+    fields: Final = as_str_mapping(requested)
+    if fields is None:
+        return level
+    if level is not None:
+        return {**fields, _EFFORT_KEY: level}
+    rest: Final = {key: value for key, value in fields.items() if key != _EFFORT_KEY}
+    return rest or None
+
+
+def model_group_from_metadata(*metadata: object) -> str | None:
+    mappings: Final = (as_str_mapping(entry) for entry in metadata)
+    groups: Final = (mapping.get("model_group") for mapping in mappings if mapping is not None)
+    return next((group for group in groups if isinstance(group, str)), None)
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentReasoningEffort:
+    value: RequestedReasoningEffort
+    declares_sent_level: bool
+
+
+def resolve_deployment_reasoning_effort(
+    requested: RequestedReasoningEffort,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+    model_group: str | None,
+) -> DeploymentReasoningEffort:
+    requested_level: Final = _requested_level(requested)
+    unchanged: Final = DeploymentReasoningEffort(value=requested, declares_sent_level=False)
+    if requested_level is None:
+        return unchanged
+    declared: Final = deployment_reasoning_effort_levels(model, custom_llm_provider, deployment_model_info)
+    if declared is None:
+        return unchanged
+    rounding: Final = _deployment_rounding(deployment_model_info)
+    sent_level: Final = (
+        None
+        if requested_level == _DEFAULT_EFFORT
+        else nearest_declared_reasoning_effort(requested_level, declared, rounding)
+    )
+    declares_sent_level: Final = sent_level is not None and sent_level in declared
+    if sent_level == requested_level:
+        return DeploymentReasoningEffort(value=requested, declares_sent_level=declares_sent_level)
+    _log_remap(
+        requested_level=requested_level,
+        sent_level=sent_level,
+        rounding=rounding,
+        deployment_model=_provider_model(model, custom_llm_provider),
+        deployment_model_info=deployment_model_info,
+        model_group=model_group,
+    )
+    return DeploymentReasoningEffort(value=_with_level(requested, sent_level), declares_sent_level=declares_sent_level)
+
+
+def _provider_model(model: str, custom_llm_provider: str | None) -> str:
+    if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _log_remap(
+    *,
+    requested_level: str,
+    sent_level: str | None,
+    rounding: ReasoningEffortRounding,
+    deployment_model: str,
+    deployment_model_info: object,
+    model_group: str | None,
+) -> None:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    deployment_id: Final = own_info.get("id") if own_info is not None else None
+    verbose_logger.info(
+        "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
+        requested_level,
+        sent_level,
+        rounding,
+        deployment_id,
+        model_group,
+        deployment_model,
+        extra={
+            "reasoning_effort_deployment_id": deployment_id,
+            "reasoning_effort_model_group": model_group,
+            "reasoning_effort_deployment_model": deployment_model,
+            "reasoning_effort_requested": requested_level,
+            "reasoning_effort_sent": sent_level,
+            "reasoning_effort_rounding": rounding,
+        },
+    )
+
+
+def reasoning_effort_needs_allowing(
+    resolved: DeploymentReasoningEffort, *, model: str, custom_llm_provider: str, base_model: str | None
+) -> bool:
+    """A provider that lists reasoning_effort maps it itself, so allowing the raw key as well would
+    send it twice (anthropic turns it into thinking and rejects the raw key)."""
+    if not resolved.declares_sent_level:
+        return False
+    return "reasoning_effort" not in (
+        get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model) or ()
+    )
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
@@ -191,7 +363,7 @@ def resolve_supported_reasoning_efforts(
 
     opt_out: Final = frozenset(effort for effort in _OPT_OUT_EFFORTS if flags[effort] is not False)
     opt_in: Final = frozenset(effort for effort in _OPT_IN_EFFORTS if flags[effort] is True)
-    none_level: Final = (
+    none_level: Final[frozenset[str]] = (
         frozenset(("none",)) if _supports_none_reasoning_effort(model_info, flags["none"]) else frozenset()
     )
     allowed: Final = opt_out | _UNCONDITIONAL_EFFORTS | opt_in | none_level

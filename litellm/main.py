@@ -128,6 +128,11 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import realtime_health_check
+from litellm.router_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    reasoning_effort_needs_allowing,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     CompletionDispatchContext,
@@ -5480,6 +5485,17 @@ def completion(
             web_search_options=web_search_options,
             api_base=api_base,
         )
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
+            reasoning_effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=routing_kwargs.get("model_info"),
+            model_group=model_group_from_metadata(
+                routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
+            ),
+        )
+        resolved_reasoning_effort: Final = deployment_reasoning_effort.value
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
@@ -5574,6 +5590,12 @@ def completion(
         allowed_openai_params: Final[list[str] | None] = (
             [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
             if bridges_to_responses_api
+            or reasoning_effort_needs_allowing(
+                deployment_reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
             else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {
@@ -5607,7 +5629,7 @@ def completion(
             "api_version": api_version,
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
@@ -5773,7 +5795,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=resolved_reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
             )
@@ -5787,10 +5809,10 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
-                optional_params["reasoning_effort"] = reasoning_effort
+            if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
+                optional_params["reasoning_effort"] = resolved_reasoning_effort
             elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", reasoning_effort)
+                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
                 if isinstance(eff, dict):
                     optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
                 elif eff is not None:

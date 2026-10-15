@@ -6,13 +6,20 @@ regression they guard is the one a caller sees: a tier the proxy advertises has 
 leaves the adapter, in the shape the target expects.
 """
 
+import functools
+import json
+from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.router import Router
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -176,10 +183,6 @@ class TestTheNormalizedTierIsTheTierSent:
     def test_a_declared_tier_reaches_the_outgoing_request(self, local_model_cost_map, model, provider):
         assert _reasoning_effort_sent(model, provider, "max") == "max"
 
-    @pytest.mark.parametrize("effort, expected", [("xhigh", "high"), ("minimal", "low")])
-    def test_a_tier_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, effort, expected):
-        assert _reasoning_effort_sent("kimi-k3", "fireworks_ai", effort) == expected
-
     def test_the_fallback_is_a_tier_the_deployment_accepts(self, local_model_cost_map):
         """gpt-5.5-pro refuses ``low``, the floor the ``minimal`` chain used to stop on, so stopping
         there would have sent a level the model map says the model rejects."""
@@ -223,3 +226,136 @@ class TestTheNormalizedTierIsTheTierSent:
 
     def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
         assert _reasoning_effort_sent("gpt-6-astra", "openai", "max") == "max"
+
+
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "my-kimi",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_RESPONSE: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5-pro",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_KIMI_LEVELS: Final = {"reasoning_effort_levels": ["low", "high", "max", "none"]}
+
+
+async def _body_sent_upstream(
+    respx_mock: respx.MockRouter,
+    litellm_params: Mapping[str, object],
+    model_info: Mapping[str, object],
+    upstream_url: str,
+    upstream_body: Mapping[str, object],
+    **messages_params: object,
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=upstream_url).mock(return_value=httpx.Response(200, json=upstream_body))
+    router: Final = Router(
+        model_list=[{"model_name": "group", "litellm_params": {**litellm_params}, "model_info": {**model_info}}]
+    )
+    await router.aanthropic_messages(model="group", messages=MESSAGES, max_tokens=4096, **messages_params)
+    return json.loads(route.calls.last.request.read())
+
+
+class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "messages_params, expected",
+        [
+            ({"thinking": {"type": "enabled", "budget_tokens": 2048}}, "high"),
+            ({"thinking": {"type": "adaptive"}, "output_config": {"effort": "xhigh"}}, "max"),
+        ],
+    )
+    async def test_a_self_hosted_deployment_receives_its_declared_level(
+        self, respx_mock: respx.MockRouter, messages_params: Mapping[str, object], expected: str
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "hosted_vllm/my-kimi", "api_base": "https://vllm.example.test/v1", "api_key": "fake-key"},
+            _KIMI_LEVELS,
+            r"https://vllm\.example\.test/v1/chat/completions",
+            _CHAT_COMPLETION,
+            **messages_params,
+        )
+
+        assert sent["reasoning_effort"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("effort, expected", [("xhigh", "max"), ("minimal", "low")])
+    async def test_a_model_map_declaration_rounds_up_onto_its_levels(
+        self, local_model_cost_map: None, respx_mock: respx.MockRouter, effort: str, expected: str
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "fireworks_ai/kimi-k3", "api_key": "fake-key"},
+            {},
+            r"https://api\.fireworks\.ai/inference/v1/chat/completions",
+            _CHAT_COMPLETION,
+            thinking={"type": "adaptive"},
+            output_config={"effort": effort},
+        )
+
+        assert sent["reasoning_effort"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, api_base, upstream_url, upstream_body, effort_path",
+        [
+            ("openai/gpt-5.5-pro", None, r"https://api\.openai\.com/v1/responses", _RESPONSE, ("reasoning", "effort")),
+            (
+                "hosted_vllm/my-kimi",
+                "https://vllm.example.test/v1",
+                r"https://vllm\.example\.test/v1/chat/completions",
+                _CHAT_COMPLETION,
+                ("reasoning_effort",),
+            ),
+        ],
+    )
+    async def test_the_deployment_declaration_beats_the_flag_based_chain(
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        model: str,
+        api_base: str | None,
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        effort_path: tuple[str, ...],
+    ) -> None:
+        """The map says gpt-5.5-pro refuses minimal and knows nothing of my-kimi, so the chain alone
+        would send medium and low."""
+        route: Final = respx_mock.post(url__regex=upstream_url).mock(
+            return_value=httpx.Response(200, json=upstream_body)
+        )
+
+        await litellm.anthropic.messages.acreate(
+            model=model,
+            api_base=api_base,
+            api_key="fake-key",
+            messages=MESSAGES,
+            max_tokens=4096,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "minimal"},
+            model_info={"reasoning_effort_levels": ["minimal", "medium", "high"]},
+        )
+
+        sent: Final = json.loads(route.calls.last.request.read())
+        assert functools.reduce(lambda body, key: body[key], effort_path, sent) == "minimal"

@@ -1,10 +1,18 @@
+import json
+import logging
+from collections.abc import Mapping
+from typing import Final
+
 import pytest
 
 import litellm
+from litellm._logging import JsonFormatter, verbose_logger
 from litellm.router_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
     nearest_declared_reasoning_effort,
+    resolve_deployment_reasoning_effort,
     resolve_supported_reasoning_efforts,
 )
 
@@ -458,6 +466,106 @@ class TestNearestDeclaredReasoningEffort:
     def test_a_level_outside_the_strength_order_is_left_for_upstream(self):
         assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
         assert nearest_declared_reasoning_effort("medium", ()) == "medium"
+
+    def test_rounding_down_takes_the_strongest_declared_level_at_most_as_strong(self):
+        assert nearest_declared_reasoning_effort("medium", ("low", "high", "max"), "down") == "low"
+        assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max"), "down") == "high"
+        assert nearest_declared_reasoning_effort("high", ("low", "high", "max"), "down") == "high"
+
+    def test_rounding_down_below_the_floor_takes_the_weakest_declared_one(self):
+        assert nearest_declared_reasoning_effort("minimal", ("none", "low", "high"), "down") == "low"
+
+    def test_rounding_down_leaves_none_and_unknown_levels_alone(self):
+        assert nearest_declared_reasoning_effort("none", ("low", "high"), "down") == "none"
+        assert nearest_declared_reasoning_effort("turbo", ("low", "high"), "down") == "turbo"
+
+
+KIMI_DEPLOYMENT: Final = {"id": "deployment-1", "reasoning_effort_levels": ["low", "high", "max", "none"]}
+
+
+def _sent(
+    requested: RequestedReasoningEffort,
+    deployment_model_info: Mapping[str, object] | None = KIMI_DEPLOYMENT,
+    *,
+    model: str = "my-kimi",
+    provider: str = "hosted_vllm",
+) -> RequestedReasoningEffort:
+    return resolve_deployment_reasoning_effort(
+        requested,
+        model=model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+        model_group="kimi-k3",
+    ).value
+
+
+class TestResolveDeploymentReasoningEffort:
+    @pytest.mark.parametrize(
+        "requested, expected",
+        [
+            ("minimal", "low"),
+            ("low", "low"),
+            ("medium", "high"),
+            ("xhigh", "max"),
+            ("max", "max"),
+            ("none", "none"),
+            ("turbo", "turbo"),
+            ("default", None),
+            ({"effort": "medium", "summary": "auto"}, {"effort": "high", "summary": "auto"}),
+            ({"effort": "default", "summary": "auto"}, {"summary": "auto"}),
+            ({"effort": "default"}, None),
+        ],
+    )
+    def test_a_declaring_deployment_receives_a_level_it_declared(self, requested, expected):
+        assert _sent(requested) == expected
+
+    def test_a_deployment_that_declares_nothing_gets_the_request_untouched(self, local_model_cost_map):
+        requested: Final = {"effort": "minimal", "summary": "auto"}
+
+        assert _sent(requested, {"id": "deployment-1"}) == requested
+        assert _sent("default", None) == "default"
+
+    def test_the_deployment_rounding_wins_over_the_global(self, monkeypatch):
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "down"}) == "low"
+
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "up"}) == "high"
+        assert _sent("medium") == "low"
+
+    @pytest.mark.parametrize("invalid", ["sideways", "DOWN", 1, None])
+    def test_an_invalid_rounding_falls_back_to_the_next_setting(self, monkeypatch, invalid):
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "low"
+
+        monkeypatch.setattr(litellm, "reasoning_effort_rounding", invalid)
+        assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "high"
+
+    def test_the_deployment_declaration_wins_over_the_model_map(self, local_model_cost_map):
+        assert _sent("xhigh", None, model="kimi-k3", provider="fireworks_ai") == "max"
+        assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
+            "medium"
+        )
+
+    def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(self, caplog):
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent("high")
+        _sent("medium")
+
+        assert len(caplog.records) == 1
+        logged: Final = json.loads(JsonFormatter().format(caplog.records[0]))
+        assert logged["level"] == "INFO"
+        assert {key: value for key, value in logged.items() if key.startswith("reasoning_effort_")} == {
+            "reasoning_effort_deployment_id": "deployment-1",
+            "reasoning_effort_model_group": "kimi-k3",
+            "reasoning_effort_deployment_model": "hosted_vllm/my-kimi",
+            "reasoning_effort_requested": "medium",
+            "reasoning_effort_sent": "high",
+            "reasoning_effort_rounding": "up",
+        }
 
 
 class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:

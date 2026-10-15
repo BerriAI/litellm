@@ -8345,3 +8345,179 @@ def test_model_alias_map_resolves_the_outbound_model(
 
     assert response.model == "resolved-model"
     assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"
+
+
+_KIMI_DEPLOYMENT: Final = {"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "high", "max", "none"]}
+_VLLM_API_BASE: Final = "https://vllm.example.test/v1"
+_HELLO: Final = [{"role": "user", "content": "hello"}]
+
+
+def _chat_body_sent(
+    respx_mock: respx.MockRouter, model: str, reasoning_effort: str, model_info: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    completion(
+        model=model,
+        api_base=_VLLM_API_BASE,
+        api_key="fake-key",
+        messages=_HELLO,
+        reasoning_effort=reasoning_effort,
+        model_info=model_info,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+def _reasoning_effort_remaps(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if hasattr(record, "reasoning_effort_sent")]
+
+
+@pytest.fixture
+def remap_log(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    from litellm._logging import verbose_logger
+
+    verbose_logger.addHandler(caplog.handler)
+    verbose_logger.propagate = False
+    verbose_logger.setLevel(logging.INFO)
+    return caplog
+
+
+@pytest.mark.parametrize(
+    "model, requested, expected",
+    [
+        ("hosted_vllm/my-kimi", "minimal", "low"),
+        ("hosted_vllm/my-kimi", "medium", "high"),
+        ("hosted_vllm/my-kimi", "xhigh", "max"),
+        ("hosted_vllm/my-kimi", "none", "none"),
+        ("azure_ai/my-kimi", "medium", "high"),
+    ],
+)
+def test_a_deployment_declaring_its_levels_receives_the_level_rounded_up(
+    respx_mock: respx.MockRouter, model: str, requested: str, expected: str
+) -> None:
+    assert _chat_body_sent(respx_mock, model, requested, _KIMI_DEPLOYMENT)["reasoning_effort"] == expected
+
+
+def test_a_deployment_rounding_down_receives_the_declared_level_below(respx_mock: respx.MockRouter) -> None:
+    rounding_down: Final = {**_KIMI_DEPLOYMENT, "reasoning_effort_rounding": "down"}
+
+    assert _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", "medium", rounding_down)["reasoning_effort"] == "low"
+
+
+def test_default_on_a_declaring_deployment_leaves_the_effort_to_the_provider(respx_mock: respx.MockRouter) -> None:
+    assert "reasoning_effort" not in _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", "default", _KIMI_DEPLOYMENT)
+
+
+def test_azure_ai_forwards_reasoning_effort_only_at_a_level_the_deployment_declares(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", {"id": "kimi-azure-1"})
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "none", {"reasoning_effort_levels": ["low", "high"]})
+
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", _KIMI_DEPLOYMENT)["reasoning_effort"] == "high"
+
+
+def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_its_own_shape(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    def body_for(reasoning_effort: str, model_info: Mapping[str, object] | None) -> Mapping[str, object]:
+        completion(
+            model="anthropic/claude-opus-5-5", messages=_HELLO, reasoning_effort=reasoning_effort, model_info=model_info
+        )
+        return json.loads(route.calls.last.request.content)
+
+    rounded: Final = body_for("medium", {"id": "opus-1", "reasoning_effort_levels": ["low", "high"]})
+    asked_for_high: Final = body_for("high", None)
+
+    assert "reasoning_effort" not in rounded
+    assert rounded == asked_for_high
+
+
+def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(
+    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+) -> None:
+    from litellm.router import Router
+
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("my-kimi")
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "kimi-k3",
+                "litellm_params": {"model": "hosted_vllm/my-kimi", "api_base": _VLLM_API_BASE, "api_key": "fake-key"},
+                "model_info": _KIMI_DEPLOYMENT,
+            }
+        ]
+    )
+
+    router.completion(model="kimi-k3", messages=_HELLO, reasoning_effort="minimal")
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "low"
+    assert [
+        (
+            getattr(record, "reasoning_effort_deployment_id"),
+            getattr(record, "reasoning_effort_model_group"),
+            getattr(record, "reasoning_effort_requested"),
+            getattr(record, "reasoning_effort_sent"),
+        )
+        for record in _reasoning_effort_remaps(remap_log)
+    ] == [("kimi-vllm-1", "kimi-k3", "minimal", "low")]
+
+
+def test_a_chat_request_bridged_to_responses_is_rounded_and_logged_once(
+    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+    )
+
+    completion(
+        model="openai/gpt-5.5",
+        messages=_HELLO,
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        reasoning_effort="medium",
+        model_info={"id": "gpt-5.5-1", "reasoning_effort_levels": ["low", "high"]},
+    )
+
+    assert json.loads(route.calls.last.request.content)["reasoning"]["effort"] == "high"
+    assert [getattr(record, "reasoning_effort_sent") for record in _reasoning_effort_remaps(remap_log)] == ["high"]
+
+
+def test_default_on_a_declaring_deployment_keeps_a_tool_call_on_chat_completions(respx_mock: respx.MockRouter) -> None:
+    gateway: Final = "https://openai-gateway.example.test/v1"
+    chat: Final = respx_mock.post(f"{gateway}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("gpt-5.5")
+    )
+    responses: Final = respx_mock.post(f"{gateway}/responses")
+
+    completion(
+        model="openai/gpt-5.5",
+        api_base=gateway,
+        api_key="fake-key",
+        messages=_HELLO,
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        reasoning_effort="default",
+        model_info={"id": "gpt-5.5-1", "reasoning_effort_levels": ["low", "high"]},
+    )
+
+    assert not responses.called
+    assert "reasoning_effort" not in json.loads(chat.calls.last.request.content)

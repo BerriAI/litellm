@@ -199,6 +199,7 @@ def _build_responses_kwargs(
                 effort,
                 model=model,
                 custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+                deployment_model_info=forwarded_kwargs.get("model_info"),
             )
             if normalized != effort:
                 responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
