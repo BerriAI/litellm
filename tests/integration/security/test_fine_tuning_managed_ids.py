@@ -21,11 +21,6 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 MANAGED_MODEL: Final = "gpt-4.1-managed-ids"
 DEPLOYMENT_KEY: Final = "sk-fine-tuning-managed-deployment"
-RUN: Final = uuid.uuid4().hex[:12]
-PROVIDER_FILE: Final = f"file-managed-{RUN}"
-PROVIDER_JOB: Final = f"ftjob-managed-{RUN}"
-DEFAULT_PROVIDER_FILE: Final = f"file-managed-default-{RUN}"
-DEFAULT_PROVIDER_JOB: Final = f"ftjob-managed-default-{RUN}"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
 JOB_PATH: Final = re.compile(r"^/v1/fine_tuning/jobs/([^/]+?)(/cancel)?$")
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -190,7 +185,10 @@ class Rig:
 
 
 @contextmanager
-def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, job_id: str) -> Iterator[Rig]:
+def _rig(directory: Path, litellm_settings: dict[str, JsonValue]) -> Iterator[Rig]:
+    build: Final = uuid.uuid4().hex
+    file_id: Final = f"file-managed-{build}"
+    job_id: Final = f"ftjob-managed-{build}"
     with gateway_from_environment() as shared, wire_server(_responder(file_id, job_id)) as wire:
         config: Final = directory / "config.yaml"
         config.write_text(yaml.safe_dump(_config(wire, litellm_settings)))
@@ -239,17 +237,13 @@ def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, 
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    with _rig(
-        tmp_path_factory.mktemp("fine-tuning-managed-ids"), {"require_managed_files": True}, PROVIDER_FILE, PROVIDER_JOB
-    ) as built:
+    with _rig(tmp_path_factory.mktemp("fine-tuning-managed-ids"), {"require_managed_files": True}) as built:
         yield built
 
 
 @pytest.fixture(scope="module")
 def default_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    with _rig(
-        tmp_path_factory.mktemp("fine-tuning-managed-ids-default"), {}, DEFAULT_PROVIDER_FILE, DEFAULT_PROVIDER_JOB
-    ) as built:
+    with _rig(tmp_path_factory.mktemp("fine-tuning-managed-ids-default"), {}) as built:
         yield built
 
 
@@ -433,7 +427,7 @@ def test_keys_granted_the_retrieve_route_get_the_owner_check_and_the_decoded_job
         with rig.sdk(owner) as client:
             retrieved: Final = client.fine_tuning.jobs.with_raw_response.retrieve(rig.managed_job)
         assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
-            ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
+            ("GET", f"/v1/fine_tuning/jobs/{rig.provider_job}", f"Bearer {DEPLOYMENT_KEY}", b"")
         ]
         assert retrieved.status_code == 200, retrieved.text
         assert Job.model_validate_json(retrieved.text) == _client_job(rig.managed_job, "running", rig.provider_file), (
@@ -455,7 +449,7 @@ def test_keys_granted_the_retrieve_route_get_default_job_ownership_and_decoded_i
         assert [
             (request.method, request.target, request.headers["authorization"], request.body)
             for request in default_rig.wire.drain()
-        ] == [("GET", f"/v1/fine_tuning/jobs/{DEFAULT_PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")]
+        ] == [("GET", f"/v1/fine_tuning/jobs/{default_rig.provider_job}", f"Bearer {DEPLOYMENT_KEY}", b"")]
         assert retrieved.status_code == 200, retrieved.text
         assert Job.model_validate_json(retrieved.text) == _client_job(
             default_rig.managed_job, "running", default_rig.provider_file
@@ -472,7 +466,7 @@ def test_owner_retrieve_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -
     with rig.sdk(rig.owner) as client:
         retrieved: Final = client.fine_tuning.jobs.with_raw_response.retrieve(rig.managed_job)
     assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
-        ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
+        ("GET", f"/v1/fine_tuning/jobs/{rig.provider_job}", f"Bearer {DEPLOYMENT_KEY}", b"")
     ]
     assert retrieved.status_code == 200, retrieved.text
     assert Job.model_validate_json(retrieved.text) == _client_job(rig.managed_job, "running", rig.provider_file), (
@@ -484,7 +478,7 @@ def test_owner_cancel_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> 
     with rig.sdk(rig.owner) as client:
         cancelled: Final = client.fine_tuning.jobs.with_raw_response.cancel(rig.managed_job)
     assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
-        ("POST", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}/cancel", f"Bearer {DEPLOYMENT_KEY}", b"")
+        ("POST", f"/v1/fine_tuning/jobs/{rig.provider_job}/cancel", f"Bearer {DEPLOYMENT_KEY}", b"")
     ]
     assert cancelled.status_code == 200, cancelled.text
     assert Job.model_validate_json(cancelled.text) == _client_job(rig.managed_job, "cancelled", rig.provider_file), (

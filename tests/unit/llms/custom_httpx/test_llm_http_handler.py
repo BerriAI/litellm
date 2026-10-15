@@ -2668,6 +2668,62 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    message: Final = "Batch input file line 3 is not valid JSON: Expecting value at column 1"
+
+    async def read_until_client_hangs_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        writer.close()
+
+    async def body_with_bad_third_row():
+        yield b'{"custom_id": "r1"}\n'
+        raise VertexAIError(status_code=400, message=message)
+
+    server: Final = await asyncio.start_server(read_until_client_hangs_up, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.HTTPError) as sent:
+                await handler.post(f"http://127.0.0.1:{port}/upload", content=body_with_bad_third_row())
+    finally:
+        await handler.close()
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=sent.value, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 400
+    assert surfaced.value.message == message
+
+
+def _runtime_error_caused_by(cause: Exception) -> RuntimeError:
+    try:
+        raise RuntimeError("upload bookkeeping failed") from cause
+    except RuntimeError as outer:
+        return outer
+
+
+def test_handle_error_reports_its_own_failure_when_it_is_not_a_transport_error():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    outer: Final = _runtime_error_caused_by(VertexAIError(status_code=400, message="inner provider error"))
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=outer, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 500
+    assert "upload bookkeeping failed" in surfaced.value.message
+
+
 _FILE_CONTENT_WIF_ENV = {
     "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_llm_http_handler_seam",
     "ANTHROPIC_ORGANIZATION_ID": "org-llm-http-handler-seam",
@@ -4226,6 +4282,54 @@ async def test_completion_streams_after_the_async_transform_request():
     assert config.transform_calls == ["async"]
     assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "async"
+
+
+class _IteratorRecordingConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+        self.iterator_requests = []
+
+    def get_model_response_iterator(self, streaming_response, sync_stream, json_mode=False):
+        self.iterator_requests.append({"sync_stream": sync_stream, "json_mode": json_mode})
+        return super().get_model_response_iterator(streaming_response, sync_stream, json_mode)
+
+
+def _json_mode_stream(config, **transport):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"json_mode": True},
+        timeout=10.0,
+        litellm_params={},
+        stream=True,
+        provider_config=config,
+        **transport,
+    )
+
+
+def _streamed_text(chunks):
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook_only_when_sync():
+    config = _IteratorRecordingConfig()
+    sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_sse_echoing_transformed_by)))
+    async_client = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_sse_echoing_transformed_by))
+
+    sync_chunks = list(_json_mode_stream(config, acompletion=False, client=sync_client))
+    async_chunks = [chunk async for chunk in await _json_mode_stream(config, acompletion=True, client=async_client)]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+    assert config.iterator_requests == [
+        {"sync_stream": True, "json_mode": True},
+        {"sync_stream": False, "json_mode": False},
+    ]
 
 
 class _ImageEditRecordingConfig(BaseImageEditConfig):
