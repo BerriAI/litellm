@@ -2,17 +2,20 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from types import TracebackType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
@@ -1052,3 +1055,107 @@ async def test_voice_transcript_blocked_by_guardrail():
 
     finally:
         litellm.callbacks = []
+
+
+@pytest.fixture
+def federated_deployment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, str]:
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token")
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    _workload_identity_auth.cache_clear()
+    return {
+        "openai_identity_provider_id": "idp_realtime",
+        "openai_service_account_id": "user-realtime",
+        "openai_identity_token_file": str(token_file),
+    }
+
+
+def _mock_token_exchange() -> None:
+    respx.post("https://auth.openai.com/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "federated-bearer", "expires_in": 3600})
+    )
+
+
+class _ConnectThatStopsAfterCapturingTheAuthorization:
+    authorization: str | None = None
+
+    def __call__(
+        self, url: str, *, additional_headers: Mapping[str, str], **kwargs: object
+    ) -> "_ConnectThatStopsAfterCapturingTheAuthorization":
+        self.authorization = additional_headers.get("Authorization")
+        return self
+
+    async def __aenter__(self) -> None:
+        raise RuntimeError("backend headers captured, nothing to bridge")
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "live_session_start",
+    [None, {"type": "session.start", "session": {"model": "gpt-live-1"}}],
+    ids=["realtime", "live_session"],
+)
+@respx.mock
+async def test_openai_websocket_sessions_send_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str], live_session_start: Mapping[str, object] | None
+) -> None:
+    _mock_token_exchange()
+    connect: Final = _ConnectThatStopsAfterCapturingTheAuthorization()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            websocket=MagicMock(close=AsyncMock()),
+            litellm_logging_obj=FakeLogging(),
+            live_session_start=live_session_start,
+            **federated_deployment,
+        )
+    assert connect.authorization == "Bearer federated-bearer"
+
+
+class _GatewayThatRecordsTheAuthorization:
+    authorization: str | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.authorization = request.headers.get("Authorization")
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+    ids=["client_secrets", "transcription_sessions"],
+)
+@respx.mock
+async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str], route: Callable[..., Awaitable[object]]
+) -> None:
+    _mock_token_exchange()
+    gateway: Final = _GatewayThatRecordsTheAuthorization()
+    await route.__wrapped__(
+        model="gpt-realtime",
+        custom_llm_provider="openai",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        **federated_deployment,
+    )
+    assert gateway.authorization == "Bearer federated-bearer"

@@ -6563,7 +6563,6 @@ def embedding(
                 or get_secret_str("OPENAI_ORGANIZATION")
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
-            deployment_api_key: Final = api_key
             # set API KEY
             api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
@@ -6596,7 +6595,7 @@ def embedding(
                 aembedding=aembedding,
                 max_retries=max_retries,
                 shared_session=shared_session,
-                litellm_params={**litellm_params_dict, "api_key": deployment_api_key},
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -7820,7 +7819,7 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     openai_client: Final = kwargs.get("client", None) or build_openai_client(
         api_key=static_api_key,
         api_base=api_base,
-        litellm_params={**kwargs, "api_key": api_key},
+        litellm_params=kwargs,
     )
 
     if model is not None:
@@ -7872,7 +7871,7 @@ async def amoderation(
             is_async=True,
             api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
-            litellm_params={**optional_params.model_dump(exclude_none=True), "api_key": api_key},
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
         _openai_client = openai_client
@@ -8139,7 +8138,7 @@ def transcription(
             api_base=api_base,
             api_key=static_api_key,
             provider_config=provider_config,
-            litellm_params={**litellm_params_dict, "api_key": api_key},
+            litellm_params=litellm_params_dict,
             shared_session=shared_session,
         )
     elif custom_llm_provider == "nvidia_riva":

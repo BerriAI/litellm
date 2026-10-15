@@ -66,7 +66,7 @@ def resolve_openai_workload_identity_config(
     static_api_key: Final = normalize_nonempty_secret_str(api_key) or normalize_nonempty_secret_str(
         get_secret_str("OPENAI_API_KEY")
     )
-    if static_api_key is not None and not _deployment_identity_outranks(static_api_key, litellm_params):
+    if static_api_key is not None:
         return None
     effective_api_base: Final = (
         api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
@@ -77,7 +77,7 @@ def resolve_openai_workload_identity_config(
         _config_value(litellm_params, param_key, env_name) for param_key, env_name in _IDENTITY_PARAM_ENV_NAMES
     )
     if identity_provider_id is None or service_account_id is None or token_file is None:
-        if static_api_key is None and _carries_deployment_identity(litellm_params):
+        if _carries_deployment_identity(litellm_params):
             raise OpenAIError(status_code=500, message=_incomplete_identity_message(litellm_params))
         return None
     return OpenAIWorkloadIdentityConfig(
@@ -98,12 +98,16 @@ async def get_workload_identity_bearer_token_for_api_base(api_base: str) -> str 
     return await _workload_identity_auth(config).get_token_async()
 
 
+def openai_static_api_key(api_key: str | None) -> str | None:
+    return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+
 def resolve_openai_bearer_token(
     api_key: str | None,
     api_base: str | None,
     litellm_params: Mapping[str, object] | None,
 ) -> str | None:
-    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    static_api_key: Final = openai_static_api_key(api_key)
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=static_api_key, api_base=api_base, litellm_params=litellm_params
     )
@@ -125,12 +129,6 @@ async def resolve_openai_bearer_token_async(
     return await _workload_identity_auth(workload_identity_config).get_token_async()
 
 
-def _deployment_identity_outranks(static_api_key: str, litellm_params: Mapping[str, object] | None) -> bool:
-    if litellm_params is None or _param_str(litellm_params, "api_key") is not None:
-        return False
-    return _carries_deployment_identity(litellm_params) and static_api_key in _process_wide_static_keys()
-
-
 def _carries_deployment_identity(litellm_params: Mapping[str, object] | None) -> bool:
     if litellm_params is None:
         return False
@@ -149,11 +147,6 @@ def _incomplete_identity_message(litellm_params: Mapping[str, object] | None) ->
         "on the deployment, or the OPENAI_IDENTITY_PROVIDER_ID / OPENAI_SERVICE_ACCOUNT_ID / "
         "OPENAI_IDENTITY_TOKEN_FILE env vars they fall back to."
     )
-
-
-def _process_wide_static_keys() -> frozenset[str]:
-    candidates: Final = (get_secret_str("OPENAI_API_KEY"), litellm.api_key, litellm.openai_key)
-    return frozenset(key for key in map(normalize_nonempty_secret_str, candidates) if key is not None)
 
 
 def _param_str(litellm_params: Mapping[str, object], key: str) -> str | None:

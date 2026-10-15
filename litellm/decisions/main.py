@@ -1,5 +1,7 @@
+import asyncio
 import warnings
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -104,19 +106,22 @@ async def adecisions(
     videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
-    call: Final = _prepare_decisions_call(
-        model=model,
-        decision_input=input,
-        questions=questions,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_decisions_call,
+            model=model,
+            decision_input=input,
+            questions=questions,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return await asend(call)
 

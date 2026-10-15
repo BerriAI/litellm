@@ -17,6 +17,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.workload_identity import (
+    resolve_openai_bearer_token_async,
+    resolve_openai_workload_identity_config,
+)
 from litellm.proxy.common_utils.callback_utils import add_guardrail_scan_id
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import (
@@ -78,7 +82,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         )
         self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
-        if not self.api_key:
+        if not self.api_key and resolve_openai_workload_identity_config(api_key=None, api_base=self.api_base) is None:
             raise ValueError(
                 "OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration."
             )
@@ -109,10 +113,13 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         verbose_proxy_logger.debug("OpenAI Moderation guard request: %s", request_body)
 
+        bearer_token: Final = await resolve_openai_bearer_token_async(
+            static_api_key=self.api_key, api_base=self.api_base, litellm_params=None
+        )
         response: Final = await self.async_handler.post(
             url=f"{self.api_base}/moderations",
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             },
             json=request_body,

@@ -506,7 +506,7 @@ def image_generation(
                 aimg_generation=aimg_generation,
                 client=client,
                 headers=headers,
-                litellm_params={**litellm_params_dict, "api_key": api_key or dynamic_api_key},
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:
