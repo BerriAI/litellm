@@ -8,6 +8,7 @@ from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
 from litellm.exceptions import UnsupportedParamsError
+from litellm.responses.litellm_completion_transformation.tool_search import unanswered_tool_search_call_ids
 from litellm.types.llms.openai import ChatCompletionCachedContent
 
 _Path: TypeAlias = tuple[str | int, ...]
@@ -260,13 +261,19 @@ def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
     return (group, index, *block)
 
 
-def _on_wire(path: _Path, messages: Sequence[object], tools: Sequence[object]) -> bool:
-    """Claude sends a message-level mark on string content, or on list content only for a tool result, and a mark
-    under ``function`` only when the tool carries none of its own."""
+def _tool_call_id(message: _Fields, index: int) -> object:
+    return (_fields((_blocks(message.get("tool_calls")) or ())[index]) or {}).get("id")
+
+
+def _on_wire(path: _Path, messages: Sequence[object], tools: Sequence[object], unsent_call_ids: frozenset[str]) -> bool:
+    """Claude sends a message-level mark on string content, or on list content only for a tool result, a mark
+    under ``function`` only when the tool carries none of its own, and no tool_search call nobody answered."""
     if path[0] == "tools":
         return len(path) == 2 or (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
     message: Final = _fields(messages[int(path[1])]) or {}
-    return len(path) == 4 or isinstance(message.get("content"), str) or message.get("role") == "tool"
+    if len(path) == 4:
+        return path[2] != "tool_calls" or _tool_call_id(message, int(path[3])) not in unsent_call_ids
+    return isinstance(message.get("content"), str) or message.get("role") == "tool"
 
 
 def _ttl(cache_control: object) -> Literal["5m", "1h"]:
@@ -333,11 +340,13 @@ def claude_prompt_cache(
     renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
     translated: Final = _translated(messages, listed_tools)
     leading_system_count: Final = _leading_system_count(messages)
+    unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
     block_marks: Final = sorted(
         (
             _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
-            if block.get("cache_control") is not None and _on_wire(path, renamed_messages, renamed_tools)
+            if block.get("cache_control") is not None
+            and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids)
         ),
         key=lambda mark: _wire_position(mark.path, leading_system_count),
     )

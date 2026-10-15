@@ -104,6 +104,25 @@ def test_a_breakpoint_under_a_function_the_tool_cache_control_overrides_is_never
     assert list(result.tools or ()) == [{"type": "function", "cache_control": _EPHEMERAL, "function": {"name": "t"}}]
 
 
+def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_no_slot_from_the_system_mark_under_drop_params():
+    search_call: Final = {
+        "id": "srvtoolu_01search",
+        "type": "function",
+        "function": {"name": "tool_search_tool_regex", "arguments": '{"query": "weather"}'},
+        "prompt_cache_breakpoint": _EXPLICIT,
+    }
+    messages: Final = [
+        {"role": "system", "content": [_part("sys", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part(f"note {n}", prompt_cache_breakpoint=_EXPLICIT) for n in range(3)]},
+        {"role": "assistant", "content": None, "tool_calls": [search_call]},
+        {"role": "user", "content": "Which section mentions watchlists?"},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert result.messages[0] == {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]}
+
+
 @pytest.mark.parametrize(
     "marker, kept",
     [({"mode": "explicit", "ttl": "30m"}, _EPHEMERAL), ({"mode": "sometimes"}, None), ("yes", None)],
