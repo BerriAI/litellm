@@ -237,7 +237,8 @@ func resourceLiteLLMModel() *schema.Resource {
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
-				Description: "Additional parameters to pass to litellm_params beyond the standard ones",
+				DiffSuppressFunc: suppressEquivalentDropParams,
+				Description:      "Additional parameters to pass to litellm_params beyond the standard ones",
 			},
 		},
 	}

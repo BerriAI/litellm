@@ -180,6 +180,119 @@ func TestResourceLiteLLMModelCreateSendsAdditionalLiteLLMParams(t *testing.T) {
 	}
 }
 
+func TestResourceLiteLLMModelCreateNormalizesAdditionalDropParams(t *testing.T) {
+	cases := map[string]struct {
+		dropParams string
+		want       []interface{}
+		wantErr    bool
+	}{
+		"null entry from an unset variable is skipped": {dropParams: `["store", null]`, want: []interface{}{"store"}},
+		"object is rejected":                           {dropParams: `{"store": true}`, wantErr: true},
+		"bare name is rejected":                        {dropParams: "store", wantErr: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var createPayload map[string]interface{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/model/new":
+					if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+						t.Errorf("failed to decode create payload: %v", err)
+					}
+					w.Write([]byte(modelInfoBody("")))
+				case "/model/info":
+					w.Write([]byte(modelInfoBody("")))
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]interface{}{
+				"model_name":                "vertex-claude-haiku",
+				"custom_llm_provider":       "vertex_ai",
+				"base_model":                "claude-haiku-4-5",
+				"additional_litellm_params": map[string]interface{}{"additional_drop_params": tc.dropParams},
+			})
+
+			err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected create to fail")
+				}
+				if createPayload != nil {
+					t.Errorf("expected no /model/new request, got %v", createPayload)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("create failed: %v", err)
+			}
+			litellmParams := createPayload["litellm_params"].(map[string]interface{})
+			if got := litellmParams["additional_drop_params"]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("additional_drop_params = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testing.T) {
+	cases := map[string]struct {
+		configured string
+		stored     interface{}
+		wantDiff   bool
+	}{
+		"list never sent by an older provider": {configured: `["store"]`, stored: nil, wantDiff: true},
+		"list changed in the Admin UI":         {configured: `["store"]`, stored: []string{"temperature"}, wantDiff: true},
+		"same list written with spaces":        {configured: `["store", "vertex_location"]`, stored: []string{"store", "vertex_location"}},
+		"null entry the proxy never received":  {configured: `["store", null]`, stored: []string{"store"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			litellmParams := map[string]interface{}{"model": "vertex_ai/claude-haiku-4-5", "custom_llm_provider": "vertex_ai"}
+			if tc.stored != nil {
+				litellmParams["additional_drop_params"] = tc.stored
+			}
+			body, _ := json.Marshal(map[string]interface{}{
+				"model_name":     "vertex-claude-haiku",
+				"litellm_params": litellmParams,
+				"model_info":     map[string]interface{}{"id": "model-123", "db_model": true, "base_model": "claude-haiku-4-5"},
+			})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write(body)
+			}))
+			defer srv.Close()
+
+			res := resourceLiteLLMModel()
+			config := map[string]interface{}{
+				"model_name":                "vertex-claude-haiku",
+				"custom_llm_provider":       "vertex_ai",
+				"base_model":                "claude-haiku-4-5",
+				"additional_litellm_params": map[string]interface{}{"additional_drop_params": tc.configured},
+			}
+			d := schema.TestResourceDataRaw(t, res.Schema, config)
+			d.SetId("model-123")
+			if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+
+			diff, err := res.Diff(context.Background(), d.State(), terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatalf("diff failed: %v", err)
+			}
+			var attr *terraform.ResourceAttrDiff
+			if diff != nil {
+				attr = diff.Attributes["additional_litellm_params.additional_drop_params"]
+			}
+			gotDiff := attr != nil && attr.Old != attr.New
+			if gotDiff != tc.wantDiff {
+				t.Errorf("plan shows additional_drop_params change = %v (%#v), want %v", gotDiff, attr, tc.wantDiff)
+			}
+		})
+	}
+}
+
 func TestResourceLiteLLMModelReadDisplayName(t *testing.T) {
 	cases := map[string]struct {
 		serverBody string

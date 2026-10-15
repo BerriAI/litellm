@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +68,44 @@ func secretFromResource(d *schema.ResourceData, attr string) string {
 		return v
 	}
 	return d.Get(attr).(string)
+}
+
+const additionalDropParamsKey = "additional_drop_params"
+
+func parseAdditionalDropParams(raw string) ([]string, error) {
+	var items []interface{}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, fmt.Errorf("additional_litellm_params.%s must be a JSON list of parameter names, such as jsonencode([\"store\"]): %w", additionalDropParamsKey, err)
+	}
+	names := []string{}
+	for _, item := range items {
+		if name, ok := item.(string); ok {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.ResourceData) bool {
+	if key != "additional_litellm_params."+additionalDropParamsKey {
+		return false
+	}
+	oldNames, oldErr := parseAdditionalDropParams(oldValue)
+	newNames, newErr := parseAdditionalDropParams(newValue)
+	return oldErr == nil && newErr == nil && slices.Equal(oldNames, newNames)
+}
+
+func withStoredDropParams(params map[string]interface{}, stored interface{}) map[string]interface{} {
+	if _, managed := params[additionalDropParamsKey]; !managed {
+		return params
+	}
+	refreshed := maps.Clone(params)
+	delete(refreshed, additionalDropParamsKey)
+	if stored != nil {
+		encoded, _ := json.Marshal(stored)
+		refreshed[additionalDropParamsKey] = string(encoded)
+	}
+	return refreshed
 }
 
 func coerceAdditionalParamValue(strValue string) interface{} {
@@ -200,7 +240,15 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
 		for key, value := range additionalParams.(map[string]interface{}) {
-			litellmParams[key] = coerceAdditionalParamValue(value.(string))
+			if key != additionalDropParamsKey {
+				litellmParams[key] = coerceAdditionalParamValue(value.(string))
+				continue
+			}
+			dropParams, err := parseAdditionalDropParams(value.(string))
+			if err != nil {
+				return err
+			}
+			litellmParams[key] = dropParams
 		}
 	}
 
@@ -369,8 +417,8 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	}
 
 	// Preserve additional_litellm_params from state since API might not return all custom parameters
-	if _, ok := d.GetOk("additional_litellm_params"); ok {
-		d.Set("additional_litellm_params", d.Get("additional_litellm_params"))
+	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
+		d.Set("additional_litellm_params", withStoredDropParams(additionalParams.(map[string]interface{}), modelResp.LiteLLMParams.AdditionalDropParams))
 	}
 
 	return nil
