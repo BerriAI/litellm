@@ -780,8 +780,9 @@ class LiteLLM_Proxy_MCP_Handler:
                         },
                     }
                 ]
-                tool_logging_call_id = litellm_call_id or str(uuid.uuid4())
+                tool_logging_call_id = str(uuid.uuid4())  # SpendLogs.request_id is unique; the LLM call owns its id
                 logging_metadata: dict[str, object] = {
+                    "parent_litellm_call_id": litellm_call_id,
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,

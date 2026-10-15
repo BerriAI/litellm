@@ -3164,6 +3164,7 @@ InternalCallOrigin = Literal[
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
     "background_response_cost_poll",
+    "mcp_auto_execute",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""

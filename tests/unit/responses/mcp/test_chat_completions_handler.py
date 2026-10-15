@@ -1,14 +1,30 @@
+import asyncio
+import datetime
 import json
 import sys
 import types
+from collections.abc import Mapping
+from typing import Final, NamedTuple
 
+import httpx
 import pytest
 import respx
 from httpx import Response
+from mcp.types import Tool
 from unittest.mock import AsyncMock, patch
 
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy import proxy_server
+from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import ModelResponse
+from litellm.utils import Rules, function_setup
 
 from litellm.responses.mcp import chat_completions_handler
 from litellm.responses.mcp.chat_completions_handler import (
@@ -1479,3 +1495,177 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     assert upstream.await_count == (0 if selected else 1)
     tool_message = model_call.await_args.kwargs["messages"][-1]
     assert ("request-selected MCP block" in tool_message["content"]) is selected
+
+
+_ANSWER: Final = "ANSWER: sunny in Seoul"
+_REQUEST_START: Final = datetime.datetime(2026, 1, 1)
+
+
+class _LoggedCall(NamedTuple):
+    status: str
+    is_first_call: bool
+    trace_id: str
+    response_cost: float
+    settles_budget_reservation: bool
+    langfuse_masked: bool
+    logs_answer: bool
+
+
+class _Recorder(CustomLogger):
+    def __init__(self, expected: int) -> None:
+        super().__init__()
+        self.calls: Final[list[_LoggedCall]] = []
+        self.expected: Final = expected
+        self.done: Final = asyncio.Event()
+
+    def _record(self, kwargs: Mapping[str, object]) -> None:
+        slo: Final = kwargs["standard_logging_object"]
+        self.calls.append(
+            _LoggedCall(
+                status=slo["status"],
+                is_first_call=kwargs["litellm_call_id"] == "first-call",
+                trace_id=slo["trace_id"],
+                response_cost=slo["response_cost"],
+                settles_budget_reservation="user_api_key_budget_reservation" in kwargs["litellm_params"]["metadata"],
+                langfuse_masked="_langfuse_masking_function" in kwargs["litellm_params"],
+                logs_answer=_ANSWER in json.dumps(slo, default=str),
+            )
+        )
+        if len(self.calls) == self.expected:
+            self.done.set()
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record(kwargs)
+
+
+def _openai_reply(request: httpx.Request) -> Response:
+    body: Final = json.loads(request.content)
+    message: Final = (
+        {"role": "assistant", "content": _ANSWER}
+        if body["messages"][-1]["role"] == "tool"
+        else {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"index": 0, "id": "call-1", "type": "function", "function": {"name": "weather-get", "arguments": "{}"}}
+            ],
+        }
+    )
+    usage: Final = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    if not body.get("stream"):
+        return Response(
+            200,
+            json={"id": "c", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini", "usage": usage,
+                  "choices": [{"index": 0, "message": message, "finish_reason": "stop"}]},
+        )
+    chunks: Final = (
+        {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "gpt-4o-mini",
+         "choices": [{"index": 0, "delta": message, "finish_reason": "stop"}]},
+        {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "gpt-4o-mini", "choices": [], "usage": usage},
+    )
+    return Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n",
+    )
+
+
+def _mcp_auto_execute_request(
+    monkeypatch, recorder: _Recorder, stream: bool
+) -> tuple[LiteLLMLoggingObj, dict[str, object]]:
+    """The request's logging object, as the proxy builds it, and the /chat/completions kwargs of a
+    weather question the model answers with one MCP tool call"""
+    manager: Final = mcp_server_manager.MCPServerManager()
+    manager.registry = {"weather": MCPServer(
+        server_id="weather", name="weather", server_name="weather", transport="http",
+        url="https://weather.example/mcp", spec_path="weather.json", auth_type="none",
+    )}
+    manager.tool_name_to_mcp_server_name_mapping = {"weather-get": "weather"}
+    registry: Final = tool_registry.MCPToolRegistry()
+    registry.register_tool("weather-get", "Weather", {"type": "object"}, AsyncMock(return_value="sunny"))
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(server, "_get_tools_from_mcp_servers", AsyncMock(return_value=AggregateToolListing(
+        tools=[Tool(name="weather-get", inputSchema={"type": "object"})], outcomes={}
+    )))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_openai_reply)
+    kwargs: Final = {
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "weather in Seoul?"}],
+        "api_key": "sk-test",
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "litellm_call_id": "first-call",
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="test", mcp_servers=["weather"]
+            )),
+            "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_cost": 1.0}],
+            "user_api_key_budget_reservation": {"reserved_cost": 1.0},
+            "langfuse_masking_function": lambda value: value,
+        },
+    }
+    parent, data = function_setup("acompletion", Rules(), _REQUEST_START, **kwargs)
+    parent.dynamic_async_success_callbacks = [recorder]
+    parent.dynamic_async_failure_callbacks = [recorder]
+    return parent, {
+        **data,
+        "litellm_logging_obj": parent,
+        "stream": stream,
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/weather", "require_approval": "never"}],
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_auto_execute_logs_the_follow_up_call_on_its_own(monkeypatch, stream):
+    """The call that answers with the tool result gets its own success log (#37358): a new call id in
+    the same trace, on the request's callbacks and Langfuse masking, without the first call's guardrail
+    cost or budget reservation"""
+    recorder: Final = _Recorder(expected=2)
+    parent, kwargs = _mcp_auto_execute_request(monkeypatch, recorder, stream)
+
+    response: Final = await litellm.acompletion(**kwargs)
+    if stream:
+        assert "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk.choices]) == _ANSWER
+    await asyncio.wait_for(recorder.done.wait(), timeout=30)
+
+    trace: Final = parent.litellm_trace_id
+    assert sorted(recorder.calls, key=lambda call: not call.is_first_call) == [
+        _LoggedCall("success", True, trace, pytest.approx(1.0 + 10 * 0.001 + 5 * 0.002), True, True, False),
+        _LoggedCall("success", False, trace, pytest.approx(10 * 0.001 + 5 * 0.002), False, True, True),
+    ], recorder.calls
+
+
+def test_follow_up_call_args_keeps_shared_logging_obj_for_deferred_stream():
+    """A stream the proxy defers for post-call guardrails keeps one logging object, so the follow-up
+    is logged only after the guardrails ran on it, not as a raw success of its own"""
+    parent, base_call_args = function_setup(
+        "acompletion", Rules(), _REQUEST_START, model="gpt-4o-mini", messages=[], litellm_call_id="c1"
+    )
+    base_call_args["litellm_logging_obj"] = parent
+    follow_up: Final = [{"role": "tool", "content": "sunny"}]
+    assert chat_completions_handler._follow_up_call_args(base_call_args, follow_up)["litellm_logging_obj"] is not parent
+
+    parent._on_deferred_stream_complete = AsyncMock()
+    args: Final = chat_completions_handler._follow_up_call_args(base_call_args, follow_up)
+    assert args["litellm_logging_obj"] is parent
+    assert args["messages"] == follow_up
