@@ -2687,6 +2687,24 @@ def supports_web_search(model: str, custom_llm_provider: str | None = None) -> b
     )
 
 
+def supports_tool_search(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model supports provider-side tool search over deferred tools.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports tool search, False otherwise.
+    """
+    return supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_tool_search",
+    )
+
+
 def supports_url_context(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports URL context and return a boolean value.

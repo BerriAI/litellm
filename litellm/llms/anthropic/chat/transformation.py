@@ -146,6 +146,14 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+_DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+
+
+def _validated_defer_loading(value: object) -> bool:
+    try:
+        return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise ValueError("defer_loading must be a boolean") from exc
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -980,9 +988,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "computer_20250124",
             ):
                 if _defer_loading is not None:
-                    if not isinstance(_defer_loading, bool):
-                        raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading
+                    returned_tool["defer_loading"] = _validated_defer_loading(_defer_loading)
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
