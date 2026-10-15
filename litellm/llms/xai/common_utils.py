@@ -5,6 +5,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -91,7 +92,7 @@ class XAIModelInfo(BaseLLMModelInfo):
                 "XAI API base or key is not set. Set XAI_API_BASE and provide an xAI API key via api_key, litellm.xai_key, or XAI_API_KEY."
             )
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}/v1/models",
+            url=join_api_base(api_base, "v1/models"),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

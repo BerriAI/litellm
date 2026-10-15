@@ -29,6 +29,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.oci.common_utils import (
@@ -156,7 +157,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/embedText"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/embedText")
 
     def sign_request(
         self,

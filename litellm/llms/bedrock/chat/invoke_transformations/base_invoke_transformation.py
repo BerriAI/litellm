@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     deepseek_r1_pt,
     prompt_factory,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -132,20 +133,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         aws_bedrock_runtime_endpoint: Final = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
         )
-
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-
-        return endpoint_url
+        invoke_route: Final = "invoke-with-response-stream" if stream is True and provider != "ai21" else "invoke"
+        return join_api_base(endpoint_url, f"model/{modelId}/{invoke_route}")
 
     def sign_request(
         self,

@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
 from litellm.types.llms.openai import AllMessageValues
@@ -116,14 +117,11 @@ class LangGraphConfig(BaseConfig):
                 "api_base is required for LangGraph. Set it via LANGGRAPH_API_BASE env var or api_base parameter."
             )
 
-        # Remove trailing slash if present
-        api_base = api_base.rstrip("/")
-
         # Choose endpoint based on streaming mode
         if stream:
-            return f"{api_base}/runs/stream"
+            return join_api_base(api_base, "runs/stream")
         else:
-            return f"{api_base}/runs/wait"
+            return join_api_base(api_base, "runs/wait")
 
     def _get_assistant_id(self, model: str, optional_params: dict) -> str:
         """

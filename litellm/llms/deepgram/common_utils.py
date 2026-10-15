@@ -8,6 +8,7 @@ import httpx
 
 import litellm
 from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import LlmProviders
 
@@ -50,7 +51,7 @@ def _first_occurrences(query_string: str) -> httpx.QueryParams:
 
 
 def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
-    listen_url: Final = httpx.URL(f"{(api_base or DEEPGRAM_DEFAULT_API_BASE).rstrip('/')}/listen")
+    listen_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, "listen"))
     websocket_url: Final = listen_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(listen_url.scheme, listen_url.scheme))
     params: Final = _first_occurrences(query_string)
     query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL)

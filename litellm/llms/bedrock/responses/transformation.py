@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -223,9 +224,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
+        configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
         override: Final = (
             api_base
-            or litellm_params.get("aws_bedrock_runtime_endpoint")
+            or (configured_endpoint if isinstance(configured_endpoint, str) else None)
             or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
         )
         # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
@@ -237,7 +239,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
             host,
         )
-        return f"{base}{BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH}"
+        return join_api_base(base, BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH)
 
     def supports_native_file_search(self) -> bool:
         return False

@@ -10,6 +10,7 @@ from typing import Any, Final, Protocol, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -128,7 +129,8 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_parts.append(urlencode({"intent": intent}))
 
         qs: Final = "&".join(query_parts)
-        return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
+        endpoint_url: Final = join_api_base(api_base, path)
+        return f"{endpoint_url}?{qs}" if qs else endpoint_url
 
     def construct_url(
         self,

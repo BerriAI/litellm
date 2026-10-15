@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
 from litellm.secret_managers.main import get_secret_str
@@ -106,8 +107,7 @@ class GigaChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base: Final = get_api_base(api_base)
-        return f"{base}/chat/completions"
+        return join_api_base(get_api_base(api_base), "chat/completions")
 
     def validate_environment(
         self,

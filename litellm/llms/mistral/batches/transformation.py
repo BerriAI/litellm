@@ -18,7 +18,7 @@ from openai.types.batch_error import BatchError
 from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -156,7 +156,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
         litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
-        return f"{get_mistral_api_base(api_base)}/v1/batch/jobs"
+        return join_api_base(get_mistral_api_base(api_base), "v1/batch/jobs")
 
     def transform_create_batch_request(
         self,
@@ -199,7 +199,10 @@ class MistralBatchesConfig(BaseBatchesConfig):
         api_key: Final = litellm_params.get("api_key")
         request: Final = MistralPresignedRequest(
             method="GET",
-            url=f"{get_mistral_api_base(api_base if isinstance(api_base, str) else None)}/v1/batch/jobs/{encoded_batch_id}",
+            url=join_api_base(
+                get_mistral_api_base(api_base if isinstance(api_base, str) else None),
+                f"v1/batch/jobs/{encoded_batch_id}",
+            ),
             headers=get_mistral_auth_headers(_NO_HEADERS, api_key if isinstance(api_key, str) else None),
         )
         return dict(request)

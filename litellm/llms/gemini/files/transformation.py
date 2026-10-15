@@ -15,7 +15,7 @@ from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -106,8 +106,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not final_api_key:
             raise ValueError("api_key is required")
 
-        url: Final = f"{api_base}/{endpoint}"
-        return url
+        return join_api_base(api_base, endpoint)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
@@ -235,10 +234,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         file_part: Final = self._normalize_gemini_file_id(file_id)
 
-        api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
-        api_base = api_base.rstrip("/")
+        api_base: Final = (
+            self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
+        )
 
-        url: Final = f"{api_base}/v1beta/{file_part}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_part}")
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
@@ -345,7 +345,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         file_name: Final = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
-        url: Final = f"{api_base}/v1beta/{file_name}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_name}")
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
         params: Final[dict] = {}

@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -97,7 +98,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         # Getting the list of models from lemonade
         try:
             response: Final = litellm.module_level_client.get(
-                url=f"{api_base}/models",
+                url=join_api_base(api_base, "models"),
                 headers=self._get_auth_headers(api_key),
             )
         except Exception as e:
@@ -185,7 +186,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         try:
             response: Final = litellm.module_level_client.get(
-                url=f"{api_base}/models/{encoded_model}",
+                url=join_api_base(str(api_base), f"models/{encoded_model}"),
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()

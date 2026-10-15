@@ -5,6 +5,7 @@ from typing import Final
 import httpx
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
@@ -104,7 +105,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         names: Final[set[str]] = set()
         try:
-            resp: Final = httpx.get(f"{base}/api/tags", headers=headers)
+            resp: Final = httpx.get(join_api_base(base, "api/tags"), headers=headers)
             resp.raise_for_status()
             data: Final = resp.json()
             # Expecting a dict with a 'models' list
@@ -185,7 +186,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         try:
             response: Final = module_level_client.post(
-                url=f"{api_base}/api/show",
+                url=join_api_base(api_base, "api/show"),
                 json={"name": model},
                 headers=headers,
             )

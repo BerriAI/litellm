@@ -15,6 +15,7 @@ import re
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
@@ -200,10 +201,10 @@ class DatabricksBase:
         if normalized_api_base.endswith("/ai-gateway/mlflow/v1"):
             return normalized_api_base
         if normalized_api_base.endswith("/serving-endpoints"):
-            return f"{normalized_api_base.removesuffix('/serving-endpoints')}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base.removesuffix("/serving-endpoints"), "ai-gateway/mlflow/v1")
         api_base_parts: Final = urlsplit(normalized_api_base)
         if api_base_parts.path in ("", "/"):
-            return f"{normalized_api_base}/ai-gateway/mlflow/v1"
+            return join_api_base(normalized_api_base, "ai-gateway/mlflow/v1")
         return api_base
 
     def _get_oauth_m2m_token(
@@ -233,7 +234,7 @@ class DatabricksBase:
 
         api_base_parts: Final = urlsplit(api_base)
         workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
-        token_url: Final = f"{workspace_url}/oidc/v1/token"
+        token_url: Final = join_api_base(workspace_url, "oidc/v1/token")
 
         try:
             response: Final = requests.post(
@@ -393,8 +394,8 @@ class DatabricksBase:
         verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
-            api_base = f"{api_base}/chat/completions"
+            api_base = join_api_base(api_base, "chat/completions")
         elif endpoint_type == "embeddings" and custom_endpoint is not True:
-            api_base = f"{api_base}/embeddings"
+            api_base = join_api_base(api_base, "embeddings")
 
         return api_base, headers
