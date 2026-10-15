@@ -754,6 +754,61 @@ AZURE_AI_GPT_5_4_MINI_LATEST_STREAM: Final = CostTrackingTestCase(
 )
 
 
+# azure_ai/grok-4.6 (Grok on Azure AI Foundry reports reasoning_tokens outside completion_tokens, like xai)
+AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION: Final = CostTrackingTestCase(
+    name="azure-ai-grok-4.6-reasoning_folded_into_completion",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/grok-4.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-grok-4.6-reasoning"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "grok-4.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1840,
+                "completion_tokens": 412,
+                "total_tokens": 2552,
+                "completion_tokens_details": {"reasoning_tokens": 300},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0108, input_cost=0.00368, output_cost=0.00712, prompt_tokens=1840, completion_tokens=712
+    ),
+)
+
+AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-grok-4.6-reasoning_folded_into_completion-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/grok-4.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-grok-4.6-reasoning-stream"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2552,"completion_tokens_details":{"reasoning_tokens":300}}}\n\n',
+            "data: [DONE]\n\n",
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0108, input_cost=0.00368, output_cost=0.00712, prompt_tokens=1840, completion_tokens=712
+    ),
+)
+
+
 # azure_ai/claude-haiku-4-5 (Azure AI Foundry Anthropic, web search billed per server_tool_use.web_search_requests)
 AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH: Final = CostTrackingTestCase(
     name="azure-ai-claude-haiku-4-5-messages_web_search_two_requests",
@@ -1743,6 +1798,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_INVOKE_HAIKU_STREAM,
     AZURE_AI_GPT_5_4_MINI_LATEST,
     AZURE_AI_GPT_5_4_MINI_LATEST_STREAM,
+    AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION,
+    AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION_STREAM,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_STREAM,
     AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_ONE_REQUEST,
