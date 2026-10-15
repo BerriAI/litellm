@@ -16,7 +16,6 @@ from typing import Final
 
 import httpx
 import jwt
-import psutil
 import psycopg
 import pytest
 import yaml
@@ -265,16 +264,16 @@ def test_concurrent_logins_on_a_scrypt_row_rehash_once_while_one_worker_is_kille
     user_id, email = _user_with_password(proxy, None)
     try:
         _write_stored_password(user_id, _scrypt_row(PASSWORD))
-        workers: Final = psutil.Process(password_proxy.process.pid).children(recursive=True)
+        workers: Final = password_proxy.worker_pids()
         assert len(workers) >= 2, workers
-        victim: Final = workers[0]
+        victim: Final = next(iter(workers))
         attempts: Final = tuple(PASSWORD if index % 3 else WRONG_PASSWORD for index in range(BURST_SIZE))
         with ThreadPoolExecutor(max_workers=BURST_SIZE) as pool:
             futures: Final = tuple(
                 pool.submit(_login_retrying_dropped_connections, proxy, email, password) for password in attempts
             )
             eventually(lambda: any(future.done() for future in futures), lambda done: done)
-            victim.kill()
+            password_proxy.kill_worker(victim)
             statuses: Final = tuple(future.result() for future in futures)
         assert sorted(statuses) == sorted(303 if password == PASSWORD else 401 for password in attempts), statuses
         rehashed: Final = eventually(lambda: _stored_password(user_id), lambda row: row.startswith("pbkdf2:"))
