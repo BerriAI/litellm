@@ -432,8 +432,29 @@ describe("TeamMembersComponent", () => {
       allowed_models: [],
       temp_budget_increase: 0,
       temp_budget_expiry: "2030-01-02T03:04:00Z",
+      model_max_budget: null,
     };
     expect(seedMemberBudgetFields({ user_id: "user1@test.com", role: "member" }, budget)).toStrictEqual(seeded);
+  });
+
+  it("seeds the team's default per-model budget when the member has no per-model override", () => {
+    const teamDefault = { "gpt-4o": { max_budget: 10, budget_duration: "30d" } };
+    const ownRowWithoutModelCaps = {
+      ...createMockTeamData().team_memberships[0].litellm_budget_table,
+      model_max_budget: {},
+    };
+    const memberOverride = { "gpt-4o": { max_budget: 2.5, budget_duration: "7d" } };
+    const ownRowWithModelCaps = { ...ownRowWithoutModelCaps, model_max_budget: memberOverride };
+
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithoutModelCaps, teamDefault).model_max_budget,
+    ).toBe(teamDefault);
+    expect(seedMemberBudgetFields({ user_id: "u", role: "user" }, undefined, teamDefault).model_max_budget).toBe(
+      teamDefault,
+    );
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithModelCaps, teamDefault).model_max_budget,
+    ).toBe(memberOverride);
   });
 
   it("seeds null temporary budget fields for a member without a budget row", () => {

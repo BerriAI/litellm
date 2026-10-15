@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 SIZES: Final = (
     1024,
@@ -50,15 +50,12 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
-        self.user_agents: set[str] = set()
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self) -> None:
-        server: Final = cast(Server, self.server)
-        server.user_agents.add(self.headers.get("User-Agent", ""))
         length: Final = int(self.headers["Content-Length"])
         body: Final = self.rfile.read(length)
         request: Final = json.loads(body)
@@ -105,10 +102,16 @@ def percentile(values: Sequence[float], quantile: float) -> float:
     return ordered[index]
 
 
-def verify(response: object) -> None:
+def verify(response: object, expected_transport: str) -> None:
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
     pages: Final = getattr(response, "pages", ())
     if len(pages) != 1 or getattr(pages[0], "markdown", None) != EXPECTED_MARKDOWN:
         raise RuntimeError(f"unexpected OCR response: {response!r}")
+    additional_headers: Final = get_hidden_params_dict(response).get("additional_headers")
+    rust_served: Final = isinstance(additional_headers, dict) and additional_headers.get("x-litellm-rust") == "true"
+    if rust_served != (expected_transport == "rust"):
+        raise RuntimeError(f"unexpected transport for {expected_transport}: rust_marker={rust_served}")
 
 
 def summarize(label: str, mode: str, size: int, samples: Sequence[float]) -> Result:
@@ -125,7 +128,9 @@ def summarize(label: str, mode: str, size: int, samples: Sequence[float]) -> Res
     )
 
 
-def sync_samples(litellm: object, url: str, request_document: dict[str, str], count: int) -> tuple[float, ...]:
+def sync_samples(
+    litellm: object, url: str, request_document: dict[str, str], count: int, expected_transport: str
+) -> tuple[float, ...]:
     samples: list[float] = []
     for _ in range(count):
         started: Final = time.perf_counter()
@@ -133,11 +138,13 @@ def sync_samples(litellm: object, url: str, request_document: dict[str, str], co
             model=MODEL, document=request_document, api_base=url, api_key="mock-key", timeout=30
         )
         samples.append(time.perf_counter() - started)
-        verify(response)
+        verify(response, expected_transport)
     return tuple(samples)
 
 
-async def async_samples(litellm: object, url: str, request_document: dict[str, str], count: int) -> tuple[float, ...]:
+async def async_samples(
+    litellm: object, url: str, request_document: dict[str, str], count: int, expected_transport: str
+) -> tuple[float, ...]:
     samples: list[float] = []
     for _ in range(count):
         started: Final = time.perf_counter()
@@ -145,7 +152,7 @@ async def async_samples(litellm: object, url: str, request_document: dict[str, s
             model=MODEL, document=request_document, api_base=url, api_key="mock-key", timeout=30
         )
         samples.append(time.perf_counter() - started)
-        verify(response)
+        verify(response, expected_transport)
     return tuple(samples)
 
 
@@ -218,17 +225,20 @@ async def main() -> int:
     try:
         for size in args.sizes:
             request_document: Final = document(size)
-            sync_samples(litellm, url, request_document, args.warmup)
+            sync_samples(litellm, url, request_document, args.warmup, args.expected_transport)
             sync_result: Final = summarize(
-                args.label, "sync", size, sync_samples(litellm, url, request_document, args.iterations)
+                args.label,
+                "sync",
+                size,
+                sync_samples(litellm, url, request_document, args.iterations, args.expected_transport),
             )
             results.append(sync_result)
-            await async_samples(litellm, url, request_document, args.warmup)
+            await async_samples(litellm, url, request_document, args.warmup, args.expected_transport)
             async_result: Final = summarize(
                 args.label,
                 "async",
                 size,
-                await async_samples(litellm, url, request_document, args.iterations),
+                await async_samples(litellm, url, request_document, args.iterations, args.expected_transport),
             )
             results.append(async_result)
             sys.stdout.write(json.dumps(asdict(sync_result)) + "\n")
@@ -256,12 +266,6 @@ async def main() -> int:
         raise RuntimeError("callback registrations appeared in the no-callback case")
     await GLOBAL_LOGGING_WORKER.stop()
 
-    user_agents: Final = tuple(sorted(server.user_agents))
-    python_transport: Final = any(
-        value.startswith("python-httpx") or value.startswith("litellm/") for value in user_agents
-    )
-    if (args.expected_transport == "python") != python_transport:
-        raise RuntimeError(f"unexpected transport for {args.label}: user_agents={user_agents}")
     artifact: Final = {
         "label": args.label,
         "callbacks": args.callbacks,
@@ -275,11 +279,10 @@ async def main() -> int:
         "package": str(package),
         "native": native_path,
         "native_sha256": native_sha256,
-        "user_agents": user_agents,
         "results": tuple(asdict(result) for result in results),
     }
     args.output.write_text(json.dumps(artifact, indent=2) + "\n")
-    sys.stdout.write(json.dumps({key: artifact[key] for key in ("label", "version", "package", "user_agents")}) + "\n")
+    sys.stdout.write(json.dumps({key: artifact[key] for key in ("label", "version", "package")}) + "\n")
     sys.stdout.write(f"results={args.output}\n")
     sys.stdout.flush()
     return 0
