@@ -8,12 +8,13 @@ from .checks import (
     COMPLETE,
     FATAL,
     GATED,
+    GATED_WITH_SHORT_LOCK_TIMEOUT,
     assert_completed,
     assert_completed_after_lock_timeouts,
     start_replicas,
 )
 from .containers import Containers, failed, ready, until, waiting
-from .database import GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
+from .database import COORDINATOR_LOCK, GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
 from .startup_models import Migration
 from e2e_metadata import Domain, Subject, meta
 
@@ -96,8 +97,11 @@ class TestMigrationStartup:
             with containers.start(
                 database, (COMPLETE,), environment={"LITELLM_MIGRATION_LOCK_TIMEOUT": "12"}
             ) as replica:
-                until("Prisma lock contention", lambda: bool(database.blocked(PRISMA_LOCK)))
-                failed((replica,), "Timed out waiting for")
+                until(
+                    "a replica holding the coordinator lock while Prisma's lock is held",
+                    lambda: bool(database.holders(COORDINATOR_LOCK)),
+                )
+                failed((replica,), "Timed out waiting for Prisma's lock")
                 assert database.history() == history
                 assert not database.exists("migration_effect")
         with containers.start(database, (COMPLETE,)) as restarted:
@@ -111,19 +115,17 @@ class TestMigrationStartup:
     )
     def test_lock_timeout_exhaustion_then_restart(self, containers: Containers, database: Database) -> None:
         with database.lock():
-            with containers.start(
-                database, (GATED,), environment={"LITELLM_MIGRATION_DDL_LOCK_TIMEOUT": "2"}
-            ) as replica:
+            with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as replica:
                 until("owner blocked in migration SQL", lambda: bool(database.blocked()))
                 failed((replica,), "attempts that made no progress")
             assert not database.exists("migration_effect")
             assert database.query(
                 "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND finished_at IS NOT NULL",
-                (GATED.name,),
+                (GATED_WITH_SHORT_LOCK_TIMEOUT.name,),
             ) == ((0,),)
-        with containers.start(database, (GATED,)) as restarted:
+        with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as restarted:
             ready((restarted,), database)
-        assert_completed_after_lock_timeouts(database, GATED)
+        assert_completed_after_lock_timeouts(database, GATED_WITH_SHORT_LOCK_TIMEOUT)
 
     @meta(
         Subject(
