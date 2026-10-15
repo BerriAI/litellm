@@ -140,16 +140,20 @@ class _UserTable:
 
 
 class _TeamTable:
-    def __init__(self, ledger: _Ledger, teams: Sequence[LiteLLM_TeamTable]) -> None:
+    def __init__(self, ledger: _Ledger, teams: Sequence[LiteLLM_TeamTable], deleted_before_update: bool) -> None:
+        """``deleted_before_update`` stands for a team delete that commits after the roster read, before its write."""
         self.ledger = ledger
         self.rows: dict[str, LiteLLM_TeamTable] = {t.team_id: t for t in teams}
+        self.deleted_before_update = deleted_before_update
 
     async def find_unique(self, where: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         self.ledger.statements.append("teamtable.find_unique")
         return self.rows.get(where["team_id"])
 
-    async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> LiteLLM_TeamTable:
+    async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         self.ledger.statements.append("teamtable.update")
+        if self.deleted_before_update:
+            return None
         roster = _MEMBERS.validate_json(data["members_with_roles"])
         updated = self.rows[where["team_id"]].model_copy(
             update={"members_with_roles": roster, "updated_at": datetime.now(UTC)}
@@ -168,9 +172,10 @@ class _Db:
         tokens: Sequence[Mapping[str, object]],
         budgets: Sequence[Mapping[str, object]],
         jwt_mappings: Sequence[Mapping[str, object]],
+        team_deleted_before_update: bool = False,
     ) -> None:
         self.litellm_usertable = _UserTable(ledger, users)
-        self.litellm_teamtable = _TeamTable(ledger, teams)
+        self.litellm_teamtable = _TeamTable(ledger, teams, team_deleted_before_update)
         self.litellm_teammembership = _Rows(
             "teammembership", ledger, [{"team_id": t, "user_id": u, "budget_id": None} for t, u in memberships]
         )
@@ -219,10 +224,13 @@ class _FakePrisma:
         jwt_mappings: Sequence[Mapping[str, object]] = (),
         fail_commit: bool = False,
         replica_teams: Sequence[LiteLLM_TeamTable] | None = None,
+        team_deleted_before_update: bool = False,
     ) -> None:
         """``db`` is the routed client, which a read replica may serve; ``writer_db`` is the writer."""
         self.ledger = _Ledger()
-        self.writer_db = _Db(self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings)
+        self.writer_db = _Db(
+            self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings, team_deleted_before_update
+        )
         self.db = (
             _Db(self.ledger, users, replica_teams, memberships, tokens, budgets, jwt_mappings)
             if replica_teams is not None
@@ -426,6 +434,27 @@ async def test_a_deleted_team_answers_team_gone_without_writing():
 
     assert outcome == TeamGone(team_id=TEAM)
     assert _writes(prisma) == []
+
+
+@pytest.mark.asyncio
+async def test_a_team_deleted_before_the_roster_write_answers_team_gone_and_rolls_back_the_member_writes():
+    prisma = _FakePrisma(
+        users=[_user("alice", TEAM), _user("bob")],
+        teams=[_team(_member("alice"))],
+        memberships=[(TEAM, "alice")],
+        tokens=[{"token": "k-alice", "user_id": "alice", "team_id": TEAM}],
+        team_deleted_before_update=True,
+    )
+    cache = _cache_with("k-alice", "alice")
+
+    outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"bob"})), cache)
+
+    assert outcome == TeamGone(team_id=TEAM)
+    assert _memberships(prisma) == [(TEAM, "alice")]
+    assert (_teams_of(prisma, "alice"), _teams_of(prisma, "bob")) == ([TEAM], [])
+    assert _tokens(prisma) == {"k-alice"}
+    assert prisma.writer_db.litellm_deletedverificationtoken.rows == []
+    assert cache.get_cache("k-alice") is not None and cache.get_cache("alice") is not None
 
 
 @pytest.mark.asyncio
