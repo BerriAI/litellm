@@ -1,0 +1,33 @@
+base policy 200 {"tool_name":"refund_order","input_policy":"blocked","output_policy":"untrusted","updated":true,"team_id":null,"key_hash
+head policy 200 {"tool_name":"refund_order","input_policy":"blocked","output_policy":"untrusted","updated":true,"team_id":null,"key_hash
+merge policy 200 {"tool_name":"refund_order","input_policy":"blocked","output_policy":"untrusted","updated":true,"team_id":null,"key_hash
+TP1_converse_blocked_tool      base  st=200 bedrock=1 tools=[['refund_order', 'ship_info']] toolConfig=[True] 
+TP1_converse_blocked_tool      head  st=400 bedrock=0 tools=[] toolConfig=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP1_converse_blocked_tool      merge st=400 bedrock=0 tools=[] toolConfig=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP2_converse_allowed_tools     base  st=200 bedrock=1 tools=[['ship_info']] toolConfig=[True] 
+TP2_converse_allowed_tools     head  st=200 bedrock=1 tools=[['ship_info']] toolConfig=[True] 
+TP2_converse_allowed_tools     merge st=200 bedrock=1 tools=[['ship_info']] toolConfig=[True] 
+TP3_chat_blocked_tool          base  st=400 bedrock=0 tools=[] toolConfig=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP3_chat_blocked_tool          head  st=400 bedrock=0 tools=[] toolConfig=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+TP3_chat_blocked_tool          merge st=400 bedrock=0 tools=[] toolConfig=[] {"error":{"message":"Violated tool policy","type":"invalid_request_error","param":null,"code":"400","provider_
+M1_converse_mcp_filtered       base  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] toolConfig=[True] 
+M1_converse_mcp_filtered       head  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] toolConfig=[True] 
+M1_converse_mcp_filtered       merge st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] toolConfig=[True] 
+M2_converse_mcp_all_removed    base  st=200 bedrock=1 tools=[['slack-post_message']] toolConfig=[True] 
+M2_converse_mcp_all_removed    head  st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M2_converse_mcp_all_removed    merge st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M3_chat_mcp_filtered           base  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] toolConfig=[True] 
+M3_chat_mcp_filtered           head  st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] toolConfig=[True] 
+M3_chat_mcp_filtered           merge st=200 bedrock=1 tools=[['github-create_issue', 'get_weather']] toolConfig=[True] 
+M5_converse_mcp_all_removed_history base  st=200 bedrock=1 tools=[['slack-post_message']] toolConfig=[True] 
+M5_converse_mcp_all_removed_history head  st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M5_converse_mcp_all_removed_history merge st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M6_converse_mcp_all_removed_history_guarded base  st=200 bedrock=1 tools=[['slack-post_message']] toolConfig=[True] 
+M6_converse_mcp_all_removed_history_guarded head  st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M6_converse_mcp_all_removed_history_guarded merge st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M7_chat_mcp_all_removed_history base  st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M7_chat_mcp_all_removed_history head  st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M7_chat_mcp_all_removed_history merge st=200 bedrock=1 tools=[[]] toolConfig=[False] 
+M4_converse_mcp_no_end_user    base  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] toolConfig=[True] 
+M4_converse_mcp_no_end_user    head  st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] toolConfig=[True] 
+M4_converse_mcp_no_end_user    merge st=200 bedrock=1 tools=[['github-create_issue', 'slack-post_message', 'get_weather']] toolConfig=[True] 

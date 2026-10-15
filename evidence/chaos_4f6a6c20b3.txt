@@ -1,0 +1,65 @@
+== burst
+head ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+head ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+head ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+head ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+head ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+head ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+head ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+head bedrock model calls 60 with raw card 0
+merge ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+merge ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+merge ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+merge ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+merge ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+merge ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+merge ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+merge bedrock model calls 60 with raw card 0
+base ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+base ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, True)] 5
+base ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+base ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, True)] 5
+base ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+base ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+base ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+base ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+base ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+base bedrock model calls 60 with raw card 15
+
+== chaos
+fix874-pg
+fix874-pg
+slow guardrail (gg-slow8, pre+post)
+  base (200, 17.1, '{"metrics": {"latencyMs": 533}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  head (200, 17.1, '{"metrics": {"latencyMs": 466}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  merge (200, 17.2, '{"metrics": {"latencyMs": 570}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+postgres paused
+  base (200, 21.9, '{"metrics": {"latencyMs": 1169}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "s') (503, 3.7, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (503, 3.8, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 3.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  merge (503, 2.9, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 4.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+after unpause
+  base (503, 4.3, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (200, 4.1, '{"metrics": {"latencyMs": 745}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
+  merge (200, 3.4, '{"metrics": {"latencyMs": 411}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
+
+== headroom paused
+headroom paused base 200 3.1 {"metrics":{"latencyMs":651},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_turn"
+headroom paused head 200 1.4 {"metrics":{"latencyMs":756},"output":{"message":{"content":[{"text":"Items with id 13 and id 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"e
+headroom paused merge 200 1.2 {"metrics":{"latencyMs":775},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have a status of \"failed\"."}],"role":"assistant"}},"stopReason":"end_
+DONE

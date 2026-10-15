@@ -1,0 +1,29 @@
+Pipeline cells: policy pipe-err-allow on claude-haiku, one pre_call step on gg-pipe with on_pass next, on_fail block, on_error allow, master key, vendor reply chosen by an x-gg-mode header
+trees: base a114356542 (port 4782), head 4f6a6c20b3 (4783), merge 789ea359a6 (4784)
+
+P0_mask_control              base  status=200 bedrock_calls=1 raw_card_to_bedrock=False reply='card **** ok'
+P0_mask_control              head  status=200 bedrock_calls=1 raw_card_to_bedrock=False reply='card **** ok'
+P0_mask_control              merge status=200 bedrock_calls=1 raw_card_to_bedrock=False reply='card **** ok'
+P1_turn_cleared              base  status=400 bedrock_calls=1 raw_card_to_bedrock=False reply='{\'detail\': {\'error\': \'{"message":"The text field in the ContentBlock object at messages.0.content.0 is blank. Add text t'
+P1_turn_cleared              head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P1_turn_cleared              merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P2_rows_drop_text_mask       base  status=200 bedrock_calls=1 raw_card_to_bedrock=False reply='I apologize for the confusion. I made an error in my previous response. You provided a card number (****) but not a spec'
+P2_rows_drop_text_mask       head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P2_rows_drop_text_mask       merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P3_drop_row_texts_masked     base  status=200 bedrock_calls=1 raw_card_to_bedrock=False reply="I can't help with that. I don't have access to any actual customer card information, and it wouldn't be appropriate to r"
+P3_drop_row_texts_masked     head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P3_drop_row_texts_masked     merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P4_tool_choice_removed       base  status=200 bedrock_calls=1 raw_card_to_bedrock=False reply="{'metrics': {'latencyMs': 619}, 'output': {'message': {'content': [{'toolUse': {'input': {'region': 'Aurora'}, 'name': '"
+P4_tool_choice_removed       head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+P4_tool_choice_removed       merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{\'error\': {\'message\': "Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was r'
+Q1_chat                      base  status=200 bedrock_calls=1 raw_card_to_bedrock=True reply='{"id":"chatcmpl-ca69f6c1-11f7-47e4-b787-2a54bb5f58ad","created":1792023379,"model":"claude-haiku","object":"chat.complet'
+Q1_chat                      head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"error":{"message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was rej'
+Q1_chat                      merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"error":{"message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was rej'
+Q2_messages                  base  status=200 bedrock_calls=1 raw_card_to_bedrock=True reply='{"model":"claude-haiku","id":"msg_bdrk_4i6teo5j7uzoinxk6ew54goxbe4f73dhsjrsejoedq2gdmj47voa","type":"message","role":"as'
+Q2_messages                  head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"type":"error","error":{"type":"api_error","message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint ca'
+Q2_messages                  merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"type":"error","error":{"type":"api_error","message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint ca'
+Q3_responses                 base  status=200 bedrock_calls=1 raw_card_to_bedrock=True reply='{"id":"resp_XwuWBNd2-akzfQw_dbI3aSfsdM30rrZPpJDJmpuNjFNRjIx8uvmwDeVsbkwh6ON8rXaOIJTtG16agLAXQsJCcvtM-MLZQ7dntJ-_ejrzxHar'
+Q3_responses                 head  status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"error":{"message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was rej'
+Q3_responses                 merge status=500 bedrock_calls=0 raw_card_to_bedrock=False reply='{"error":{"message":"Guardrail \'gg-pipe\' rewrote the request in a way this endpoint cannot apply, so the request was rej'
+
+Technical error control (vendor returns a list instead of a verdict): base, head and merge all 200 with one Bedrock call on Converse and chat, so on_error allow still applies to technical errors

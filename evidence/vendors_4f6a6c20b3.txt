@@ -1,0 +1,53 @@
+== Conduct
+C1_tool_result_injection     base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C2_benign_tool_loop          base  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          head  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          merge st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C3_system_injection          base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+
+== Ovalix
+V1_field_injection_main_lists_last     base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V2_field_injection_main_lists_first    base  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    head  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    merge st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V3_single_field_injection              base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V4_benign_fields                       base  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       head  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       merge st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V5_user_injection                      base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+
+== Airia
+A1_converse_email_user           base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":523},"output":{"message":{"content":[{"text":"mail [EmailAddress1]'
+A1_converse_email_user           head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":573},"output":{"message":{"content":[{"text":"mail [EmailAddress1]'
+A1_converse_email_user           merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":523},"output":{"message":{"content":[{"text":"mail [EmailAddress1]'
+A2_converse_email_system         base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":811},"output":{"message":{"content":[{"text":"I don\'t see a custom'
+A2_converse_email_system         head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":952},"output":{"message":{"content":[{"text":"I don\'t have a custo'
+A2_converse_email_system         merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":520},"output":{"message":{"content":[{"text":"[EmailAddress1]"}],"'
+A3_converse_email_earlier_turn   base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":854},"output":{"message":{"content":[{"text":"I don\'t have any add'
+A3_converse_email_earlier_turn   head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":939},"output":{"message":{"content":[{"text":"I appreciate you tes'
+A3_converse_email_earlier_turn   merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":857},"output":{"message":{"content":[{"text":"I don\'t have access '
+A4_converse_benign               base  st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":543},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A4_converse_benign               head  st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":515},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A4_converse_benign               merge st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":553},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A5_converse_stream_email_user    base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1111 bytes>'
+A5_converse_stream_email_user    head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1065 bytes>'
+A5_converse_stream_email_user    merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1101 bytes>'
+A6_chat_email_user               base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-7c7ae01a-670b-44bc-ab5d-04d2fef30ac8","created":1792024383,"model":"claude'
+A6_chat_email_user               head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-31c6d4fe-7c73-456e-9e68-258636027763","created":1792024385,"model":"claude'
+A6_chat_email_user               merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-c4721401-e4e6-4033-9c85-0e4d7553759a","created":1792024388,"model":"claude'
