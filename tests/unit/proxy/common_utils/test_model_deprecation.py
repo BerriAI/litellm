@@ -380,7 +380,7 @@ class TestSuccessorModel:
         monkeypatch.setattr(
             litellm,
             "model_cost",
-            {"old-model": {"deprecation_date": "2026-06-10", "successor_model": "new-model"}},
+            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "new-model"}}},
         )
         router = _make_router(
             [{"model_name": "old", "litellm_params": {"model": "old-model"}, "model_info": {"id": "1"}}]
@@ -394,7 +394,7 @@ class TestSuccessorModel:
         monkeypatch.setattr(
             litellm,
             "model_cost",
-            {"old-model": {"deprecation_date": "2026-06-10", "successor_model": "cost-map-pick"}},
+            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "cost-map-pick"}}},
         )
         router = _make_router(
             [
@@ -485,7 +485,7 @@ class TestSuccessorModel:
         monkeypatch.setattr(
             litellm,
             "model_cost",
-            {"old-model": {"deprecation_date": "2030-01-01", "successor_model": "new-model"}},
+            {"old-model": {"deprecation_date": "2030-01-01", "metadata": {"successor": "new-model"}}},
         )
         router = _make_router(
             [
@@ -500,4 +500,20 @@ class TestSuccessorModel:
         snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
 
         assert snapshot.imminent[0].deprecation_date == date(2026, 6, 10)
+        assert snapshot.imminent[0].successor_model == "new-model"
+
+    def test_should_take_the_cost_map_successor_when_only_the_deployment_sets_a_date(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {"old-model": {"metadata": {"successor": "new-model"}}})
+        router = _make_router(
+            [
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "provider/old-model"},
+                    "model_info": {"id": "1", "deprecation_date": "2026-06-10"},
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
         assert snapshot.imminent[0].successor_model == "new-model"

@@ -36,7 +36,7 @@ class ModelDeprecationInfo(LiteLLMBaseModel):
         default=None,
         description=(
             "The model to migrate to, taken from model_info.successor_model on the deployment "
-            "or from the model cost map entry."
+            "or from metadata.successor on its model cost map entry."
         ),
     )
 

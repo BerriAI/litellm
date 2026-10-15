@@ -48,23 +48,25 @@ def _successor_model(raw_value: object) -> str | None:
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
-def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
-    if not isinstance(model_key, str) or not model_key:
-        return None
-    entry: Final = litellm.model_cost.get(model_key)
-    if not isinstance(entry, Mapping):
-        return None
-    fields: Final[Mapping[str, object]] = entry
-    parsed: Final = _parse_deprecation_date(fields.get("deprecation_date"))
+def _cost_map_entry(model_key: str) -> Mapping[str, object]:
+    return _mapping_field(litellm.model_cost, model_key)
+
+
+def _cost_map_deprecation(model_key: str) -> _ResolvedDeprecation | None:
+    entry: Final = _cost_map_entry(model_key)
+    parsed: Final = _parse_deprecation_date(entry.get("deprecation_date"))
     if parsed is None:
         return None
-    provider: Final = fields.get("litellm_provider")
+    provider: Final = entry.get("litellm_provider")
     return _ResolvedDeprecation(
         deprecation_date=parsed,
         litellm_model=model_key,
         litellm_provider=provider if isinstance(provider, str) else None,
-        successor_model=_successor_model(fields.get("successor_model")),
     )
+
+
+def _cost_map_successor(model_key: str) -> str | None:
+    return _successor_model(_mapping_field(_cost_map_entry(model_key), "metadata").get("successor"))
 
 
 def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, object]:
@@ -79,20 +81,14 @@ def _resolve_deployment_deprecation(
     model_info: Final = _mapping_field(deployment, "model_info")
     raw_model: Final = _mapping_field(deployment, "litellm_params").get("model")
     unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
-    from_cost_map: Final = next(
-        (
-            candidate
-            for candidate in (
-                _cost_map_lookup(model_info.get("base_model")),
-                _cost_map_lookup(raw_model),
-                _cost_map_lookup(unprefixed),
-            )
-            if candidate is not None
-        ),
-        None,
+    cost_map_keys: Final = tuple(
+        key for key in (model_info.get("base_model"), raw_model, unprefixed) if isinstance(key, str) and key
     )
-    successor: Final = _successor_model(model_info.get("successor_model")) or (
-        from_cost_map.successor_model if from_cost_map is not None else None
+    from_cost_map: Final = next(
+        (resolved for key in cost_map_keys if (resolved := _cost_map_deprecation(key)) is not None), None
+    )
+    successor: Final = _successor_model(model_info.get("successor_model")) or next(
+        (named for key in cost_map_keys if (named := _cost_map_successor(key)) is not None), None
     )
 
     override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
