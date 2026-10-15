@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -8,7 +9,15 @@ import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler, convert_to_model_response_object, convert_to_streaming_response, handle_invalid_parallel_tool_calls, safe_convert_created_field, should_convert_tool_call_to_json_mode
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    LiteLLMResponseObjectHandler,
+    convert_to_model_response_object,
+    convert_to_streaming_response,
+    handle_invalid_parallel_tool_calls,
+    normalize_image_response_usage,
+    safe_convert_created_field,
+    should_convert_tool_call_to_json_mode,
+)
 from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall, Choices, CompletionTokensDetailsWrapper, Function, ImageObject, ImageResponse, Message, ModelResponse, PromptTokensDetailsWrapper, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -372,6 +381,97 @@ def test_convert_to_image_response_with_extra_fields_2():
 
     assert result.data[0].url == "http://example.com/image1.jpg"
     assert result.data[1].url == "http://example.com/image2.jpg"
+
+
+@pytest.mark.parametrize("response", [{}, {"usage": None}])
+def test_normalize_image_response_without_usage_returns_copy(response: dict[str, object]) -> None:
+    normalized: Final = normalize_image_response_usage(response)
+
+    assert normalized == response
+    assert normalized is not response
+
+
+@pytest.mark.parametrize(
+    ("usage_fields", "expected_fields"),
+    [
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": None, "text_tokens": 5}},
+            {"input_tokens_details": {"image_tokens": 0, "text_tokens": 5}},
+            id="null-input-image-tokens",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": 6}},
+            {"input_tokens_details": {"image_tokens": 6, "text_tokens": 0}},
+            id="missing-input-text-tokens",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"text_tokens": 5}},
+            {"input_tokens_details": {"image_tokens": 0, "text_tokens": 5}},
+            id="missing-input-image-tokens",
+        ),
+        pytest.param(
+            {"output_tokens_details": None},
+            {"output_tokens_details": None},
+            id="null-output-details",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": 6, "text_tokens": 4, "cached_tokens_details": None}},
+            {"input_tokens_details": {"image_tokens": 6, "text_tokens": 4, "cached_tokens_details": None}},
+            id="null-cached-details",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": 20}},
+            {"output_tokens_details": {"image_tokens": 20}},
+            id="sparse-output-details",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": None}},
+            {"output_tokens_details": {"image_tokens": None}},
+            id="null-output-image-tokens",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": 18, "text_tokens": 2}},
+            {"output_tokens_details": {"image_tokens": 18, "text_tokens": 2}},
+            id="fully-populated-usage",
+        ),
+        pytest.param(
+            {"provider_metadata": None},
+            {"provider_metadata": None},
+            id="null-provider-metadata",
+        ),
+        pytest.param({}, {}, id="absent-output-details"),
+    ],
+)
+def test_convert_to_image_response_preserves_usage_details(
+    usage_fields: dict[str, object], expected_fields: dict[str, object]
+) -> None:
+    usage: Final = {
+        "input_tokens": 10,
+        "input_tokens_details": {"image_tokens": 6, "text_tokens": 4},
+        "output_tokens": 20,
+        "total_tokens": 30,
+    }
+    response: Final = {
+        "created": 1234567890,
+        "data": [{"b64_json": "generated-image"}],
+        "usage": {**usage, **usage_fields},
+    }
+    original: Final = deepcopy(response)
+    expected_usage: Final = {**usage, **expected_fields}
+
+    normalized: Final = normalize_image_response_usage(response)
+
+    assert normalized == {**response, "usage": expected_usage}
+    assert normalized is not response
+    assert response == original
+
+    result: Final = LiteLLMResponseObjectHandler.convert_to_image_response(response)
+
+    assert result.usage is not None
+    serialized_usage: Final = result.usage.model_dump()
+    assert {key: serialized_usage[key] for key in expected_usage} == expected_usage
+    assert result.data[0].b64_json == "generated-image"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_none_usage_fields():

@@ -1,17 +1,117 @@
 from io import BufferedReader, BytesIO
-from typing import Dict
+from typing import Dict, Final
+from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ImageObject
 
 
 @pytest.fixture
 def image_edit_config() -> OpenAIImageEditConfig:
     return OpenAIImageEditConfig()
+
+
+@pytest.mark.parametrize(
+    ("usage_fields", "expected_fields"),
+    [
+        pytest.param(
+            {"input_tokens": None, "output_tokens": None, "total_tokens": None},
+            {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            id="null-counts",
+        ),
+        pytest.param(
+            {"input_tokens_details": None},
+            {"input_tokens_details": {"image_tokens": 0, "text_tokens": 0}},
+            id="null-input-details",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": None, "text_tokens": None}},
+            {"input_tokens_details": {"image_tokens": 0, "text_tokens": 0}},
+            id="null-input-detail-counts",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": None, "text_tokens": 5}},
+            {"input_tokens_details": {"image_tokens": 0, "text_tokens": 5}},
+            id="mixed-input-detail-counts",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": None, "text_tokens": None}},
+            {"output_tokens_details": {"image_tokens": None, "text_tokens": None}},
+            id="null-output-detail-counts",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": 18, "text_tokens": None}},
+            {"output_tokens_details": {"image_tokens": 18, "text_tokens": None}},
+            id="mixed-output-detail-counts",
+        ),
+        pytest.param(
+            {"output_tokens_details": None},
+            {"output_tokens_details": None},
+            id="null-output-details",
+        ),
+        pytest.param(
+            {"input_tokens_details": {"image_tokens": 6, "text_tokens": 4, "cached_tokens_details": None}},
+            {"input_tokens_details": {"image_tokens": 6, "text_tokens": 4, "cached_tokens_details": None}},
+            id="null-cached-details",
+        ),
+        pytest.param(
+            {"output_tokens_details": {"image_tokens": 20}},
+            {"output_tokens_details": {"image_tokens": 20}},
+            id="sparse-output-details",
+        ),
+        pytest.param({"total_tokens": None}, {"total_tokens": 30}, id="calculated-total"),
+        pytest.param({}, {}, id="integer-usage-unchanged"),
+    ],
+)
+def test_transform_image_edit_response_normalizes_null_usage(
+    image_edit_config: OpenAIImageEditConfig,
+    usage_fields: dict[str, object],
+    expected_fields: dict[str, object],
+) -> None:
+    usage: Final = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_tokens_details": {"image_tokens": 6, "text_tokens": 4},
+        "output_tokens_details": {"image_tokens": 18, "text_tokens": 2},
+    }
+    raw_response: Final = httpx.Response(
+        status_code=200,
+        json={"created": 1234567890, "data": [{"b64_json": "edited-image"}], "usage": {**usage, **usage_fields}},
+    )
+
+    result: Final = image_edit_config.transform_image_edit_response(
+        model="gpt-image-1", raw_response=raw_response, logging_obj=Mock()
+    )
+
+    assert result.usage is not None
+    assert result.usage.model_dump() == {**usage, **expected_fields}
+    assert result.data[0].b64_json == "edited-image"
+
+
+def test_transform_image_edit_response_defaults_created_and_converts_image_objects(
+    image_edit_config: OpenAIImageEditConfig,
+) -> None:
+    raw_response: Final = httpx.Response(
+        status_code=200,
+        json={"data": [{"b64_json": "edited-image"}]},
+    )
+
+    with patch("time.time", return_value=1234567890):
+        result: Final = image_edit_config.transform_image_edit_response(
+            model="gpt-image-1", raw_response=raw_response, logging_obj=Mock()
+        )
+
+    assert result.created == 1234567890
+    assert len(result.data) == 1
+    assert isinstance(result.data[0], ImageObject)
+    assert result.data[0].b64_json == "edited-image"
 
 
 def test_transform_image_edit_request_basic(image_edit_config: OpenAIImageEditConfig):

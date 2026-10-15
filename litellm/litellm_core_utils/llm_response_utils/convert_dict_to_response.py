@@ -484,6 +484,32 @@ def handle_invalid_parallel_tool_calls(
 _handle_invalid_parallel_tool_calls = handle_invalid_parallel_tool_calls
 
 
+def normalize_image_response_usage(response: Mapping[str, object]) -> Mapping[str, object]:
+    usage: Final = cast(Mapping[str, object] | None, response.get("usage"))
+    if usage is None:
+        return {**response}
+
+    input_tokens: Final = cast(int, usage["input_tokens"] if usage.get("input_tokens") is not None else 0)
+    output_tokens: Final = cast(int, usage["output_tokens"] if usage.get("output_tokens") is not None else 0)
+    input_details: Final = cast(Mapping[str, object], usage.get("input_tokens_details") or {})
+    return {
+        **response,
+        "usage": {
+            **usage,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": usage["total_tokens"]
+            if usage.get("total_tokens") is not None
+            else input_tokens + output_tokens,
+            "input_tokens_details": {
+                **input_details,
+                "image_tokens": input_details["image_tokens"] if input_details.get("image_tokens") is not None else 0,
+                "text_tokens": input_details["text_tokens"] if input_details.get("text_tokens") is not None else 0,
+            },
+        },
+    }
+
+
 class LiteLLMResponseObjectHandler:
     @staticmethod
     def convert_to_image_response(
@@ -491,23 +517,15 @@ class LiteLLMResponseObjectHandler:
         model_response_object: ImageResponse | None = None,
         hidden_params: dict | None = None,
     ) -> ImageResponse:
-        response_object.update({"hidden_params": hidden_params})
+        response_object.update(
+            {
+                **normalize_image_response_usage(cast(Mapping[str, object], response_object)),
+                "hidden_params": hidden_params,
+            }
+        )
 
-        # Handle gpt-image-1 usage field with None values
         if "usage" in response_object and response_object["usage"] is not None:
             usage: Final = response_object["usage"]
-            # Check if usage fields are None and provide defaults
-            if usage.get("input_tokens") is None:
-                usage["input_tokens"] = 0
-            if usage.get("output_tokens") is None:
-                usage["output_tokens"] = 0
-            if usage.get("total_tokens") is None:
-                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
-            if usage.get("input_tokens_details") is None:
-                usage["input_tokens_details"] = {
-                    "image_tokens": 0,
-                    "text_tokens": 0,
-                }
 
             # Map Responses API naming to Chat Completions API naming for cost calculator
             if usage.get("prompt_tokens") is None:

@@ -6,6 +6,9 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    normalize_image_response_usage,
+)
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -150,7 +153,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        return ImageResponse(**raw_response_json)
+        return ImageResponse(**cast(dict[str, Any], normalize_image_response_usage(raw_response_json)))
 
     def validate_environment(
         self,
