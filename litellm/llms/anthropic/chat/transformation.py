@@ -2338,9 +2338,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             ## TOOL RESULTS - handle all tool result types (code execution, etc.)
             elif content["type"].endswith("_tool_result"):
-                # Skip tool_search_tool_result as it's internal metadata
-                if content["type"] == "tool_search_tool_result":
-                    continue
                 # Handle web_search_tool_result separately for backwards compatibility
                 if content["type"] == "web_search_tool_result" or content["type"] == "web_fetch_tool_result":
                     if web_search_results is None:
@@ -2709,6 +2706,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
+
+        if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             container_id: Final = (
                 completion_response.get("container", {}).get("id")
                 if isinstance(completion_response.get("container"), dict)
