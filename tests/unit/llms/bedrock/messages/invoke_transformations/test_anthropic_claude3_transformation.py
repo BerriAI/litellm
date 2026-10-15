@@ -3731,34 +3731,50 @@ def test_bedrock_messages_keeps_block_binding_with_display_updates(
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize(
-    ("model", "extra_params"),
+    ("model", "requested_thinking", "extra_params", "expected_thinking"),
     (
-        ("eu.anthropic.claude-opus-5", {}),
-        ("us.anthropic.claude-opus-4-6", {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}}),
+        ("eu.anthropic.claude-opus-5", {"type": "enabled", "budget_tokens": 2048}, {}, {"type": "adaptive"}),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+            {"type": "adaptive"},
+        ),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "adaptive", "display": "updates"},
+            {},
+            {"type": "adaptive", "display": "updates"},
+        ),
     ),
-    ids=("legacy", "legacy_clear_thinking"),
+    ids=("legacy", "legacy_clear_thinking", "adaptive_display_updates"),
 )
-@pytest.mark.parametrize(("drop_params", "expected_unknown_keys"), ((True, {}), (False, {"not_a_thinking_key": True})))
-def test_bedrock_messages_legacy_thinking_drops_unknown_keys_only_under_drop_params(
-    model: str, extra_params: dict[str, object], drop_params: bool, expected_unknown_keys: dict[str, object]
+@pytest.mark.parametrize("drop_params_source", ("request", "global", None))
+def test_bedrock_messages_thinking_drops_unknown_keys_only_under_drop_params(
+    model: str,
+    requested_thinking: dict[str, object],
+    extra_params: dict[str, object],
+    expected_thinking: dict[str, object],
+    drop_params_source: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    requested_thinking: Final = {
-        "type": "enabled",
-        "budget_tokens": 2048,
-        "block_binding": BLOCK_BINDING,
-        "not_a_thinking_key": True,
-    }
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
     result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
         model=model,
         messages=[{"role": "user", "content": "Reply with OK"}],
-        anthropic_messages_optional_request_params={"max_tokens": 4096, "thinking": requested_thinking, **extra_params},
-        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "thinking": {**requested_thinking, "block_binding": BLOCK_BINDING, "not_a_thinking_key": True},
+            **extra_params,
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params_source == "request"),
         headers={},
     )
 
-    assert result.get("thinking") == {"type": "adaptive", "block_binding": BLOCK_BINDING, **expected_unknown_keys}
+    expected_unknown_keys: Final = {} if drop_params_source else {"not_a_thinking_key": True}
+    assert result.get("thinking") == {**expected_thinking, "block_binding": BLOCK_BINDING, **expected_unknown_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

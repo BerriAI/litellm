@@ -18,8 +18,9 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import (
+    OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
-    carried_legacy_thinking_keys,
+    carried_thinking_keys,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -356,7 +357,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
         thinking: Final = validated_object_mapping(anthropic_messages_request.get("thinking"))
-        carried: Final = carried_legacy_thinking_keys(
+        carried: Final = carried_thinking_keys(
             thinking or {}, rebuilt_keys=frozenset(("type", "budget_tokens")), drop_params=drop_params
         )
         anthropic_messages_request["output_config"] = output_config
@@ -673,6 +674,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> dict:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
+        drop_params: Final = getattr(litellm_params, "drop_params", None) is True
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -691,7 +693,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            anthropic_messages_request["thinking"] = {**translated_thinking, "display": "updates"}
+            anthropic_messages_request["thinking"] = {
+                **carried_thinking_keys(
+                    OBJECT_MAPPING_ADAPTER.validate_python(translated_thinking),
+                    rebuilt_keys=frozenset(("display",)),
+                    drop_params=drop_params,
+                ),
+                "display": "updates",
+            }
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
@@ -714,7 +723,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         injected_thinking_for_clear_thinking: Final = self._ensure_thinking_for_clear_thinking_context_management(
             anthropic_messages_request=anthropic_messages_request,
             model=model,
-            drop_params=getattr(litellm_params, "drop_params", None) is True,
+            drop_params=drop_params,
         )
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)

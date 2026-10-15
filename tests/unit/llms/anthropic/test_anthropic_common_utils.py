@@ -4290,6 +4290,52 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
     }
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "requested_thinking", "expected_thinking"),
+    (
+        ("anthropic", "claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        (
+            "bedrock",
+            "converse/us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 2048},
+            {"type": "adaptive"},
+        ),
+        ("bedrock", "invoke/us.anthropic.claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        (
+            "bedrock",
+            "invoke/us.anthropic.claude-opus-5-5",
+            {"type": "adaptive", "display": "updates"},
+            {"type": "adaptive", "display": "updates"},
+        ),
+        ("vertex_ai", "claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+        ("databricks", "databricks-claude-opus-5-5", {"type": "enabled", "budget_tokens": 2048}, {"type": "adaptive"}),
+    ),
+    ids=("anthropic", "bedrock_converse", "bedrock_invoke", "bedrock_invoke_display_updates", "vertex_ai", "databricks"),
+)
+@pytest.mark.parametrize("drop_params_source", ("request", "global", None))
+def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
+    custom_llm_provider: str,
+    model: str,
+    requested_thinking: dict[str, object],
+    expected_thinking: dict[str, object],
+    drop_params_source: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        thinking={**requested_thinking, "block_binding": block_binding, "not_a_thinking_key": True},
+        drop_params=drop_params_source == "request",
+    )
+
+    expected_unknown_keys: Final = {} if drop_params_source else {"not_a_thinking_key": True}
+    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **expected_unknown_keys}
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
 @pytest.mark.parametrize("explicit_beta", (False, True))

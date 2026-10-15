@@ -109,7 +109,7 @@ _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
-_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
@@ -166,7 +166,7 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
 
 def validated_object_mapping(value: object) -> dict[object, object] | None:
     try:
-        return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+        return OBJECT_MAPPING_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
@@ -949,10 +949,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
-        carried_thinking_keys: Final = carried_legacy_thinking_keys(
+        carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
-        optional_params["thinking"] = {**carried_thinking_keys, "type": "adaptive", **supported_display}
+        optional_params["thinking"] = {**carried_keys, "type": "adaptive", **supported_display}
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
@@ -1625,7 +1625,7 @@ _ANTHROPIC_THINKING_PARAM_KEYS: Final = (
 )
 
 
-def carried_legacy_thinking_keys(
+def carried_thinking_keys(
     thinking: Mapping[object, object], rebuilt_keys: frozenset[str], drop_params: bool
 ) -> Mapping[object, object]:
     drops_unknown_keys: Final = drop_params or litellm.drop_params is True
