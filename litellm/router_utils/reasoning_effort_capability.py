@@ -266,26 +266,34 @@ def _log_remap(
 ) -> None:
     own_info: Final = as_str_mapping(deployment_model_info)
     deployment_id: Final = own_info.get("id") if own_info is not None else None
-    logged_requested_level: Final = (
+    logged_requested_level: Final = _single_line(
         requested_level if requested_level in _LOGGABLE_REQUESTED_LEVELS else _UNRECOGNIZED_LEVEL
     )
+    logged_sent_level: Final = _single_line(sent_level)
+    logged_deployment_id: Final = _single_line(deployment_id)
+    logged_model_group: Final = _single_line(model_group)
+    logged_deployment_model: Final = _single_line(deployment_model)
     verbose_logger.info(
         "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
         logged_requested_level,
-        sent_level,
+        logged_sent_level,
         rounding,
-        deployment_id,
-        model_group,
-        deployment_model,
+        logged_deployment_id,
+        logged_model_group,
+        logged_deployment_model,
         extra={
-            "reasoning_effort_deployment_id": deployment_id,
-            "reasoning_effort_model_group": model_group,
-            "reasoning_effort_deployment_model": deployment_model,
+            "reasoning_effort_deployment_id": logged_deployment_id,
+            "reasoning_effort_model_group": logged_model_group,
+            "reasoning_effort_deployment_model": logged_deployment_model,
             "reasoning_effort_requested": logged_requested_level,
-            "reasoning_effort_sent": sent_level,
+            "reasoning_effort_sent": logged_sent_level,
             "reasoning_effort_rounding": rounding,
         },
     )
+
+
+def _single_line(value: object) -> str | None:
+    return None if value is None else str(value).replace("\r", "").replace("\n", "")
 
 
 def reasoning_effort_needs_allowing(

@@ -490,13 +490,14 @@ def _sent(
     model: str = "my-kimi",
     provider: str = "hosted_vllm",
     drop_params: bool = False,
+    model_group: str = "kimi-k3",
 ) -> RequestedReasoningEffort:
     return resolve_deployment_reasoning_effort(
         requested,
         model=model,
         custom_llm_provider=provider,
         deployment_model_info=deployment_model_info,
-        model_group="kimi-k3",
+        model_group=model_group,
         drop_params=drop_params,
     ).value
 
@@ -581,6 +582,23 @@ class TestResolveDeploymentReasoningEffort:
         assert [record.getMessage() for record in caplog.records] == [
             "reasoning_effort unrecognized sent as None (rounding up) to deployment deployment-1, "
             "model group kimi-k3, model hosted_vllm/my-kimi"
+        ]
+
+    def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog):
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+
+        _sent(
+            "medium",
+            {"id": "deployment-1\r\nforged id", "reasoning_effort_levels": ["low", "high"]},
+            model="my-kimi\nforged model",
+            model_group="kimi-k3\nforged group",
+        )
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "reasoning_effort medium sent as high (rounding up) to deployment deployment-1forged id, "
+            "model group kimi-k3forged group, model hosted_vllm/my-kimiforged model"
         ]
 
     def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(self, caplog):
