@@ -1,5 +1,5 @@
 {
-  "head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
+  "head": "eed595238afd3d078e80012c9bec29c237510dfb",
   "command": "PYTHONPATH=/path/to/litellm PYTHON_DOTENV_DISABLED=1 LITELLM_LOCAL_MODEL_COST_MAP=True python -m pytest test_recorded_drex.py -v",
   "result": "8 passed",
   "providers": [

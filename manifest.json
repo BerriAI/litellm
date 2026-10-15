@@ -1,7 +1,7 @@
 {
-  "baseline": "b22a0bd9e5531d443da2945951f99573c0a02413",
-  "head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
-  "date": "2026-10-14",
+  "baseline": "67fab6737b920402ce199b2e24fb0c7fe6c1c147",
+  "head": "eed595238afd3d078e80012c9bec29c237510dfb",
+  "date": "2026-10-15",
   "observations": {
     "baseline": "Both decisions routes return HTTP 400, Nace provider search has no result",
     "head": "Both decisions routes return HTTP 200, Nace provider selection and real Test Connect succeed"
