@@ -15,6 +15,25 @@ from litellm_proxy_extras.prisma_toolchain import (
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"llm_mig2", "big")
 PRISMA_ADVISORY_LOCK_KEY: Final = 72707369
 
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryLock:
+    key: int
+    name: str
+    holder: str
+
+
+COORDINATOR_LOCK: Final = AdvisoryLock(
+    MIGRATION_LOCK_KEY,
+    "v2 migration coordinator lock",
+    "another v2 migration resolver",
+)
+PRISMA_LOCK: Final = AdvisoryLock(
+    PRISMA_ADVISORY_LOCK_KEY,
+    "Prisma migration lock",
+    "another Prisma migration",
+)
+
 if TYPE_CHECKING:
     import psycopg
 
@@ -75,7 +94,10 @@ class MigrationCoordinator:
 
 
 @contextmanager
-def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, None]:
+def migration_lock(
+    database_url: str,
+    lock: AdvisoryLock = COORDINATOR_LOCK,
+) -> Generator[MigrationCoordinator, None, None]:
     import psycopg
 
     wait_seconds: Final = migration_lock_timeout()
@@ -83,11 +105,11 @@ def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, N
     try:
         with psycopg.connect(database_url, connect_timeout=10, autocommit=True) as connection:
             coordinator: Final = MigrationCoordinator(connection)
-            logger.info("Waiting for the v2 migration coordinator lock (up to %ss)", wait_seconds)
+            logger.info("Waiting for the %s (up to %ss)", lock.name, wait_seconds)
             while time.monotonic() < deadline:
                 with connection.transaction():
-                    if _try_lock(connection):
-                        logger.info("Acquired the v2 migration coordinator lock")
+                    if _try_lock(connection, lock.key):
+                        logger.info("Acquired the %s", lock.name)
 
                         yield coordinator
                         coordinator.check_connection()
@@ -96,18 +118,17 @@ def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, N
     except psycopg.Error as exc:
         raise RuntimeError(f"Lost or could not establish v2 migration coordination with the database: {exc}") from exc
     raise RuntimeError(
-        f"Timed out waiting for another v2 migration resolver after {wait_seconds}s. "
+        f"Timed out waiting for {lock.holder} after {wait_seconds}s. "
         f"Check the running migration or increase {MIGRATION_LOCK_TIMEOUT_ENV_VAR}."
     )
 
 
 @contextmanager
 def prisma_migration_lock(database_url: str) -> Generator[None, None, None]:
-    """Hold the coordinator lock and Prisma's own lock key as transaction-level locks on one
-    pinned connection while a Prisma command runs with its session advisory lock disabled, so a
-    transaction pooler can never strand that lock on an idle backend after the command exits."""
-    with migration_lock(database_url) as coordinator:
-        coordinator.acquire_prisma_lock()
+    """Hold only Prisma's key as an xact lock on a pinned connection with Prisma's session lock disabled.
+
+    This keeps deploy independent of the coordinator key held by request-log index builds."""
+    with migration_lock(database_url, PRISMA_LOCK) as coordinator:
         coordinator.release_statement_snapshot()
         yield
 
