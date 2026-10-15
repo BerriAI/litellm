@@ -798,6 +798,27 @@ class TestProxyBaseLLMRequestProcessing:
         assert exc_info.value.param == "tools"
 
     @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_rejects_malformed_tools_a_request_list_leaves_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-5.2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}, 5],
+                "additional_drop_params": ["web_search_options"],
+            }
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(
+                monkeypatch, processing_obj, llm_router=self._router({"additional_drop_params": ["tools"]})
+            )
+
+        assert exc_info.value.param == "tools"
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_drops_malformed_tools_when_every_deployment_drops_params(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

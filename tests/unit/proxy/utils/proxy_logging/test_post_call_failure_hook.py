@@ -927,6 +927,7 @@ async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(p
     [
         ("anthropic_messages", {"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
         ("aresponses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
+        ("acompact_responses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
     ],
 )
 async def test_post_call_failure_hook_keeps_the_call_type_request_setup_logged(

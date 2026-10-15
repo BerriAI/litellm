@@ -711,7 +711,9 @@ def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, t
     requested: Final = data.get("drop_params") if "drop_params" in data else group_drops
     return DropPolicy(
         drop_params=litellm.drop_params is True or normalize_drop_params(requested) is True,
-        additional_drop_params=_field_names(data.get("additional_drop_params")) | group_drop_fields,
+        additional_drop_params=(
+            _field_names(data.get("additional_drop_params")) if "additional_drop_params" in data else group_drop_fields
+        ),
     )
 
 
