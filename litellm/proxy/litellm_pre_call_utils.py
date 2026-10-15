@@ -2036,6 +2036,25 @@ class LiteLLMProxyRequestSetup:
         raw_rules: Final = general_settings.get("request_tag_mappings")
         if not isinstance(raw_rules, list) or not raw_rules:
             return
+        has_client_metadata: Final = "metadata" in request_data
+        has_alternate_metadata: Final = "litellm_metadata" in request_data
+        client_metadata: Final[object] = request_data.pop("metadata", None)
+        alternate_client_metadata: Final[object] = request_data.pop("litellm_metadata", None)
+        normalized_client_metadata: Final[Mapping[str, object]] = (
+            _normalized_metadata_object("metadata", client_metadata)
+            if client_metadata is not None
+            else MappingProxyType({})
+        )
+        normalized_alternate_metadata: Final[Mapping[str, object]] = (
+            _normalized_metadata_object("litellm_metadata", alternate_client_metadata)
+            if alternate_client_metadata is not None
+            else MappingProxyType({})
+        )
+        if has_client_metadata:
+            # Keep rejection logging safe without changing the cached client body.
+            request_data["metadata"] = dict(normalized_client_metadata)  # rebind-ok: normalize working auth metadata
+        if has_alternate_metadata:
+            request_data["litellm_metadata"] = dict(normalized_alternate_metadata)  # rebind-ok: normalize auth copy
         rules: Final = TypeAdapter(tuple[RequestTagMapping, ...]).validate_python(raw_rules)
         header: Final = ",".join(request.headers.getlist("baggage"))
         mapped: Final = resolve_baggage_tag_mappings(header, rules)
@@ -2055,14 +2074,10 @@ class LiteLLMProxyRequestSetup:
             if unbudgeted_tag is not None:
                 raise HTTPException(400, f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
         if mapped:
-            client_metadata: Final[object] = request_data.get("metadata")
-            normalized_client_metadata: Final[Mapping[str, object]] = (
-                _normalized_metadata_object("metadata", client_metadata)
-                if client_metadata is not None
-                else MappingProxyType({})
-            )
-            client_has_tags: Final = "tags" in normalized_client_metadata or any(
-                member.strip() for member in request.headers.get("x-litellm-tags", "").split(",")
+            client_has_tags: Final = (
+                "tags" in normalized_client_metadata
+                or "tags" in normalized_alternate_metadata
+                or any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
             )
             mapped_tags: Final = tuple(tag for tag, _ in mapped)
             request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
@@ -2075,7 +2090,8 @@ class LiteLLMProxyRequestSetup:
         request_data: MutableMapping[str, object],  # mutable-ok: restore authenticated tags in downstream metadata
         metadata_key: str | None = None,
     ) -> None:
-        raw_tags: Final[object] = getattr(request.state, "litellm_baggage_mapped_tags", None)
+        request_state: Final[object] = getattr(request, "state", None)
+        raw_tags: Final[object] = getattr(request_state, "litellm_baggage_mapped_tags", None)
         if not isinstance(raw_tags, tuple) or not raw_tags:
             return
         tags: Final = TypeAdapter(tuple[str, ...]).validate_python(raw_tags)

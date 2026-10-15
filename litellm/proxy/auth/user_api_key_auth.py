@@ -1978,7 +1978,7 @@ async def _read_request_body_deferring_parse_failure(
         parsed_body: Final = await read_request_body(request=request)
     except ProxyException as parse_exception:
         return {}, parse_exception
-    return populate_request_with_path_params(request_data=parsed_body, request=request), None
+    return populate_request_with_path_params(request_data=dict(parsed_body), request=request), None
 
 
 async def _record_unparsable_body_failure(
