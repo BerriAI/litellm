@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import TypedDict
 
 from litellm.types.utils import FileTypes
 
@@ -33,8 +33,3 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
-
-
-class ImageGenerationProviderHints(TypedDict, total=False):
-    custom_llm_provider: ReadOnly[str | None]
-    api_base: ReadOnly[str | None]

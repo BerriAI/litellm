@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError
+from openai import APITimeoutError, AsyncOpenAI
 from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
@@ -8345,3 +8345,48 @@ def test_model_alias_map_resolves_the_outbound_model(
 
     assert response.model == "resolved-model"
     assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_routes_a_bare_model_name_to_its_explicit_provider(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12351/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="kokoro",
+        input="hello",
+        voice="alloy",
+        custom_llm_provider="openai",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert json.loads(route.calls[0].request.content)["model"] == "kokoro"
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_routes_a_bare_model_name_to_its_explicit_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12352/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="my-whisper",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        custom_llm_provider="openai",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert b'name="model"\r\n\r\nmy-whisper' in route.calls[0].request.content
+    assert response.text == "four score"

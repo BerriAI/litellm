@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -86,6 +86,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     InvalidControlOption,
     parse_control_options,
     with_control_options,
+)
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    invalid_provider_routing_hints_message,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -139,6 +142,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     ModelResponseStream,
+    ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
     is_decisions_model_mode,
@@ -4102,6 +4106,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 
 
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -7895,6 +7900,12 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
     file: Final = kwargs.get("file", None)
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -7904,7 +7915,11 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -8223,7 +8238,13 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aspeech"] = True
-    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
+    custom_llm_provider = provider_hints.get("custom_llm_provider")
     try:
         # Use a partial function to pass your keyword arguments
         func: Final = partial(speech, *args, **kwargs)
@@ -8232,7 +8253,11 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)

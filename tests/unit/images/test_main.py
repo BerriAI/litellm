@@ -63,6 +63,21 @@ async def test_aimage_generation_routes_a_bare_model_name_to_its_explicit_provid
     assert response.data[0].b64_json == "aW1n"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base"])
+async def test_aimage_generation_answers_a_non_string_provider_hint_with_a_bad_request(
+    hint: str, respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.aimage_generation(
+            model="Qwen-Image", prompt="a red circle", api_key="fake_openai_api_key", **{hint: 123}
+        )
+
+    assert raised.value.status_code == 400
+    assert f"Invalid {hint}" in raised.value.message
+    assert not respx_mock.calls
+
+
 def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
