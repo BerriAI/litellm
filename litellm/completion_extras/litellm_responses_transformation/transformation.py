@@ -20,7 +20,7 @@ from openai.types.responses.response_input_param import (
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import ModelResponse
@@ -346,14 +346,20 @@ def _fold_choices_into_one(
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
     trailing_reasoning_item: _BuiltReasoningItem | None,
+    structured_output: bool = False,
 ) -> "Choices":
-    """Clients that only read choices[0] must still see every text and tool call."""
+    """Clients that only read choices[0] must still see every text and tool call.
+
+    Under a structured ``response_format`` each message item is a complete document, so
+    ``content`` is the first one, the same item the openai SDK returns as ``output_parsed``.
+    """
     from litellm.types.utils import Choices, Message
 
     messages: Final = tuple(choice.message for choice in choices)
-    texts: Final = tuple(str(message.content or "") for message in messages)
+    content_messages: Final = messages[:1] if structured_output else messages
+    texts: Final = tuple(str(message.content or "") for message in content_messages)
     offsets: Final = (0, *accumulate(len(text) for text in texts))
-    annotations: Final = tuple(_shifted_annotations(messages, offsets))
+    annotations: Final = tuple(_shifted_annotations(content_messages, offsets))
     reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
     reasoning_items: Final = (
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
@@ -371,6 +377,38 @@ def _fold_choices_into_one(
         finish_reason="tool_calls" if tool_calls else "stop",
         index=0,
     )
+
+
+def _responses_event_type(chunk: Mapping[str, object]) -> object:
+    event_type: Final = chunk.get("type")
+    return event_type.value if isinstance(event_type, ResponsesAPIStreamEvents) else event_type
+
+
+class _TypedPayload(BaseModel):
+    """The ``type`` discriminator of a response_format dict or a Responses output item."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    type: str | None = None
+
+
+_TYPED_PAYLOAD: Final = TypeAdapter(_TypedPayload)
+
+
+def _payload_type(payload: object) -> str | None:
+    try:
+        return _TYPED_PAYLOAD.validate_python(payload).type
+    except ValidationError:
+        return None
+
+
+def _is_message_item_done(chunk: Mapping[str, object]) -> bool:
+    if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+        return False
+    return _payload_type(chunk.get("item")) == "message"
+
+
+def is_structured_output_request(optional_params: Mapping[str, object]) -> bool:
+    return _payload_type(optional_params.get("response_format")) in ("json_schema", "json_object")
 
 
 _ToolChoiceT = TypeVar("_ToolChoiceT")
@@ -897,6 +935,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_response_output_to_choices(
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
+        structured_output: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -904,6 +943,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Args:
             output_items: List of items from ResponsesAPIResponse.output
             handle_raw_dict_callback: Optional callback for handling raw dict items
+            structured_output: The chat request carried a json response_format, so only the
+                first message item becomes content
 
         Returns:
             List of Choices objects
@@ -1027,6 +1068,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
                 trailing_reasoning_item=pending_reasoning_item,
+                structured_output=structured_output,
             )
         ]
 
@@ -1157,6 +1199,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final = self._convert_response_output_to_choices(
             output_items=output_items,
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
+            structured_output=is_structured_output_request(
+                cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+            ),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
@@ -1219,8 +1264,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"],
         sync_stream: bool,
         json_mode: bool | None = False,
+        structured_output: bool = False,
     ) -> BaseModelResponseIterator:
-        return OpenAiResponsesToChatCompletionStreamIterator(streaming_response, sync_stream, json_mode)
+        return OpenAiResponsesToChatCompletionStreamIterator(
+            streaming_response, sync_stream, json_mode, structured_output=structured_output
+        )
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
         if role in ("user", "system", "developer", "tool"):
@@ -1587,11 +1635,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"],
         sync_stream: bool,
         json_mode: bool | None = False,
+        structured_output: bool = False,
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._structured_output: Final = structured_output
+        self._first_message_item_done: bool = False
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1903,13 +1954,31 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
-        return self._with_served_service_tier(
-            self._with_stream_scoped_id(
-                OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                    chunk, tool_call_index_map=self._tool_call_index_map
-                )
+        translated: Final = (
+            self._empty_content_chunk()
+            if self._is_text_delta_after_structured_answer(chunk)
+            else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+                chunk, tool_call_index_map=self._tool_call_index_map
             )
         )
+        if self._structured_output and _is_message_item_done(chunk):
+            self._first_message_item_done = True
+        return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+
+    def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
+        """Under a structured response_format the first message item is the whole answer, so
+        text from any later message item is dropped, matching the non-stream fold."""
+        return (
+            self._structured_output
+            and self._first_message_item_done
+            and _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+        )
+
+    @staticmethod
+    def _empty_content_chunk() -> "ModelResponseStream":
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")

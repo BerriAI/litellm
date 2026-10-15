@@ -16,9 +16,9 @@ from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
 from litellm.types.utils import ModelResponse
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
 
 
 def payload(value: object) -> object:

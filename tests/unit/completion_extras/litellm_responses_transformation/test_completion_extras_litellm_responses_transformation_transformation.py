@@ -5267,3 +5267,94 @@ def test_convert_response_output_numbers_two_function_calls_zero_and_one() -> No
     tool_calls: Final = choices[0].message.tool_calls
     assert tool_calls is not None
     assert [(call.index, call.function.name) for call in tool_calls] == [(0, "get_weather"), (1, "get_time")]
+
+
+def _final_answer_message(item_id: str, text: str) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_convert_response_output_structured_output_keeps_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    """gpt-5.4-mini on /responses with a strict json_schema and a 'say what you will do first'
+    system prompt returned two final_answer items, each the whole document (captured 2026-10-14)."""
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (_final_answer_message("msg_1", '{"city":"Paris"}'), _final_answer_message("msg_2", '{"city":"Paris"}')),
+        structured_output=structured_output,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == expected_content
+    if structured_output:
+        assert json.loads(expected_content) == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}}, True),
+        ({"response_format": {"type": "json_object"}}, True),
+        ({"response_format": {"type": "text"}}, False),
+        ({}, False),
+    ],
+)
+def test_is_structured_output_request(optional_params: dict[str, object], expected: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        is_structured_output_request,
+    )
+
+    assert is_structured_output_request(optional_params) is expected
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_stream_structured_output_drops_text_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, structured_output=structured_output
+    )
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.completed"},
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert content == expected_content
+    assert chunks[-1].choices[0].finish_reason == "stop"

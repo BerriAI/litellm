@@ -2386,7 +2386,7 @@ export interface paths {
          *
          *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
-         *     to it through `object_permission.skills` on the key or its team.
+         *     to it through `object_permission.skills` or an access group on the key or its team.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -25105,6 +25105,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -25154,6 +25156,11 @@ export interface components {
             access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
+            /**
+             * Access Skill Names
+             * @default []
+             */
+            access_skill_names: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -25193,6 +25200,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Skill Names */
+            access_skill_names?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -45869,6 +45878,8 @@ export interface components {
             access_group_mcp_server_ids?: string[] | null;
             /** Access Group Models */
             access_group_models?: string[] | null;
+            /** Access Group Skill Names */
+            access_group_skill_names?: string[] | null;
             /**
              * Admins
              * @default []

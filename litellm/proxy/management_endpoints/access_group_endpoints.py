@@ -558,6 +558,7 @@ async def create_access_group(
                     "access_mcp_server_ids": data.access_mcp_server_ids or [],
                     "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
+                    "access_skill_names": list(data.access_skill_names or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -649,18 +650,15 @@ async def update_access_group(
     update_fields: Final = data.model_dump(exclude_unset=True)
     update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
-        if (
-            field
-            in (
-                "assigned_team_ids",
-                "assigned_key_ids",
-                "access_model_names",
-                "access_mcp_server_ids",
-                "access_agent_ids",
-            )
-            and value is None
+        if field in (
+            "assigned_team_ids",
+            "assigned_key_ids",
+            "access_model_names",
+            "access_mcp_server_ids",
+            "access_agent_ids",
+            "access_skill_names",
         ):
-            value = []
+            value = list(value or ())
         update_data[field] = (
             _tool_permissions_json(data.mcp_tool_permissions) if field == "mcp_tool_permissions" else value
         )

@@ -4260,6 +4260,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     models: tuple[str, ...]
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
+    skill_names: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4274,6 +4275,7 @@ class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
     may_raise_max_budget: bool = False
+    proxy_controlled_metadata_keys: tuple[str, ...] = ()
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
@@ -4297,6 +4299,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
+    # Listed group ids with no row; skill grants are suspended while this is non-empty.
+    unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
