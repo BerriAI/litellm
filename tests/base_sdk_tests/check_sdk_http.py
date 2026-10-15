@@ -6,11 +6,16 @@ import json
 import os
 import struct
 import zlib
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue
 from threading import Event, Thread
-from typing import Final
+from typing import Final, cast
+from unittest import SkipTest, skipIf
 from unittest.mock import patch
+
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 ENVIRONMENT: Final = {"LITELLM_LOCAL_MODEL_COST_MAP": "True", "PYTHON_DOTENV_DISABLED": "1"}
 
@@ -21,6 +26,7 @@ RESPONSES: Final[Queue[tuple[int, bytes]]] = Queue()
 REQUESTS: Final[Queue[tuple[str, dict[str, str], bytes]]] = Queue()
 ARRIVED: Final = Event()
 RELEASE: Final = Event()
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MESSAGES: Final = [{"role": "user", "content": "ping"}]
 CHAT: Final = {
     "id": "chat-http-check",
@@ -45,7 +51,14 @@ class RecordingUpstream(BaseHTTPRequestHandler):
             RELEASE.wait(timeout=10)
             return
         self.send_response(status)
-        self.send_header("Content-Type", "text/event-stream" if body.startswith(b"data:") else "application/vnd.amazon.eventstream" if body[:1] == b"\x00" else "application/json")
+        self.send_header(
+            "Content-Type",
+            "text/event-stream"
+            if body.startswith((b"data:", b"event:"))
+            else "application/vnd.amazon.eventstream"
+            if body[:1] == b"\x00"
+            else "application/json",
+        )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -69,6 +82,189 @@ def bedrock_event(event: str, payload: object) -> bytes:
     prelude: Final = struct.pack(">II", len(headers) + len(content) + 16, len(headers))
     frame: Final = prelude + struct.pack(">I", zlib.crc32(prelude)) + headers + content
     return frame + struct.pack(">I", zlib.crc32(frame))
+
+
+def payload(response: object) -> Mapping[str, JsonValue]:
+    assert isinstance(response, BaseModel), response
+    return JSON_OBJECT.validate_json(response.model_dump_json(exclude_none=True))
+
+
+@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 completion(tools=...) imports optional mcp")
+def check_tools(base: str, asynchronous: bool = False) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        }
+    ]
+    call: Final = {
+        "id": "call-http-check",
+        "type": "function",
+        "function": {"name": "lookup", "arguments": '{"city":"Paris"}'},
+    }
+    arguments: Final = dict(model="openai/gpt-6", messages=MESSAGES, api_key="test-key", api_base=base + "/v1")
+    choices: Final = [
+        {"index": 0, "message": {"role": "assistant", "tool_calls": [call]}, "finish_reason": "tool_calls"}
+    ]
+    enqueue({**CHAT, "choices": choices})
+    result: Final = (
+        asyncio.run(litellm.acompletion(**arguments, tools=tools))
+        if asynchronous
+        else litellm.completion(**arguments, tools=tools)
+    )
+    assert payload(result)["choices"] == [{**choices[0], "provider_specific_fields": {}}]
+    path, headers, body = REQUESTS.get(timeout=10)
+    assert path == "/v1/chat/completions"
+    assert headers["authorization"] == "Bearer test-key"
+    assert json.loads(body) == {"model": "gpt-6", "messages": MESSAGES, "tools": tools}
+
+
+@skipIf(importlib.util.find_spec("mcp") is None, "BUG: LIT-9333 responses() imports optional mcp")
+def check_responses(base: str, asynchronous: bool = False) -> None:
+    output: Final[Sequence[JsonValue]] = [
+        {
+            "id": "msg-http-check",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+        }
+    ]
+    enqueue(
+        {
+            "id": "resp-http-check",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-6",
+            "output": output,
+            "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        }
+    )
+    arguments: Final = dict(model="openai/gpt-6", input="ping", api_key="test-key", api_base=base + "/v1")
+    response: Final = asyncio.run(litellm.aresponses(**arguments)) if asynchronous else litellm.responses(**arguments)
+    assert payload(response)["output"] == output
+    assert payload(response)["usage"] == {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+    path, headers, body = REQUESTS.get(timeout=10)
+    assert path == "/v1/responses"
+    assert headers["authorization"] == "Bearer test-key"
+    assert json.loads(body) == {"model": "gpt-6", "input": "ping"}
+
+
+@skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 cache hits import proxy-only fastapi")
+def check_cache_hit(base: str) -> None:
+    from litellm.caching.caching import Cache
+    from litellm.types.caching import LiteLLMCacheType
+
+    arguments: Final = dict(
+        model="openai/gpt-6",
+        messages=MESSAGES,
+        api_key="test-key",
+        api_base=base + "/v1",
+        caching=True,
+        timeout=3,
+        num_retries=0,
+        max_retries=0,
+    )
+    with patch.object(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL)):
+        enqueue(CHAT)
+        first: Final = litellm.completion(**arguments)
+        assert REQUESTS.get(timeout=10)[0] == "/v1/chat/completions"
+        cached: Final = litellm.completion(**arguments)
+        assert payload(cached) == payload(first)
+        assert payload(cached)["choices"] == [{
+            "index": 0, "message": {"role": "assistant", "content": "pong"},
+            "finish_reason": "stop", "provider_specific_fields": {},
+        }]
+        assert payload(cached)["usage"] == CHAT["usage"]
+        assert REQUESTS.empty(), "the second SDK call missed the response cache"
+
+
+@skipIf(importlib.util.find_spec("fastapi") is None, "BUG: LIT-9333 Messages streaming imports proxy-only fastapi")
+def check_messages_stream_and_callback(base: str) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    successes: Final[Queue[Mapping[str, object]]] = Queue()
+    failures: Final[Queue[object]] = Queue()
+
+    class Probe(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            if kwargs.get("litellm_call_id") == "base-sdk-messages-check":
+                successes.put(kwargs)
+
+        async def async_log_failure_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            if kwargs.get("litellm_call_id") == "base-sdk-messages-check":
+                failures.put(response_obj)
+
+    frames: Final[tuple[Mapping[str, JsonValue], ...]] = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg-stream-http-check",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "pong"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 2},
+        },
+        {"type": "message_stop"},
+    )
+    RESPONSES.put(
+        (200, b"".join(f"event: {frame['type']}\ndata: {json.dumps(frame)}\n\n".encode() for frame in frames))
+    )
+
+    async def check_async() -> None:
+        with patch.object(litellm, "callbacks", [Probe()]):
+            create: Final = cast(  # cast-ok: SDK facade exposes untyped kwargs and iterator items
+                Callable[..., Awaitable[object]], litellm.anthropic.messages.acreate
+            )
+            stream: Final = await create(
+                model="anthropic/claude-sonnet-5-5",
+                messages=MESSAGES,
+                api_key="test-key",
+                api_base=base,
+                max_tokens=16,
+                stream=True,
+                litellm_call_id="base-sdk-messages-check",
+            )
+            assert isinstance(stream, AsyncIterable), stream
+            iterator: Final = cast(AsyncIterable[object], stream)  # cast-ok: SDK returns an unparameterized iterator
+            chunks: Final = tuple([frame async for frame in iterator])
+            assert all(isinstance(frame, bytes) for frame in chunks), chunks
+            received: Final = b"".join(frame for frame in chunks if isinstance(frame, bytes))
+            assert tuple(json.loads(line[6:]) for line in received.splitlines() if line.startswith(b"data: ")) == frames
+            success: Final = await asyncio.to_thread(successes.get, True, 10)
+            await GLOBAL_LOGGING_WORKER.flush()
+            logging: Final = success["standard_logging_object"]
+            assert isinstance(logging, dict)
+            assert (logging["prompt_tokens"], logging["completion_tokens"], logging["total_tokens"]) == (3, 2, 5)
+            assert successes.empty(), "a successful stream fired more than one success callback"
+            assert failures.empty(), "a successful stream fired a failure callback"
+
+    asyncio.run(check_async())
+    path, headers, body = REQUESTS.get(timeout=10)
+    assert path == "/v1/messages"
+    assert headers["x-api-key"] == "test-key"
+    assert json.loads(body) == {"model": "claude-sonnet-5-5", "messages": MESSAGES, "max_tokens": 16, "stream": True}
 
 
 def check_http(base: str) -> None:
@@ -191,6 +387,18 @@ def main() -> None:
         worker.start()
         try:
             check_http(f"http://127.0.0.1:{server.server_port}")
+            for check in (
+                check_tools,
+                partial(check_tools, asynchronous=True),
+                check_responses,
+                partial(check_responses, asynchronous=True),
+                check_cache_hit,
+                check_messages_stream_and_callback,
+            ):
+                try:
+                    check(f"http://127.0.0.1:{server.server_port}")
+                except SkipTest as skipped:
+                    print(f"SKIP: {skipped}")
             assert RESPONSES.empty() and REQUESTS.empty(), "unconsumed HTTP exchanges"
         finally:
             RELEASE.set()
