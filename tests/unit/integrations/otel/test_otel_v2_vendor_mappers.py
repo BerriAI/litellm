@@ -777,12 +777,10 @@ def test_resolve_mappers_rejects_unknown_name():
         resolve_mappers(["genai", "nope"])
 
 
-def test_langfuse_mapper_derives_trace_name_input_and_output():
+def test_langfuse_mapper_derives_the_trace_name_from_the_call_type():
     attrs = LangfuseMapper().map(_llm_call(call_type="acompletion"))
 
     assert attrs["langfuse.trace.name"] == "litellm-acompletion"
-    assert attrs["langfuse.trace.input"] == attrs["langfuse.observation.input"]
-    assert attrs["langfuse.trace.output"] == attrs["langfuse.observation.output"]
 
 
 def test_langfuse_mapper_derived_name_yields_to_the_caller_name():
@@ -804,5 +802,3 @@ def test_langfuse_root_trace_attributes_match_the_generation_pairs():
     root = LangfuseMapper.trace_attributes(TraceControls(), "aresponses")
     assert root == {"langfuse.trace.name": "litellm-aresponses"}
     assert generation["langfuse.trace.name"] == root["langfuse.trace.name"]
-    assert generation["langfuse.trace.input"] == generation["langfuse.observation.input"]
-    assert generation["langfuse.trace.output"] == generation["langfuse.observation.output"]

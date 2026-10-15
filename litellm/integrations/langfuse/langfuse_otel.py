@@ -6,12 +6,15 @@ from datetime import datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -46,11 +49,9 @@ def _attr(item: object, name: str, default: object = None) -> object:
 
 
 def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
-    import litellm
-
     if litellm.cache is None:
         return None
-    return litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+    return litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -118,6 +119,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "session_id": LangfuseSpanAttributes.SESSION_ID,
+            "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
             "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
@@ -157,8 +159,6 @@ class LangfuseOtelLogger(OpenTelemetry):
     @staticmethod
     def _trace_tags(kwargs: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[str, ...]:
         """Order-preserving dedupe of caller tags, request tags and langfuse_default_tags expansions."""
-        import litellm
-
         caller_tags: Final = metadata.get("tags")
         request_tags: Final = (_as_gettable(kwargs.get("standard_logging_object")) or {}).get("request_tags")
         default_tags: Final = litellm.langfuse_default_tags
@@ -239,13 +239,21 @@ class LangfuseOtelLogger(OpenTelemetry):
         if input_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, input_json)
             if not joins_existing_trace:
-                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_INPUT.value, input_json)
+                safe_set_attribute(
+                    span,
+                    LangfuseSpanAttributes.TRACE_INPUT.value,
+                    REDACTED_BY_LITELLM if metadata.get("mask_input") else input_json,
+                )
 
         output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
         if output_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, output_json)
             if not joins_existing_trace:
-                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_OUTPUT.value, output_json)
+                safe_set_attribute(
+                    span,
+                    LangfuseSpanAttributes.TRACE_OUTPUT.value,
+                    REDACTED_BY_LITELLM if metadata.get("mask_output") else output_json,
+                )
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:
@@ -440,8 +448,6 @@ class LangfuseOtelLogger(OpenTelemetry):
 
 
 def _extract_choices_output(response_obj: _Gettable) -> str | None:
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
     choices: Final = response_obj.get("choices", [])
     if not isinstance(choices, list) or not choices:
         return None
@@ -494,8 +500,6 @@ def _tool_call_arguments(arguments: object) -> object:
 
 
 def _extract_output_items(response_obj: _Gettable) -> str | None:
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
     output: Final = response_obj.get("output", [])
     if not isinstance(output, list) or not output:
         return None
