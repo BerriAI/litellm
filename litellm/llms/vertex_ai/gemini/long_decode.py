@@ -297,8 +297,10 @@ def parse_body(response: httpx.Response) -> GenerateContentResponseBody:
         )
 
 
-def hops_original_response(hops: LongDecodeHops, first_response: httpx.Response) -> str:
-    return first_response.text if len(hops) == 1 else json.dumps(hops)
+def hops_original_response(
+    hops: LongDecodeHops, merged: GenerateContentResponseBody, first_response: httpx.Response
+) -> str:
+    return first_response.text if len(hops) == 1 else json.dumps(merged)
 
 
 def log_failed_hop(error: Exception | str) -> None:

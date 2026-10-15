@@ -3373,14 +3373,15 @@ def _transform_long_decode_hops(
     request_body: RequestBody,
     messages: Sequence[AllMessageValues],
 ) -> ModelResponse:
+    body: Final = merge_hops(hops)
     logging_obj.post_call(
         input=messages,
         api_key="",
-        original_response=hops_original_response(hops, first_response),
+        original_response=hops_original_response(hops, body, first_response),
         additional_args={"complete_input_dict": request_body},
     )
     merged: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
-        completion_response=merge_hops(hops),
+        completion_response=body,
         model_response=model_response,
         model=model,
         logging_obj=logging_obj,

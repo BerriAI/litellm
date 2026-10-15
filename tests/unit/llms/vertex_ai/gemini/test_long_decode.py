@@ -562,6 +562,47 @@ async def test_unary_failed_continuation_hop_returns_the_answer_so_far_with_its_
 
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
+async def test_unary_long_decode_logs_one_raw_response_object_with_the_whole_answer_and_only_its_last_token(
+    is_async: bool,
+):
+    sent: Final[list[dict[str, object]]] = []
+    logged: Final[list[object]] = []
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED))
+
+    def log_raw_response(details: Mapping[str, object]) -> None:
+        if details.get("log_event_type") == "post_api_call":
+            logged.append(details["original_response"])
+
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 50,
+        "api_key": "fake-gemini-key",
+        "logger_fn": log_raw_response,
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+    else:
+        litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+
+    assert len(sent) == 2
+    assert len(logged) == 1
+    raw: Final = logged[0]
+    assert isinstance(raw, str)
+    body: Final = json.loads(raw)
+    assert isinstance(body, dict)
+    candidate: Final = body["candidates"][0]
+    assert "".join(part["text"] for part in candidate["content"]["parts"]) == "hello world"
+    assert candidate["continuationToken"] == "dG9rLTI="
+    assert "dG9rLTE=" not in raw
+    assert body["usageMetadata"]["candidatesTokenCount"] == 50
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
 async def test_unary_long_decode_follows_more_hops_than_the_interpreter_allows_nested_calls(is_async: bool):
     hop_count: Final = sys.getrecursionlimit() + 50
     one_token_hop: Final = {**HOP_1, "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}}

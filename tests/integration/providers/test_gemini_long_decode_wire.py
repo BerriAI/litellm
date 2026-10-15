@@ -19,8 +19,9 @@ import openai
 import pytest
 import yaml
 from _pytest.mark.structures import ParameterSet
-from integration._support.client import JSON_OBJECT, Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows
+from integration._support.openai_wire import answering_model_discovery, chat_reply, posted_targets
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._gemini_long_decode_support import (
@@ -64,6 +65,7 @@ from integration.providers._gemini_long_decode_support import (
     items_of,
     number,
     output_text,
+    path_of,
     payloads,
     post,
     received,
@@ -114,6 +116,13 @@ def _cells(providers: Sequence[Provider], endpoints: Sequence[Endpoint]) -> tupl
     return tuple(
         pytest.param(provider, endpoint, stream, id=f"{provider}-{endpoint}-{_mode(stream)}")
         for provider, endpoint, stream in itertools.product(providers, endpoints, (False, True))
+    )
+
+
+def _provider_modes() -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(provider, stream, id=f"{provider}-{_mode(stream)}")
+        for provider, stream in itertools.product(PROVIDERS, (False, True))
     )
 
 
@@ -343,6 +352,38 @@ def test_answer_cut_at_the_callers_cap_returns_from_one_request_and_chat_carries
         assert_billed(model, endpoint, CUT.usage, _identities(observed, response_id))
 
 
+_EMPTY_VERTEX_LISTS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_ratings": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    }
+)
+
+
+def _vertex_lists(chunk: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: value for key, value in chunk.items() if key.startswith("vertex_ai_")}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_cut_chat_stream_hands_its_token_on_a_chunk_with_empty_vertex_ai_lists_and_no_reasoning_count(
+    gateway: Gateway, provider: Provider
+) -> None:
+    with wire_server(upstream(answers(f"cut-{uuid.uuid4().hex}", CUT))) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        chunks: Final = payloads(post(gateway, "chat", request_body("chat", model, True)).text, True)
+        carriers: Final = [chunk for chunk in chunks if "continuation_token" in json.dumps(chunk)]
+        assert [_vertex_lists(chunk) for chunk in carriers] == [dict(_EMPTY_VERTEX_LISTS)], chunks
+        assert [_vertex_lists(chunk) for chunk in chunks if chunk not in carriers] == [{}] * (len(chunks) - 1), chunks
+        metered: Final = [chunk for chunk in chunks if isinstance(chunk.get("usage"), dict)]
+        assert [at(chunk, "usage", "completion_tokens_details") for chunk in metered] == [
+            {"text_tokens": CUT.output_tokens}
+        ], chunks
+        received(wire, provider, True, (False,))
+
+
 @pytest.mark.parametrize(("provider", "endpoint", "stream"), _cells(PROVIDERS, ENDPOINTS))
 def test_resend_with_a_continuation_token_reaches_google_and_returns_the_rest(
     gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool
@@ -510,6 +551,49 @@ def test_third_request_that_fails_to_open_returns_both_earlier_parts_with_the_se
         assert_one_id(endpoint, stream, observed, first_id)
         _assert_each_request_sent_the_token_before_it(wire, provider, stream)
         assert_billed(model, endpoint, usage, _identities(observed, first_id))
+
+
+_CUTS: Final = 40
+
+
+def _part(index: int) -> Hop:
+    if index == _CUTS:
+        return Hop((f"part {index} ", "ends it."), "STOP", None, 20, 3)
+    return Hop((f"part {index} ", "goes on, "), "CONTINUATION", f"token-after-part-{index}", 20, 3)
+
+
+_PARTS: Final = tuple(_part(index) for index in range(_CUTS + 1))
+_PART_AFTER: Final[Mapping[str | None, Hop]] = MappingProxyType(
+    {None: _PARTS[0], **{earlier.token: later for earlier, later in itertools.pairwise(_PARTS)}}
+)
+
+
+def _cut_until_the_last_part(first_id: str) -> Respond:
+    def respond(request: Request) -> Reply:
+        token: Final = JSON_OBJECT.validate_json(request.body).get("continuationToken")
+        assert token is None or isinstance(token, str), request
+        response_id: Final = first_id if token is None else f"later-{uuid.uuid4().hex}"
+        return hop_reply(response_id, _PART_AFTER[token], streams(request))
+
+    return respond
+
+
+@pytest.mark.parametrize(("provider", "stream"), _provider_modes())
+def test_answer_google_ends_early_forty_times_is_joined_from_forty_one_requests_and_billed_once(
+    gateway: Gateway, provider: Provider, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    joined: Final = "".join(part.text for part in _PARTS)
+    usage: Final = summed(*_PARTS)
+    with wire_server(_cut_until_the_last_part(first_id)) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        observed: Final = answered("chat", stream, post(gateway, "chat", request_body("chat", model, stream)))
+        assert (observed.answer, observed.finishes, observed.usage) == (joined, ("stop",), usage), observed
+        assert observed.tokens == () and observed.errors == (), observed
+        assert_one_id("chat", stream, observed, first_id)
+        sent: Final = received(wire, provider, stream, (False, *(True,) * _CUTS))
+        assert [body.get("continuationToken") for body in sent] == [None, *(part.token for part in _PARTS[:-1])]
+        assert_billed(model, "chat", usage, _identities(observed, first_id))
 
 
 _TOKEN_PATH: Final = "/_oauth/token"
@@ -697,6 +781,42 @@ def test_non_streamed_continuation_request_left_unanswered_returns_the_answer_so
         opening, continuing = received(wire, provider, False, (False, True))
         assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
         assert_billed(model, endpoint, FIRST_HALF.usage, _identities(observed, first_id))
+
+
+_GIVE_UP_SECONDS: Final = 2
+
+
+def _held(release: threading.Event, answer: Answer) -> Answer:
+    def hold(stream: bool) -> Reply:
+        assert release.wait(timeout=90), "The first request was never released"
+        return answer(stream)
+
+    return hold
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_non_streamed_request_its_caller_gave_up_on_is_still_continued_and_billed_for_the_whole_answer(
+    gateway: Gateway, provider: Provider
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    release: Final = threading.Event()
+    respond: Final = upstream(
+        _held(release, answers(first_id, FIRST_HALF)), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF)
+    )
+    with wire_server(respond) as wire, contextlib.ExitStack() as cleanup, gateway.scenario() as scenario:
+        cleanup.callback(release.set)
+        model: Final = register(gateway, scenario, provider, wire)
+        with pytest.raises(httpx.ReadTimeout):
+            gateway.client.post(
+                path_of("chat"),
+                json=request_body("chat", model, False),
+                headers={"Authorization": f"Bearer {gateway.key}"},
+                timeout=_GIVE_UP_SECONDS,
+            )
+        release.set()
+        assert_billed(model, "chat", _CHAIN_USAGE, frozenset({first_id}))
+        opening, continuing = received(wire, provider, False, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
 
 
 @pytest.mark.parametrize(("provider", "endpoint"), tuple(itertools.product(PROVIDERS, ENDPOINTS)))
@@ -1067,28 +1187,85 @@ def test_request_with_no_output_cap_is_never_continued_and_returns_googles_cut_w
         assert at(only, "generationConfig", "max_output_tokens") is None, only
 
 
-_STRINGLY: Final[tuple[ParameterSet, ...]] = tuple(
+_NOT_A_NUMBER: Final[tuple[tuple[str, Mapping[str, JsonValue], int | None], ...]] = (
+    ("n-string", {"n": "1"}, CAP),
+    ("n-list", {"n": [1]}, CAP),
+    ("n-empty", {"n": ""}, CAP),
+    ("n-5kb", {"n": "1" * 5120}, CAP),
+    ("max_tokens-string", {"max_tokens": "300"}, None),
+    ("max_tokens-list", {"max_tokens": [300]}, None),
+    ("max_tokens-empty", {"max_tokens": ""}, None),
+    ("max_tokens-5kb", {"max_tokens": "3" * 5120}, None),
+)
+_NOT_A_NUMBER_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
     pytest.param(extra, cap, stream, id=f"{name}-{_mode(stream)}")
-    for (name, extra, cap), stream in itertools.product(
-        (("n", {"n": "1"}, CAP), ("max_tokens", {"max_tokens": "300"}, None)), (False, True)
-    )
+    for (name, extra, cap), stream in itertools.product(_NOT_A_NUMBER, (False, True))
 )
 
 
-@pytest.mark.parametrize(("extra", "cap", "stream"), _STRINGLY)
-def test_count_or_cap_sent_as_a_string_makes_one_request_and_is_never_continued(
-    gateway: Gateway, extra: Mapping[str, JsonValue], cap: int | None, stream: bool
-) -> None:
-    respond: Final = upstream(
+def _halves() -> Respond:
+    return upstream(
         answers(f"first-{uuid.uuid4().hex}", FIRST_HALF), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF)
     )
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+
+
+@pytest.mark.parametrize(("extra", "cap", "stream"), _NOT_A_NUMBER_CELLS)
+def test_count_or_cap_that_is_not_a_number_makes_one_request_and_is_never_continued(
+    gateway: Gateway, extra: Mapping[str, JsonValue], cap: int | None, stream: bool
+) -> None:
+    with wire_server(_halves()) as wire, gateway.scenario() as scenario:
         model: Final = register(gateway, scenario, "gemini", wire)
         body: Final = request_body("chat", model, stream, {**NO_CACHE, **extra}, cap=cap)
         observed: Final = answered("chat", stream, post(gateway, "chat", body))
         assert (observed.answer, observed.errors) == (FIRST_HALF.text, ()), observed
         (only,) = received(wire, "gemini", stream, (False,))
         assert "continuationToken" not in only, only
+
+
+def _twice_cells() -> tuple[ParameterSet, ...]:
+    pairs: Final = (
+        ("max_tokens-number-last", f'"max_tokens": "300", "max_tokens": {CAP}', True),
+        ("max_tokens-string-last", f'"max_tokens": {CAP}, "max_tokens": "300"', False),
+        ("n-one-last", f'"max_tokens": {CAP}, "n": 2, "n": 1', True),
+        ("n-string-last", f'"max_tokens": {CAP}, "n": 1, "n": "1"', False),
+    )
+    return tuple(
+        pytest.param(pair, continued, stream, id=f"{name}-{_mode(stream)}")
+        for (name, pair, continued), stream in itertools.product(pairs, (False, True))
+    )
+
+
+@pytest.mark.parametrize(("pairs", "continued", "stream"), _twice_cells())
+def test_count_or_cap_sent_twice_in_one_body_is_read_from_its_last_value(
+    gateway: Gateway, pairs: str, continued: bool, stream: bool
+) -> None:
+    with wire_server(_halves()) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, "gemini", wire)
+        whole: Final = json.dumps(request_body("chat", model, stream, cap=None))
+        response: Final = gateway.client.request(
+            "POST",
+            path_of("chat"),
+            content=f"{whole[:-1]}, {pairs}}}".encode(),
+            headers={"Authorization": f"Bearer {gateway.key}", "Content-Type": "application/json"},
+        )
+        observed: Final = answered("chat", stream, response)
+        assert (observed.answer, observed.errors) == (_JOINED if continued else FIRST_HALF.text, ()), observed
+        received(wire, "gemini", stream, (False, True) if continued else (False,))
+
+
+@pytest.mark.parametrize(("provider", "stream"), _provider_modes())
+def test_count_of_true_is_read_as_one_answer_and_continued(gateway: Gateway, provider: Provider, stream: bool) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    respond: Final = upstream(answers(first_id, FIRST_HALF), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF))
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body("chat", model, stream, {**NO_CACHE, "n": True})
+        observed: Final = answered("chat", stream, post(gateway, "chat", body))
+        assert (observed.answer, observed.finishes, observed.usage) == (_JOINED, ("stop",), _CHAIN_USAGE), observed
+        assert (observed.tokens, observed.errors) == ((), ()), observed
+        opening, continuing = received(wire, provider, stream, (False, True))
+        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
+        assert_billed(model, "chat", _CHAIN_USAGE, _identities(observed, first_id))
 
 
 @pytest.mark.parametrize(("provider", "endpoint", "stream"), _cells(PROVIDERS, ENDPOINTS))
@@ -1165,6 +1342,115 @@ def test_empty_or_null_continuation_token_is_served_the_cached_answer_of_the_req
         assert (twin.answer, wire.drain()) == (PLAIN.text, ()), twin
         rows: Final = spend_rows(model, expected=2)
         assert sorted(str(row["cache_hit"]) == "True" for row in rows) == [False, True], rows
+
+
+def _refused_continuation_cells() -> tuple[ParameterSet, ...]:
+    reached: Final = (
+        *itertools.product(PROVIDERS, ("chat",), (False, True)),
+        *itertools.product(("gemini",), ("messages", "responses"), (False, True)),
+    )
+    return tuple(
+        pytest.param(provider, endpoint, stream, id=f"{provider}-{endpoint}-{_mode(stream)}")
+        for provider, endpoint, stream in reached
+    )
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream"), _refused_continuation_cells())
+def test_answer_so_far_after_a_refused_continuation_is_cached_and_replayed_without_asking_google_again(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool
+) -> None:
+    first_id: Final = f"first-{uuid.uuid4().hex}"
+    so_far: Final = (FIRST_HALF.text, (cut_off(endpoint),), FIRST_HALF.usage)
+    with wire_server(upstream(answers(first_id, FIRST_HALF), refuses(500))) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body(endpoint, model, stream, NOTHING_EXTRA, prompt=f"{PROMPT} {uuid.uuid4().hex}")
+        first: Final = answered(endpoint, stream, post(gateway, endpoint, body))
+        assert (first.answer, first.finishes, first.usage) == so_far, first
+        assert first.tokens == ((HOP_TOKEN,) if carries_token(endpoint, stream) else ()), first
+        assert len(wire.drain()) == 2
+        assert_billed(model, endpoint, FIRST_HALF.usage, _identities(first, first_id))
+        replayed: Final = answered(endpoint, stream, post(gateway, endpoint, body))
+        assert (replayed.answer, replayed.finishes, replayed.usage) == so_far, replayed
+        assert wire.drain() == ()
+        rows: Final = spend_rows(model, expected=2)
+        assert sorted(str(row["cache_hit"]) == "True" for row in rows) == [False, True], rows
+
+
+_OPENAI_ANSWER: Final = "An answer from another provider."
+
+
+def _openai_answering(request: Request) -> Reply:
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    return chat_reply(
+        f"chatcmpl-{uuid.uuid4().hex}", string_value(body["model"]), _OPENAI_ANSWER, stream=body.get("stream") is True
+    )
+
+
+def _register_openai(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(model="openai/gpt-5.6", api_base=f"{wire.url}/v1")
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=_mode)
+def test_continuation_token_on_another_providers_request_misses_the_cached_answer_of_the_request_without_it(
+    gateway: Gateway, stream: bool
+) -> None:
+    with wire_server(answering_model_discovery(_openai_answering)) as wire, gateway.scenario() as scenario:
+        model: Final = _register_openai(scenario, wire)
+        body: Final = request_body("chat", model, stream, NOTHING_EXTRA, prompt=f"{PROMPT} {uuid.uuid4().hex}")
+        tokened: Final = {**body, "continuation_token": CUT_TOKEN}
+        assert answered("chat", stream, post(gateway, "chat", body)).answer == _OPENAI_ANSWER
+        spend_rows(model)
+        assert answered("chat", stream, post(gateway, "chat", tokened)).answer == _OPENAI_ANSWER
+        spend_rows(model, expected=2)
+        assert answered("chat", stream, post(gateway, "chat", tokened)).answer == _OPENAI_ANSWER
+        rows: Final = spend_rows(model, expected=3)
+        assert posted_targets(wire) == ("/v1/chat/completions",) * 2
+        assert sorted(str(row["cache_hit"]) == "True" for row in rows) == [False, False, True], rows
+
+
+def _openai_stream_reporting_cached_prompt_tokens(request: Request) -> Reply:
+    chunk: Final[dict[str, JsonValue]] = {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": string_value(JSON_OBJECT.validate_json(request.body)["model"]),
+    }
+    usage: Final[dict[str, JsonValue]] = {
+        "prompt_tokens": 5,
+        "completion_tokens": 3,
+        "total_tokens": 8,
+        "prompt_tokens_details": {"cached_tokens": 2},
+    }
+    frames: Final[tuple[dict[str, JsonValue], ...]] = (
+        {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": _OPENAI_ANSWER}}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": usage},
+    )
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(*(f"data: {json.dumps(item)}\n\n".encode() for item in frames), b"data: [DONE]\n\n"),
+    )
+
+
+def _spend_metadata(model: str) -> dict[str, JsonValue]:
+    spend_rows(model)
+    (row,) = read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,))
+    metadata: Final = row["metadata"]
+    return JSON_OBJECT.validate_json(metadata) if isinstance(metadata, str) else JSON_OBJECT.validate_python(metadata)
+
+
+def test_streamed_answer_from_another_provider_logs_an_empty_initial_prompt_count_the_caller_never_sees(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(answering_model_discovery(_openai_stream_reporting_cached_prompt_tokens)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _register_openai(scenario, wire)
+        response: Final = post(gateway, "chat", request_body("chat", model, True))
+        assert answered("chat", True, response).answer == _OPENAI_ANSWER
+        assert "initial_prompt_tokens" not in response.text, response.text
+        logged: Final = at(_spend_metadata(model), "usage_object", "prompt_tokens_details")
+        assert isinstance(logged, dict) and logged.get("initial_prompt_tokens", "absent") is None, logged
 
 
 def _native_path(model: str, stream: bool) -> str:
