@@ -1,5 +1,6 @@
 import io
 import json
+from collections.abc import Iterable
 from os import PathLike
 from typing import Final
 
@@ -83,17 +84,17 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # spooled upload handle (managed batches stream from it) is read straight
         # off its backing; bytes/str are wrapped so they iterate line-by-line.
         source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
-        if hasattr(source, "read"):
+        if isinstance(source, (bytes, bytearray)):
+            line_iter: Iterable[bytes] | Iterable[str] = io.BytesIO(bytes(source))
+        elif isinstance(source, str):
+            line_iter = io.StringIO(source)
+        elif hasattr(source, "read") and not isinstance(source, PathLike):
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)
                 except (OSError, ValueError):
                     pass
-            line_iter: object = source
-        elif isinstance(source, (bytes, bytearray)):
-            line_iter = io.BytesIO(bytes(source))
-        elif isinstance(source, str):
-            line_iter = io.StringIO(source)
+            line_iter = source
         else:
             return file_content
 
@@ -105,12 +106,18 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         # multiple physical lines still parse. Streaming the handle also means
         # the model rewrite is actually applied to tuple-wrapped upload handles;
         # otherwise a restricted body.model would survive and bypass the batch
-        # model allowlist (which validates the upload target alias).
+        # model allowlist (which validates the upload target alias). Each row is
+        # written on the line it ends on, blank lines included, so a provider
+        # error naming a line still points into the caller's file.
         output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
-        wrote_any = False
+        last_written_line = 0
         buffer = ""
-        for raw_line in line_iter:
-            buffer += raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+        for line_number, raw_line in enumerate(line_iter, start=1):
+            buffer += (
+                raw_line.decode("utf-8-sig")
+                if isinstance(raw_line, (bytes, bytearray))
+                else raw_line.removeprefix("\ufeff")
+            )
             stripped = buffer.strip()
             if not stripped:
                 buffer = ""
@@ -121,8 +128,8 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
                 continue  # object not complete yet; keep accumulating
             if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
                 json_object["body"]["model"] = new_model_name
-            output.write((("\n" if wrote_any else "") + json.dumps(json_object)).encode("utf-8"))
-            wrote_any = True
+            output.write(("\n" * (line_number - max(last_written_line, 1)) + json.dumps(json_object)).encode("utf-8"))
+            last_written_line = line_number
             buffer = ""
 
         if buffer.strip():
@@ -139,7 +146,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             return file_content
 
         # If no valid JSON objects were found, return the original content
-        if not wrote_any:
+        if not last_written_line:
             return file_content
 
         output.seek(0)

@@ -260,9 +260,15 @@ class TestGetObjectNameLazyParse:
         assert "gemini-2.5-flash" in object_name
 
     @pytest.mark.parametrize(
-        "first_row", [b'{"custom_id": "r-0", "body": null}', b'{"custom_id": "r-0", "body": "hi"}']
+        "first_row",
+        [
+            b'{"custom_id": "r-0", "body": null}',
+            b'{"custom_id": "r-0", "body": "hi"}',
+            b'{"custom_id": "r-0", "body": {"model": null, "messages": [{"role": "user", "content": "hi"}]}}',
+            b'{"custom_id": "r-0", "body": {"model": 5, "messages": [{"role": "user", "content": "hi"}]}}',
+        ],
     )
-    def test_non_object_body_on_line_1_is_reported_as_a_400_naming_the_line(self, first_row: bytes):
+    def test_bad_body_on_line_1_is_reported_as_a_400_naming_the_line(self, first_row: bytes):
         cfg: Final = VertexAIFilesConfig()
         file_data: Final = ("batch.jsonl", first_row + b"\n", "application/jsonl")
         cfg.get_object_name(file_data, purpose="batch")

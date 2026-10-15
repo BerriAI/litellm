@@ -276,6 +276,40 @@ def test_replace_model_in_jsonl_multi_row_rewrites_every_model():
     assert all(row["body"]["model"] == "new-model" for row in rows)
 
 
+def test_replace_model_in_jsonl_keeps_every_row_on_its_original_line():
+    content = (
+        b'{"custom_id":"a","body":{"model":"old"}}\n'
+        b"\n"
+        b'{"custom_id":"c","body":{"model":"old"}}\n'
+        b'{"custom_id":"d",\n'
+        b'"body":{"model":"old"}}\n'
+        b'{"custom_id":"f","body":{"model":"old"}}\n'
+    )
+
+    result = replace_model_in_jsonl(content, "new-model")
+
+    assert isinstance(result, InMemoryFile)
+    lines = result.getvalue().decode("utf-8").split("\n")
+    assert [json.loads(line)["custom_id"] if line else None for line in lines] == ["a", None, "c", None, "d", "f"]
+    assert all(json.loads(line)["body"]["model"] == "new-model" for line in lines if line)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'\xef\xbb\xbf{"custom_id":"a","body":{"model":"old"}}\n\xef\xbb\xbf{"custom_id":"b","body":{"model":"old"}}\n',
+        '\ufeff{"custom_id":"a","body":{"model":"old"}}\n\ufeff{"custom_id":"b","body":{"model":"old"}}\n',
+    ],
+    ids=["bytes", "str"],
+)
+def test_replace_model_in_jsonl_rewrites_rows_that_start_with_a_bom(content):
+    result = replace_model_in_jsonl(content, "new-model")
+
+    assert isinstance(result, InMemoryFile)
+    rows = [json.loads(line) for line in result.getvalue().decode("utf-8").split("\n")]
+    assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [("a", "new-model"), ("b", "new-model")]
+
+
 def test_replace_model_in_jsonl_with_embedded_newlines():
     """Test that replace_model_in_jsonl works correctly with embedded newlines in content"""
     # Create a JSONL with embedded newlines in the message content

@@ -694,9 +694,11 @@ async def test_every_record_blocked_leaves_nothing_to_submit():
 
 
 @pytest.mark.asyncio
-async def test_rewrite_drops_blocked_records_and_masks_redacted_ones():
+async def test_rewrite_blanks_blocked_records_and_masks_redacted_ones_keeping_line_numbers():
     records = [_record("a"), _record("b", content="my secret is here"), _record("c", content="tripwire"), _record("d")]
-    source = _jsonl(*records)
+    source = io.BytesIO(
+        "\n".join((json.dumps(records[0]), "  ", *(json.dumps(r) for r in records[1:]))).encode() + b"\n"
+    )
 
     def _hook(data):
         _redact_containing("secret")(data)
@@ -705,9 +707,9 @@ async def test_rewrite_drops_blocked_records_and_masks_redacted_ones():
     result = await _scan_full(source, FakeProxyLogging(_hook))
     rewritten = rewrite_batch_input_file(source, result)
 
-    lines = [json.loads(line) for line in (rewritten.seek(0), rewritten.read().decode())[1].splitlines()]
-    assert [line["custom_id"] for line in lines] == ["a", "b", "d"]
-    assert lines[1]["body"]["messages"][0]["content"] == "my *** is here"
+    lines = [json.loads(line) if line else None for line in rewritten.read().decode().split("\n")]
+    assert [line and line["custom_id"] for line in lines] == ["a", None, "b", None, "d"]
+    assert lines[2]["body"]["messages"][0]["content"] == "my *** is here"
 
 
 @pytest.mark.asyncio
@@ -1117,12 +1119,14 @@ async def test_the_uploaded_file_is_what_the_loadbalancing_model_sniff_reads():
     }
     source = _jsonl(dropped_first, kept)
 
-    result = await _scan_full(source, FakeProxyLogging(_blocking("tripwire")))
-    rewritten = rewrite_batch_input_file(source, result)
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_first_json_object
 
-    first_line = json.loads((rewritten.seek(0), rewritten.read().decode())[1].splitlines()[0])
-    assert first_line["custom_id"] == "kept"
-    assert first_line["body"]["model"] == "model-b"
+    result = await _scan_full(source, FakeProxyLogging(_blocking("tripwire")))
+    first_record = get_first_json_object(rewrite_batch_input_file(source, result))
+
+    assert first_record is not None
+    assert first_record["custom_id"] == "kept"
+    assert first_record["body"]["model"] == "model-b"
 
 
 @pytest.mark.asyncio

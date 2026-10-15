@@ -534,13 +534,14 @@ def _read_spooled(redactions: BinaryIO, change: RecordRedacted) -> bytes:
 
 def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> BinaryIO:
     """
-    Re-emit the file with redacted records rewritten and dropped records left out.
+    Re-emit the file with redacted records rewritten and dropped records blanked.
 
     Untouched records are copied through as written rather than re-serialized, so enabling the
-    feature does not reformat records no guardrail objected to. Blank lines between records are
-    not carried over, since they are not records. Rewritten records are read back from the scan's
-    spool rather than from memory, so a file whose records are mostly rewritten does not put a
-    second copy of itself on the heap.
+    feature does not reformat records no guardrail objected to. Blank lines and dropped records
+    become empty lines, so every record keeps its line number and a provider error naming a line
+    still points into the caller's file. Rewritten records are read back from the scan's spool
+    rather than from memory, so a file whose records are mostly rewritten does not put a second
+    copy of itself on the heap.
     """
     redacted: Final = MappingProxyType(
         {change.line_number: change for change in result.changes if isinstance(change, RecordRedacted)}
@@ -550,15 +551,17 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle
         max_size=_REWRITE_SPOOL_BYTES
     )
-    wrote_any = False  # rebind-ok: tracks whether a separator is needed
     try:
-        for line_number, raw_line in _iter_lines(file_source):
-            if line_number in dropped:
-                continue
+        for line_number, raw_line in enumerate(file_source, start=1):
             change = redacted.get(line_number)
-            line = raw_line.rstrip(b"\n") if change is None else _read_spooled(result.redactions, change)
-            output.write(b"\n" + line if wrote_any else line)
-            wrote_any = True
+            line = (
+                b""
+                if line_number in dropped or not raw_line.strip()
+                else raw_line.rstrip(b"\n")
+                if change is None
+                else _read_spooled(result.redactions, change)
+            )
+            output.write(line if line_number == 1 else b"\n" + line)
     except BaseException:
         output.close()
         raise

@@ -974,7 +974,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         nonexistent publisher model.
         """
         first_entry: Final = openai_jsonl_content[0]
-        jsonl_model: Final = first_entry["body"].get("model", "") if isinstance(first_entry.get("body"), dict) else ""
+        body_model: Final = first_entry["body"].get("model") if isinstance(first_entry.get("body"), dict) else None
+        jsonl_model: Final = body_model if isinstance(body_model, str) else ""
         raw_model: Final = deployment_model.removeprefix("vertex_ai/") if deployment_model else jsonl_model
         return _managed_batch_object_name(raw_model, passthrough=False)
 
