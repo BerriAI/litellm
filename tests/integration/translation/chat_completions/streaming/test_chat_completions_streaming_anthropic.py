@@ -11,10 +11,25 @@ from integration.translation.runner import assert_streaming_translation
 CLAUDE_SONNET_5_5_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
     scenario="streaming",
     litellm_endpoint=CLAUDE_SONNET_5_5_TEST_CASE.litellm_endpoint,
-    litellm_request={**CLAUDE_SONNET_5_5_TEST_CASE.litellm_request, "stream": True},
+    litellm_request={
+        "model": "anthropic/claude-sonnet-5-5",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+        "stream": True,
+    },
     expected_provider_endpoint=CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_endpoint,
     expected_provider_headers=CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_headers,
-    expected_provider_request={**CLAUDE_SONNET_5_5_TEST_CASE.expected_provider_request, "stream": True},
+    expected_provider_request={
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
+        "max_tokens": 64,
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+        "stream": True,
+    },
     mock_provider_frames=(
         SSEFrame(
             event="message_start",
