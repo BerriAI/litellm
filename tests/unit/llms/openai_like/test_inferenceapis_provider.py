@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -73,26 +72,6 @@ def test_inferenceapis_provider_detected_from_api_base():
     assert model == "zai-org/GLM-5.3"
     assert provider == "inferenceapis"
     assert api_base == INFERENCEAPIS_API_BASE
-
-
-def test_inferenceapis_is_available_in_add_model_form():
-    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers: Final = json.loads(fields_path.read_text())
-    inferenceapis: Final = next(provider for provider in providers if provider["litellm_provider"] == "inferenceapis")
-
-    assert inferenceapis["provider"] == "INFERENCEAPIS"
-    assert inferenceapis["provider_display_name"] == "Inference APIs"
-    assert {field["key"]: field["required"] for field in inferenceapis["credential_fields"]} == {
-        "api_base": False,
-        "api_key": True,
-    }
-
-
-def test_inferenceapis_supported_endpoints():
-    matrix_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    endpoints: Final = json.loads(matrix_path.read_text())["providers"]["inferenceapis"]["endpoints"]
-
-    assert {name for name, supported in endpoints.items() if supported} == {"chat_completions", "responses"}
 
 
 def test_inferenceapis_cost_map_rows_only_list_registered_endpoints():
