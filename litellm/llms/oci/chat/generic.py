@@ -13,7 +13,6 @@ from typing import Final
 import httpx
 from pydantic import ValidationError
 
-from litellm._logging import verbose_logger
 from litellm.llms.oci.common_utils import (
     OCIError,
     resolve_oci_schema_anyof,
@@ -219,18 +218,8 @@ def adapt_tool_definition_to_oci_standard(tools: list[dict], vendor: OCIVendors)
     """
     new_tools: Final = []
     for tool in tools:
-        tool_type = tool.get("type")
-        if tool_type != "function":
-            # Coding-agent clients (Codex over the Responses API, Claude Code
-            # over the Anthropic Messages API) mix built-in / server tools in
-            # with their function tools. OCI GENERIC only knows FUNCTION tools,
-            # so translate what we can and skip the rest instead of failing
-            # the whole request (see BerriAI/litellm#31449).
-            verbose_logger.warning(
-                "OCI GENERIC only supports function tools; skipping tool of type %r",
-                tool_type,
-            )
-            continue
+        if tool["type"] != "function":
+            raise OCIError(status_code=400, message="OCI only supports function tools")
 
         tool_function = tool.get("function")
         if not isinstance(tool_function, dict):

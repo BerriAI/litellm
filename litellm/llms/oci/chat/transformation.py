@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -50,6 +51,7 @@ from litellm.llms.oci.common_utils import (
     sign_oci_request,
     validate_oci_environment,
 )
+from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.oci import (
     CohereChatRequest,
     OCIChatRequestPayload,
@@ -185,36 +187,57 @@ def _normalize_tool_choice(selected_params: dict) -> None:
     )
 
 
-def _fail_closed_tool_choice_for_missing_function(selected_params: dict) -> None:
-    """Disable tool calls when a ``FUNCTION`` tool_choice names a tool OCI will not receive.
+_TOOL_CHOICE_MODES: Final = frozenset({"auto", "none", "required", "any"})
+_TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
-    Runs after tool adaptation and tool_choice normalisation. Coding-agent
-    clients that mix built-in tools with function tools may also force one of
-    the built-ins through ``tool_choice``; once that tool has been skipped (see
-    :func:`adapt_tool_definition_to_oci_standard`) the forced choice matches
-    nothing in the request and OCI rejects the call. Falling back to the
-    service default would let the model pick *any* remaining function, which
-    an agent processing untrusted content must not do when the caller forced a
-    specific tool, so fail closed instead: send ``toolChoice: NONE`` and let
-    the model answer in text. The same applies to a misspelled function name.
-    """
-    tc: Final = selected_params.get("toolChoice")
-    if not (isinstance(tc, dict) and tc.get("type") == "FUNCTION"):
-        return
-    tools: Final = selected_params.get("tools")
-    if not tools:
-        return
-    available: Final = frozenset(getattr(tool, "name", None) for tool in tools)
-    if tc.get("name") in available:
-        return
-    verbose_logger.warning(
-        "OCI tool_choice names function %r, which is not among the tools sent to OCI %s; "
-        "disabling tool calls for this request (toolChoice NONE)",
-        tc.get("name"),
-        sorted(str(name) for name in available if name),
-    )
-    selected_params["toolChoice"] = {"type": "NONE"}  # mutable-ok: OCI request payload, serialised as-is
-    selected_params.pop("tool_choice", None)
+
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _forced_tool_name(tool_choice: object) -> str | None:
+    if isinstance(tool_choice, str):
+        return None if tool_choice.lower() in _TOOL_CHOICE_MODES else tool_choice
+    choice: Final = _as_json_object(tool_choice)
+    if choice is None:
+        return None
+    name: Final = (_as_json_object(choice.get("function")) or choice).get("name")
+    if isinstance(name, str):
+        return name
+    choice_type: Final = choice.get("type")
+    if isinstance(choice_type, str) and choice_type.lower() not in _TOOL_CHOICE_MODES:
+        return choice_type
+    return None
+
+
+def _without_non_function_tools(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    if params.get("tools") is None:
+        return params
+    try:
+        tools: Final = _TOOLS_ADAPTER.validate_python(params["tools"])
+    except ValidationError:
+        return params
+    dropped: Final = tuple(tool for tool in tools if tool.get("type") != "function")
+    if not dropped:
+        return params
+    dropped_types: Final = sorted(str(tool.get("type")) for tool in dropped)
+    if not drop_params:
+        raise OCIError(
+            status_code=400,
+            message=f"OCI only supports function tools, got {dropped_types}; set drop_params=True to skip them",
+        )
+    verbose_logger.warning("OCI only supports function tools; dropping tools of type %s", dropped_types)
+    kept: Final = [tool for tool in tools if tool.get("type") == "function"]
+    if not kept:
+        return {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
+    forced: Final = _forced_tool_name(params.get("tool_choice"))
+    if forced is not None and any(forced in (tool.get("type"), tool.get("name")) for tool in dropped):
+        return {**params, "tools": kept, "tool_choice": "none"}
+    return {**params, "tools": kept}
 
 
 def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> None:
@@ -265,29 +288,8 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
 
 
 def _model_supports_reasoning_effort(model: str) -> bool:
-    """Return True when the OCI-hosted model accepts ``reasoningEffort``.
-
-    Driven by the ``supports_reasoning`` flag of the model's ``oci/`` entry in
-    ``model_prices_and_context_window.json`` (read through ``get_model_info``).
-    Catalogued reasoning models (gpt-5 family, Gemini 2.5) accept the
-    parameter; catalogued non-reasoning models do not: every OCI-hosted xAI
-    Grok model rejects it with ``400 "Model ... does not support parameter
-    reasoningEffort"`` and OpenAI's non-reasoning commercial models 400 with
-    ``Unrecognized request argument supplied: reasoning_effort`` (verified
-    against the service, 2026-09). Models absent from the catalog are forwarded
-    unchanged so the service, not litellm, decides. Cohere is handled by its
-    own param map. See BerriAI/litellm#31449.
-    """
-    if not model:
-        return True
     name: Final = model[4:] if model.lower().startswith("oci/") else model
-    try:
-        info = litellm.get_model_info(model=name, custom_llm_provider="oci")
-    except Exception:
-        # Not in the catalog (OCI adds models faster than the catalog tracks
-        # them): keep the historical pass-through behaviour.
-        return True
-    return bool(info.get("supports_reasoning"))
+    return declared_reasoning_efforts_for_model(name, "oci") != ()
 
 
 def get_vendor_from_model(model: str) -> OCIVendors:
@@ -383,10 +385,11 @@ class OCIChatConfig(BaseConfig):
         # honoured and advertising it would be misleading. Callers that gate on
         # this list strip n=1 (a no-op, matching what map_openai_params does);
         # callers that bypass it have n=1 dropped there. Both paths converge.
-        supported: Final = [key for key, value in param_map.items() if value]
-        if "reasoning_effort" in supported and not _model_supports_reasoning_effort(model):
-            supported.remove("reasoning_effort")
-        return supported
+        return [
+            key
+            for key, value in param_map.items()
+            if value and (key != "reasoning_effort" or _model_supports_reasoning_effort(model))
+        ]
 
     def map_openai_params(
         self,
@@ -401,13 +404,12 @@ class OCIChatConfig(BaseConfig):
             self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
 
-        for key, value in {**non_default_params, **optional_params}.items():
+        request_params: Final = _without_non_function_tools(
+            {**non_default_params, **optional_params}, drop_params or litellm.drop_params
+        )
+        for key, value in request_params.items():
             alias = param_map.get(key)
             if key == "reasoning_effort" and alias and not _model_supports_reasoning_effort(model):
-                # The GENERIC map forwards reasoning_effort for every non-Cohere
-                # model, but xAI Grok and OpenAI's non-reasoning models 400 on
-                # it. Follow the standard unsupported-param contract so
-                # drop_params (and additional_drop_params) work as documented.
                 if drop_params or litellm.drop_params:
                     continue
                 raise OCIError(
@@ -584,19 +586,11 @@ class OCIChatConfig(BaseConfig):
                     selected_params["tools"],
                     vendor,
                 )
-            if not selected_params["tools"]:
-                # Every tool was skipped (no function tools): send a plain chat
-                # request rather than an empty tools array + toolChoice.
-                selected_params.pop("tools")
-                for key in ("toolChoice", "tool_choice"):
-                    selected_params.pop(key, None)
 
         # Normalise tool_choice to OCI's flat uppercase dict form
         # ({"type": "AUTO"|"NONE"|"REQUIRED"} or {"type": "FUNCTION", "name": "<fn>"}).
         # OCI rejects both the OpenAI string and the nested OpenAI dict shape.
         _normalize_tool_choice(selected_params)
-        if vendor != OCIVendors.COHERE:
-            _fail_closed_tool_choice_for_missing_function(selected_params)
 
         _normalize_response_format(selected_params, vendor)
 

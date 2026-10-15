@@ -389,10 +389,8 @@ async def test_async_tool_use(m: _M, oci_params):
 # Reasoning-effort tests (reasoning models only)
 # ---------------------------------------------------------------------------
 
-# Reasoning model that accepts the `reasoningEffort` parameter on OCI.
-# Not every reasoning model does — xai.grok-4-fast-reasoning, for example,
-# rejects it with a 400.
-_REASONING_MODEL = "xai.grok-3-mini"
+# Reasons at LOW and accepts reasoningEffort NONE on OCI (gpt-oss and Gemini Pro reject NONE, xAI Grok the param).
+_REASONING_MODEL = "google.gemini-2.5-flash"
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
