@@ -2397,10 +2397,11 @@ class TestResponsesInputTokens:
         body: dict[str, Any],
         path: str = "/v1/responses/input_tokens",
         counter: AsyncMock | None = None,
+        llm_router: litellm.Router | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.response_api_endpoints.endpoints import _proxy_token_counter
+        from litellm.proxy.response_api_endpoints.endpoints import _proxy_llm_router, _proxy_token_counter
         from litellm.types.utils import TokenCountResponse
 
         token_counter_mock = (
@@ -2417,6 +2418,7 @@ class TestResponsesInputTokens:
         )
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
+        app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -2424,6 +2426,7 @@ class TestResponsesInputTokens:
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
             app.dependency_overrides.pop(_proxy_token_counter, None)
+            app.dependency_overrides.pop(_proxy_llm_router, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -2548,6 +2551,38 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
+
+    def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self):
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.2",
+                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "additional_drop_params": ["tools"]},
+                },
+                {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test"}},
+            ],
+            fallbacks=[{"gpt-5.2": ["backup"]}],
+        )
+
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-5.2", "input": "hi", "tools": 5}, llm_router=router
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["request"].tools is None
+
+    def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self):
+        router: Final = litellm.Router(
+            model_list=[{"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}}]
+        )
+
+        response, counter = self._post_input_tokens(
+            {"model": "openai/gpt-5.4-mini", "input": "hi", "tools": 5}, llm_router=router
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["param"] == "tools"
+        counter.assert_not_awaited()
 
     def test_provider_error_maps_status_code(self):
         from litellm.proxy._types import ProxyException

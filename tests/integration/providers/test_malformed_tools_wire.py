@@ -1268,7 +1268,6 @@ _NOT_A_NAME_LIST: Final[Mapping[str, JsonValue]] = MappingProxyType(
         "empty_string": "",
         "five_kb_string": "x" * 5120,
         "int": 5,
-        "list_with_an_int": ["tools", 5],
     }
 )
 

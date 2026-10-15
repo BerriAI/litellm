@@ -213,6 +213,44 @@ _ToolRoute = Literal[
     "acreate_interaction",
 ]
 
+
+def _router_with_backup(
+    fallbacks: Sequence[Mapping[str, Sequence[str]]] = (),
+    default_fallbacks: Sequence[str] | None = None,
+    model_group_alias: Mapping[str, str] = MappingProxyType({}),
+    smart_router: bool = False,
+) -> Router:
+    smart: Final = {
+        "model_name": "smart",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "heuristic",
+                "adaptive": False,
+                "tiers": {tier: "backup" for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+            },
+            "complexity_router_default_model": "backup",
+        },
+    }
+    return Router(
+        model_list=[
+            {"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}},
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "additional_drop_params": ["tools"],
+                },
+            },
+            *((smart,) if smart_router else ()),
+        ],
+        fallbacks=[{group: list(chain) for group, chain in item.items()} for item in fallbacks],
+        default_fallbacks=None if default_fallbacks is None else list(default_fallbacks),
+        model_group_alias=dict(model_group_alias),
+    )
+
+
 class TestProxyBaseLLMRequestProcessing:
     @pytest.mark.asyncio
     async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
@@ -904,6 +942,88 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.param == "tools"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "request_fields", "router"),
+        [
+            ("gpt-5.2", {}, lambda: _router_with_backup(fallbacks=[{"gpt-5.2": ["backup"]}])),
+            ("gpt-5.2", {}, lambda: _router_with_backup(default_fallbacks=["backup"])),
+            ("gpt-5.2", {"fallbacks": ["backup"]}, _router_with_backup),
+            ("smart", {}, lambda: _router_with_backup(smart_router=True)),
+            ("openai/gpt-5.4-mini", {}, _router_with_backup),
+            ("gpt-5.2,backup", {}, _router_with_backup),
+        ],
+        ids=["group_fallback", "default_fallback", "request_fallback", "auto_router", "model_string", "comma_batch"],
+    )
+    async def test_common_processing_pre_call_logic_leaves_malformed_tools_to_the_router_when_it_picks_the_deployment(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        request_fields: Mapping[str, object],
+        router: Callable[[], Router],
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": 5, **request_fields}
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj, llm_router=router())
+
+        assert forwarded["tools"] == 5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "router"),
+        [
+            ("gpt-5.2", lambda: _router_with_backup(fallbacks=[{"backup": ["gpt-5.2"]}])),
+            ("my-alias", lambda: _router_with_backup(model_group_alias={"my-alias": "gpt-5.2"})),
+        ],
+        ids=["fallback_for_another_group", "alias_to_a_group_that_keeps_tools"],
+    )
+    async def test_common_processing_pre_call_logic_rejects_malformed_tools_when_the_router_cannot_reroute(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, router: Callable[[], Router]
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_pre_call(monkeypatch, processing_obj, llm_router=router())
+
+        assert exc_info.value.param == "tools"
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_the_alias_target_drops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        forwarded: Final = await self._run_pre_call(
+            monkeypatch, processing_obj, llm_router=_router_with_backup(model_group_alias={"gpt-5.2": "backup"})
+        )
+
+        assert "tools" not in forwarded
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_drops_malformed_tools_a_mixed_deployment_list_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+        )
+
+        forwarded: Final = await self._run_pre_call(
+            monkeypatch, processing_obj, llm_router=self._router({"additional_drop_params": ["tools", 1]})
+        )
+
+        assert "tools" not in forwarded
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
     @pytest.mark.parametrize(

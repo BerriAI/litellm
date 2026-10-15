@@ -118,7 +118,9 @@ def _token_count_fields(
     }
     auto_drop: Final = should_auto_drop_params_for_agentic_cli(user_agent, dict(fields), proxy_config)
     resolving: Final = {**fields, "drop_params": True} if auto_drop else fields
-    return resolve_tool_fields(resolving, lambda: request_drop_policy(resolving, llm_router, team_id))
+    return resolve_tool_fields(
+        resolving, lambda: request_drop_policy(resolving, llm_router, team_id, router_may_reroute=False)
+    )
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:

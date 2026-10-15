@@ -6,7 +6,7 @@ import math
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, reduce
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -131,7 +131,9 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.router_utils.fallback_event_handlers import get_fallback_model_group_for_lookup_groups
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -647,7 +649,8 @@ _ROUTES_WITH_TOOLS: Final = frozenset(
 _TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
 _TOOLS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
-_FIELD_NAMES: Final = TypeAdapter(list[str], config=ConfigDict(strict=True))
+_FIELD_LIST: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+_FALLBACK_CHAINS: Final = TypeAdapter(list[dict[str, list[str]]], config=ConfigDict(strict=True))
 
 
 class _ToolFunction(TypedDict, total=False):
@@ -669,6 +672,7 @@ _WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=Config
 class DropPolicy:
     drop_params: bool
     additional_drop_params: frozenset[str]
+    sees_final_target: bool = True
 
     def drops(self, field: str) -> bool:
         return self.drop_params or field in self.additional_drop_params
@@ -678,28 +682,78 @@ class DropPolicy:
 class _MalformedField:
     field: str
     message: str
-    without_field: Mapping[str, object]
+    dropped: Callable[[Mapping[str, object]], Mapping[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class _NamedTarget:
+    groups: tuple[str, ...]
+    deployments: tuple[Mapping[object, object], ...]
 
 
 def _field_names(value: object) -> frozenset[str]:
     try:
-        return frozenset(_FIELD_NAMES.validate_python(value))
+        return frozenset(name for name in _FIELD_LIST.validate_python(value) if isinstance(name, str))
     except ValidationError:
         return frozenset()
 
 
-def _deployment_params(
-    llm_router: Router | None, model: object, team_id: str | None
-) -> tuple[Mapping[object, object], ...]:
-    if llm_router is None or not isinstance(model, str):
-        return ()
+def _named_target(llm_router: Router, model: str, team_id: str | None) -> _NamedTarget | None:
     by_id: Final = None if model in llm_router.model_names else llm_router.get_deployment(model_id=model)
     if by_id is not None:
-        return (_REQUEST_FIELDS.validate_python(by_id.litellm_params.model_dump(exclude_none=True)),)
-    return tuple(
-        _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
-        for deployment in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
+        return _NamedTarget(
+            groups=(model, by_id.model_name),
+            deployments=(_REQUEST_FIELDS.validate_python(by_id.litellm_params.model_dump(exclude_none=True)),),
+        )
+    group: Final = llm_router.get_model_from_alias(model=model) or model
+    if group not in llm_router.model_names or llm_router.get_model_list_from_routing_groups(model_name=group):
+        return None
+    return _NamedTarget(
+        groups=(model, group),
+        deployments=tuple(
+            _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
+            for deployment in llm_router.get_all_deployments(model_name=group, team_id=team_id)
+        ),
     )
+
+
+def _is_auto_router(params: Mapping[object, object]) -> bool:
+    model: Final = params.get("model")
+    return isinstance(model, str) and model.startswith(AUTO_ROUTER_MODEL_PREFIX)
+
+
+def _fallbacks_apply(fallbacks: object, groups: tuple[str, ...]) -> bool:
+    if not fallbacks:
+        return False
+    try:
+        chains: Final = _FALLBACK_CHAINS.validate_python(fallbacks)
+    except ValidationError:
+        return True
+    chain, generic_index = get_fallback_model_group_for_lookup_groups(fallbacks=chains, lookup_groups=groups)
+    return chain is not None or generic_index is not None
+
+
+def _router_may_reroute(data: Mapping[str, object], llm_router: Router, target: _NamedTarget) -> bool:
+    router_fallbacks: Final[object] = getattr(llm_router, "fallbacks", None)
+    return (
+        data.get("specific_deployment") is True
+        or any(_is_auto_router(params) for params in target.deployments)
+        or _fallbacks_apply(data.get("fallbacks", router_fallbacks), target.groups)
+    )
+
+
+def _final_deployments(
+    data: Mapping[str, object], llm_router: Router | None, team_id: str | None, router_may_reroute: bool
+) -> tuple[Mapping[object, object], ...] | None:
+    model: Final = data.get("model")
+    if llm_router is None or not isinstance(model, str):
+        return ()
+    target: Final = _named_target(llm_router, model, team_id)
+    if not router_may_reroute:
+        return () if target is None else target.deployments
+    if target is None or _router_may_reroute(data, llm_router, target):
+        return None
+    return target.deployments
 
 
 def _router_defaults(llm_router: Router | None) -> Mapping[object, object]:
@@ -709,8 +763,11 @@ def _router_defaults(llm_router: Router | None) -> Mapping[object, object]:
     return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
 
 
-def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, team_id: str | None) -> DropPolicy:
-    deployments: Final = _deployment_params(llm_router, data.get("model"), team_id)
+def request_drop_policy(
+    data: Mapping[str, object], llm_router: Router | None, team_id: str | None, *, router_may_reroute: bool
+) -> DropPolicy:
+    final_deployments: Final = _final_deployments(data, llm_router, team_id, router_may_reroute)
+    deployments: Final = final_deployments or ()
     group_drops: Final = bool(deployments) and all(
         normalize_drop_params(params.get("drop_params")) is True for params in deployments
     )
@@ -727,6 +784,7 @@ def request_drop_policy(data: Mapping[str, object], llm_router: Router | None, t
             if "additional_drop_params" in requested_params
             else group_drop_fields
         ),
+        sees_final_target=final_deployments is not None,
     )
 
 
@@ -754,13 +812,19 @@ def _malformed_tools(data: Mapping[str, object]) -> _MalformedField | None:
     try:
         entries: Final = _TOOLS.validate_python(tools)
     except ValidationError as e:
-        return _MalformedField("tools", first_validation_error(e, prefix=("tools",)), _without_tool_fields(data))
+        return _MalformedField("tools", first_validation_error(e, prefix=("tools",)), _without_tool_fields)
     entry_errors: Final = tuple(_tool_entry_error(index, entry) for index, entry in enumerate(entries))
     first_error: Final = next((error for error in entry_errors if error is not None), None)
     if first_error is None:
         return None
     kept: Final = [entry for entry, error in zip(entries, entry_errors) if error is None]
-    return _MalformedField("tools", first_error, {**data, "tools": kept} if kept else _without_tool_fields(data))
+    return _MalformedField(
+        "tools", first_error, lambda fields: {**fields, "tools": kept} if kept else _without_tool_fields(fields)
+    )
+
+
+def _without_web_search_options(data: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in data.items() if name != "web_search_options"}
 
 
 def _malformed_web_search_options(data: Mapping[str, object]) -> _MalformedField | None:
@@ -770,7 +834,7 @@ def _malformed_web_search_options(data: Mapping[str, object]) -> _MalformedField
         return _MalformedField(
             "web_search_options",
             first_validation_error(e, prefix=("web_search_options",)),
-            {name: value for name, value in data.items() if name != "web_search_options"},
+            _without_web_search_options,
         )
     return None
 
@@ -778,21 +842,24 @@ def _malformed_web_search_options(data: Mapping[str, object]) -> _MalformedField
 def resolve_tool_fields(
     data: Mapping[str, object], drop_policy: Callable[[], DropPolicy]
 ) -> Mapping[str, object] | ProxyException:
-    tools: Final = _malformed_tools(data)
-    web_search_options: Final = _malformed_web_search_options(data if tools is None else tools.without_field)
-    malformed: Final = tuple(field for field in (tools, web_search_options) if field is not None)
+    checked: Final = (_malformed_tools(data), _malformed_web_search_options(data))
+    malformed: Final = tuple(field for field in checked if field is not None)
     if not malformed:
         return data
     policy: Final = drop_policy()
     rejected: Final = next((field for field in malformed if not policy.drops(field.field)), None)
-    if rejected is not None:
+    if rejected is not None and policy.sees_final_target:
         return ProxyException(
             message=rejected.message,
             type="invalid_request_error",
             param=rejected.field,
             code=status.HTTP_400_BAD_REQUEST,
         )
-    return malformed[-1].without_field
+    return reduce(
+        lambda resolved, field: field.dropped(resolved),
+        (field for field in malformed if policy.drops(field.field)),
+        data,
+    )
 
 
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
@@ -2467,7 +2534,8 @@ class ProxyBaseLLMRequestProcessing:
 
         resolved_fields: Final = (
             resolve_tool_fields(
-                self.data, lambda: request_drop_policy(self.data, llm_router, user_api_key_dict.team_id)
+                self.data,
+                lambda: request_drop_policy(self.data, llm_router, user_api_key_dict.team_id, router_may_reroute=True),
             )
             if route_type in _ROUTES_WITH_TOOLS
             else self.data

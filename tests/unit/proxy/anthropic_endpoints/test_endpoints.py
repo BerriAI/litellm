@@ -514,6 +514,43 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
     assert counted.messages == messages
 
 
+@pytest.mark.asyncio
+async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_even_with_fallbacks() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "sk-test",
+                    "additional_drop_params": ["tools"],
+                },
+            },
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-test"}},
+        ],
+        fallbacks=[{"claude-sonnet": ["backup"]}],
+    )
+    request = MagicMock()
+    request.headers = {}
+    counter = AsyncMock(return_value={"total_tokens": 7})
+    body = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 7}
+    assert counter.await_args.kwargs["request"].tools is None
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

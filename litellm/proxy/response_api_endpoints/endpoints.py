@@ -1197,7 +1197,8 @@ async def responses_input_tokens(
         name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
     }
     token_fields: Final = resolve_tool_fields(
-        counted_fields, lambda: request_drop_policy(counted_fields, llm_router, user_api_key_dict.team_id)
+        counted_fields,
+        lambda: request_drop_policy(counted_fields, llm_router, user_api_key_dict.team_id, router_may_reroute=False),
     )
     if isinstance(token_fields, ProxyException):
         return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
