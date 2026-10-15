@@ -256,15 +256,12 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return f"{api_base}/responses"
 
     def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: mirrors the base class signature
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
     ) -> BaseLLMException:
-        return super().get_error_class(
-            error_message=error_message,
+        return BaseLLMException(
             status_code=xai_error_status_code(status_code, error_message),
-            headers=headers,
+            message=error_message,
+            headers=httpx.Headers(headers),
         )
 
     def transform_response_api_response(
