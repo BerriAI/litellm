@@ -2677,7 +2677,7 @@ async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams
 
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
-    message: Final = "Invalid JSON on line 3 of batch input file: Expecting value at column 1"
+    message: Final = "Batch input file line 3 is not valid JSON: Expecting value at column 1"
 
     async def read_until_client_hangs_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         await reader.read()
@@ -2702,6 +2702,26 @@ async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams
 
     assert surfaced.value.status_code == 400
     assert surfaced.value.message == message
+
+
+def _runtime_error_caused_by(cause: Exception) -> RuntimeError:
+    try:
+        raise RuntimeError("upload bookkeeping failed") from cause
+    except RuntimeError as outer:
+        return outer
+
+
+def test_handle_error_reports_its_own_failure_when_it_is_not_a_transport_error():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    outer: Final = _runtime_error_caused_by(VertexAIError(status_code=400, message="inner provider error"))
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=outer, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 500
+    assert "upload bookkeeping failed" in surfaced.value.message
 
 
 _FILE_CONTENT_WIF_ENV = {

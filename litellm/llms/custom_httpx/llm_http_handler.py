@@ -507,7 +507,7 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
 
 
 def _unwrap_provider_error(error: Exception) -> Exception:
-    if isinstance(error, BaseLLMException):
+    if not isinstance(error, httpx.TransportError):
         return error
     current: BaseException | None = error.__cause__  # rebind-ok: walks the bounded exception cause chain
     for _ in range(10):

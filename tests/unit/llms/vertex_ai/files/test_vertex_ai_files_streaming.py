@@ -29,6 +29,7 @@ import json
 import tempfile
 import time
 import tracemalloc
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -372,6 +373,8 @@ class TestPathSourcedStreaming:
         assert first == second and len(first) > 0
 
 
+_LINE_2_NOT_CONVERTED: Final = "Batch input file line 2 could not be converted to a Vertex AI request"
+
 _GCS_OBJECT_JSON = {
     "id": "test-bucket/litellm-vertex-files/x/123",
     "name": "litellm-vertex-files/x",
@@ -523,17 +526,29 @@ class TestUploadStreamBody:
     @pytest.mark.parametrize(
         ("bad_row", "expected_message"),
         [
-            (b"[1, 2]", "Line 2 of batch input file is not a JSON object"),
-            (b'"text"', "Line 2 of batch input file is not a JSON object"),
-            (b"42", "Line 2 of batch input file is not a JSON object"),
-            (b'{"custom_id": "r2", "body": "hi"}', "Line 2 of batch input file: `body` on batch requests must be a JSON object"),
-            (b'{"custom_id": "r2", "body": [1]}', "Line 2 of batch input file: `body` on batch requests must be a JSON object"),
-            (b'{"custom_id": "r2", "body": {"a": "\xff"}}', "Line 2 of batch input file is not valid UTF-8"),
+            (b"[1, 2]", "Batch input file line 2 is not a JSON object"),
+            (b'"text"', "Batch input file line 2 is not a JSON object"),
+            (b"42", "Batch input file line 2 is not a JSON object"),
+            (b'{"custom_id": "r2", "body": "hi"}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
+            (b'{"custom_id": "r2", "body": [1]}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
+            (b'{"custom_id": "r2", "body": {"a": "\xff"}}', "Batch input file line 2 is not valid UTF-8"),
             (
                 b'{"custom_id": "r2", "url": "/v1/embeddings", "body": {"model": "gemini-embedding-001"}}',
-                "Line 2 of batch input file: `input` is required",
+                f"{_LINE_2_NOT_CONVERTED}: `input` is required",
             ),
-            (b'{"custom_id": "r2", "body": {"a": 1,}}', "Invalid JSON on line 2 of batch input file"),
+            (
+                b'{"custom_id": "r2", "url": "/v1/embeddings", "body": {"model": "gemini-embedding-001", "input": 5}}',
+                _LINE_2_NOT_CONVERTED,
+            ),
+            (
+                b'{"custom_id": "r2", "body": {"model": "gemini-2.5-flash", "messages": [{"content": "hi"}]}}',
+                f"{_LINE_2_NOT_CONVERTED}: missing field 'role'",
+            ),
+            (
+                b'{"custom_id": "r2", "body": {"model": "gemini-2.5-flash", "messages": [{"role": 5, "content": "hi"}]}}',
+                _LINE_2_NOT_CONVERTED,
+            ),
+            (b'{"custom_id": "r2", "body": {"a": 1,}}', "Batch input file line 2 is not valid JSON"),
         ],
     )
     def test_stream_rejects_malformed_row_naming_its_line(self, bad_row: bytes, expected_message: str):
@@ -558,6 +573,15 @@ class TestUploadStreamBody:
         with pytest.raises(json.JSONDecodeError) as parsed:
             json.loads(bad_row)
         assert exc_info.value.message.endswith(f"{parsed.value.msg} at column {parsed.value.colno}")
+
+    @pytest.mark.parametrize("encode", [lambda text: ("\ufeff" + text).encode("utf-8"), lambda text: "\ufeff" + text])
+    def test_stream_uploads_a_file_that_starts_with_a_byte_order_mark(self, encode: Callable[[str], bytes | str]):
+        row: Final = json.dumps(
+            {"custom_id": "r1", "body": {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}]}}
+        )
+        with_bom: Final = _OpenAIToVertexBatchUploadStream(encode(row + "\n"), lambda body: body)
+        without_bom: Final = _OpenAIToVertexBatchUploadStream((row + "\n").encode("utf-8"), lambda body: body)
+        assert b"".join(with_bom.iter_bytes()) == b"".join(without_bom.iter_bytes())
 
     @pytest.mark.parametrize("falsy_body", [b"null", b'""', b"[]", b"0"])
     def test_stream_keeps_uploading_rows_whose_body_is_empty(self, falsy_body: bytes):

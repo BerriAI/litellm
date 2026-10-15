@@ -712,14 +712,22 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
     if isinstance(raw, str):
-        return raw
+        return raw.removeprefix("\ufeff")
     try:
-        return raw.decode("utf-8")
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError as e:
         raise VertexAIError(
             status_code=400,
-            message=f"Line {lineno} of batch input file is not valid UTF-8: {e.reason}",
+            message=f"Batch input file line {lineno} is not valid UTF-8: {e.reason}",
         ) from e
+
+
+def _describe_batch_row_error(error: Exception) -> str:
+    match error:
+        case KeyError():
+            return f"missing field {error}"
+        case _:
+            return str(error)
 
 
 def _iter_numbered_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[tuple[int, str]]:
@@ -800,7 +808,7 @@ def _iter_openai_jsonl_entries(
         if not isinstance(entry, dict):
             raise VertexAIError(
                 status_code=400,
-                message=f"Line {lineno} of batch input file is not a JSON object",
+                message=f"Batch input file line {lineno} is not a JSON object",
             )
         yield lineno, entry
 
@@ -811,7 +819,7 @@ def _load_openai_jsonl_row(lineno: int, line: str) -> object:
     except json.JSONDecodeError as e:
         raise VertexAIError(
             status_code=400,
-            message=f"Invalid JSON on line {lineno} of batch input file: {e.msg} at column {e.colno}",
+            message=f"Batch input file line {lineno} is not valid JSON: {e.msg} at column {e.colno}",
         ) from e
 
 
@@ -841,8 +849,12 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         for lineno, entry in _iter_openai_jsonl_entries(self._openai_file_content):
             try:
                 vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params)
-            except (TypeError, ValueError) as e:
-                raise VertexAIError(status_code=400, message=f"Line {lineno} of batch input file: {e}") from e
+            except Exception as e:
+                raise VertexAIError(
+                    status_code=400,
+                    message=f"Batch input file line {lineno} could not be converted to a Vertex AI request: "
+                    f"{_describe_batch_row_error(e)}",
+                ) from e
             for wrapped in vertex_rows:
                 prefix = b"" if first else b"\n"
                 first = False
