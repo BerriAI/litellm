@@ -366,19 +366,8 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
         "system": [{"text": "You are a terse assistant."}],
     },
     mock_provider_response={
-        "metrics": {
-            "latencyMs": 4060,
-        },
-        "output": {
-            "message": {
-                "content": [
-                    {
-                        "text": "Hello.",
-                    },
-                ],
-                "role": "assistant",
-            },
-        },
+        "metrics": {"latencyMs": 4060},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
         "stopReason": "end_turn",
         "usage": {
             "cacheReadInputTokenCount": 0,
