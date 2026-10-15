@@ -32,6 +32,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
+import litellm  # noqa: E402
 from litellm._internal_context import (  # noqa: E402
     in_post_response_phase,
     post_response_phase,
@@ -849,6 +850,108 @@ def test_system_instructions_are_withheld_while_content_capture_is_off() -> None
     _emit_llm(logger, _system_prompt_kwargs("anthropic_messages", {"system": "You are terse."}))
     (span,) = exporter.get_finished_spans()
     assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def _capturing_logger_with(
+    *, turn_off_message_logging: bool, message_logging: bool
+) -> tuple[OpenTelemetryV2, InMemorySpanExporter]:
+    cfg: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    exporter: Final = InMemorySpanExporter()
+    tracer_provider: Final = providers.build_tracer_provider(cfg, exporter=exporter)
+    return (
+        OpenTelemetryV2(
+            config=cfg,
+            tracer_provider=tracer_provider,
+            turn_off_message_logging=turn_off_message_logging,
+            message_logging=message_logging,
+        ),
+        exporter,
+    )
+
+
+def _emitted_system_instructions(
+    logger: OpenTelemetryV2, exporter: InMemorySpanExporter, kwargs: Mapping[str, object], *, fail: bool
+) -> object:
+    _emit_llm(logger, kwargs, fail=fail)
+    (span,) = exporter.get_finished_spans()
+    return (span.attributes or {}).get(GenAI.SYSTEM_INSTRUCTIONS)
+
+
+_TERSE_SYSTEM: Final = MappingProxyType({"system": "You are terse."})
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+def test_global_message_redaction_withholds_system_instructions(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize(
+    ("turn_off_message_logging", "message_logging"),
+    [(True, True), (False, False)],
+    ids=["turn-off-message-logging", "deprecated-message-logging"],
+)
+def test_callback_message_redaction_withholds_system_instructions(
+    turn_off_message_logging: bool, message_logging: bool, fail: bool
+) -> None:
+    logger, exporter = _capturing_logger_with(
+        turn_off_message_logging=turn_off_message_logging, message_logging=message_logging
+    )
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": True}},
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": "true"}},
+        {"litellm_params": {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}},
+    ],
+    ids=["dynamic-param", "dynamic-param-string", "enable-redaction-header"],
+)
+def test_request_message_redaction_withholds_system_instructions(
+    request_fields: Mapping[str, object], fail: bool
+) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = {**_system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM), **request_fields}
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"litellm_params": {"metadata": {"headers": {"litellm-disable-message-redaction": "true"}}}},
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": False}},
+    ],
+    ids=["disable-redaction-header", "dynamic-param-off"],
+)
+def test_request_opt_out_of_global_redaction_keeps_system_instructions(
+    monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger_capturing()
+    kwargs: Final = {**_system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM), **request_fields}
+    assert json.loads(str(_emitted_system_instructions(logger, exporter, kwargs, fail=False))) == [
+        {"type": "text", "content": "You are terse."}
+    ]
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+def test_system_instructions_are_kept_without_message_redaction(fail: bool) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert json.loads(str(_emitted_system_instructions(logger, exporter, kwargs, fail=fail))) == [
+        {"type": "text", "content": "You are terse."}
+    ]
 
 
 def test_mcp_tool_call_failure_marks_error():

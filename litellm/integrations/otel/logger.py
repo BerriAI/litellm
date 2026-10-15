@@ -83,6 +83,7 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.types.utils import captures_span_content
 
 if TYPE_CHECKING:
@@ -529,7 +530,8 @@ class OpenTelemetryV2(CustomLogger):
         rejected at the gate or blocked by a pre-call guardrail before any upstream
         call — so there is nothing to record and no phantom span.
         """
-        call: Final = LLMCallEvent.from_dict(kwargs)
+        event: Final = LLMCallEvent.from_dict(kwargs)
+        call: Final = replace(event, system_instructions=()) if self._redacts_messages(kwargs) else event
         call_id: Final = call.call_id
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
@@ -547,6 +549,13 @@ class OpenTelemetryV2(CustomLogger):
             # After the span has ended, so a release-triggered provider shutdown
             # force-flushes it out rather than racing its enqueue.
             self._release_carrier(carrier)
+
+    def _redacts_messages(self, kwargs: Mapping[str, object]) -> bool:
+        """Whether litellm redacts this call's messages for this callback: the global, per-request and
+        header settings, or this callback's own ``turn_off_message_logging`` / ``message_logging``."""
+        return (
+            self.turn_off_message_logging or self.message_logging is not True or should_redact_message_logging(kwargs)
+        )
 
     def _store_open_call(self, call_id: str, carrier: _LLMCallSpan) -> None:
         """Remember an in-flight LLM call, evicting the oldest if over budget.
