@@ -534,7 +534,13 @@ def _prisma_client() -> object:
     db: Final = SimpleNamespace(
         litellm_usertable=_PrismaTable((user, other_user)),
         litellm_teamtable=_PrismaTable((team, other_team)),
-        litellm_verificationtoken=_PrismaTable((SimpleNamespace(token="key-alpha", user_id="user-a"),)),
+        litellm_verificationtoken=_PrismaTable(
+            tuple(
+                SimpleNamespace(token=token, user_id="user-a")
+                for token in ("key-alpha", "key-beta", "key-gamma", "key-cache")
+            )
+        ),
+        litellm_deletedverificationtoken=_PrismaTable((SimpleNamespace(token="key-target", user_id="user-a"),)),
         litellm_organizationmembership=_PrismaTable(
             (
                 SimpleNamespace(user_id="user-a", organization_id="org-a", user_role="org_admin"),
@@ -1144,10 +1150,10 @@ def test_team_scope_applies_membership_and_user_key_filter(
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["metadata"]["total_spend"] == pytest.approx(3.0)
-    assert response.json()["metadata"]["total_api_keys"] == 1
+    assert response.json()["metadata"]["total_spend"] == pytest.approx(14.0)
+    assert response.json()["metadata"]["total_api_keys"] == 4
     scope: Final = repository.aggregated.call_args.args[0]
-    assert scope.api_keys == ("key-alpha",)
+    assert set(scope.api_keys or ()) == {"key-alpha", "key-beta", "key-gamma", "key-cache"}
     assert scope.entity_ids == ("team-a",)
     assert scope.timezone_offset_minutes == 480
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
@@ -1159,13 +1165,13 @@ def test_team_scope_does_not_allow_an_unowned_api_key(
     client, _ = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
-        params={**_entity_params("team_ids", "team-a"), "api_key": "key-beta"},
+        params={**_entity_params("team_ids", "team-a"), "api_key": "key-other-team"},
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
     assert response.json()["metadata"]["total_spend"] == 0
     assert response.json()["metadata"]["total_api_keys"] == 0
-    assert "key-beta" not in response.text
+    assert "key-other-team" not in response.text
 
 
 def _assert_customer_route_denied(client: TestClient, prefix: str, suffix: str, extra_params: dict[str, str]) -> None:
@@ -1236,8 +1242,8 @@ def test_non_admin_routes_return_only_permitted_entities_and_keys(
     assert response.status_code == 200, response.text
     assert "key-other-" not in response.text, response.text
     if prefix in ("/team", "/tag"):
-        assert "key-beta" not in response.text, response.text
-        assert "key-alpha" in response.text, response.text
+        for api_key in ("key-alpha", "key-beta", "key-gamma", "key-cache"):
+            assert api_key in response.text, response.text
 
 
 def test_empty_scope_filters_fail_closed(daily_activity_client: tuple[TestClient, _FakeRepository]) -> None:
@@ -1350,7 +1356,9 @@ def test_export_json_stream_has_all_seeded_rows(daily_activity_client: tuple[Tes
     assert len(response.json()) == 6
 
 
-def test_user_internal_role_is_scoped_to_api_key(daily_activity_client: tuple[TestClient, _FakeRepository]) -> None:
+def test_user_internal_role_is_scoped_to_owned_api_keys(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
     client, _ = daily_activity_client
     response: Final = client.get(
         "/tag/daily/activity/aggregated",
@@ -1361,7 +1369,7 @@ def test_user_internal_role_is_scoped_to_api_key(daily_activity_client: tuple[Te
         },
     )
     assert response.status_code == 200, response.text
-    assert response.json()["metadata"]["total_spend"] == pytest.approx(3.0)
+    assert response.json()["metadata"]["total_spend"] == pytest.approx(14.0)
 
 
 def test_user_aggregate_keeps_current_day_query_semantics(
@@ -1375,9 +1383,43 @@ def test_user_aggregate_keeps_current_day_query_semantics(
     assert response.status_code == 200, response.text
     assert response.json()["metadata"]["total_spend"] == pytest.approx(14.5)
     scope: Final = repository.aggregated.call_args.args[0]
-    assert scope.entity_ids == ("user-a",)
+    assert scope.entity_ids is None
+    assert set(scope.api_keys or ()) == {"key-alpha", "key-beta", "key-gamma", "key-cache", "key-target"}
     assert scope.timezone_offset_minutes == 480
     assert scope.include_current_utc_day is True
+
+
+def test_user_aggregate_rejects_api_keys_not_owned_by_user(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={**_DATE_PARAMS, "user_id": "user-a", "api_key": "key-other-user"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert scope.entity_ids is None
+    assert scope.api_keys == ()
+
+
+def test_user_aggregate_fails_closed_when_owned_key_lookup_errors(
+    daily_activity_client: tuple[TestClient, _FakeRepository], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints import daily_activity_routes
+
+    async def fail_key_lookup(_prisma_client: object, _user_id: str, _api_key: str | None) -> Sequence[str]:
+        raise RuntimeError("key lookup failed")
+
+    client, repository = daily_activity_client
+    monkeypatch.setattr(daily_activity_routes, "get_user_api_key_filter", fail_key_lookup)
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={**_DATE_PARAMS, "user_id": "user-a"},
+    )
+    assert response.status_code == 500, response.text
+    repository.aggregated.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
