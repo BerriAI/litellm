@@ -129,6 +129,14 @@ context_window_test_cases = [
         "Invalid 'metadata': maximum input length is 512 characters.",
         False,
     ),
+    (
+        '{"error":{"message":"Input too long: 150055 input tokens, limit is 131072 for this model","code":"upstream_rejected"}}',
+        True,
+    ),
+    (
+        "Input should be 'error' or 'truncate', field: 'context_length_exceeded_behavior', value: 'foo'",
+        False,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),

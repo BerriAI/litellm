@@ -222,6 +222,30 @@ async def test_inferenceapis_anthropic_messages_request_is_sent_natively():
     assert response["content"][0]["text"] == "Hello from Inference APIs"
 
 
+@pytest.mark.asyncio
+async def test_inferenceapis_anthropic_messages_context_length_error_raises_context_window_exceeded():
+    with respx.mock() as upstream:
+        upstream.post(f"{INFERENCEAPIS_API_BASE}/messages").respond(
+            400,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Input too long: 150055 input tokens, limit is 131072 for this model",
+                    "code": "upstream_rejected",
+                },
+            },
+        )
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await litellm.anthropic.messages.acreate(
+                model=INFERENCEAPIS_MODEL,
+                messages=[{"role": "user", "content": "Say hello"}],
+                max_tokens=32,
+                api_key="inferenceapis-test-key",
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+
+
 def test_inferenceapis_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
     row: Final = litellm.model_cost[INFERENCEAPIS_MODEL]
     with respx.mock() as upstream:
