@@ -1,8 +1,18 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
+from integration.translation.chat_completions.templates import (
+    CHAT_COMPLETIONS_REQUEST,
+    CHAT_COMPLETIONS_RESPONSE,
+    CODING_AGENT_REQUEST,
+    CODING_AGENT_RESPONSE,
+)
+from integration.translation.templates.anthropic import (
+    ANTHROPIC_AGENT_REQUEST,
+    ANTHROPIC_AGENT_RESPONSE,
+)
 from integration.translation.templates.vertex_ai import (
     VERTEX_AI_ANTHROPIC_MESSAGES_REQUEST,
     VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
@@ -1139,6 +1149,186 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         "vertex_ai_url_context_metadata": [],
         "vertex_ai_safety_results": [],
         "vertex_ai_citation_metadata": [],
+    },
+)
+
+
+CLAUDE_FABLE_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/claude-fable-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-fable-5@default:rawPredict",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "x-api-key": "scripted-token",
+        "anthropic-version": "2023-06-01",
+        "authorization": "Bearer scripted-token",
+    },
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-fable-5",
+        "id": "msg_vrtx_011Cg3Ks7bxVSjgjZZkcaRY9",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01HkGRMBmWWCqTp5Ck2nZnJp",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01ASaiWVEwF3LUJU8KDzBdrr",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1184,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-fable-5@default",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_vrtx_01HkGRMBmWWCqTp5Ck2nZnJp",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_vrtx_01ASaiWVEwF3LUJU8KDzBdrr",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
+CLAUDE_OPUS_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/claude-opus-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-opus-5@default:rawPredict",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "x-api-key": "scripted-token",
+        "anthropic-version": "2023-06-01",
+        "authorization": "Bearer scripted-token",
+    },
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-opus-5",
+        "id": "msg_vrtx_011Cg3KqBd15Sob6y53PCoBe",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_014y2somv8RVnNoX3s7i7RwH",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01B8D9djnyoPnNQSccNW99Hi",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1180,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-opus-5@default",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_vrtx_014y2somv8RVnNoX3s7i7RwH",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_vrtx_01B8D9djnyoPnNQSccNW99Hi",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1180,
+            "total_tokens": 1285,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1180,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
     },
 )
 
