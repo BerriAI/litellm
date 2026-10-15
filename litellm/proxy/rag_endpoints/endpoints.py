@@ -230,8 +230,8 @@ def _with_body_drop_params(request_data: Mapping[str, object], body: Mapping[str
 
 
 async def _rag_ingest_body(request: Request) -> Mapping[str, object]:
-    body: Final = await read_request_body(request)
-    if "multipart/form-data" not in safe_get_request_headers(request).get("content-type", ""):
+    body: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(await read_request_body(request))
+    if "multipart/form-data" not in request.headers.get("content-type", ""):
         return body
     form_request: Final = body.get("request")
     parsed: Final[object] = (
