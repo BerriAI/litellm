@@ -15,7 +15,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
     SseResponse,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -6954,7 +6954,22 @@ CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usage(
     ),
 )
 
+CLAUDE_SONNET_5_GENERALIZED_ALIAS: Final = CLAUDE_SONNET_5_INPUT_TEXT.model_copy(
+    update={"name": "claude-sonnet-5-generalized_alias", "alias": "claude-sonnet-5-$MARKER"}
+)
+
+CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
+    update={"name": "claude-sonnet-5-generalized_alias_stream", "alias": "claude-sonnet-5-$MARKER"}
+)
+
+CLAUDE_SONNET_5_SLASH_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
+    update={"name": "claude-sonnet-5-slash_alias_stream", "alias": "anthropic/claude-sonnet-5-$MARKER"}
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_SONNET_5_GENERALIZED_ALIAS,
+    CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM,
+    CLAUDE_SONNET_5_SLASH_ALIAS_STREAM,
     CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
     CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY,
     CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
@@ -7118,6 +7133,15 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT,
+            CLAUDE_SONNET_5_MESSAGES_CACHE_READ,
+            CLAUDE_SONNET_5_MESSAGES_STREAM,
+            CLAUDE_SONNET_5_MESSAGES_STREAM_CACHE_READ,
+        ),
+        ("/v1/responses", "/v1/chat/completions"),
+    ),
     BridgeCostParityTestCase(
         native=CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON
     ),
