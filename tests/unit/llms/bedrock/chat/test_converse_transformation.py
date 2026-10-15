@@ -1335,6 +1335,61 @@ def test_request_without_thinking_omits_response_field_paths():
     assert "additionalModelResponseFieldPaths" not in result
 
 
+def test_prepare_request_params_does_not_deep_copy_optional_params():
+    """Regression #46519: deep-copying optional_params on every request allocates enough
+    for large tool lists to trigger long GC pauses on the event loop."""
+
+    class _CountsDeepCopies:
+        copies = 0
+
+        def __deepcopy__(self, memo):
+            type(self).copies += 1
+            return type(self)()
+
+    AmazonConverseConfig()._prepare_request_params(
+        {"maxTokens": 256, "custom_field": {"value": _CountsDeepCopies()}},
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+
+    assert _CountsDeepCopies.copies == 0
+
+
+def test_transform_request_leaves_caller_optional_params_unchanged():
+    """Without the deep copy, the transformation must still not mutate the caller's
+    nested params, which retries and fallbacks reuse."""
+    optional_params = {
+        "maxTokens": 256,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "strict": True,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"item": {"$ref": "#/$defs/Item"}},
+                        "$defs": {"Item": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                    },
+                },
+            }
+        ],
+        "tool_choice": {"tool": {"name": "lookup"}},
+        "_parallel_tool_use_config": {"tool_choice": {"type": "auto", "disable_parallel_tool_use": True}},
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+    snapshot = copy.deepcopy(optional_params)
+
+    AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert optional_params == snapshot
+
+
 def test_transform_usage_prefers_provider_reasoning_tokens():
     """Regression LIT-5714: provider-reported thinking tokens must win over the
     token_counter estimate derived from visible reasoning text."""
