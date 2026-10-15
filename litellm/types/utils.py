@@ -4225,6 +4225,7 @@ class LlmProviders(str, Enum):
     BESPOKE = "bespoke"
     MISTRAL = "mistral"
     MILVUS = "milvus"
+    QDRANT = "qdrant"
     GROQ = "groq"
     A2A = "a2a"
     GIGACHAT = "gigachat"

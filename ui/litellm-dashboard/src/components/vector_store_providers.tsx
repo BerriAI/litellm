@@ -2,6 +2,7 @@ import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components
 import milvusLogo from "../../public/assets/logos/milvus.svg";
 import mongodbLogo from "../../public/assets/logos/mongodb.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
+import qdrantLogo from "../../public/assets/logos/qdrant.svg";
 import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
 import valkeyLogo from "../../public/assets/logos/valkey.svg";
 
@@ -14,6 +15,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  Qdrant = "Qdrant",
   MongoDB = "MongoDB (BETA)",
   Valkey = "Valkey",
 }
@@ -26,6 +28,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
   Milvus: "milvus",
+  Qdrant: "qdrant",
   MongoDB: "mongodb",
   S3Vectors: "s3_vectors",
   Valkey: "valkey",
@@ -39,6 +42,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
   [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
   [VectorStoreProviders.Milvus]: milvusLogo.src,
+  [VectorStoreProviders.Qdrant]: qdrantLogo.src,
   [VectorStoreProviders.MongoDB]: mongodbLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
   [VectorStoreProviders.Valkey]: valkeyLogo.src,
@@ -171,6 +175,46 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "text-embedding-3-small",
       required: true,
       type: "select",
+    },
+  ],
+  qdrant: [
+    {
+      name: "api_base",
+      label: "API Base",
+      tooltip: "HTTP endpoint of your Qdrant server or Qdrant Cloud cluster",
+      placeholder: "http://localhost:6333",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "api_key",
+      label: "API Key",
+      tooltip: "Qdrant API key. Leave blank for a server without authentication",
+      required: false,
+      type: "password",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip: "Select the same embedding model used to populate the collection",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "qdrant_text_field",
+      label: "Text Field",
+      tooltip: "Payload field containing document text. Dotted paths such as metadata.body are supported",
+      placeholder: "text",
+      initialValue: "text",
+      required: false,
+      type: "text",
+    },
+    {
+      name: "qdrant_vector_name",
+      label: "Vector Name",
+      tooltip: "Name of the dense vector to search. Leave blank for an unnamed vector",
+      required: false,
+      type: "text",
     },
   ],
   mongodb: [
