@@ -53,6 +53,8 @@ def call(**kwargs: object) -> NativeCall:
         (detectors.drop_modify_params, {"drop_params": " True "}, True),
         (detectors.drop_modify_params, {"drop_params": "false"}, False),
         (detectors.drop_modify_params, {"drop_params": "maybe"}, False),
+        (detectors.drop_modify_params, {"additional_drop_params": ["metadata.user_id"]}, True),
+        (detectors.drop_modify_params, {"additional_drop_params": []}, False),
         (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, True),
         (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {}}}, False),
         (detectors.deployment_response_id, {"litellm_metadata": None}, False),

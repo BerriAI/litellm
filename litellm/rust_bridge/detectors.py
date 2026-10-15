@@ -74,6 +74,7 @@ def drop_modify_params(request: NativeCall) -> bool:
         bool(litellm.drop_params)
         or bool(litellm.modify_params)
         or normalize_drop_params(request.resolved.get("drop_params")) is True
+        or bool(optional_sequence(request.resolved.get("additional_drop_params")))
     )
 
 
