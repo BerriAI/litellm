@@ -379,7 +379,9 @@ class LiteLLMAnthropicMessagesAdapter:
             if signature:
                 return signature
 
-        function_fields: Final[object] = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
+        function_fields: Final[object] = _optional_attr(
+            _optional_attr(tool_call, "function"), "provider_specific_fields"
+        )
         if function_fields:
             function_signature: Final[str | None] = _thought_signature(function_fields)
             if function_signature:
