@@ -9,7 +9,6 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-import psutil
 import pytest
 from _openinference_support import (
     CHAT_TOOLS,
@@ -334,13 +333,6 @@ def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path
     _matching_marker_span(rig.destination, marker)
 
 
-def _has_exited(process: psutil.Process) -> bool:
-    try:
-        return process.status() == psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return True
-
-
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple("f3-" + uuid.uuid4().hex for _ in range(8))
@@ -365,11 +357,8 @@ def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: P
         destination_handler=sink,
         fresh_client_connections=True,
     ) as rig:
-        children: Final = psutil.Process(rig.owned.process.pid).children(recursive=True)
-        workers: Final = tuple(
-            child for child in children if child.is_running() and "resource_tracker" not in " ".join(child.cmdline())
-        )
-        assert len(workers) >= 2, tuple((worker.pid, worker.name()) for worker in workers)
+        workers: Final = rig.owned.worker_pids()
+        assert len(workers) >= 2, workers
         with ThreadPoolExecutor(max_workers=len(markers)) as executor:
             try:
                 futures: Final = tuple(
@@ -388,12 +377,12 @@ def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: P
                     seconds=10,
                 )
                 assert observed >= 2, observed
-                workers[0].kill()
-                assert eventually(lambda: _has_exited(workers[0]), bool, seconds=10), workers[0]
-                release.set()
-                in_flight: Final = tuple(
-                    (marker, future.result(timeout=60)) for marker, future in zip(markers, futures, strict=True)
-                )
+                with rig.owned.replacing_worker(min(workers)) as kill:
+                    kill()
+                    release.set()
+                    in_flight: Final = tuple(
+                        (marker, future.result(timeout=60)) for marker, future in zip(markers, futures, strict=True)
+                    )
             finally:
                 release.set()
         survivor: Final = "f3-survivor-" + uuid.uuid4().hex

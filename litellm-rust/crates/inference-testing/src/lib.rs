@@ -9,6 +9,8 @@ use litellm_secrets::{SecretValue, source::SecretSource};
 
 use litellm_inference::resources::CoreResources;
 
+pub mod live;
+
 pub fn http_pool() -> HttpClientPool {
     HttpClientPool::new(Arc::new(PublicDnsResolver))
 }

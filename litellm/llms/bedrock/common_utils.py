@@ -9,6 +9,7 @@ import functools
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -811,6 +812,14 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     return ":application-inference-profile/" in model
 
 
+def bedrock_capability_model(model: str, base_model: object) -> str:
+    """The model id to look capabilities up by: the deployment's ``base_model`` for an
+    application inference profile ARN, since the ARN names no model, else ``model``."""
+    if isinstance(base_model, str) and base_model and is_bedrock_application_inference_profile_arn(model):
+        return strip_bedrock_routing_prefix(base_model)
+    return model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
@@ -1163,6 +1172,24 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+    """
+    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+
+    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss 400 on it (checked live in us-west-2 on
+    2026-10-14), so every other target keeps dropping the block. A model id that names its model decides on
+    its own. An ARN that hides its model, like an application inference profile, falls back to the
+    deployment's ``base_model`` and counts as non-Claude without one.
+    """
+    if base_model is None or "." in get_bedrock_base_model(model):
+        return _is_claude(model)
+    return _is_claude(base_model)
+
+
+def _is_claude(model: str) -> bool:
+    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
@@ -1170,7 +1197,7 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     )
 
 
-def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str | None = None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
@@ -1188,10 +1215,21 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     inference profile ARN or a model newer than the map, while only the map decides whether
     a model is known: absent a map entry the model keeps emitting so existing caching setups
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
-    it returns False for unmapped models, the opposite polarity.
+    it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
+    model as configured when ``model`` is its ``base_model``: its own declaration wins.
     """
     if model is None:
         return True
+    deployment_declared: Final = (
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+    )
+    return declared is not False
+
+
+def bedrock_declared_cache_point_support(model: str) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     map_keys: Final = (model, get_bedrock_base_model(model))
@@ -1208,7 +1246,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if explicit_marker_support is not None:
         return explicit_marker_support
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys
@@ -1230,20 +1268,31 @@ def bedrock_supports_tool_search(model: str) -> bool:
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
-def is_claude_4_5_on_bedrock(model: str) -> bool:
+def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     """
-    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
-    (in addition to the default 5m TTL).
-
-    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
-    ``model_prices_and_context_window.json`` instead of a hardcoded list of
-    model-name patterns, so newly released models pick up support as soon as
-    their pricing entry ships, with no code change required here.
+    Whether Bedrock accepts a ``ttl`` ("5m"/"1h") on prompt ``cache_control``
+    for this model, decided by ``cache_creation_input_token_cost_above_1hr`` on
+    the model's or its base model's cost-map entry.
     """
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def bedrock_cache_point_ttl_supported(model: str | None, deployment_model: str | None = None) -> bool:
+    return any(
+        supports_bedrock_prompt_cache_ttl(candidate) for candidate in (model, deployment_model) if candidate is not None
+    )
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    warnings.warn(
+        "is_claude_4_5_on_bedrock is deprecated, use supports_bedrock_prompt_cache_ttl",
+        UserWarning,
+        stacklevel=2,
+    )
+    return supports_bedrock_prompt_cache_ttl(model)
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")

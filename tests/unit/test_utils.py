@@ -438,6 +438,26 @@ def test_supports_audio_output_reads_its_own_cost_map_flag(
     assert litellm.supports_audio_output(model) is audio_output
 
 
+@pytest.mark.parametrize(("audio_input", "video_input"), [(True, False), (False, True)])
+def test_supports_video_input_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, audio_input: bool, video_input: bool
+) -> None:
+    model: Final = "openai/video-flags-disagree-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": audio_input,
+            "supports_video_input": video_input,
+        },
+    )
+    assert litellm.supports_video_input(model) is video_input
+    assert litellm.supports_audio_input(model) is audio_input
+    assert litellm.get_model_info(model)["supports_video_input"] is video_input
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -794,6 +814,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "cost_per_second",
         "input_cost_per_second",
+        "input_cost_per_text_message",
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
@@ -918,6 +939,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
@@ -992,6 +1021,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_request": {"type": "number"},
                 "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
@@ -1105,6 +1135,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
@@ -1395,6 +1426,25 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 
     control = litellm.get_model_info(model="eu.amazon.nova-pro-v1:0", custom_llm_provider="bedrock")
     assert control["key"] == "eu.amazon.nova-pro-v1:0"
+
+
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/converse/", "bedrock/invoke/", "bedrock/eu-west-1/"])
+def test_get_model_info_bedrock_inference_profile_arn_keeps_regional_row(local_model_cost_map, route):
+    regional = litellm.model_cost["eu.amazon.nova-pro-v1:0"]
+    base = litellm.model_cost["amazon.nova-pro-v1:0"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+    arn_prefix = "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/"
+
+    info = litellm.get_model_info(model=f"{route}{arn_prefix}eu.amazon.nova-pro-v1:0")
+    assert info["key"] == "eu.amazon.nova-pro-v1:0"
+    assert info["input_cost_per_token"] == regional["input_cost_per_token"]
+    assert info["output_cost_per_token"] == regional["output_cost_per_token"]
+
+    bare = litellm.get_model_info(model=f"{route}{arn_prefix}amazon.nova-pro-v1:0")
+    assert bare["key"] == "amazon.nova-pro-v1:0"
+    assert bare["input_cost_per_token"] == base["input_cost_per_token"]
+
+
 
 
 @pytest.mark.parametrize(
@@ -3521,6 +3571,64 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestGetOptionalParamsSpeedGate:
+    UNSUPPORTED_LEGS: Final = (
+        ("bedrock", "anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+    )
+
+    @staticmethod
+    def _speed_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "speed" in optional_params or (isinstance(extra_body, dict) and "speed" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNSUPPORTED_LEGS)
+    def test_drop_params_strips_speed_on_providers_without_fast_mode(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=not global_drop_params
+        )
+        assert not self._speed_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_speed_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=False
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_drop_params_keeps_speed_for_a_downstream_litellm_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8", custom_llm_provider="litellm_proxy", speed="fast", drop_params=True
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_speed_survives_on_a_direct_anthropic_fast_mode_model(
+        self, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        fast_mode_model: Final = next(
+            name
+            for name, info in litellm.model_cost.items()
+            if info.get("supports_speed") is True and info.get("litellm_provider") == "anthropic"
+        )
+        result: Final = litellm.get_optional_params(
+            model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
+        )
+        assert result.get("speed") == "fast"
 
 
 class TestGetOptionalParamsDeepSeek:
@@ -6217,25 +6325,30 @@ async def test_wrapper_async_preserves_original_exception_when_hook_await_is_can
     the caller - not get replaced by CancelledError/TimeoutError from the hook's own
     await getting cancelled."""
 
+    hook_entered: Final = asyncio.Event()
+    hook_released: Final = asyncio.Event()
+
     class SlowLogger(CustomLogger):
         async def async_post_call_failure_deployment_hook(
             self, request_data, exception, call_type, fallback_depth=None
         ):
-            await asyncio.sleep(5)
+            hook_entered.set()
+            await hook_released.wait()
 
     monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
 
-    with pytest.raises(litellm.AuthenticationError):
-        await asyncio.wait_for(
-            litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                mock_response=litellm.AuthenticationError(
-                    message="bad key", llm_provider="openai", model="gpt-4o-mini"
-                ),
-            ),
-            timeout=0.2,
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
         )
+    )
+    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
+    call.cancel()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await call
 
 
 @pytest.mark.asyncio
