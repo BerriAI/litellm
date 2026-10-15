@@ -25,6 +25,11 @@ EMBED_BACKEND: Final = "gemini-embedding-2-preview"
 PROJECT: Final = "scripted-project"
 LOCATION: Final = "us-central1"
 MODELS_PATH: Final = f"/v1/projects/{PROJECT}/locations/{LOCATION}/publishers/google/models"
+CLAUDE_BACKEND: Final = "claude-opus-5-5"
+CLAUDE_LOCATION: Final = "us-east5"
+CLAUDE_TARGET: Final = (
+    f"/v1/projects/{PROJECT}/locations/{CLAUDE_LOCATION}/publishers/anthropic/models/{CLAUDE_BACKEND}:rawPredict"
+)
 VALUES: Final = [0.5, 0.25]
 FILE_MESSAGE: Final = "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
 VALUE_ADVICE: Final = "Set it to a readable file path, or to the credentials JSON itself."
@@ -386,17 +391,74 @@ def test_concurrent_mixed_traffic_keeps_each_answer_on_its_own_deployment(gatewa
         assert gateway.client.get("/health/liveliness").status_code == 200
 
 
+def claude_prompt(body: dict[str, JsonValue]) -> str:
+    content: Final = object_value(list_value(body["messages"])[-1])["content"]
+    if isinstance(content, str):
+        return content
+    return string_value(object_value(list_value(content)[0])["text"])
+
+
+def vertex_claude_peer(request: Request) -> Reply:
+    assert request.method == "POST", request.method
+    assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+    assert request.target == CLAUDE_TARGET, request.target
+    reply: Final[dict[str, JsonValue]] = {
+        "id": f"msg_{uuid.uuid4().hex}",
+        "type": "message",
+        "role": "assistant",
+        "model": CLAUDE_BACKEND,
+        "content": [{"type": "text", "text": f"echo {claude_prompt(JSON_OBJECT.validate_json(request.body))}"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 2},
+    }
+    return Reply(body=json.dumps(reply).encode())
+
+
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
-def test_rust_messages_route_answers_the_file_message_and_loads_a_key_file(gateway: Gateway, tmp_path: Path) -> None:
-    key_path: Final = written(tmp_path, "key.json", service_account_json(PROJECT, gateway.upstream_url.rstrip("/")))
+def test_rust_messages_route_loads_a_claude_key_file_and_names_unloadable_credentials(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    token_url: Final = gateway.upstream_url.rstrip("/")
+    key_path: Final = written(tmp_path, "key.json", service_account_json(PROJECT, token_url))
+    encoded: Final = string_value(_base64_inline(tmp_path, token_url))
     (tmp_path / "rust").mkdir()
     with (
-        wire_server(vertex_peer) as wire,
+        wire_server(vertex_claude_peer) as wire,
         owned_proxy(gateway, tmp_path / "rust", {"LITELLM_RUST": "true"}, workers=2) as candidate,
         candidate.scenario() as scenario,
     ):
-        good: Final = register(scenario, wire, key_path)
-        bad: Final = register(scenario, wire, str(tmp_path / "missing.json"))
-        answered("messages", call(candidate, "messages", good, "rust loads the file"), "rust loads the file")
-        provider_saw(wire, "rust loads the file")
-        refused(candidate, wire, call(candidate, "messages", bad, "rust refuses"), FILE_MESSAGE, str(tmp_path))
+
+        def ask(credentials: str, text: str) -> httpx.Response:
+            model: Final = scenario.model(
+                model=f"vertex_ai/{CLAUDE_BACKEND}",
+                api_key=None,
+                api_base=wire.url,
+                vertex_project=PROJECT,
+                vertex_location=CLAUDE_LOCATION,
+                vertex_credentials=credentials,
+            )
+            return candidate.request(
+                "POST",
+                "/v1/messages",
+                {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": text}]},
+            )
+
+        loaded: Final = ask(key_path, "rust loads the file")
+        assert loaded.status_code == 200, loaded.text
+        assert object_value(list_value(body_of(loaded)["content"])[0])["text"] == "echo rust loads the file"
+        assert [claude_prompt(JSON_OBJECT.validate_json(item.body)) for item in wire.drain()] == ["rust loads the file"]
+        refused(
+            candidate,
+            wire,
+            ask(str(tmp_path / "missing.json"), "rust refuses a missing file"),
+            "failed to open application credentials file",
+            str(tmp_path),
+        )
+        refused(
+            candidate,
+            wire,
+            ask(encoded, "rust refuses a base64 value"),
+            f"The `vertex_credentials` value is base64-encoded JSON, not the JSON itself. {VALUE_ADVICE}",
+            encoded,
+        )
