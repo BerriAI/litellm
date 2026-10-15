@@ -101,8 +101,16 @@ def _read_file_prompt() -> object:
                 USER_TURN,
             ],
         ),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN, {"role": "system", "content": "Be brief."}),
+            lambda prompt: [
+                {"role": "system", "content": f"You are helpful. {prompt}"},
+                USER_TURN,
+                {"role": "system", "content": f"Be brief. {prompt}"},
+            ],
+        ),
     ),
-    ids=("no_system", "string_content", "list_content"),
+    ids=("no_system", "string_content", "list_content", "two_system_messages"),
 )
 def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
     history: tuple[dict[str, object], ...],
