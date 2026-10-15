@@ -13,10 +13,12 @@ Verifies that:
 import json
 import os
 import sys
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -1319,6 +1321,12 @@ class TestPassthroughAuthToken:
         assert url == "https://custom.example.com/v1/messages"
 
 
+_BOUND_THINKING_ERROR: Final = (
+    "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."
+)
+_NULL_SIGNATURE_ERROR: Final = "messages.1.content.0.thinking.signature.str: Input should be a valid string"
+
+
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid thinking blocks in replayed history:
     invalid encrypted signatures, and blocks with empty thinking text."""
@@ -1984,6 +1992,49 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
+    @pytest.mark.parametrize(
+        ("thinking", "error_message", "expected"),
+        (
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _BOUND_THINKING_ERROR,
+                False,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _NULL_SIGNATURE_ERROR,
+                True,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+                _BOUND_THINKING_ERROR,
+                True,
+            ),
+            ({"type": "adaptive"}, _BOUND_THINKING_ERROR, True),
+        ),
+        ids=("error", "error_on_unrelated_bad_block", "drop_block", "unbound"),
+    )
+    def test_anthropic_messages_retry_honors_thinking_block_binding(
+        self, thinking: Mapping[str, object], error_message: str, expected: bool
+    ) -> None:
+        from litellm.llms.anthropic.pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        req: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp: Final = httpx.Response(
+            400,
+            request=req,
+            text=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": error_message}}),
+        )
+        err: Final = httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        should_retry = AnthropicMessagesConfig().should_retry_anthropic_messages_on_http_error(
+            err, {}, request_body={"model": "claude-opus-5-5", "thinking": thinking}
+        )
+
+        assert should_retry is expected
+
 
 class TestClaudeOpus48AdaptiveThinking:
     """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
@@ -2480,6 +2531,100 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     )
 
     assert optional_params["thinking"] == expected_thinking
+
+
+LEGACY_THINKING_WITH_BINDING: Final = {
+    "type": "enabled",
+    "budget_tokens": 2048,
+    "block_binding": {"prefix_mismatch_behavior": "error"},
+    "future_key": 1,
+}
+
+
+def _rebuilt_thinking(carries_block_binding: bool) -> dict[str, object]:
+    return {
+        "type": "adaptive",
+        **({"block_binding": LEGACY_THINKING_WITH_BINDING["block_binding"]} if carries_block_binding else {}),
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("provider", "carries_block_binding"),
+    (
+        ("anthropic", True),
+        ("azure_ai", True),
+        ("bedrock_invoke", True),
+        ("vertex_ai", False),
+        ("databricks", False),
+        ("bedrock_converse", False),
+    ),
+)
+def test_chat_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_supported(
+    provider: str, carries_block_binding: bool
+) -> None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeConfig,
+    )
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+
+    config, model = {
+        "anthropic": (AnthropicConfig(), "claude-opus-4-8"),
+        "azure_ai": (AzureAnthropicConfig(), "claude-opus-4-8"),
+        "bedrock_invoke": (AmazonAnthropicClaudeConfig(), "us.anthropic.claude-opus-4-8"),
+        "vertex_ai": (VertexAIAnthropicConfig(), "claude-opus-4-8"),
+        "databricks": (DatabricksConfig(), "databricks-claude-opus-4-8"),
+        "bedrock_converse": (AmazonConverseConfig(), "us.anthropic.claude-opus-4-8"),
+    }[provider]
+
+    mapped: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 4096, "thinking": dict(LEGACY_THINKING_WITH_BINDING)},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped["thinking"] == _rebuilt_thinking(carries_block_binding)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("provider", "carries_block_binding"),
+    (("anthropic", True), ("azure_ai", True), ("bedrock_invoke", True), ("vertex_ai", False)),
+)
+def test_messages_legacy_thinking_rebuild_carries_only_block_binding_and_only_where_supported(
+    provider: str, carries_block_binding: bool
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    config, model = {
+        "anthropic": (AnthropicMessagesConfig(), "claude-opus-4-8"),
+        "azure_ai": (AzureAnthropicMessagesConfig(), "claude-opus-4-8"),
+        "bedrock_invoke": (AmazonAnthropicClaudeMessagesConfig(), "us.anthropic.claude-opus-4-8"),
+        "vertex_ai": (VertexAIPartnerModelsAnthropicMessagesConfig(), "claude-opus-4-8"),
+    }[provider]
+
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4096, "thinking": dict(LEGACY_THINKING_WITH_BINDING)},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["thinking"] == _rebuilt_thinking(carries_block_binding)
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
