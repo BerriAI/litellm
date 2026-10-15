@@ -6,6 +6,7 @@ instead of writing immediately on each request.
 """
 
 from collections.abc import AsyncGenerator, Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
@@ -31,6 +32,16 @@ if TYPE_CHECKING:
 
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
 _RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
+_ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aresponses": "previous_response_id",
+        "acompact_responses": "previous_response_id",
+        "aget_responses": "response_id",
+        "adelete_responses": "response_id",
+        "acancel_responses": "response_id",
+        "alist_input_items": "response_id",
+    }
+)
 
 _UNMANAGED_RESPONSE_ID_DETAIL: Final = (
     "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it. "
@@ -40,7 +51,7 @@ _UNMANAGED_RESPONSE_ID_DETAIL: Final = (
 _PROXY_ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value})
 
 
-def _proxy_general_settings() -> Mapping[str, Any]:
+def _proxy_general_settings() -> Mapping[str, object]:
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings
@@ -88,7 +99,7 @@ def _rewrite_advertised_id(
     if not isinstance(payload_id, str):
         return event
 
-    rewritten: Final = {**payload, "id": rewrite(payload_id)}  # mutable-ok: pydantic cannot serialize a frozen map
+    rewritten: Final = {**payload, "id": rewrite(payload_id)}
     setattr(event, "response", rewritten)
     return event
 
@@ -107,7 +118,7 @@ def _is_responses_api_create_route(request_route: str | None) -> bool:
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
-        general_settings_reader: Callable[[], Mapping[str, Any]] = _proxy_general_settings,
+        general_settings_reader: Callable[[], Mapping[str, object]] = _proxy_general_settings,
         signing_key_reader: Callable[[], str | None] = _proxy_signing_key,
     ) -> None:
         self._general_settings_reader: Final = general_settings_reader
@@ -120,17 +131,9 @@ class ResponsesIDSecurity(CustomLogger):
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
-        # MAP all the responses api response ids to the encrypted response ids
-        responses_api_call_types: Final = {
-            "aresponses",
-            "aget_responses",
-            "adelete_responses",
-            "acancel_responses",
-            "alist_input_items",
-        }
-        if call_type not in responses_api_call_types:
+        addressed_id_field: Final = _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE.get(call_type)
+        if addressed_id_field is None:
             return None
-        addressed_id_field: Final = "previous_response_id" if call_type == "aresponses" else "response_id"
         retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
         addressed_id: Final = (
             retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
@@ -307,7 +310,7 @@ class ResponsesIDSecurity(CustomLogger):
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
-    ) -> Any:
+    ) -> LLMResponseTypes:
         """
         Queue response IDs for batch processing instead of writing directly to DB.
 

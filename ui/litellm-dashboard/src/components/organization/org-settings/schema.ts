@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 const isBlank = (value: string): boolean => value.trim() === "";
 

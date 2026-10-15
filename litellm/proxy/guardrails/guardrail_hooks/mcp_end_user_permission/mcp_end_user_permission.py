@@ -10,7 +10,7 @@ Permission logic:
 - end_user_id + mcp_servers    → allow only those servers
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -193,7 +193,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
             MCPRequestHandler,
         )
 
-        access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
+        access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(mcp_access_groups)
 
         return list(set(direct_mcp_servers + access_group_servers))
 
@@ -230,7 +230,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         return tool_name.split("-", 1)[0]
 
     @staticmethod
-    def _get_tool_name_from_definition(tool: Any) -> str | None:
+    def _get_tool_name_from_definition(tool: object) -> str | None:
         """
         Extract tool name from a definition dict.
 

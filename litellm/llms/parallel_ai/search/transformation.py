@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -20,9 +20,10 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_USAGE_PARAM
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _ParallelAIV1SearchResult(BaseModel):
+class _ParallelAIV1SearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     url: str | None = None
@@ -31,7 +32,7 @@ class _ParallelAIV1SearchResult(BaseModel):
     excerpts: Sequence[str] | None = None
 
 
-class _ParallelAIV1SearchResponse(BaseModel):
+class _ParallelAIV1SearchResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     search_id: str | None = None
@@ -89,6 +90,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
     @staticmethod
     def ui_friendly_name() -> str:
         return "Parallel AI"
+
+    def supports_rich_search_input(self) -> bool:
+        # The v1 search API takes `objective` + multiple `search_queries`
+        # natively; sending both is the documented best practice.
+        return True
 
     def validate_environment(
         self,

@@ -23,11 +23,12 @@ from typing import Final
 import httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.base import LiteLLMBaseModel
 
 METRICS_PATH: Final = "/metrics"
 HEALTH_PATH: Final = "/health"
@@ -39,7 +40,7 @@ _STARTUP_PROBE_TIMEOUT_SECONDS: Final = 1.0
 _WILDCARD_TO_LOOPBACK: Final = MappingProxyType({"0.0.0.0": "127.0.0.1", "::": "::1"})
 
 
-class _CliArgs(BaseModel):
+class _CliArgs(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     host: str

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         BaseImageGenerationConfig,
     )
     from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+    from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 DASHSCOPE_CHAT_COMPATIBLE_PATH: Final = "/compatible-mode/v1"
 DASHSCOPE_RERANK_PATH: Final = "/compatible-api/v1/reranks"
@@ -89,6 +90,22 @@ def get_dashscope_family_image_generation_config(
     return DashScopeImageGenerationConfig()
 
 
+def get_dashscope_family_video_config(
+    custom_llm_provider: str,
+) -> "BaseVideoConfig":
+    if custom_llm_provider == "qwencloud":
+        from litellm.llms.dashscope.qwencloud import QwenCloudVideoConfig
+
+        return QwenCloudVideoConfig()
+    if custom_llm_provider == "qwen_ai_platform":
+        from litellm.llms.dashscope.qwen_ai_platform import QwenAIPlatformVideoConfig
+
+        return QwenAIPlatformVideoConfig()
+    from litellm.llms.dashscope.videos.transformation import DashScopeVideoConfig
+
+    return DashScopeVideoConfig()
+
+
 def resolve_dashscope_family_api_key(custom_llm_provider: str, api_key: str | None) -> str | None:
     if custom_llm_provider == "dashscope":
         return api_key or get_secret_str("DASHSCOPE_API_KEY")
@@ -103,7 +120,7 @@ def missing_dashscope_family_key_message(custom_llm_provider: str) -> str:
         )
     if custom_llm_provider == "qwen_ai_platform":
         return (
-            "Missing API key for Qwen AI Platform. Set QWEN_AI_PLATFORM_API_KEY or "
+            "Missing API key for Qianwen AI Platform. Set QWEN_AI_PLATFORM_API_KEY or "
             "DASHSCOPE_API_KEY environment variable or pass api_key parameter."
         )
     return "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."

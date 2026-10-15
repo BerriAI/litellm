@@ -13,6 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
+from pydantic import BaseModel
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -41,12 +42,15 @@ from ..base import BaseLLM
 from ..openai.common_utils import (
     build_output_token_limit_response,
     is_output_token_limit_error,
+    model_dump_provider_response,
 )
 from .common_utils import (
     AzureOpenAIError,
     BaseAzureLLM,
     get_azure_ad_token_from_oidc,
+    get_azure_request_auth_headers,
     process_azure_headers,
+    redact_azure_auth_headers,
     select_azure_base_url_or_endpoint,
 )
 from .image_generation import (
@@ -110,7 +114,7 @@ class AzureOpenAIAssistantsAPIConfig:
         return optional_params
 
 
-def _check_dynamic_azure_params(
+def check_dynamic_azure_params(
     azure_client_params: dict,
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
@@ -125,10 +129,13 @@ def _check_dynamic_azure_params(
     dynamic_params: Final = ["api_version"]
     for k, v in azure_client_params.items():
         if k in dynamic_params and k == "api_version":
-            if v is not None and v != azure_client._custom_query["api-version"]:
+            if v is not None and v != azure_client._custom_query["api-version"]:  # pyright: ignore[reportPrivateUsage]  # SDK query internals
                 return True
 
     return False
+
+
+_check_dynamic_azure_params = check_dynamic_azure_params
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
@@ -347,12 +354,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
                     azure_client=azure_client, data=data, timeout=timeout
                 )
-                if isinstance(response, str):
+                if not isinstance(response, BaseModel):
                     raise AzureOpenAIError(
                         status_code=500,
-                        message=f"Unexpected string response from Azure: {response[:500]}",
+                        message=f"Unexpected response from Azure: {response!r:.500}",
                     )
-                stringified_response: Final = response.model_dump()
+                stringified_response: Final = model_dump_provider_response(response)
                 ## LOGGING
                 logging_obj.post_call(
                     input=messages,
@@ -442,12 +449,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             )
             logging_obj.model_call_details["response_headers"] = headers
 
-            if isinstance(response, str):
+            if not isinstance(response, BaseModel):
                 raise AzureOpenAIError(
                     status_code=500,
-                    message=f"Unexpected string response from Azure: {response[:500]}",
+                    message=f"Unexpected response from Azure: {response!r:.500}",
                 )
-            stringified_response: Final = response.model_dump()
+            stringified_response: Final = model_dump_provider_response(response)
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,
@@ -479,7 +486,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            raise
         except Exception as e:
             message: Final = getattr(e, "message", str(e))
             body: Final = getattr(e, "body", None)
@@ -1145,7 +1152,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_key: str,
         input: list,
         logging_obj: LiteLLMLoggingObj,
-        headers: dict,
+        headers: dict[str, str],
         client=None,
         timeout=None,
         model: str | None = None,
@@ -1170,7 +1177,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={
                     "complete_input_dict": data,
                     "api_base": img_gen_api_base,
-                    "headers": headers,
+                    "headers": redact_azure_auth_headers(headers),
                 },
             )
             httpx_response: Final[httpx.Response] = await self.make_async_azure_httpx_request(
@@ -1229,7 +1236,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float,
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        headers: dict,
+        headers: dict[str, str],
         model: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -1252,7 +1259,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
-                model_response._hidden_params["model"] = litellm_params.get("base_model", None)
+                model_response.hidden_params["model"] = litellm_params.get("base_model", None)
 
             # Azure image generation API doesn't support extra_body parameter
             extra_body: Final = optional_params.pop("extra_body", {})
@@ -1264,20 +1271,21 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
 
-            if api_key is None and azure_ad_token_provider is not None:
-                azure_ad_token = azure_ad_token_provider()
-                if azure_ad_token:
-                    headers.pop("api-key", None)
-                    headers["Authorization"] = f"Bearer {azure_ad_token}"
-
-            # init AzureOpenAI Client
+            auth_params: Final[dict[str, object]] = {**(litellm_params or {})}  # mutable-ok: SDK init takes a dict
+            if azure_ad_token is not None:
+                auth_params["azure_ad_token"] = azure_ad_token
+            if azure_ad_token_provider is not None:
+                auth_params["azure_ad_token_provider"] = azure_ad_token_provider
             azure_client_params: Final[dict[str, object]] = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
+                litellm_params=auth_params,
                 api_key=api_key,
                 model_name=model or "",
                 api_version=api_version,
                 api_base=api_base,
                 is_async=False,
+            )
+            request_headers: Final = dict(
+                get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params)
             )
             if aimg_generation is True:
                 return self.aimage_generation(
@@ -1289,7 +1297,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     client=client,
                     azure_client_params=azure_client_params,
                     timeout=timeout,
-                    headers=headers,
+                    headers=request_headers,
                     model=model,
                 )
 
@@ -1306,7 +1314,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={
                     "complete_input_dict": data,
                     "api_base": img_gen_api_base,
-                    "headers": headers,
+                    "headers": redact_azure_auth_headers(request_headers),
                 },
             )
             httpx_response: Final[httpx.Response] = self.make_sync_azure_httpx_request(
@@ -1316,7 +1324,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version or "",
                 api_key=api_key or "",
                 data=data,
-                headers=headers,
+                headers=request_headers,
                 deployment_name=model,
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
@@ -1408,7 +1416,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
@@ -1452,7 +1460,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },

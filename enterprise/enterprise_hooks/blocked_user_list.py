@@ -7,17 +7,21 @@
 ## This accepts a list of user id's for whom calls will be rejected
 
 
-from typing import Optional, Literal
-import litellm
-from litellm.proxy.utils import PrismaClient
-from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+from typing import Literal, Optional
+
 from fastapi import HTTPException
 
+import litellm
+from litellm._internal_context import with_service_target
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.proxy.utils import PrismaClient
 
-class _ENTERPRISE_BlockedUserList(CustomLogger):
+
+class ENTERPRISE_BlockedUserList(CustomLogger):
     enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self, prisma_client: Optional[PrismaClient]):
@@ -54,6 +58,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -123,3 +128,4 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                     str(e)
                 )
             )
+_ENTERPRISE_BlockedUserList = ENTERPRISE_BlockedUserList

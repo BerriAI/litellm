@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import KeySavingsTab from "./KeySavingsTab";
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import * as useScopedDailyActivityRangeModule from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
@@ -36,12 +37,16 @@ const mockActivity = (
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   onDateChange: vi.fn(),
   results: [] as DailyData[],
+  metadata: EMPTY_DAILY_ACTIVITY_METADATA,
   loading: false,
-  isFetchingMore: false,
-  progress: { currentPage: 1, totalPages: 1 },
-  cancelled: false,
   failed: false,
-  cancel: vi.fn(),
+  scope: {
+    accessToken: "test-token",
+    startTime: new Date("2025-01-01"),
+    endTime: new Date("2025-01-31"),
+    userId: null,
+    apiKey: null,
+  },
   ...overrides,
 });
 
@@ -94,7 +99,7 @@ describe("KeySavingsTab", () => {
 
     renderTab();
 
-    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$5.40");
+    expect(screen.getByTestId("summary-card-total-recorded-savings")).toHaveTextContent("$5.40");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("$2.00");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("1,000 tokens compressed");
     // the card leads with what LiteLLM's own injection earned and carries the total beneath it,
@@ -102,6 +107,7 @@ describe("KeySavingsTab", () => {
     expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$0.40");
     expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00Total");
     expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("$3.00");
+    expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("Recorded estimates subtotal");
   });
 
   it("separates a key with no traffic from one still loading", () => {
