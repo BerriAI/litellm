@@ -1712,7 +1712,7 @@ async def _lookup_jwt_mapping_token_hash(
 
 
 async def _resolve_jwt_to_virtual_key(
-    jwt_claims: dict[str, object],
+    jwt_claims: dict,
     jwt_handler: JWTHandler,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
@@ -2272,7 +2272,10 @@ async def user_api_key_auth_builder(
                     )
                     if isinstance(resolve_result, UserAPIKeyAuth):
                         mapped_end_user_id: Final = (
-                            jwt_handler.get_end_user_id(token=jwt_claims or {}, default_value=None) or None
+                            jwt_handler.get_end_user_id(  # pyright: ignore[reportUnknownMemberType]  # untyped dict token
+                                token=jwt_claims or {}, default_value=None
+                            )
+                            or None
                         )
                         valid_token = resolve_result.model_copy(update={"end_user_id": mapped_end_user_id})
                         api_key = valid_token.token or ""

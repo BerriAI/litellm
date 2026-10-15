@@ -496,7 +496,7 @@ async def _resolve_jwt_auth(
         return None
     try:
         if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
-            claims: Final[dict[str, object]] = await jwt_handler.auth_jwt(token=token)
+            claims: Final = await jwt_handler.auth_jwt(token=token)
             validate: Final = jwt_handler.litellm_jwtauth.custom_validate
             if validate is not None and not validate(claims):
                 return None
