@@ -146,6 +146,9 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
+from litellm.proxy._experimental.mcp_server.utils import (
+    server_answers_to as _server_answers_to,
+)
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
@@ -578,9 +581,36 @@ def _http_detail_message(detail: object) -> str:
     return str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
 
 
-def _server_answers_to(server: MCPServer, name: str) -> bool:
-    requested: Final = name.lower()
-    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def raise_if_unscoped_aggregate_request(
+    mcp_servers: Sequence[str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    toolset_id: str | None,
+) -> None:
+    from litellm.proxy import proxy_server  # noqa: PLC0415  # proxy import cycle
+
+    raw_settings: Final[object] = getattr(proxy_server, "general_settings", None)
+    if not raw_settings:
+        return
+    settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(raw_settings)
+    if not settings.get("mcp_require_explicit_server_scope", False):
+        return
+    if mcp_servers or toolset_id is not None:
+        return
+    if user_api_key_auth is not None and user_api_key_auth.mcp_session_resource_server_ids is not None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "mcp_server_scope_required",
+            "message": (
+                "This gateway requires an explicit MCP server scope: connect to /mcp/<server_name> "
+                "or send the x-mcp-servers header."
+            ),
+        },
+    )
 
 
 async def raise_denied_scoped_mcp_access(
@@ -1030,6 +1060,84 @@ def _aggregate_server_key(server: MCPServer) -> str:
     sees on the tool names. Canonical internal server names never key a caller-readable
     surface; when the display naming deliberately hides them, the outcome keys must too."""
     return get_server_prefix(server) or "unknown"
+
+
+_proxy_tool_lookups: Final[set[asyncio.Task[MCPTool | None]]] = set()  # mutable-ok: refs until teardown ends
+
+
+def _release_proxy_tool_lookup(lookup: asyncio.Task[MCPTool | None]) -> None:
+    _proxy_tool_lookups.discard(lookup)
+    if not lookup.cancelled() and lookup.exception() is not None:
+        verbose_logger.debug("MCP proxy tool lookup failed: %s", lookup.exception())
+
+
+@catalog_operation(lambda: global_mcp_server_manager)
+async def find_mcp_proxy_tool(
+    tool_id: str,
+    user_api_key_auth: UserAPIKeyAuth,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
+    oauth2_headers: Mapping[str, str] | None,
+    raw_headers: Mapping[str, str] | None,
+) -> MCPTool | None:
+    """Resolve an /mcp/proxy tool_id against the caller's catalog, returning as soon as the
+    server that owns it has listed instead of waiting for every allowed server."""
+    from litellm.proxy._experimental.mcp_server.catalog import get_filtered_server_tools
+    from litellm.proxy._experimental.mcp_server.tool_search import mcp_proxy_tool_id
+
+    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+        user_api_key_auth=user_api_key_auth,
+        mcp_servers=mcp_servers,
+        client_ip=client_ip,
+    )
+    if mcp_servers and not allowed_mcp_servers:
+        await raise_denied_scoped_mcp_access(
+            requested_names=mcp_servers,
+            user_api_key_auth=user_api_key_auth,
+            client_ip=client_ip,
+        )
+    admission: Final = await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+    if not admission.admitted_servers and admission.rejected_servers:
+        raise admission.rejected_servers[0][1]
+    prefetched_oauth_creds: Final = (
+        await _prefetch_oauth_creds_for_user(user_api_key_auth)
+        if any(server.auth_type == MCPAuth.oauth2 for server in allowed_mcp_servers)
+        else {}
+    )
+    context: Final = OperationContext(
+        _caller=user_api_key_auth,
+        mcp_auth_header=mcp_auth_header,
+        mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+        mcp_proxy_mode=True,
+    )
+
+    async def _owned_tool(server: MCPServer) -> MCPTool | None:
+        page, _ = await get_filtered_server_tools(
+            server,
+            context=context,
+            allowed_mcp_servers=allowed_mcp_servers,
+            prefetched_oauth_creds=prefetched_oauth_creds,
+        )
+        return next((tool for tool in page.tools if mcp_proxy_tool_id(tool) == tool_id), None)
+
+    lookups: Final = tuple(asyncio.create_task(_owned_tool(server)) for server in admission.admitted_servers)
+    for lookup in lookups:
+        _proxy_tool_lookups.add(lookup)
+        lookup.add_done_callback(_release_proxy_tool_lookup)
+    try:
+        for lookup in asyncio.as_completed(lookups):
+            if (tool := await lookup) is not None:
+                return tool
+        return None
+    finally:
+        for lookup in lookups:
+            lookup.cancel()
 
 
 @catalog_operation(lambda: global_mcp_server_manager)

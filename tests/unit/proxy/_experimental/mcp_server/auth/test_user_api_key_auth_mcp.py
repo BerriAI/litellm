@@ -7790,6 +7790,73 @@ class TestAggregateGatewayDcrChallenge:
         assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
 
     @pytest.mark.parametrize(
+        ("header", "expected_scope"),
+        [
+            ("alpha,beta", 'scope="litellm:mcp_server:alpha litellm:mcp_server:beta"'),
+            ("ALPHA", 'scope="litellm:mcp_server:ALPHA"'),
+            ("alpha-id", 'scope="litellm:mcp_server:alpha-id"'),
+            ("alpha,unknown", None),
+            ("access-group", None),
+            ("token-exchange", None),
+        ],
+    )
+    async def test_aggregate_header_challenge_scopes_resolved_gateway_servers(
+        self, header: str, expected_scope: str | None
+    ) -> None:
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        alpha: Final = MCPServer(
+            server_id="alpha-id",
+            name="alpha",
+            server_name="alpha",
+            alias="alpha",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth("oauth2"),
+        )
+        beta: Final = MCPServer(
+            server_id="beta-id",
+            name="beta",
+            server_name="beta",
+            alias="beta",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth("oauth2"),
+        )
+        token_exchange: Final = MCPServer(
+            server_id="token-exchange-id",
+            name="token-exchange",
+            server_name="token-exchange",
+            alias="token-exchange",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth("oauth2_token_exchange"),
+        )
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
+        ):
+            manager.get_mcp_server_by_identifier.side_effect = lambda identifier, client_ip=None: {
+                "alpha": alpha,
+                "alpha-id": alpha,
+                "beta": beta,
+                "token-exchange": token_exchange,
+            }.get(identifier.lower())
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-servers", header.encode()),))
+                )
+
+        expected: Final = (
+            f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+            if expected_scope is None
+            else f"Bearer {self._EXPECTED_RESOURCE_METADATA}, {expected_scope}"
+        )
+        assert (exc_info.value.headers or {})["WWW-Authenticate"] == expected
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.parametrize(
         "auth_type",
         (None, "none", "api_key", "bearer_token", "basic", "aws_sigv4", "authorization", "token", "oauth2"),
     )
@@ -7898,6 +7965,7 @@ class TestAggregateGatewayDcrChallenge:
                 ) as mock_mgr,
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = resolved
+                mock_mgr.get_mcp_server_by_identifier.return_value = resolved
                 with pytest.raises(ProxyException):
                     await MCPRequestHandler.process_mcp_request(
                         self._scope(path=path, extra_headers=((b"authorization", b"Bearer not-a-key"),))
@@ -7942,12 +8010,12 @@ class TestAggregateGatewayDcrChallenge:
             with patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr:
-                mock_mgr.get_mcp_server_by_name.return_value = resolved
+                mock_mgr.get_mcp_server_by_identifier.return_value = resolved
                 assert _gateway_dcr_challenge_target("/mcp/srv", None, None) == expected, resolved
         assert _gateway_dcr_challenge_target("/mcp/a,b", None, None) is None
         assert _gateway_dcr_challenge_target("/mcp", None, None) is None
         with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr:
-            mock_mgr.get_mcp_server_by_name.return_value = _server(MCPAuth.oauth2)
+            mock_mgr.get_mcp_server_by_identifier.return_value = _server(MCPAuth.oauth2)
             assert _gateway_dcr_challenge_target("/mcp/srv", ["other"], None) is None
 
     async def test_no_challenge_for_path_named_server(self):
@@ -10658,7 +10726,7 @@ class TestScopedSessionAdmission:
 
     _MASTER_KEY = "sk-scoped-session-admission-master-key"
 
-    def _bearer(self, resource_server_id):
+    def _bearer(self, resource_server_ids):
         from datetime import datetime, timezone
 
         from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
@@ -10671,11 +10739,11 @@ class TestScopedSessionAdmission:
 
         keys = session_keys_from_master_key(self._MASTER_KEY)
         principal = SessionPrincipal(
-            user_id="scoped-user", client_id="llm_dcrc_abc", resource_server_id=resource_server_id
+            user_id="scoped-user", client_id="llm_dcrc_abc", resource_server_ids=resource_server_ids
         )
         return mint_session_token(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
 
-    @pytest.mark.parametrize("scope", ["github-server-id", None])
+    @pytest.mark.parametrize("scope", [("github-server-id",), None])
     async def test_admission_carries_sealed_resource_scope(self, scope):
         token = self._bearer(scope)
         scope_dict = {
@@ -10708,11 +10776,11 @@ class TestScopedSessionAdmission:
         ):
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)
         assert auth_result.mcp_admitted_user_subject is True
-        assert auth_result.mcp_session_resource_server_id == scope
+        assert auth_result.mcp_session_resource_server_ids == scope
 
     def test_scope_field_cannot_be_forged_through_construction(self):
-        forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
-        assert forged.mcp_session_resource_server_id is None
+        forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_ids=("any-server",))
+        assert forged.mcp_session_resource_server_ids is None
 
 
 @pytest.mark.asyncio
@@ -10789,13 +10857,13 @@ async def test_catalog_refresh_preserves_non_database_admission_and_resource_sco
     caller = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS if kind == "master" else "custom-subject")
     caller.via_virtual_key = kind == "master"
     caller.authenticated_by_custom_auth = kind == "custom"
-    caller.mcp_session_resource_server_id = "only-this-server"
+    caller.mcp_session_resource_server_ids = ("only-this-server",)
     caller.mcp_toolset_id = "only-this-toolset"
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     assert refreshed is not caller
     assert refreshed.api_key == caller.api_key
     assert refreshed.authenticated_by_custom_auth == caller.authenticated_by_custom_auth
-    assert refreshed.mcp_session_resource_server_id == "only-this-server"
+    assert refreshed.mcp_session_resource_server_ids == ("only-this-server",)
     assert refreshed.mcp_toolset_id == "only-this-toolset"
     assert refreshed.requires_fresh_policy is True
     assert caller.requires_fresh_policy is False
@@ -10818,11 +10886,11 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
     caller.mcp_admitted_user_subject = True
-    caller.mcp_session_resource_server_id = "scoped-server"
+    caller.mcp_session_resource_server_ids = ("scoped-server",)
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     assert refreshed.org_id == "current-org"
     assert refreshed.user_role == "internal_user"
-    assert refreshed.mcp_session_resource_server_id == "scoped-server"
+    assert refreshed.mcp_session_resource_server_ids == ("scoped-server",)
     assert refreshed.mcp_admitted_user_subject is True
     assert caller.org_id == "previous-org"
 
@@ -10851,7 +10919,7 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
         access_group_ids=["original-group"],
     )
     caller.via_virtual_key = True
-    caller.mcp_session_resource_server_id = "session-server"
+    caller.mcp_session_resource_server_ids = ("session-server",)
     caller.mcp_toolset_id = "session-toolset"
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=True)
@@ -10863,7 +10931,7 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
         "new-project",
         "new-owner",
     )
-    assert refreshed.mcp_session_resource_server_id == "session-server"
+    assert refreshed.mcp_session_resource_server_ids == ("session-server",)
     assert refreshed.mcp_toolset_id == "session-toolset"
     assert refreshed.via_virtual_key and refreshed.requires_fresh_policy
     assert caller.team_id == "old-team" and not caller.requires_fresh_policy
