@@ -106,6 +106,7 @@ DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIV
 S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+MAX_S3_OBJECT_KEY_FILENAME_BYTES: Final = 255
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
