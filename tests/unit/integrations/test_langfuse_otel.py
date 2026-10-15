@@ -1010,6 +1010,59 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
 
+    def test_responses_api_with_custom_tool_calls(self):
+        """Test Langfuse OTEL logger with Responses API custom_tool_call output."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.responses.main import CustomToolCallOutputItem
+
+        # Create Responses API response with a custom (freeform) tool call
+        response_obj = ResponsesAPIResponse(
+            id="response-790",
+            created_at=1625247700,
+            output=[
+                CustomToolCallOutputItem(
+                    id="ctc-123",
+                    type="custom_tool_call",
+                    name="exec",
+                    call_id="call-def",
+                    input="console.log('hello')",
+                    status="completed",
+                )
+            ],
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "Print hello"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                mock_span, kwargs, response_obj
+            )
+
+            output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should be set"
+            output_data = json.loads(output_calls[0].args[2])
+            assert isinstance(output_data, list)
+            assert len(output_data) == 1
+            assert output_data[0]["type"] == "custom_tool_call"
+            assert output_data[0]["id"] == "ctc-123"
+            assert output_data[0]["name"] == "exec"
+            assert output_data[0]["call_id"] == "call-def"
+            assert output_data[0]["input"] == "console.log('hello')"
+
 
 LANGFUSE_ENV_ONLY: Final = {
     key: value

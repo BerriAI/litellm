@@ -196,19 +196,25 @@ class LangfuseOtelLogger(OpenTelemetry):
                                 "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
                             }
                         )
-                    elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = (
-                            safe_json_loads(arguments_str, default={})
-                            if isinstance(arguments_str, str)
-                            else arguments_str
-                        )
+                    elif item_type in ("function_call", "custom_tool_call"):
+                        # A custom (freeform) tool carries its payload as a raw string under `input`,
+                        # where a function call carries a JSON string under `arguments`.
+                        if item_type == "custom_tool_call":
+                            payload_key, payload_value = "input", getattr(item, "input", "")
+                        else:
+                            arguments_str = getattr(item, "arguments", "{}")
+                            payload_key = "arguments"
+                            payload_value = (
+                                safe_json_loads(arguments_str, default={})
+                                if isinstance(arguments_str, str)
+                                else arguments_str
+                            )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
                             "call_id": getattr(item, "call_id", ""),
-                            "type": "function_call",
-                            "arguments": arguments_obj,
+                            "type": item_type,
+                            payload_key: payload_value,
                         }
                         output_items_data.append(langfuse_tool_call)
             if output_items_data:
