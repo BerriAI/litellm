@@ -2687,6 +2687,24 @@ def supports_web_search(model: str, custom_llm_provider: str | None = None) -> b
     )
 
 
+def supports_tool_search(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model supports provider-side tool search over deferred tools.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports tool search, False otherwise.
+    """
+    return supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_tool_search",
+    )
+
+
 def supports_url_context(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports URL context and return a boolean value.
@@ -2995,6 +3013,10 @@ def supports_audio_input(model: str, custom_llm_provider: str | None = None) -> 
 
 def supports_video_input(model: str, custom_llm_provider: str | None = None) -> bool:
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_video_input")
+
+
+def supports_box_questions(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_box_questions")
 
 
 def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -4792,8 +4814,10 @@ def get_optional_params(
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
+            from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=model,
+                model=bedrock_capability_model(model, base_model),
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
@@ -6324,6 +6348,7 @@ def get_model_info_helper(
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 cost_per_second=_model_info.get("cost_per_second", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -6424,6 +6449,7 @@ def get_model_info_helper(
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
+                supports_box_questions=_model_info.get("supports_box_questions", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
@@ -6575,6 +6601,7 @@ def get_model_info(
             supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_video_input: Optional[bool]
+            supports_box_questions: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]

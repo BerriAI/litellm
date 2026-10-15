@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -311,6 +312,31 @@ def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monk
 
 
 @pytest.mark.asyncio
+def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blocks():
+    """Streamed thinking blocks carry the OpenAI SDK list-position `index`. Anthropic's native thinking block schema
+    rejects unknown fields, so the field must not reach the request when a client replays the streamed message"""
+    messages: Final = [
+        {"role": "user", "content": "Capital of France?"},
+        {
+            "role": "assistant",
+            "content": "Paris",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+                {"type": "redacted_thinking", "data": "EmwKAhgB", "index": 1},
+            ],
+        },
+        {"role": "user", "content": "And Spain?"},
+    ]
+
+    replayed: Final = anthropic_messages_pt(messages=messages, model="claude-haiku-4-5", llm_provider="anthropic")
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "EmwKAhgB"},
+        {"type": "text", "text": "Paris"},
+    ]
+
+
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """
     Test the specific function that processes thinking_blocks when content is None
@@ -7308,3 +7334,90 @@ def test_completion_bedrock_invalid_role_exception(monkeypatch):
         str(exc_info.value)
         == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
     )
+
+
+def test_anthropic_messages_pt_drops_replayed_tool_search_call_without_its_result():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [("tool_use", "toolu_01Weather")]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "toolu_01Weather"
+    ]
+
+
+def test_anthropic_messages_pt_keeps_a_replayed_tool_search_call_the_caller_answered():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": '[{"name": "get_weather"}]'},
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [
+        ("tool_use", "srvtoolu_01Search"),
+        ("tool_use", "toolu_01Weather"),
+    ]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "srvtoolu_01Search",
+        "toolu_01Weather",
+    ]
+
+
+def _merged_assistant_run_cost(run_length: int) -> float:
+    messages: Final = [
+        {"role": "user", "content": "Plan the trip"},
+        *({"role": "assistant", "content": "Working on it", "tool_calls": []} for _ in range(run_length)),
+        {"role": "user", "content": "Go on"},
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
+    growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
+
+    assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"

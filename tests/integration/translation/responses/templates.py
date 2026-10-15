@@ -285,3 +285,8 @@ RESPONSES_RESPONSE: Final[Mapping[str, JsonValue]] = {
         ],
     },
 }
+
+
+RESPONSES_NATIVE_RESPONSE: Final[Mapping[str, JsonValue]] = {
+    key: value for key, value in RESPONSES_RESPONSE.items() if key not in {"provider_specific_fields"}
+}

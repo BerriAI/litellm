@@ -82,3 +82,8 @@ MESSAGES_REQUEST: Final[Mapping[str, JsonValue]] = {
 }
 
 MESSAGES_RESPONSE: Final[Mapping[str, JsonValue]] = ANTHROPIC_MESSAGES_RESPONSE
+
+
+MESSAGES_BRIDGE_RESPONSE: Final[Mapping[str, JsonValue]] = {
+    key: value for key, value in MESSAGES_RESPONSE.items() if key not in {"container", "diagnostics"}
+}
