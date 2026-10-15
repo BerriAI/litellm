@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.xai.common_utils import XAIModelInfo, xai_error_status_code, xai_reported_cost_in_usd
 from litellm.llms.xai.cost_calculator import (
     apply_server_side_tool_usage_details_to_usage,
@@ -128,15 +129,12 @@ class XAIChatConfig(OpenAIGPTConfig):
         )
 
     def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: mirrors the base class signature
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
     ) -> BaseLLMException:
-        return super().get_error_class(
-            error_message=error_message,
+        return OpenAIError(
             status_code=xai_error_status_code(status_code, error_message),
-            headers=headers,
+            message=error_message,
+            headers=httpx.Headers(headers),
         )
 
     def get_supported_openai_params(self, model: str) -> list:
