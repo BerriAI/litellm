@@ -24,7 +24,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
-from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
 from .pi import (
@@ -741,7 +741,7 @@ def _is_interactive() -> bool:
 
 
 def resolve_api_key(ctx: click.Context) -> str:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     api_key = ctx_obj.get("api_key")
     if api_key:
@@ -765,7 +765,7 @@ _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
