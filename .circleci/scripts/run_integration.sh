@@ -232,9 +232,6 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-sudo ss -Htlnp > "$results/listening-sockets.txt" 2>&1 || true
-cat /proc/sys/net/ipv4/ip_local_port_range > "$results/ephemeral-port-range.txt" 2>&1 || true
-
 shard_arguments=()
 if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
   .venv/bin/python tests/integration/run.py "$suite" --list \
