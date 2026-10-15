@@ -471,7 +471,7 @@ class TestEndUserTable:
             spend: float | None = None
 
         record = MockPrismaRecord(user_id="u3", blocked=True, spend=None)
-        table = LiteLLM_EndUserTable.model_validate(record)
+        table = LiteLLM_EndUserTable.model_validate(record, from_attributes=True)
         assert table.user_id == "u3"
         assert table.spend == 0.0
         assert table.blocked is True

@@ -32,4 +32,4 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     def default_null_spend_to_zero(cls, spend: object) -> object:
         return 0.0 if spend is None else spend
 
-    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+    model_config = ConfigDict(protected_namespaces=())
