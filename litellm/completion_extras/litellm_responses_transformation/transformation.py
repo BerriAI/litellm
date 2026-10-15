@@ -535,9 +535,6 @@ def _append_reasoning_if_present(
     return True, merged_content
 
 
-
-
-
 def _responses_event_type(chunk: Mapping[str, object]) -> object:
     event_type: Final = chunk.get("type")
     return event_type.value if isinstance(event_type, ResponsesAPIStreamEvents) else event_type
