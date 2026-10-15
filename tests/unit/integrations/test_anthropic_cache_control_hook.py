@@ -4704,3 +4704,47 @@ def test_cache_control_hook_counts_a_marked_tool_call_next_to_a_message_it_canno
     )
 
     assert (census, envelope_census) == (1, 1)
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": {"id": "toolu_02"}}]},
+            id="tool_call_id_is_a_dict",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": ["toolu_02"]}]},
+            id="tool_call_id_is_a_list",
+        ),
+        pytest.param({"role": "tool", "tool_call_id": {"id": "toolu_02"}, "content": "18C"}, id="answer_id_is_a_dict"),
+        pytest.param({"role": ["assistant"], "content": "Checking"}, id="role_is_a_list"),
+    ],
+)
+def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, malformed: dict[str, object]
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        malformed,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert [message.get("cache_control") for message in processed if message.get("role") == "system"] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+    ]

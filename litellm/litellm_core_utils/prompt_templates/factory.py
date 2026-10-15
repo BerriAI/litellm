@@ -1887,7 +1887,14 @@ def _as_the_request_builder_sends_them(messages: Sequence[object]) -> Sequence[o
     if not all(callable(getattr(message, "get", None)) for message in messages):
         return messages
     chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: placement reads messages via get
-    _, conversation = split_leading_system_run(chat_messages)
+    try:
+        return _placed_and_paired(chat_messages)
+    except TypeError:
+        return messages
+
+
+def _placed_and_paired(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    _, conversation = split_leading_system_run(messages)
     placed: Final = place_mid_conversation_system(conversation, supports_mid_conversation_system=True)
     return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
