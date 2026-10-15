@@ -6472,7 +6472,13 @@ _COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Earlier turns cove
 _COMPACTION_REQUESTED: Final = ResponsesAPIOptionalRequestParams(
     context_management=[{"type": "compaction", "compact_threshold": 50000}]
 )
-_SUMMARY_AS_TEXT: Final = {"role": "assistant", "content": _COMPACTION_BLOCK["content"]}
+_SUMMARY_AS_TEXT: Final = {"role": "user", "content": _COMPACTION_BLOCK["content"]}
+
+
+def _anthropic_form_context_management(edit: Mapping[str, object]) -> ResponsesAPIOptionalRequestParams:
+    return cast(  # cast-ok: Anthropic's native {"edits": [...]} form, which the param type does not declare
+        ResponsesAPIOptionalRequestParams, {"context_management": {"edits": [edit]}}
+    )
 
 
 @pytest.mark.parametrize(
@@ -6481,9 +6487,27 @@ _SUMMARY_AS_TEXT: Final = {"role": "assistant", "content": _COMPACTION_BLOCK["co
         (
             "anthropic/claude-sonnet-5-5",
             _COMPACTION_REQUESTED,
-            {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]}},
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]},
+            },
+        ),
+        (
+            "anthropic/claude-sonnet-5-5",
+            _anthropic_form_context_management({"type": "compact_20260112"}),
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]},
+            },
         ),
         ("anthropic/claude-sonnet-5-5", ResponsesAPIOptionalRequestParams(), _SUMMARY_AS_TEXT),
+        (
+            "anthropic/claude-sonnet-5-5",
+            _anthropic_form_context_management({"type": "clear_tool_uses_20250919"}),
+            _SUMMARY_AS_TEXT,
+        ),
         ("gemini/gemini-3.8-flash", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
     ],
 )
@@ -6505,5 +6529,28 @@ def test_compaction_input_item_replays_as_a_compaction_block_only_when_anthropic
 
     assert [dict(message) for message in result["messages"]] == [
         replayed_compaction,
+        {"role": "user", "content": "And Osaka?"},
+    ]
+
+
+def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                {"role": "assistant", "content": "Day one, Asakusa."},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"role": "user", "content": "And Osaka?"},
+            ],
+        ),
+        responses_api_request=_COMPACTION_REQUESTED,
+    )
+
+    assert [dict(message) for message in result["messages"]] == [
+        {"role": "system", "content": "Answer briefly."},
+        _SUMMARY_AS_TEXT,
         {"role": "user", "content": "And Osaka?"},
     ]

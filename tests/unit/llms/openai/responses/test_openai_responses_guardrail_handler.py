@@ -299,6 +299,32 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["model"] == "gpt-4"
 
     @pytest.mark.asyncio
+    async def test_compaction_summary_is_scanned_and_rewritten_inside_its_item(self) -> None:
+        affinity_prefix: Final = "litellm_enc:bW9kZWxfaWQ6ZGVwLWE=;"
+        data: Final = {
+            "input": [
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": affinity_prefix
+                    + json.dumps({"type": "compaction", "content": "Cat is Biscuit."}),
+                },
+                {"role": "user", "content": "Cat name?", "type": "message"},
+            ],
+            "model": "claude-sonnet-5-5",
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, MockGuardrail(guardrail_name="t"))
+
+        rewritten: Final = result["input"][0]["encrypted_content"]
+        assert rewritten.startswith(affinity_prefix)
+        assert json.loads(rewritten.removeprefix(affinity_prefix)) == {
+            "type": "compaction",
+            "content": "Cat is Biscuit. [GUARDRAILED]",
+        }
+        assert result["input"][1]["content"] == "Cat name? [GUARDRAILED]"
+
+    @pytest.mark.asyncio
     async def test_process_input_list_with_multimodal_content(self):
         """Test processing list input with multimodal content"""
         handler = OpenAIResponsesHandler()

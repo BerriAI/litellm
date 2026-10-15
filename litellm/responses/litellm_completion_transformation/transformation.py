@@ -79,7 +79,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
-    ContextManagementEntry,
     GenericChatCompletionMessage,
     IncompleteDetails,
     InputTokensDetails,
@@ -117,7 +116,13 @@ from litellm.types.utils import (
     Usage,
 )
 
-from .compaction_items import compaction_output_item, decode_compaction_item
+from .compaction_items import (
+    compaction_output_item,
+    compaction_summary,
+    decode_compaction_item,
+    requests_compaction,
+    without_items_before_compaction,
+)
 from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
@@ -342,13 +347,23 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _replays_compaction_block(
-    input: str | ResponseInputParam, context_management: Sequence[ContextManagementEntry] | None
-) -> bool:
+def _as_input_param(item: object) -> object:
+    return item.model_dump(exclude_none=True) if isinstance(item, ResponseCompactionItem) else item
+
+
+def with_compaction_items_as_params(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    if not isinstance(input, list):
+        return input
+    return cast(  # cast-ok: the same input items, a compaction item replayed from SDK output dumped to its param dict
+        ResponseInputParam, [_as_input_param(item) for item in input]
+    )
+
+
+def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
     return (
-        isinstance(input, list)
-        and any(item.get("type") == "compaction" for item in input)
-        and any(entry.get("type") == "compaction" for entry in context_management or ())
+        requests_compaction(context_management)
+        and isinstance(input, list)
+        and any(compaction_summary(item) is not None for item in input)
     )
 
 
@@ -875,13 +890,16 @@ class LiteLLMCompletionResponsesConfig:
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
+        request_input: Final = with_compaction_items_as_params(input)
+        native_compaction: Final = _replays_compaction_block(
+            request_input, context_management
+        ) and provider_builds_anthropic_request(model, custom_llm_provider)
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input,
+            input=request_input if native_compaction else without_items_before_compaction(request_input),
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
-            native_compaction=_replays_compaction_block(input, context_management)
-            and provider_builds_anthropic_request(model, custom_llm_provider),
+            native_compaction=native_compaction,
         )
 
         litellm_completion_request: dict = {
@@ -1946,7 +1964,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_compaction_item_to_chat_completion_messages(
         input_item: Mapping[str, object], native_compaction: bool
-    ) -> tuple[GenericChatCompletionMessage | ChatCompletionResponseMessage, ...]:
+    ) -> tuple[ChatCompletionUserMessage | ChatCompletionResponseMessage, ...]:
         compaction: Final = decode_compaction_item(input_item.get("encrypted_content"))
         if compaction is None:
             return ()
@@ -1958,7 +1976,7 @@ class LiteLLMCompletionResponsesConfig:
                     provider_specific_fields={"compaction_blocks": [dict(compaction.wire_block)]},
                 ),
             )
-        return (GenericChatCompletionMessage(role="assistant", content=compaction.summary),)
+        return (ChatCompletionUserMessage(role="user", content=compaction.summary),)
 
     @staticmethod
     def _transform_responses_api_message_item(

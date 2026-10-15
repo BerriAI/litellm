@@ -64,6 +64,10 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    with_compaction_summary,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
 from litellm.responses.litellm_completion_transformation.tool_search import is_server_tool_search_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -803,6 +807,11 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image extraction logic.
         """
+        summary: Final = compaction_summary(message)
+        if summary is not None:
+            texts_to_check.append(summary)
+            task_mappings.append((msg_idx, None))
+            return
         content: Final = message.get("content", None)
         if content is None:
             return
@@ -847,6 +856,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
+
+            if compaction_summary(messages[msg_idx]) is not None:
+                messages[msg_idx]["encrypted_content"] = with_compaction_summary(  # rebind-ok: in-place input rewrite
+                    messages[msg_idx]["encrypted_content"], guardrail_response
+                )
+                continue
 
             content = messages[msg_idx].get("content", None)
             if content is None:
