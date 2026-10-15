@@ -93,6 +93,15 @@ ROUTES: Final[Mapping[str, Callable[[str], object]]] = MappingProxyType(
         "gigachat-embedding": _embedding("gigachat/Embeddings-2", api_key=FAKE_KEY),
         "volcengine-embedding": _embedding("volcengine/doubao-embedding-text-240715", api_key=FAKE_KEY),
         "ollama-embedding": _embedding("ollama/nomic-embed-text"),
+        "oobabooga-chat": _completion("oobabooga/local-model"),
+        "oobabooga-embedding": _embedding("oobabooga/local-model"),
+        "bedrock-rerank": lambda api_base: litellm.rerank(
+            model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+            query="hi",
+            documents=["a"],
+            api_base=api_base,
+            **FAKE_AWS,
+        ),
         "bedrock-image-generation": lambda api_base: litellm.image_generation(
             model="bedrock/amazon.nova-canvas-v1:0", prompt="a cat", api_base=api_base, timeout=5, **FAKE_AWS
         ),
