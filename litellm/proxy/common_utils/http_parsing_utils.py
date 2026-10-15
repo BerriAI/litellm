@@ -7,6 +7,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 import orjson
 from fastapi import Request, UploadFile, status
 from starlette._utils import get_route_path
+from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -182,8 +183,10 @@ def _mark_body_received(byte_count: int | None) -> None:
     )
 
 
-def is_otlp_trace_request(request: Request) -> bool:
-    return request.method == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+def is_otlp_trace_request(request: HTTPConnection) -> bool:
+    if request.scope.get("type") != "http":
+        return False
+    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
 async def read_request_body(request: Request | None) -> dict:
@@ -542,7 +545,7 @@ async def convert_upload_files_to_file_data(
     return data
 
 
-async def get_request_body(request: Request) -> dict[str, Any]:
+async def get_request_body(request: Request) -> dict[str, object]:
     """
     Read the request body and parse it as JSON.
     """

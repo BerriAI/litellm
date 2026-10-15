@@ -154,7 +154,11 @@ def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache"
     its rows are gone, whatever Redis is doing.
     """
     for cache_key in cache_keys:
-        user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+        _drop_from_memory(cache_key, user_api_key_cache)
+
+
+def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
+    user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -273,7 +277,7 @@ class AuthCacheInvalidationSubscriber:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        self._user_api_key_cache.in_memory_cache_for(parsed.cache_key).delete_cache(parsed.cache_key)
+        _drop_from_memory(parsed.cache_key, self._user_api_key_cache)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)
 

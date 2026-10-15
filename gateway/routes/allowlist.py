@@ -62,6 +62,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/rerank",
     "/v1/decisions",
     "/decisions",
+    "/v1/systemone",
+    "/systemone",
     "/v1/ocr",
     "/ocr",
     "/v1/rag/",
@@ -119,6 +121,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Realtime / streaming
     "/v1/realtime",
     "/realtime",
+    "/v1/live/sessions",
+    "/live/sessions",
     # Health & ops
     "/health",
     "/metrics",

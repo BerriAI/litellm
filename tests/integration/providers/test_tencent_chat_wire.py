@@ -77,7 +77,6 @@ def test_tencent_thinking_is_sent_in_provider_body_instead_of_failing_the_reques
                     "role": "assistant",
                     "content": "43",
                     "reasoning_content": "17 plus 26 is 43.",
-                    "provider_specific_fields": {"refusal": None},
                 },
                 "provider_specific_fields": {},
             }

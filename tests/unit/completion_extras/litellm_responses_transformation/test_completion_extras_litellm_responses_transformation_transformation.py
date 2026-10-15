@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import unittest
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -4246,6 +4247,50 @@ def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
     assert request["prompt_cache_options"] == cache_breakpoint
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "keep_marker"),
+    [
+        ("openai.gpt-5.6-sol", "bedrock_mantle", True),
+        ("openai.gpt-5.4", "bedrock_mantle", False),
+        ("openai.gpt-5.6-sol", "azure_ai", False),
+    ],
+    ids=("flagged-hosted-deployment", "unflagged-hosted-deployment", "provider-without-flag"),
+)
+def test_transform_request_uses_provider_keyed_prompt_cache_breakpoint_flag(
+    model: str, custom_llm_provider: str, keep_marker: bool
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    request: Final = handler.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Stable prefix",
+                **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+            }
+        ],
+    }
+
+
 def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
     handler: Final = LiteLLMResponsesTransformationHandler()
     # Non-string keys are not JSON-representable but are accepted by chat completion
@@ -4533,6 +4578,81 @@ def test_prompt_cache_breakpoint_supports_model_alias_with_base_model(
     ]
 
 
+_MANTLE_GPT_ROW: Final = {
+    "litellm_provider": "bedrock_mantle",
+    "mode": "responses",
+    "supports_prompt_cache_breakpoint": True,
+}
+_MARKED_SYSTEM_PART: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def _bridged_input_for_served_provider(
+    model: str, custom_llm_provider: str, **litellm_params: object
+) -> list[dict[str, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(
+            List[AllMessageValues],
+            [{"role": "system", "content": [_MARKED_SYSTEM_PART]}, {"role": "user", "content": "hi"}],
+        ),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider, **litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us-east-1/openai.gpt-5.6-sol"])
+def test_transform_request_keeps_the_breakpoint_for_a_hosted_openai_model_by_its_served_provider(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """The bridge is handed the provider-stripped deployment name, which has no cost-map row and no
+    ``gpt-`` version of its own: the row keyed for the serving provider states the dialect."""
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider(model, "bedrock_mantle") == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{**_MARKED_SYSTEM_PART, "type": "input_text"}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+def test_transform_request_keeps_the_breakpoint_when_the_served_providers_row_is_the_base_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("my-alias", "bedrock_mantle", base_model="openai.gpt-5.6-sol")[0][
+        "content"
+    ] == [{**_MARKED_SYSTEM_PART, "type": "input_text"}]
+
+
+def test_transform_request_strips_the_breakpoint_when_the_served_providers_row_opts_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "bedrock_mantle/gpt-6-luna", {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+
+    assert _bridged_input_for_served_provider("gpt-6-luna", "bedrock_mantle")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
+def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a_row_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("openai.gpt-5.6-sol", "azure")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
@@ -4738,6 +4858,188 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
     assert relayed == ["default"] * len(events), relayed
 
 
+_AUDIO_PART: Final = {"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}
+_TEXT_PART: Final = {"type": "text", "text": "Transcribe this"}
+
+
+def test_convert_chat_completion_messages_to_responses_api_maps_input_audio_block():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+    ]
+
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages, keep_prompt_cache_breakpoints=True)
+
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        {
+            "type": "input_audio",
+            "input_audio": {"data": "Zm9v", "format": "wav"},
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        },
+    ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_malformed_input_audio_breakpoint_under_drop_params():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    messages: Final = [{"role": "user", "content": [{**_AUDIO_PART, "prompt_cache_breakpoint": ["explicit"]}]}]
+
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, drop_params=True, keep_prompt_cache_breakpoints=True
+    )
+
+    assert items[0]["content"] == [_AUDIO_PART]
+
+
+@pytest.fixture
+def registered_audio_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "unit-audio-capable",
+        {"litellm_provider": "openai", "mode": "chat", "supports_audio_input": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "unit-text-only",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": False,
+            "supports_prompt_cache_breakpoint": True,
+        },
+    )
+
+
+def _bridge_input(
+    model: str,
+    drop_params: bool | None,
+    messages: Sequence[Mapping[str, object]] | None = None,
+    **extra_litellm_params: object,
+) -> list[dict[str, object]]:
+    chat_messages: Final = cast(
+        List[AllMessageValues], list(messages or [{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}])
+    )  # cast-ok: the tests build chat messages as plain mappings
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=chat_messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params, **extra_litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+
+
+def test_transform_request_forwards_input_audio_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=False)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_drop_params_when_model_lacks_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_model_supports_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-audio-capable", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_base_model_supports_audio_input(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("my-audio-deployment", drop_params=True, base_model="unit-audio-capable")[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert _bridge_input("unit-text-only", drop_params=None)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_drops_input_audio_from_tool_output_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": "Describe the recording"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "record", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [_TEXT_PART, _AUDIO_PART]},
+    ]
+
+    forwarded: Final = _bridge_input("unit-text-only", drop_params=False, messages=messages)
+    dropped: Final = _bridge_input("unit-text-only", drop_params=True, messages=messages)
+
+    assert forwarded[-1]["type"] == "function_call_output"
+    assert forwarded[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}, _AUDIO_PART]
+    assert dropped[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}]
+
+
+def test_transform_request_moves_the_dropped_audio_part_breakpoint_to_the_preceding_part(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}]}
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+def test_transform_request_keeps_the_preceding_part_breakpoint_over_the_dropped_audio_part_breakpoint(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {**_TEXT_PART, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+                {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}},
+            ],
+        }
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+    ]
+
+
 def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
     """The hook marks the last block of its target message, so a message ending in a block the bridge
     cannot map reaches the stringify path and has to keep the marker there."""
@@ -4754,8 +5056,8 @@ def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_br
             "content": [
                 {"type": "text", "text": "describe this"},
                 {
-                    "type": "input_audio",
-                    "input_audio": {"data": "Zm9v", "format": "wav"},
+                    "type": "video_url",
+                    "video_url": {"url": "https://example.com/clip.mp4"},
                     "prompt_cache_breakpoint": breakpoint_marker,
                 },
             ],
@@ -4837,3 +5139,222 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    first: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_first",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+        }
+    )
+    second_annotation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Second",
+        "url": "https://example.com/second",
+    }
+    second: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_second",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Second message.", "annotations": [second_annotation]}],
+        }
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (first, second, function_call)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "First message.Second message."
+    assert choices[0].message.annotations == [
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
+    ]
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [call.model_dump(exclude_none=True) for call in tool_calls] == [
+        {
+            "id": "fc_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+            "index": 0,
+        }
+    ]
+
+
+def test_convert_response_output_folds_commentary_and_final_answer_into_one_choice() -> None:
+    commentary: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_commentary",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Let me answer that.", "annotations": []}],
+        }
+    )
+    final_answer: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_final",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": '{"city": "Paris"}', "annotations": []}],
+        }
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (commentary, final_answer)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.tool_calls is None
+
+
+def test_convert_response_output_numbers_two_function_calls_zero_and_one() -> None:
+    message: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_only",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Checking both.", "annotations": []}],
+        }
+    )
+    weather: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+    time: Final = ResponseFunctionToolCall(
+        id="fc_2",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_2",
+        name="get_time",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
+        (message, weather, time)
+    )
+
+    assert len(choices) == 1
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.index, call.function.name) for call in tool_calls] == [(0, "get_weather"), (1, "get_time")]
+
+
+def _final_answer_message(item_id: str, text: str) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_convert_response_output_structured_output_keeps_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    """gpt-5.4-mini on /responses with a strict json_schema and a 'say what you will do first'
+    system prompt returned two final_answer items, each the whole document (captured 2026-10-14)."""
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (_final_answer_message("msg_1", '{"city":"Paris"}'), _final_answer_message("msg_2", '{"city":"Paris"}')),
+        structured_output=structured_output,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == expected_content
+    if structured_output:
+        assert json.loads(expected_content) == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}}, True),
+        ({"response_format": {"type": "json_object"}}, True),
+        ({"response_format": {"type": "text"}}, False),
+        ({}, False),
+    ],
+)
+def test_is_structured_output_request(optional_params: dict[str, object], expected: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        is_structured_output_request,
+    )
+
+    assert is_structured_output_request(optional_params) is expected
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [
+        (True, '{"city":"Paris"}'),
+        (False, '{"city":"Paris"}{"city":"Paris"}'),
+    ],
+)
+def test_stream_structured_output_drops_text_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, structured_output=structured_output
+    )
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": []}},
+        {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '{"city":'},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": '"Paris"}'},
+        {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "content": []}},
+        {"type": "response.completed"},
+    )
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+    assert content == expected_content
+    assert chunks[-1].choices[0].finish_reason == "stop"

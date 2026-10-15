@@ -504,7 +504,9 @@ impl litellm_host_python::ExecutionBody for Preparing {
                 }
                 HookStep::Await(awaitable, resume) => {
                     self.resume = Some(resume);
-                    Ok(litellm_host_python::ExecutionStep::Await(awaitable))
+                    Ok(litellm_host_python::ExecutionStep::Suspended(
+                        litellm_host_python::Suspension::Await(awaitable),
+                    ))
                 }
             }
         })
@@ -517,9 +519,11 @@ impl litellm_host_python::ExecutionBody for Preparing {
 }
 
 fn lifecycle(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let source =
-        std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/lifecycle.py"))
-            .unwrap();
+    let source = std::ffi::CString::new(concat!(
+        include_str!("../../../../litellm/rust_bridge/lifecycle.py"),
+        "\n_drive = drive\n\n\nasync def drive(execution):\n    return await _drive(execution, Stream)\n",
+    ))
+    .unwrap();
     PyModule::from_code(py, &source, c"lifecycle.py", c"hook_chain_test_lifecycle")
 }
 

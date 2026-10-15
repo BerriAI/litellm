@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeAlias, overload
 
 from fastapi import (
     APIRouter,
@@ -29,6 +29,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
@@ -80,7 +81,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     handle_exception_on_proxy,
     premium_user_check,
 )
-from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in, update_many_in
+from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -592,6 +593,111 @@ class _CaseInsensitiveMatch(TypedDict):
     mode: ReadOnly[str]
 
 
+_InFilter: Final = TypedDict("_InFilter", {"in": ReadOnly[Sequence[str]]})
+_CaseInsensitiveInFilter: Final = TypedDict(
+    "_CaseInsensitiveInFilter", {"in": ReadOnly[Sequence[str]], "mode": ReadOnly[str]}
+)
+
+
+class _UserIdIn(TypedDict):
+    user_id: ReadOnly[_InFilter]
+
+
+class _SsoUserIdIn(TypedDict):
+    sso_user_id: ReadOnly[_InFilter]
+
+
+class _UserEmailIn(TypedDict):
+    user_email: ReadOnly[_CaseInsensitiveInFilter]
+
+
+_IdentityRowsClause: TypeAlias = _UserIdIn | _SsoUserIdIn | _UserEmailIn
+
+
+class _IdentityRowsWhere(TypedDict):
+    OR: ReadOnly[Sequence[_IdentityRowsClause]]
+
+
+@dataclass(frozen=True, slots=True)
+class _IdentityIndex:
+    user_ids: frozenset[str]
+    by_sso_user_id: Mapping[str, tuple[str, ...]]
+    by_email: Mapping[str, tuple[str, ...]]
+
+
+async def _identity_rows_for_chunk(chunk: Sequence[str], prisma_client: PrismaClient) -> tuple[LiteLLM_UserTable, ...]:
+    subjects: Final = list(dict.fromkeys(value.strip() for value in chunk))
+    where: Final[_IdentityRowsWhere] = {
+        "OR": [
+            {"user_id": {"in": list(chunk)}},  # bounded-ok: chunk cap is 10,000
+            {"sso_user_id": {"in": subjects}},  # bounded-ok: subjects are chunk-bounded
+            {"user_email": {"in": subjects, "mode": "insensitive"}},  # bounded-ok: subjects are chunk-bounded
+        ]
+    }
+    return tuple(await _table(UserRepository(prisma_client)).find_many(where=where))
+
+
+async def _identity_rows_for_values(
+    values: Sequence[str], prisma_client: PrismaClient
+) -> tuple[LiteLLM_UserTable, ...]:
+    unique_values: Final = tuple(dict.fromkeys(values))
+    if not unique_values:
+        return ()
+
+    batch_size: Final = SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE
+    chunks: Final = tuple(
+        unique_values[start : start + batch_size] for start in range(0, len(unique_values), batch_size)
+    )
+    chunk_rows: Final = tuple([await _identity_rows_for_chunk(chunk, prisma_client) for chunk in chunks])
+    rows: Final = tuple(chain.from_iterable(chunk_rows))
+    return tuple({row.user_id: row for row in rows}.values())
+
+
+def _identity_index(rows: Sequence[LiteLLM_UserTable]) -> _IdentityIndex:
+    sso_entries: Final = tuple(sorted((row.sso_user_id, row.user_id) for row in rows if row.sso_user_id is not None))
+    email_entries: Final = tuple(
+        sorted((row.user_email.lower(), row.user_id) for row in rows if row.user_email is not None)
+    )
+    by_sso_user_id: Final = MappingProxyType(
+        {
+            subject: tuple(sorted({user_id for _, user_id in matches}))
+            for subject, matches in groupby(sso_entries, key=lambda entry: entry[0])
+        }
+    )
+    by_email: Final = MappingProxyType(
+        {
+            email: tuple(sorted({user_id for _, user_id in matches}))
+            for email, matches in groupby(email_entries, key=lambda entry: entry[0])
+        }
+    )
+    return _IdentityIndex(
+        user_ids=frozenset(row.user_id for row in rows),
+        by_sso_user_id=by_sso_user_id,
+        by_email=by_email,
+    )
+
+
+def _users_named_by(value: str, index: _IdentityIndex) -> tuple[str, ...]:
+    subject: Final = value.strip()
+    named: Final = frozenset(
+        chain(
+            index.by_sso_user_id.get(subject, ()),
+            index.by_email.get(subject.lower(), ()),
+        )
+    )
+    return tuple(sorted(named))
+
+
+def _accounts_named_by(value: str, index: _IdentityIndex) -> tuple[str, ...]:
+    named: Final = frozenset(
+        chain(
+            _users_named_by(value, index),
+            (value,) if value in index.user_ids else (),
+        )
+    )
+    return tuple(sorted(named))
+
+
 async def _users_named_by_member_value(
     value: str, prisma_client: PrismaClient, *, take: int | None = 2
 ) -> tuple[str, ...]:
@@ -624,101 +730,35 @@ async def _users_named_by_member_value(
     return tuple(dict.fromkeys(row.user_id for row in rows))
 
 
-def _grouped(pairs: Iterable[tuple[str, str]]) -> Mapping[str, tuple[str, ...]]:
-    ordered: Final = sorted(pairs)
-    return MappingProxyType(
-        {key: tuple(user_id for _, user_id in group) for key, group in groupby(ordered, key=lambda pair: pair[0])}
+async def _scim_team_ids_among(values: Sequence[str], prisma_client: PrismaClient) -> frozenset[str]:
+    unique_values: Final = tuple(dict.fromkeys(values))
+    if not unique_values:
+        return frozenset()
+
+    teams: Final = await find_many_in(
+        _table(TeamRepository(prisma_client)),
+        "team_id",
+        unique_values,
+        chunk_size=SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _NamedAccounts:
-    """The accounts a group push's member values name, read from the user table in one pass.
-
-    Classification needs to know whether a value is one account's ``user_id`` and
-    whether it names any other account, so all three fields are read together. The
-    id compares exactly and unstripped, as a primary key lookup would; the identities
-    compare as ``_users_named_by_member_value`` describes, an email folded and an SSO
-    subject exact.
-    """
-
-    user_ids: frozenset[str]
-    by_sso_user_id: Mapping[str, tuple[str, ...]]
-    by_folded_email: Mapping[str, tuple[str, ...]]
-
-    @classmethod
-    def of(cls, rows: Iterable[LiteLLM_UserTable]) -> "_NamedAccounts":
-        listed: Final = tuple(rows)
-        return cls(
-            user_ids=frozenset(row.user_id for row in listed),
-            by_sso_user_id=_grouped((row.sso_user_id, row.user_id) for row in listed if row.sso_user_id),
-            by_folded_email=_grouped((row.user_email.lower(), row.user_id) for row in listed if row.user_email),
-        )
-
-    def named_by(self, value: str) -> tuple[str, ...]:
-        subject: Final = value.strip()
-        return tuple(
-            dict.fromkeys(
-                chain(
-                    (value,) if value in self.user_ids else (),
-                    self.by_sso_user_id.get(subject, ()),
-                    self.by_folded_email.get(subject.lower(), ()),
-                )
-            )
-        )
-
-
-async def _accounts_named_by_member_values(values: Sequence[str], prisma_client: PrismaClient) -> _NamedAccounts:
-    """One read of every account the given member values name, by user id, SSO identity or email.
-
-    A group push used to look each member up on its own, so a 500-member group was
-    500 scans of an unindexed column before a single row was written. Each read binds
-    one parameter per value in each of its three lists and Postgres caps a statement at
-    32,767 binds, so a push past ``IN_LIST_CHUNK_SIZE`` members reads in slices.
-    """
-    users: Final = _table(UserRepository(prisma_client))
-    starts: Final = range(0, len(values), IN_LIST_CHUNK_SIZE)
-    pages: Final = tuple(
-        [
-            await users.find_many(where=_named_accounts_filter(values[start : start + IN_LIST_CHUNK_SIZE]))
-            for start in starts
-        ]
-    )
-    return _NamedAccounts.of(chain.from_iterable(pages))
-
-
-def _named_accounts_filter(values: Sequence[str]) -> Mapping[str, object]:
-    subjects: Final = list(dict.fromkeys(value.strip() for value in values))
-    return {
-        "OR": [
-            {"user_id": {"in": list(values)}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
-            {"sso_user_id": {"in": subjects}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
-            {"user_email": {"in": subjects, "mode": "insensitive"}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
-        ],
-    }
-
-
-async def _scim_managed_team_ids(team_ids: Sequence[str], prisma_client: PrismaClient) -> frozenset[str]:
-    """The given ids that name a team the identity provider writes."""
-    teams: Final = await find_many_in(_table(TeamRepository(prisma_client)), "team_id", team_ids)
     return frozenset(team.team_id for team in teams if _team_metadata_has_scim_provenance(team.metadata))
 
 
 def _classify_group_member(
-    value: str, member_type: str | None, accounts: _NamedAccounts, scim_team_ids: frozenset[str]
+    member: SCIMMember, named: tuple[str, ...], scim_team_ids: frozenset[str]
 ) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
 
     A LiteLLM team only holds users, so a member is dropped when it declares a type
     other than ``User`` or when its id names an existing team. Both of those checks
-    are placed around the user lookup rather than before it, because the id of a
+    are placed around identity resolution rather than before it, because the id of a
     real user is the one thing that outranks them:
 
     - ``"type": "Group"`` (what Entra sends for a nested group) is dropped without
-      a lookup. This bug provisioned nested group GUIDs as users, so those rows
+      identity resolution. This bug provisioned nested group GUIDs as users, so those rows
       exist in the wild and would otherwise resolve as members all over again.
-    - any other unrecognized type is dropped only after the user lookup misses.
+    - any other unrecognized type is dropped only after identity resolution misses.
       Clients do send non-canonical types on real members (RFC 7643 defines
       ``direct`` for ``User.groups``), and dropping a live user over one would
       revoke that user's team access on the next full sync.
@@ -728,8 +768,8 @@ def _classify_group_member(
       even if some team happens to share the id, and a team created here rather
       than through SCIM is not evidence of anything about the member.
 
-    When those checks miss on an otherwise user-shaped member, its value is looked
-    up as an SSO identity or an email, and a match resolves to that user's
+    When those checks miss on an otherwise user-shaped member, its value is matched
+    against SSO identities or emails, and a match resolves to that user's
     ``user_id``. A value that names more than one account is ambiguous rather than
     unknown: it names a real person we cannot identify, so it is neither guessed at
     nor provisioned.
@@ -742,10 +782,12 @@ def _classify_group_member(
     the membership is refused and named rather than silently landing on the
     placeholder again.
     """
+    value: Final = _member_value(member)
+    member_type: Final = _normalized_member_type(member)
+
     if member_type == "group":
         return _SkippedGroupMember(value=value, reason="nested_group")
 
-    named: Final = accounts.named_by(value)
     if value in named:
         shared_with: Final = tuple(other for other in named if other != value)
         if shared_with:
@@ -781,25 +823,6 @@ def _classify_group_member(
         return _AmbiguousMember(value=value)
 
     return _UnknownMember(value=value)
-
-
-async def _classify_group_members(
-    members: Sequence[SCIMMember], prisma_client: PrismaClient
-) -> tuple[_ClassifiedGroupMember, ...]:
-    """Classify every member of a group push with one read of the user table and one of the team table.
-
-    Members typed ``Group`` are never looked up, and only an untyped member that is not
-    an account's own id needs the team read, exactly as the per-member classification
-    orders its checks.
-    """
-    typed: Final = tuple((_member_value(member), _normalized_member_type(member)) for member in members)
-    looked_up: Final = tuple(dict.fromkeys(value for value, member_type in typed if member_type != "group"))
-    accounts: Final = await _accounts_named_by_member_values(looked_up, prisma_client)
-    untyped: Final = tuple(dict.fromkeys(value for value, member_type in typed if member_type is None))
-    scim_team_ids: Final = await _scim_managed_team_ids(
-        tuple(value for value in untyped if value not in accounts.user_ids), prisma_client
-    )
-    return tuple(_classify_group_member(value, member_type, accounts, scim_team_ids) for value, member_type in typed)
 
 
 def _bucketed_member(entry: _ClassifiedGroupMember) -> _PartitionedMembers:
@@ -928,10 +951,11 @@ async def _member_ids_to_drop(
     Raises:
         HTTPException: 400 when a member id names more than one current member.
     """
-    written: Final = tuple(sorted(frozenset(_member_value(member) for member in members)))
-    accounts: Final = await _accounts_named_by_member_values(written, prisma_client)
+    written: Final = frozenset(_member_value(member) for member in members)
+    rows: Final = await _identity_rows_for_values(sorted(written), prisma_client)
+    index: Final = _identity_index(rows)
     matched: Final = tuple(
-        (value, _roster_entries_named_by(value, roster, accounts.named_by(value))) for value in written
+        (value, _roster_entries_named_by(value, roster, _users_named_by(value, index))) for value in sorted(written)
     )
     undecidable: Final = tuple(value for value, entries in matched if len(entries) > 1)
     if undecidable:
@@ -966,7 +990,22 @@ async def _resolve_group_member_ids(
         other than a user. 500 when a member's user row can neither be created nor
         found.
     """
-    classified: Final = await _classify_group_members(members, prisma_client)
+    values: Final = tuple(_member_value(member) for member in members)
+    identity_values: Final = tuple(
+        value for member, value in zip(members, values) if _normalized_member_type(member) != "group"
+    )
+    rows: Final = await _identity_rows_for_values(identity_values, prisma_client)
+    index: Final = _identity_index(rows)
+    named_by: Final = MappingProxyType({value: _accounts_named_by(value, index) for value in dict.fromkeys(values)})
+    team_candidates: Final = tuple(
+        value
+        for member, value in zip(members, values)
+        if _normalized_member_type(member) is None and value not in named_by[value]
+    )
+    scim_teams: Final = await _scim_team_ids_among(team_candidates, prisma_client)
+    classified: Final = tuple(
+        _classify_group_member(member, named_by[value], scim_teams) for member, value in zip(members, values)
+    )
     partition: Final = _partition_classified_members(classified)
 
     for skipped in partition.skipped:

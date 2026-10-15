@@ -2,7 +2,9 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -13,8 +15,17 @@ from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
 from litellm.types.utils import LlmProviders
+
+_V = TypeVar("_V")
+
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
+    return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
 
 
 def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
@@ -64,6 +75,30 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
+def resolve_served_model(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+) -> str:
+    """Model the request preparation serves for `model`.
+
+    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
+    """
+    global_aliases: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
+    )
+    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
+    after_global: Final = global_target if isinstance(global_target, str) else model
+    key_alias_mapping: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
+    )
+    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
+    after_key: Final = key_target if isinstance(key_target, str) else after_global
+    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
+    return router_target if router_target is not None else after_key
+
+
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -99,15 +134,61 @@ def format_fallback_outcome_message(
     model_group: str | None,
     fallback_model_group: Sequence[object] | None,
     fallback_failure_detail: str,
+    skipped: Sequence[SkippedFallbackTarget] = (),
 ) -> str:
     """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
     lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
+
+    def fallback_target_model_group(target: object) -> str | None:
+        if isinstance(target, str):
+            return target
+        if not isinstance(target, Mapping):
+            return None
+        model: Final = target.get("model")
+        return model if isinstance(model, str) else None
+
+    skipped_targets: Final = frozenset(target.target for target in skipped)
+    attempted_targets: Final = tuple(
+        target for target in fallback_model_group if fallback_target_model_group(target) not in skipped_targets
+    )
+    not_authorized_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.NOT_AUTHORIZED)
+    )
+    over_budget_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
+    )
+    attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
+    not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
+    over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    attempted_failure: Final = (
+        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        if fallback_failure_detail and attempted_targets
+        else ()
+    )
+    not_authorized_sentence: Final = (
+        (
+            f"Fallback to {not_authorized_text} was skipped because the caller is not authorized to call "
+            f"{'it' if len(not_authorized_targets) == 1 else 'them'}.",
+        )
+        if not_authorized_targets
+        else ()
+    )
+    over_budget_sentence: Final = (
+        (
+            f"Fallback to {over_budget_text} was skipped because the caller is over budget for "
+            f"{'it' if len(over_budget_targets) == 1 else 'them'}.",
+        )
+        if over_budget_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    if sentences:
+        return f"{lead} {' '.join(sentences)}"
+
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
-    if not fallback_failure_detail:
-        return f"{lead} Fallback model group(s) configured: {targets}."
-    return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
+    return f"{lead} Fallback model group(s) configured: {targets}."
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:

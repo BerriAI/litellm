@@ -71,11 +71,14 @@ class _QueuePubSub:
             self.queue.put_nowait(message)
         self.subscribed_channels: list[str] = []
         self.closed = False
+        self.drained = asyncio.Event()
 
     async def subscribe(self, *channels: str) -> None:
         self.subscribed_channels.extend(channels)
 
     async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+        if self.queue.empty():
+            self.drained.set()
         try:
             return await asyncio.wait_for(self.queue.get(), timeout)
         except asyncio.TimeoutError:
@@ -166,10 +169,7 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     )
     subscriber.start()
     try:
-        for _ in range(200):
-            if cache.in_memory_cache.get_cache("project_id:p-1") is None:
-                break
-            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
     finally:
         await subscriber.stop()
 
@@ -196,10 +196,7 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
     )
     subscriber.start()
     try:
-        for _ in range(200):
-            if cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None:
-                break
-            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
     finally:
         await subscriber.stop()
 
@@ -227,10 +224,7 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
     )
     subscriber.start()
     try:
-        for _ in range(200):
-            if spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None:
-                break
-            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
     finally:
         await subscriber.stop()
 
