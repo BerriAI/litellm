@@ -250,10 +250,16 @@ async def test_key_router_settings_alias_the_key_lists_reports_its_target_at_lis
 
 
 @pytest.mark.asyncio
-async def test_alias_to_a_paused_model_is_not_described_by_it(router: Router) -> None:
-    caller = _team_member(models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "paused"})
+@pytest.mark.parametrize("target", ["paused", "hidden"])
+async def test_alias_to_a_model_the_listing_hides_is_not_described_by_it(router: Router, target: str) -> None:
+    models = ["gpt-4.1-mini", "model_name_team1_abc", "fast"]
+    caller = _team_member(models=models, team_model_aliases={"fast": target})
 
-    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "fast"]
+    listing = await proxy_server.model_list(user_api_key_dict=caller, request=None, include_metadata=True)
+    unaliased = await proxy_server.model_list(
+        user_api_key_dict=_team_member(models=models), request=None, include_metadata=True
+    )
+    assert listing["data"] == unaliased["data"]
     with pytest.raises(HTTPException) as retrieval:
         await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
     assert retrieval.value.status_code == 404

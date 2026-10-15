@@ -430,7 +430,11 @@ from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
-from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
+from litellm.proxy.common_utils.discoverable_model_filter import (
+    discoverable_rows,
+    undiscoverable_model_groups,
+    undiscoverable_model_names,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -12120,7 +12124,13 @@ async def model_list(
         TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
     )
     entries: Final = alias_listing_entries(
-        listed_entries, caller_aliases, DeployedModelGroups(llm_router, hidden_names)
+        listed_entries,
+        caller_aliases,
+        DeployedModelGroups(
+            llm_router,
+            hidden_names
+            | undiscoverable_model_groups(llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id),
+        ),
     )
     labels: Final = label_entries(listed_entries, entries)
     for response_id, lookup_id in entries:
@@ -12255,7 +12265,11 @@ async def model_info(
             caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
         ),
         listed_entries,
-        DeployedModelGroups(llm_router, hidden_names),
+        DeployedModelGroups(
+            llm_router,
+            hidden_names
+            | undiscoverable_model_groups(llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id),
+        ),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
