@@ -343,3 +343,19 @@ async def test_vector_store_index_row_without_optional_columns_gets_empty_defaul
 async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
     with pytest.raises(ValidationError):
         await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+
+
+@pytest.mark.parametrize(
+    ("tools", "expected"),
+    [
+        (5, []),
+        (["vector_store_ids", {"type": "file_search", "vector_store_ids": ["vs_kept"]}], ["vs_kept"]),
+        (
+            [{"type": "file_search", "vector_store_ids": 5}, {"type": "file_search", "vector_store_ids": ["vs_kept"]}],
+            ["vs_kept"],
+        ),
+    ],
+    ids=["int", "string_entry", "int_vector_store_ids"],
+)
+def test_vector_store_ids_to_run_skips_malformed_tools(tools: object, expected: list[str]) -> None:
+    assert VectorStoreRegistry().get_vector_store_ids_to_run(non_default_params={}, tools=tools) == expected

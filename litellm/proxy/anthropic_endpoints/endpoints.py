@@ -2,10 +2,12 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+from collections.abc import Mapping
 from typing import Final
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -84,6 +86,32 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
         "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
     }
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
+
+
+_DROPPABLE_TOKEN_COUNT_FIELDS: Final = frozenset({"tools"})
+
+
+def _drops_params(data: Mapping[str, object]) -> bool:
+    requested: Final = data.get("drop_params")
+    return requested if isinstance(requested, bool) else litellm.drop_params is True
+
+
+def _token_count_request(fields: Mapping[str, object], drop_params: bool) -> TokenCountRequest | ProxyException:
+    try:
+        return TokenCountRequest.model_validate(fields)
+    except ValidationError as e:
+        errors: Final = e.errors(include_url=False)
+        invalid_fields: Final = frozenset(str(error["loc"][0]) for error in errors)
+        if drop_params and invalid_fields <= _DROPPABLE_TOKEN_COUNT_FIELDS:
+            return _token_count_request(
+                {name: value for name, value in fields.items() if name not in invalid_fields}, drop_params=False
+            )
+        return ProxyException(
+            message="; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors),
+            type="invalid_request_error",
+            param=str(errors[0]["loc"][0]),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def _strip_total_tokens_from_anthropic_response(response: object) -> None:
@@ -335,15 +363,12 @@ async def count_tokens(
         if not messages:
             raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
 
-        # Create TokenCountRequest for the internal endpoint
-        from litellm.proxy._types import TokenCountRequest
-
-        token_request: Final = TokenCountRequest(
-            model=model_name,
-            messages=messages,
-            tools=data.get("tools"),
-            system=data.get("system"),
+        token_request: Final = _token_count_request(
+            {"model": model_name, "messages": messages, "tools": data.get("tools"), "system": data.get("system")},
+            drop_params=_drops_params(data),
         )
+        if isinstance(token_request, ProxyException):
+            return _anthropic_error_json_response(token_request, request)
 
         # Call the internal token counter function with direct request flag set to False
         token_response: Final = await internal_token_counter(

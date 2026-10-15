@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -740,9 +740,9 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_web_search_options(kwargs: Mapping[str, object]) -> WebSearchOptions | None:
-        if "web_search_options" in kwargs:
-            web_search_options: Final = cast(WebSearchOptions, kwargs.get("web_search_options", {}))
-            return WebSearchOptions(**web_search_options)
+        web_search_options: Final = kwargs.get("web_search_options")
+        if isinstance(web_search_options, dict):
+            return WebSearchOptions(**cast(WebSearchOptions, web_search_options))
 
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
             kwargs=kwargs, tool_type="web_search_preview"
@@ -758,10 +758,9 @@ class StandardBuiltInToolCostTracking:
     _get_web_search_options = get_web_search_options
 
     @staticmethod
-    def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> list[object] | None:
-        if "tools" in kwargs:
-            return cast(list[object], kwargs.get("tools", []))
-        return None
+    def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> Sequence[object] | None:
+        tools: Final = kwargs.get("tools")
+        return cast(Sequence[object], tools) if isinstance(tools, (list, tuple)) else None
 
     @staticmethod
     def get_file_search_tool_call(kwargs: Mapping[str, object]) -> FileSearchTool | None:

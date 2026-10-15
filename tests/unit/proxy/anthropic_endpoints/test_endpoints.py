@@ -452,6 +452,53 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [5, "", ["get_weather"]], ids=["int", "empty_string", "list_of_strings"])
+async def test_count_tokens_answers_400_for_malformed_tools_without_counting(tools: object) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request = MagicMock()
+    request.headers = {}
+    counter = AsyncMock()
+    body = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": tools}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+    ):
+        response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
+    counter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request = MagicMock()
+    request.headers = {}
+    counter = AsyncMock(return_value={"total_tokens": 7})
+    messages = [{"role": "user", "content": "hi"}]
+    body = {"model": "claude-sonnet", "messages": messages, "tools": 5, "drop_params": True}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+    ):
+        response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 7}
+    counted = counter.await_args.kwargs["request"]
+    assert counted.tools is None
+    assert counted.messages == messages
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

@@ -49,11 +49,12 @@ def test_web_search_cost_high():
     )
 
 
-def test_get_web_search_options_preserves_explicit_none_error():
-    with pytest.raises(TypeError):
-        StandardBuiltInToolCostTracking.get_web_search_options(
-            {"web_search_options": None, "tools": [{"type": "web_search_preview"}]}
-        )
+def test_get_web_search_options_reads_tools_when_options_are_null():
+    options = StandardBuiltInToolCostTracking.get_web_search_options(
+        {"web_search_options": None, "tools": [{"type": "web_search_preview"}]}
+    )
+
+    assert options == {"type": "web_search_preview"}
 
 
 def test_get_web_search_options_accepts_non_list_tool_iterables():
@@ -654,3 +655,13 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
 
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"tools": 5}, {"web_search_options": None}, {"web_search_options": 5}],
+    ids=["int_tools", "null_web_search_options", "int_web_search_options"],
+)
+def test_built_in_tool_lookups_ignore_malformed_request_values(kwargs: dict[str, object]) -> None:
+    assert StandardBuiltInToolCostTracking.get_web_search_options(kwargs) is None
+    assert StandardBuiltInToolCostTracking.get_file_search_tool_call(kwargs) is None
