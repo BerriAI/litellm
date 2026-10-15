@@ -688,12 +688,14 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     thinking: str
     signature: str | None
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     type: Required[Literal["redacted_thinking"]]
     data: str
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):

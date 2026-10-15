@@ -46344,6 +46344,10 @@
               "title": "Data",
               "type": "string"
             },
+            "index": {
+              "title": "Index",
+              "type": "integer"
+            },
             "type": {
               "const": "redacted_thinking",
               "title": "Type",
@@ -46428,6 +46432,10 @@
                 }
               ],
               "title": "Cache Control"
+            },
+            "index": {
+              "title": "Index",
+              "type": "integer"
             },
             "signature": {
               "anyOf": [

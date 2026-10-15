@@ -312,6 +312,31 @@ def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monk
 
 
 @pytest.mark.asyncio
+def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blocks():
+    """Streamed thinking blocks carry the OpenAI SDK list-position `index`. Anthropic's native thinking block schema
+    rejects unknown fields, so the field must not reach the request when a client replays the streamed message"""
+    messages: Final = [
+        {"role": "user", "content": "Capital of France?"},
+        {
+            "role": "assistant",
+            "content": "Paris",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+                {"type": "redacted_thinking", "data": "EmwKAhgB", "index": 1},
+            ],
+        },
+        {"role": "user", "content": "And Spain?"},
+    ]
+
+    replayed: Final = anthropic_messages_pt(messages=messages, model="claude-haiku-4-5", llm_provider="anthropic")
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "EmwKAhgB"},
+        {"type": "text", "text": "Paris"},
+    ]
+
+
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """
     Test the specific function that processes thinking_blocks when content is None
