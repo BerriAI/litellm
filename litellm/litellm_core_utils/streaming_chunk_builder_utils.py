@@ -1183,6 +1183,7 @@ class ChunkProcessor:
             for field, value in (
                 ("inference_geo", calculated_usage_per_chunk["inference_geo"]),
                 ("speed", calculated_usage_per_chunk["speed"]),
+                ("service_tier", self._last_provider_pricing_field(chunks, "service_tier")),
             )
             if value is not None
         }
