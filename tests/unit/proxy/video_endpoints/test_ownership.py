@@ -19,6 +19,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.video_endpoints import endpoints
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import encode_video_id_with_provider
 
 ALICE = UserAPIKeyAuth(user_id="alice", api_key=hash_token("sk-alice"))
@@ -70,11 +71,13 @@ class Provider:
 
     def __init__(self):
         self.calls: list[str] = []
+        self.returns_video_objects = False
 
     async def respond(self, processor, *, route_type: str, **kwargs):
         self.calls.append(route_type)
         if route_type in ("avideo_generation", "avideo_remix", "avideo_edit", "avideo_extension"):
-            return {"id": f"video_{uuid.uuid4().hex}", "object": "video", "status": "queued"}
+            created = {"id": f"video_{uuid.uuid4().hex}", "object": "video", "status": "queued"}
+            return VideoObject(**created) if self.returns_video_objects else created
         if route_type == "avideo_content":
             return b"mp4-bytes"
         if route_type == "avideo_list":
@@ -132,11 +135,22 @@ ALL_OK = {"status": 200, "content": 200, "remix": 200, "edit": 200, "extension":
 ALL_FORBIDDEN = {"status": 403, "content": 403, "remix": 403, "edit": 403, "extension": 403}
 
 
-def test_owner_can_use_every_video_route(provider, table):
+@pytest.mark.parametrize("returns_video_objects", [False, True])
+def test_owner_can_use_every_video_route(provider, table, returns_video_objects):
+    provider.returns_video_objects = returns_video_objects
     video_id = _create_video(ALICE)
 
     assert table.rows[f"video:{video_id}"].created_by == "alice"
     assert _access(ALICE, video_id) == ALL_OK
+    assert _access(BOB, video_id) == ALL_FORBIDDEN
+
+
+def test_caller_without_identity_scope_leaves_the_video_admin_only(provider, table):
+    video_id = _create_video(UserAPIKeyAuth())
+
+    assert table.rows == {}
+    assert _access(ALICE, video_id) == ALL_FORBIDDEN
+    assert _access(ADMIN, video_id) == ALL_OK
 
 
 def test_other_user_is_forbidden_and_the_provider_is_never_called(provider, table):

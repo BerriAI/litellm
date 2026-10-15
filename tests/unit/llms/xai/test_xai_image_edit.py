@@ -1,4 +1,5 @@
 import base64
+from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -184,3 +185,135 @@ def test_transform_multiple_images_uses_images_array():
         {"url": "https://imgen.x.ai/a.jpeg"},
         {"url": "https://imgen.x.ai/b.jpeg"},
     ]
+
+
+def _edit_request(image, optional_params=None):
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    data, _ = XAIImageEditConfig().transform_image_edit_request(
+        model="grok-imagine-image",
+        prompt="make it night",
+        image=image,
+        image_edit_optional_request_params=optional_params or {},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    return data
+
+
+def test_validate_environment_api_key_sets_bearer_and_keeps_caller_content_type():
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    headers = XAIImageEditConfig().validate_environment(
+        headers={"Content-Type": "application/custom"},
+        model="grok-imagine-image",
+        api_key="fake-key",
+        litellm_params={},
+    )
+
+    assert headers == {"Content-Type": "application/custom", "Authorization": "Bearer fake-key"}
+
+
+def test_map_rejects_unknown_param_unless_dropped():
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    config = XAIImageEditConfig()
+    with pytest.raises(ValueError, match="Parameter quality is not supported"):
+        config.map_openai_params(
+            image_edit_optional_params={"quality": "hd", "n": 2},
+            model="grok-imagine-image",
+            drop_params=False,
+        )
+
+    assert config.map_openai_params(
+        image_edit_optional_params={"quality": "hd", "n": 2, "resolution": "2k"},
+        model="grok-imagine-image",
+        drop_params=True,
+    ) == {"n": 2, "resolution": "2k"}
+
+
+def test_get_complete_url_appends_v1_to_a_bare_custom_base():
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    url = XAIImageEditConfig().get_complete_url(
+        model="grok-imagine-image",
+        api_base="https://xai-gateway.example.com/",
+        litellm_params={"api_key": "fake-key"},
+    )
+
+    assert url == "https://xai-gateway.example.com/v1/images/edits"
+
+
+@pytest.mark.parametrize("image", [None, [], [None]])
+def test_transform_rejects_missing_reference_image(image):
+    with pytest.raises(ValueError, match="requires at least one reference image"):
+        _edit_request(image)
+
+
+@pytest.mark.parametrize(
+    "image,expected",
+    [
+        ({"url": "https://imgen.x.ai/a.jpeg"}, {"url": "https://imgen.x.ai/a.jpeg"}),
+        ({"file_id": "file-123"}, {"file_id": "file-123"}),
+    ],
+)
+def test_transform_passes_url_and_file_id_references_through(image, expected):
+    assert _edit_request(image)["image"] == expected
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        bytearray(b"\x89PNG\r\n\x1a\nfakepng"),
+        BytesIO(b"\x89PNG\r\n\x1a\nfakepng"),
+    ],
+)
+def test_transform_encodes_binary_inputs_as_data_uri(image):
+    expected = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\nfakepng").decode()
+
+    assert _edit_request(image)["image"]["url"] == expected
+
+
+def test_transform_reads_a_partially_consumed_stream_from_the_start_and_restores_position():
+    stream = BytesIO(b"\x89PNG\r\n\x1a\nfakepng")
+    stream.seek(4)
+
+    url = _edit_request(stream)["image"]["url"]
+
+    assert url.endswith(base64.b64encode(b"\x89PNG\r\n\x1a\nfakepng").decode())
+    assert stream.tell() == 4
+
+
+def test_transform_encodes_text_reader_as_utf8():
+    class TextReader:
+        def read(self) -> str:
+            return "plain-text-bytes"
+
+    url = _edit_request(TextReader())["image"]["url"]
+
+    assert url.endswith(base64.b64encode(b"plain-text-bytes").decode())
+
+
+def test_transform_rejects_unsupported_image_type():
+    with pytest.raises(ValueError, match="Unsupported image input type"):
+        _edit_request(12345)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        httpx.Response(502, text="<html>bad gateway</html>"),
+        httpx.Response(200, json={"data": []}),
+    ],
+)
+def test_transform_response_raises_provider_error_without_images(raw):
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    with pytest.raises(Exception) as exc_info:
+        XAIImageEditConfig().transform_image_edit_response(
+            model="grok-imagine-image",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == raw.status_code

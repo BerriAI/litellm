@@ -11,7 +11,7 @@ from litellm.llms.xai.batches.transformation import XAIBatchesError
 from litellm.types.utils import LiteLLMBatch
 
 API_BASE: Final = "https://api.x.ai"
-KEY: Final = "xai-test-key"
+KEY: Final = "fake-key"
 
 
 @pytest.fixture(autouse=True)
