@@ -3,7 +3,9 @@ from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.responses.bases.anthropic import (
+    CLAUDE_FABLE_5_1_TEST_CASE,
     CLAUDE_HAIKU_4_5_TEST_CASE,
+    CLAUDE_HAIKU_5_5_TEST_CASE,
     CLAUDE_OPUS_4_8_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
     CLAUDE_SONNET_4_6_TEST_CASE,
@@ -17,11 +19,13 @@ from integration.translation.runner import assert_translation
     "case",
     [
         CLAUDE_HAIKU_4_5_TEST_CASE,
+        CLAUDE_HAIKU_5_5_TEST_CASE,
         CLAUDE_SONNET_4_6_TEST_CASE,
         CLAUDE_SONNET_5_TEST_CASE,
         CLAUDE_OPUS_4_8_TEST_CASE,
         CLAUDE_SONNET_5_5_TEST_CASE,
         CLAUDE_OPUS_5_5_TEST_CASE,
+        CLAUDE_FABLE_5_1_TEST_CASE,
     ],
     ids=lambda case: case.id,
 )
