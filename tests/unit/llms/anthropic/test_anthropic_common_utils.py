@@ -1667,6 +1667,37 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert len(msgs[1]["content"]) == 2
         assert len(msgs[2]["content"]) == 4
 
+    def test_strip_encrypted_reasoning_unwraps_converse_wrapped_redacted_data(self):
+        """/v1/messages turns served by Bedrock Converse used to hand out the data base64-wrapped, which the
+        Anthropic API and Bedrock Invoke reject with "Invalid `data` in `redacted_thinking` block"."""
+        import base64
+
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        native = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+        untouched = {"role": "assistant", "content": [{"type": "redacted_thinking", "data": native}]}
+        msgs = [
+            {"role": "user", "content": "Solve it."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": base64.b64encode(native.encode()).decode()},
+                    {"type": "text", "text": "The answer."},
+                ],
+            },
+            untouched,
+        ]
+
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
+
+        assert out[1] == {
+            "role": "assistant",
+            "content": [{"type": "redacted_thinking", "data": native}, {"type": "text", "text": "The answer."}],
+        }
+        assert out[2] is untouched
+
     def test_strip_encrypted_reasoning_leaves_malformed_messages_for_the_provider_to_reject(self):
         """A bare string in messages must reach Anthropic as a 400, not die in the stripper as a 500."""
         from litellm.llms.anthropic.common_utils import (

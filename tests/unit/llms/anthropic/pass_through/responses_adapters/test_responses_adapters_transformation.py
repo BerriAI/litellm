@@ -1570,7 +1570,7 @@ class TestTranslateResponse:
     def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self, summaries, encrypted_content):
         """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
-            _drop_unsignable_thinking_blocks,
+            _replayable_thinking_blocks,
         )
 
         response = _make_mock_response(
@@ -1578,7 +1578,7 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert len(result["content"]) == 1
-        assert _drop_unsignable_thinking_blocks(result["content"]) == []
+        assert _replayable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
         """Input/output tokens from ResponseAPIUsage are mapped to AnthropicUsage."""

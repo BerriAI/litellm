@@ -1,3 +1,4 @@
+import base64
 import copy
 import functools
 import json
@@ -13,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
+    converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
@@ -23,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    native_redacted_thinking_data,
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
@@ -2306,3 +2309,28 @@ def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> No
         "text": "rules",
         "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
     }
+
+
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "data, native",
+    [
+        pytest.param(_NATIVE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="claude-native"),
+        pytest.param(_CONVERSE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="converse-wrapped-legacy-history"),
+        pytest.param(
+            encrypted_reasoning_signature("gAAAA_1"), encrypted_reasoning_signature("gAAAA_1"), id="openai-encrypted"
+        ),
+        pytest.param("", "", id="blank"),
+        pytest.param(base64.b64encode(b"not base64!").decode(), base64.b64encode(b"not base64!").decode(), id="b64-once"),
+    ],
+)
+def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(data: str, native: str) -> None:
+    assert native_redacted_thinking_data(data) == native
+
+
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
+    assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
