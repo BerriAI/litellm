@@ -3350,19 +3350,38 @@ def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockR
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("openai_format", (False, True))
-async def test_nace_decisions_reuses_shared_translation_and_prices_the_returned_model(
+@pytest.mark.parametrize(
+    ("provider", "model", "url", "key_env"),
+    (
+        ("nace", "drex-test-alias", "https://console.nace.ai/v1/systemone", "NACE_API_KEY"),
+        ("openrouter", "nace/drex-test-alias", "https://openrouter.ai/api/alpha/decisions", "OPENROUTER_API_KEY"),
+        (
+            "fireworks_ai",
+            "accounts/test/models/drex-test-alias",
+            "https://api.fireworks.ai/inference/v1/systemone",
+            "FIREWORKS_API_KEY",
+        ),
+    ),
+)
+async def test_decision_hosts_preserve_drex_model_routing_credentials_and_returned_model_pricing(
+    provider: str,
+    model: str,
+    url: str,
+    key_env: str,
     openai_format: bool,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
-    monkeypatch.setenv("NACE_API_KEY", "nace-test-key")
+    monkeypatch.setenv(key_env, "host-test-key")
     monkeypatch.delenv("NACE_API_BASE", raising=False)
     monkeypatch.delenv("NACE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
     monkeypatch.setitem(
         litellm.model_cost,
-        "nace/drex-test-alias",
+        f"{provider}/{model}",
         {
-            "litellm_provider": "nace",
+            "litellm_provider": provider,
             "mode": "evaluation",
             "input_cost_per_token": 0.001,
             "output_cost_per_token": 0,
@@ -3370,19 +3389,19 @@ async def test_nace_decisions_reuses_shared_translation_and_prices_the_returned_
     )
     monkeypatch.setitem(
         litellm.model_cost,
-        "nace/drex-test-resolved",
+        f"{provider}/drex-test-resolved",
         {
-            "litellm_provider": "nace",
+            "litellm_provider": provider,
             "mode": "evaluation",
             "input_cost_per_token": 0.002,
             "output_cost_per_token": 0,
         },
     )
     payload: Final = {**_RESPONSE, "model": "drex-test-resolved", "request_id": "request-test"}
-    upstream: Final = respx_mock.post("https://console.nace.ai/v1/systemone").respond(json=payload)
+    upstream: Final = respx_mock.post(url).respond(json=payload)
     if openai_format:
         response: Final = await litellm.adecisions(
-            model="nace/drex-test-alias",
+            model=f"{provider}/{model}",
             input="damaged order",
             questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         )
@@ -3390,7 +3409,7 @@ async def test_nace_decisions_reuses_shared_translation_and_prices_the_returned_
         assert response.answers[0].model_dump() == {"type": "predicate", "name": "is_defect", "probability": 0.9}
     else:
         systemone_response: Final = await litellm.asystemone(
-            model="nace/drex-test-alias",
+            model=f"{provider}/{model}",
             state="damaged order",
             questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
         )
@@ -3399,9 +3418,9 @@ async def test_nace_decisions_reuses_shared_translation_and_prices_the_returned_
             _INPUT_TOKENS * 0.002
         )
     assert upstream.call_count == 1
-    assert upstream.calls[0].request.headers["authorization"] == "Bearer nace-test-key"
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer host-test-key"
     assert json.loads(upstream.calls[0].request.content) == {
-        "model": "drex-test-alias",
+        "model": model,
         "state": "damaged order",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
