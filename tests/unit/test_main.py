@@ -621,6 +621,57 @@ def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes
     assert called_names(json.loads(route.calls.last.request.content)) == sent_names
 
 
+_CONVERSE_ROUTE: Final = r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse"
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "18C"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+_FAKE_AWS: Final = {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"}
+_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _converse_cache_points(body: Mapping[str, object]) -> tuple[str, ...]:
+    system: Final = body.get("system")
+    messages: Final = body["messages"]
+    assert isinstance(system, list) and isinstance(messages, list)
+    in_messages: Final = tuple(block for message in messages for block in message["content"])
+    return (
+        *("system" for block in system if "cachePoint" in block),
+        *("message" for block in in_messages if "cachePoint" in block),
+    )
+
+
+def test_a_breakpoint_on_an_unanswered_tool_search_call_takes_no_slot_from_the_four_under_drop_params(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_CLAUDE_TOOL_SEARCH_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):

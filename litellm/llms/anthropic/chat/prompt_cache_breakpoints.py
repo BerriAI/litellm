@@ -151,19 +151,25 @@ def _marked_message(index: int, message: object, mark: _Mark) -> object:
     }
 
 
-def _with_function_breakpoint_hoisted(tool: _Fields) -> _Fields:
-    """Converse reads only a tool's top-level mark, so a breakpoint written under ``function`` moves up."""
+def _with_one_tool_breakpoint(tool: _Fields) -> _Fields:
+    """Claude sends one mark per tool and Converse reads only the top-level one, so a breakpoint written under
+    ``function`` moves up, and a ``cache_control`` the client wrote at either level wins over every breakpoint."""
     function: Final = _fields(tool.get("function"))
-    marker: Final = None if function is None else function.get("prompt_cache_breakpoint")
-    if function is None or marker is None:
+    if function is None:
         return tool
-    keeps_client_mark: Final = (
-        function.get("cache_control") is not None or tool.get("prompt_cache_breakpoint") is not None
-    )
+    function_marker: Final = function.get("prompt_cache_breakpoint")
+    tool_marker: Final = tool.get("prompt_cache_breakpoint")
+    if function_marker is None and (tool_marker is None or function.get("cache_control") is None):
+        return tool
+    client_marked: Final = function.get("cache_control") is not None or tool.get("cache_control") is not None
     return {
-        **tool,
+        **{key: value for key, value in tool.items() if key != "prompt_cache_breakpoint"},
         "function": {key: value for key, value in function.items() if key != "prompt_cache_breakpoint"},
-        **({} if keeps_client_mark else {"prompt_cache_breakpoint": marker}),
+        **(
+            {}
+            if client_marked
+            else {"prompt_cache_breakpoint": function_marker if tool_marker is None else tool_marker}
+        ),
     }
 
 
@@ -171,7 +177,7 @@ def _marked_tool(index: int, tool: object, mark: _Mark) -> object:
     fields: Final = _fields(tool)
     if fields is None:
         return tool
-    marked: Final = mark(("tools", index), _with_function_breakpoint_hoisted(fields))
+    marked: Final = mark(("tools", index), _with_one_tool_breakpoint(fields))
     function: Final = _fields(marked.get("function"))
     return marked if function is None else {**marked, "function": mark(("tools", index, "function"), function)}
 
@@ -318,7 +324,7 @@ def claude_prompt_cache(
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
-    blocks: Final = tuple(block for _, block in _markable(messages, listed_tools))
+    blocks: Final = tuple(block for _, block in _markable(*_marked_request(messages, listed_tools, _unchanged)))
     problem: Final = next(filter(None, map(_breakpoint_problem, blocks)), None)
     if problem is not None and not drop_params:
         return problem

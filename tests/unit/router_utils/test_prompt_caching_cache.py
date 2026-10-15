@@ -103,6 +103,19 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
             id="1h-system-then-5m-turn",
         ),
         pytest.param(
+            [
+                {
+                    "role": "system",
+                    "content": "Here is the full text of a complex legal agreement" * 200,
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+                {"role": "user", "content": "Reply with the single word ok."},
+            ],
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="1h-breakpoint",
+        ),
+        pytest.param(
             _system_block_messages({"type": "ephemeral"}),
             [_tool({"type": "ephemeral", "ttl": "1h"})],
             PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,

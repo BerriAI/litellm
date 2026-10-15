@@ -61,12 +61,20 @@ def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
-def _carries_cache_mark(block: Mapping[str, object]) -> bool:
+def _mark_pin_ttl_seconds(block: Mapping[str, object]) -> int | None:
     cache_control: Final = block.get("cache_control")
     marker: Final = block.get("prompt_cache_breakpoint")
-    return (isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral") or (
-        isinstance(marker, dict) and marker.get("mode") == "explicit"
-    )
+    if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
+        return (
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+        )
+    if isinstance(marker, dict) and marker.get("mode") == "explicit":
+        return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if marker.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+    return None
+
+
+def _carries_cache_mark(block: Mapping[str, object]) -> bool:
+    return _mark_pin_ttl_seconds(block) is not None
 
 
 def _block_unit(
@@ -129,12 +137,7 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
 
 
 def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
-    if not isinstance(carrier, Mapping):
-        return None
-    cache_control: Final = carrier.get("cache_control")
-    if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
-        return None
-    return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+    return _mark_pin_ttl_seconds(carrier) if isinstance(carrier, Mapping) else None
 
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:

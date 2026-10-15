@@ -90,6 +90,20 @@ def test_a_client_cache_control_on_the_same_block_wins():
     assert list(_resolved(messages).messages) == [{"role": "user", "content": [_part("hi", cache_control=hour)]}]
 
 
+def test_a_breakpoint_under_a_function_the_tool_cache_control_overrides_is_never_reported():
+    tools: Final = [
+        {
+            "type": "function",
+            "cache_control": _EPHEMERAL,
+            "function": {"name": "t", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+        }
+    ]
+
+    result: Final = _resolved([{"role": "user", "content": "hi"}], tools)
+
+    assert list(result.tools or ()) == [{"type": "function", "cache_control": _EPHEMERAL, "function": {"name": "t"}}]
+
+
 @pytest.mark.parametrize(
     "marker, kept",
     [({"mode": "explicit", "ttl": "30m"}, _EPHEMERAL), ({"mode": "sometimes"}, None), ("yes", None)],
@@ -315,6 +329,28 @@ def test_a_tool_marked_at_both_levels_takes_one_slot_under_drop_params():
 
     assert list(result.messages) == [
         {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]}
+    ]
+
+
+def test_a_tool_breakpoint_beside_a_function_cache_control_frees_a_slot_claude_still_reads_under_drop_params():
+    tools: Final = [
+        {
+            "type": "function",
+            "prompt_cache_breakpoint": _EXPLICIT,
+            "function": {"name": "t", "cache_control": _EPHEMERAL},
+        }
+    ]
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+    ]
+
+    result: Final = _resolved(messages, tools, drop_params=True)
+
+    assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t", "cache_control": _EPHEMERAL}}]
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s")]},
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]},
     ]
 
 

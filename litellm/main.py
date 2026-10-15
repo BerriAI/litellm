@@ -5579,6 +5579,13 @@ def completion(
                 base_model=base_model,
             )
 
+        request_messages: Final = cast(list[object], messages)  # cast-ok: completion types messages as a bare List
+        history_for_route: Final = (
+            None
+            if provider_config is None
+            else _history_without_unanswered_tool_search_calls(request_messages, custom_llm_provider, provider_config)
+        )
+        routed_messages: Final = request_messages if history_for_route is None else list(history_for_route)
         claude_drop_params: Final = litellm.drop_params is True or (
             "drop_params" in kwargs
             and normalize_drop_params(cast(object, kwargs["drop_params"])) is True  # cast-ok: untyped request kwargs
@@ -5586,7 +5593,7 @@ def completion(
         claude_cache: Final = (
             resolved_claude_prompt_cache(
                 claude_prompt_cache(
-                    cast(list[object], messages),  # cast-ok: completion types messages as a bare List
+                    routed_messages,
                     cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
                     non_default_params,
                     drop_params=claude_drop_params,
@@ -5602,20 +5609,12 @@ def completion(
             )
             else None
         )
-        claude_messages: Final = (
-            None
-            if claude_cache is None
-            else cast(list[AllMessageValues], list(claude_cache.messages))  # cast-ok: marks renamed in place
+        provider_messages: Final = cast(  # cast-ok: completion() only renames marks and drops tool_search calls
+            list[AllMessageValues], routed_messages if claude_cache is None else list(claude_cache.messages)
         )
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(
-                messages=messages if claude_messages is None else claude_messages
-            )
-            history_for_route: Final = _history_without_unanswered_tool_search_calls(
-                translated_messages, custom_llm_provider, provider_config
-            )
             messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
-                translated_messages if history_for_route is None else list(history_for_route)
+                provider_config.translate_developer_role_to_system_role(messages=provider_messages)
             )
 
         if (
