@@ -71,7 +71,7 @@ def response_timing_metrics(
     receive_anchored: Final = timing_window[1]
     total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
-        return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
+        return {"_response_ms": total_response_time_ms}
     caching_details: Final = logging_obj.caching_details
     cache_duration_ms: Final = (
         caching_details.get("cache_duration_ms")
@@ -115,8 +115,19 @@ class ResponseMetadata:
         """Check if response type supports timing metrics"""
         return isinstance(self.result, (ModelResponse, EmbeddingResponse, TranscriptionResponse))
 
-    def set_hidden_params(self, logging_obj: LiteLLMLoggingObject, model: str | None, kwargs: dict) -> None:
-        """Set hidden parameters on the response"""
+    def set_hidden_params(
+        self,
+        logging_obj: LiteLLMLoggingObject,
+        model: str | None,
+        kwargs: dict,
+        cache_hit: bool | None = None,
+    ) -> None:
+        """Set hidden parameters on the response.
+
+        ``cache_hit`` is passed for a response served from the cache: ``logging_obj`` only
+        learns of the hit later, in the success handler, so its cost calculator would
+        otherwise price the cached response as a fresh call.
+        """
 
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
@@ -125,8 +136,11 @@ class ResponseMetadata:
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj._response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
+            "response_cost": logging_obj.response_cost_calculator(
+                result=self.result,
+                litellm_model_name=model,
+                router_model_id=model_id,
+                cache_hit=cache_hit,
             ),
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
@@ -228,6 +242,7 @@ def update_response_metadata(
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     include_overhead: bool = True,
+    cache_hit: bool | None = None,
 ) -> None:
     """
     Updates response metadata including hidden params and timing metrics
@@ -252,5 +267,5 @@ def update_response_metadata(
 
     metadata: Final = ResponseMetadata(result)
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
-    metadata.set_hidden_params(logging_obj, model, kwargs)
+    metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()

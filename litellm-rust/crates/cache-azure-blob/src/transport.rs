@@ -8,7 +8,7 @@ use azure_core::{
 use futures_util::TryStreamExt;
 
 #[derive(Debug)]
-pub struct ReqwestTransport(pub reqwest::Client);
+pub struct ReqwestTransport(pub litellm_http::Client);
 
 #[async_trait::async_trait]
 impl HttpClient for ReqwestTransport {

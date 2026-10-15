@@ -11,7 +11,7 @@ export const skillId = (skill: any, idx: number): string => skill?.id ?? skill?.
 
 export const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
 
-export const filterCapabilitiesForUI = (capabilities: Record<string, any> | undefined): Record<string, boolean> => {
+export const filterCapabilitiesForUI = (capabilities: DiscoveredAgentCard["capabilities"]): Record<string, boolean> => {
   if (!capabilities) return {};
   return ALLOWED_CAPABILITY_KEYS.reduce<Record<string, boolean>>((acc, key) => {
     if (key in capabilities) acc[key] = Boolean(capabilities[key]);

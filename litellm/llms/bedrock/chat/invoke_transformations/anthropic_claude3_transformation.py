@@ -1,9 +1,10 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -29,6 +30,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -40,6 +42,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -72,6 +76,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    def uses_native_structured_output(self, model: str) -> bool:
+        from litellm.utils import supports_native_structured_output
+
+        return supports_native_structured_output(model=model, custom_llm_provider="bedrock")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -79,17 +88,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201) unless the model map advertises
-        # native structured output
-        from litellm.utils import supports_native_structured_output
-
-        original_model: Final = model
-        if "response_format" in non_default_params and not supports_native_structured_output(
-            model=model, custom_llm_provider="bedrock"
-        ):
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
+        requested_thinking: Final = non_default_params.get("thinking")
+        requested_display_updates: Final = self.is_thinking_display_updates_used(requested_thinking)
 
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
@@ -98,34 +98,34 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
         # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
         # models like Opus 4.6 that don't natively advertise xhigh.
-        self._clamp_adaptive_reasoning_effort_for_bedrock(model=original_model, params=non_default_params)
+        self._clamp_adaptive_reasoning_effort_for_bedrock(model=model, params=non_default_params)
 
-        optional_params = AnthropicConfig.map_openai_params(
+        mapped_params: Final = AnthropicConfig.map_openai_params(
             self,
-            non_default_params,
+            {
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), model, drop_params
+                ),
+            },
             optional_params,
             model,
             drop_params,
         )
 
-        # Restore original model name
-        model = original_model
-
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=original_model, optional_params=optional_params, custom_llm_provider="bedrock"
+            model=model, optional_params=mapped_params, custom_llm_provider="bedrock"
         )
-
-        # The stub model hides the original model from the parent's forced-tool-use backstop
-        response_format_tool_choice: Final = optional_params.get("tool_choice")
+        translated_thinking: Final = mapped_params.get("thinking")
         if (
-            "response_format" in non_default_params
-            and isinstance(response_format_tool_choice, dict)
-            and response_format_tool_choice.get("name") == RESPONSE_FORMAT_TOOL_NAME
-            and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
+            requested_display_updates
+            and isinstance(translated_thinking, dict)
+            and translated_thinking.get("type") == "adaptive"
         ):
-            optional_params.pop("tool_choice")
+            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
+            mapped_params["thinking"] = thinking_with_display
 
-        return optional_params
+        return mapped_params
 
     @staticmethod
     def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict) -> None:
@@ -170,6 +170,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             messages=messages,
             optional_params=optional_params,
             headers=headers,
+            thinking=_anthropic_request.get("thinking"),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -225,7 +226,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        anthropic_request.pop("stream_chunk_size", None)
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
@@ -251,11 +251,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict,
+        thinking: AnthropicThinkingParam | None,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
         tool_search_used: Final = self.is_tool_search_used(tools)
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
+        is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
+        is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
         user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
@@ -267,6 +270,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="bedrock",
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
+            is_thinking_display_updates_used=is_thinking_display_updates_used,
         )
         beta_set.update(auto_betas)
 

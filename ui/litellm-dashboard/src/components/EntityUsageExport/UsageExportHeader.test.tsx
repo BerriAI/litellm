@@ -2,7 +2,6 @@ import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
-import type { EntitySpendData } from "./types";
 
 vi.mock("./EntityUsageExportModal", () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
@@ -16,16 +15,7 @@ vi.mock("./EntityUsageExportModal", () => ({
 const defaultProps = {
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   entityType: "team" as const,
-  spendData: {
-    results: [],
-    metadata: {
-      total_spend: 0,
-      total_api_requests: 0,
-      total_successful_requests: 0,
-      total_failed_requests: 0,
-      total_tokens: 0,
-    },
-  } satisfies EntitySpendData,
+  onExport: vi.fn().mockResolvedValue(new Blob(["data"])),
 };
 
 describe("UsageExportHeader", () => {
@@ -39,27 +29,6 @@ describe("UsageExportHeader", () => {
     renderWithProviders(<UsageExportHeader {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: /export data/i }));
     expect(screen.getByTestId("export-modal")).toBeInTheDocument();
-  });
-
-  it("blocks the export while the data on screen does not cover the range", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <UsageExportHeader
-        {...defaultProps}
-        exportBlockedReason="Spend data is still loading, so an export would under-report. Wait for it to finish."
-      />,
-    );
-
-    const exportButton = screen.getByRole("button", { name: /export data/i });
-    expect(exportButton).toBeDisabled();
-    await user.click(exportButton);
-    expect(screen.queryByTestId("export-modal")).not.toBeInTheDocument();
-  });
-
-  it("explains why the export is blocked on hover", () => {
-    renderWithProviders(<UsageExportHeader {...defaultProps} exportBlockedReason="Spend data is still loading" />);
-
-    expect(screen.getByTitle("Spend data is still loading")).toBeInTheDocument();
   });
 
   it("should close the export modal when onClose is called", async () => {

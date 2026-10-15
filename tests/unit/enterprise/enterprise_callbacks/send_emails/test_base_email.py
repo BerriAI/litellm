@@ -2,6 +2,8 @@ import asyncio
 import json
 import os
 import unittest.mock as mock
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +21,12 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 )
 
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
-from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
+from litellm.proxy._types import (
+    CallInfo,
+    LiteLLM_UserTable,
+    Litellm_EntityType,
+    WebhookEvent,
+)
 from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 
 
@@ -1091,6 +1098,47 @@ async def test_multi_threshold_empty_emails_only_owner(
 
 
 @pytest.mark.asyncio
+async def test_multi_threshold_team_member_alert_renders_member_template_per_team(
+    base_email_logger, mock_send_email
+):
+    """A team member budget alert is keyed per member and team, names the member and team,
+    and goes to the member plus the threshold's configured recipients"""
+    user_info = CallInfo(
+        user_id="member_1",
+        user_email="member@co.com",
+        team_id="team_a",
+        team_alias="Platform",
+        spend=0.10,
+        max_budget=0.10,
+        event_group=Litellm_EntityType.TEAM_MEMBER,
+        max_budget_alert_emails={"50": [], "100": ["finance@co.com"]},
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+    cache_keys = sorted(c[1]["key"] for c in mock_cache.async_increment_cache.call_args_list)
+    assert cache_keys == [
+        "email_budget_alerts:max_budget_alert:100:team_member:member_1:team_a",
+        "email_budget_alerts:max_budget_alert:50:team_member:member_1:team_a",
+    ]
+    assert mock_send_email.call_count == 2
+    hundred = next(
+        c.kwargs for c in mock_send_email.call_args_list if "100%" in c.kwargs["subject"]
+    )
+    assert hundred["subject"] == "LiteLLM: Team Member Budget Alert - 100% of Team Member Budget Reached"
+    assert sorted(hundred["to_email"]) == ["finance@co.com", "member@co.com"]
+    assert "member@co.com" in hundred["html_body"] and "Platform" in hundred["html_body"]
+    assert "team member budget" in hundred["html_body"] and "$0.1" in hundred["html_body"]
+    fifty = next(c.kwargs for c in mock_send_email.call_args_list if "50%" in c.kwargs["subject"])
+    assert fifty["to_email"] == ["member@co.com"]
+
+
+@pytest.mark.asyncio
 async def test_no_map_preserves_old_single_threshold(
     base_email_logger, mock_send_email
 ):
@@ -1376,3 +1424,69 @@ async def test_budget_alert_release_failure_does_not_propagate(base_email_logger
             )
 
     mock_cache.async_delete_cache.assert_awaited_once()
+
+
+class _RecordingEmailLogger(BaseEmailLogger):
+    def __init__(self):
+        super().__init__()
+        self.recipients = []
+
+    async def send_email(self, from_email, to_email, subject, html_body):
+        self.recipients.append(to_email)
+
+
+class _UserTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def find_unique(self, where):
+        return self._rows.get(where["user_id"])
+
+
+def _prisma_client_with_users(*rows):
+    table: Final = _UserTable({row.user_id: row for row in rows})
+    return SimpleNamespace(db=SimpleNamespace(litellm_usertable=table))
+
+
+def _key_created_event(user_id):
+    return SendKeyCreatedEmailEvent(
+        user_id=user_id,
+        user_email=None,
+        virtual_key="sk-test",
+        max_budget=None,
+        spend=0.0,
+        event_group=Litellm_EntityType.USER,
+        event="key_created",
+        event_message="Key Created",
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_created_email_goes_to_the_address_stored_for_the_user(monkeypatch):
+    stored_user: Final = LiteLLM_UserTable(
+        user_id="user-1", user_email="stored@example.com"
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _prisma_client_with_users(stored_user),
+    )
+    email_logger: Final = _RecordingEmailLogger()
+
+    await email_logger.send_key_created_email(_key_created_event("user-1"))
+
+    assert email_logger.recipients == [["stored@example.com"]]
+
+
+@pytest.mark.asyncio
+async def test_key_created_email_is_refused_for_a_user_the_database_does_not_know(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", _prisma_client_with_users()
+    )
+    email_logger: Final = _RecordingEmailLogger()
+
+    with pytest.raises(ValueError, match="User email not found for user_id: user-2"):
+        await email_logger.send_key_created_email(_key_created_event("user-2"))
+
+    assert email_logger.recipients == []

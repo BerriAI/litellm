@@ -11,7 +11,7 @@ use wiremock::{
 
 fn manager(server: &MockServer, always_read: bool, ttl: Duration) -> GoogleSecretManager {
     GoogleSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         "project".into(),
         Arc::new(|name: &str| (name == "VERTEX_AI_API_KEY").then(|| "token".into())),
@@ -214,11 +214,19 @@ async fn always_read_and_expired_cache_fetch_again(
 #[rstest]
 fn google_manager_requires_host_license_and_project_configuration() {
     assert!(matches!(
-        GoogleSecretManager::new(Arc::new(|_: &str| None), false),
+        GoogleSecretManager::new(
+            litellm_http::Client::plain_for_test(),
+            Arc::new(|_: &str| None),
+            false
+        ),
         Err(Error::EnterpriseRequired)
     ));
     assert!(matches!(
-        GoogleSecretManager::new(Arc::new(|_: &str| None), true),
+        GoogleSecretManager::new(
+            litellm_http::Client::plain_for_test(),
+            Arc::new(|_: &str| None),
+            true
+        ),
         Err(Error::MissingEnvironment(
             "GOOGLE_SECRET_MANAGER_PROJECT_ID"
         ))
@@ -236,7 +244,7 @@ fn google_manager_rejects_invalid_refresh_intervals(#[case] variable: &'static s
     });
 
     assert!(matches!(
-        GoogleSecretManager::new(environment, true),
+        GoogleSecretManager::new(litellm_http::Client::plain_for_test(), environment, true),
         Err(Error::RefreshInterval)
     ));
 }

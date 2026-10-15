@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, override
 
 from litellm._logging import verbose_logger
@@ -29,6 +30,8 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -619,9 +622,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
-            parsed: Final = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(text))
         except Exception:
             pass
     return response_obj
@@ -1079,9 +1080,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
             inner = candidate.get("response")
             if isinstance(inner, str):
                 try:
-                    parsed = json.loads(inner)
-                    if isinstance(parsed, dict):
-                        return parsed
+                    return _JSON_OBJECT.validate_python(json.loads(inner))
                 except Exception:
                     continue
             if isinstance(inner, dict):
@@ -1095,9 +1094,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
         return original
     if isinstance(original, str):
         try:
-            parsed = json.loads(original)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(original))
         except Exception:
             return None
     return None

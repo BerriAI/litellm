@@ -213,6 +213,8 @@ fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), LoadError> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::TiktokenTokenizer;
 
@@ -327,11 +329,18 @@ mod tests {
         assert_eq!(vocabulary.encode_single_token(b"<|not-a-token|>"), None);
     }
 
-    #[test]
-    fn malformed_ranks_return_errors_instead_of_panicking() {
-        for ranks in ["", "IQ==", "IQ== x", "!!! 1", "IQ== 1"] {
-            assert!(build("cl100k_base", ranks).is_err());
-        }
+    #[rstest]
+    #[case::empty("")]
+    #[case::missing_rank("IQ==")]
+    #[case::invalid_rank("IQ== x")]
+    #[case::invalid_base64("!!! 1")]
+    #[case::single_byte_rank("IQ== 1")]
+    fn malformed_ranks_return_errors_instead_of_panicking(#[case] ranks: &str) {
+        assert!(build("cl100k_base", ranks).is_err());
+    }
+
+    #[rstest]
+    fn repeated_ranks_return_errors_instead_of_panicking() {
         let repeated_rank = (0..=u8::MAX)
             .map(|byte| format!("{} 0\n", STANDARD.encode([byte])))
             .collect::<String>();

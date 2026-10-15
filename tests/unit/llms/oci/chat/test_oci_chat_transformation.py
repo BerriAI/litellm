@@ -1247,6 +1247,7 @@ class TestOCIStreamingSignedBody:
         mock_logging = MagicMock()
 
         config.get_sync_custom_stream_wrapper(
+            litellm_params={},
             api_base="https://example.com",
             headers={},
             data={"key": "value"},
@@ -1286,6 +1287,7 @@ class TestOCIStreamingSignedBody:
         payload = {"key": "value"}
 
         config.get_sync_custom_stream_wrapper(
+            litellm_params={},
             api_base="https://example.com",
             headers={},
             data=payload,

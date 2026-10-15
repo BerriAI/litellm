@@ -8,9 +8,12 @@ sensitive information like SSNs, credit cards, API keys, etc.
 import json
 import os
 import re
+from collections.abc import Iterator
 from enum import Enum
 from re import Pattern
 from typing import Any, Final
+
+from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
 
 def _load_patterns_from_json() -> dict:
@@ -124,74 +127,64 @@ def get_pattern_metadata() -> list[dict[str, str]]:
     ]
 
 
-def get_available_content_categories() -> list[dict[str, str]]:
+def _category_entry(categories_dir: str, filename: str) -> dict[str, str] | None:
+    import yaml
+
+    category_file_path: Final = os.path.join(categories_dir, filename)
+    if filename.endswith((".yaml", ".yml")):
+        try:
+            with open(category_file_path, "r") as f:
+                category_data = yaml.safe_load(f)
+        except Exception as e:
+            from litellm._logging import verbose_proxy_logger
+
+            verbose_proxy_logger.warning("Failed to load category file %s: %s", filename, e)
+            return None
+        if not category_data or "category_name" not in category_data:
+            return None
+        return {
+            "name": category_data["category_name"],
+            "display_name": category_data.get("display_name")
+            or category_data["category_name"].replace("_", " ").title(),
+            "description": category_data.get("description", ""),
+            "default_action": category_data.get("default_action", "BLOCK"),
+        }
+    if filename.endswith(".json"):
+        category_name: Final = os.path.splitext(filename)[0]
+        if category_name == "harm_toxic_abuse":
+            return {
+                "name": category_name,
+                "display_name": "Harmful Toxic Abuse",
+                "description": "Detects harmful, toxic, or abusive language and content",
+                "default_action": "BLOCK",
+            }
+        display_name: Final = category_name.replace("_", " ").title()
+        return {
+            "name": category_name,
+            "display_name": display_name,
+            "description": f"Content category: {display_name}",
+            "default_action": "BLOCK",
+        }
+    return None
+
+
+def get_available_content_categories(roots: tuple[str, ...] = DATA_ROOTS) -> list[dict[str, str]]:
     """
     Return available content categories for UI display.
 
     Includes categories defined in .yaml/.yml files and in .json files
-    (e.g. harm_toxic_abuse.json).
+    (e.g. harm_toxic_abuse.json) under every data root, bundled first. A
+    name that appears under several roots is listed once, from the first root.
 
     Returns:
         List of dictionaries containing category name, display_name, and description
     """
-    import yaml
+    entries: Final = tuple(e for e in (_category_entry(d, f) for d, f in _category_files(roots)) if e is not None)
+    first_per_name: Final = {e["name"]: e for e in reversed(entries)}
+    return sorted(first_per_name.values(), key=lambda x: x["name"])
 
-    categories_dir: Final = os.path.join(os.path.dirname(__file__), "categories")
-    available_categories: Final = []
 
-    if not os.path.exists(categories_dir):
-        return []
-
-    # Scan the categories directory for YAML files
-    for filename in os.listdir(categories_dir):
-        if filename.endswith(".yaml") or filename.endswith(".yml"):
-            category_file_path = os.path.join(categories_dir, filename)
-            try:
-                with open(category_file_path, "r") as f:
-                    category_data = yaml.safe_load(f)
-
-                if category_data and "category_name" in category_data:
-                    # Use explicit display_name if provided, otherwise auto-generate from category_name
-                    display_name = category_data.get("display_name") or (
-                        category_data["category_name"].replace("_", " ").title()
-                    )
-
-                    available_categories.append(
-                        {
-                            "name": category_data["category_name"],
-                            "display_name": display_name,
-                            "description": category_data.get("description", ""),
-                            "default_action": category_data.get("default_action", "BLOCK"),
-                        }
-                    )
-            except Exception as e:
-                # Skip files that can't be loaded but log the error for debugging
-                from litellm._logging import verbose_proxy_logger
-
-                verbose_proxy_logger.warning("Failed to load category file %s: %s", filename, e)
-                continue
-        elif filename.endswith(".json"):
-            # JSON category files (e.g. harm_toxic_abuse.json) - no YAML header, use filename
-            category_name = os.path.splitext(filename)[0]
-            try:
-                if category_name == "harm_toxic_abuse":
-                    display_name = "Harmful Toxic Abuse"
-                    description = "Detects harmful, toxic, or abusive language and content"
-                else:
-                    display_name = category_name.replace("_", " ").title()
-                    description = f"Content category: {display_name}"
-                available_categories.append(
-                    {
-                        "name": category_name,
-                        "display_name": display_name,
-                        "description": description,
-                        "default_action": "BLOCK",
-                    }
-                )
-            except Exception:
-                continue
-
-    # Sort by name for consistent ordering
-    available_categories.sort(key=lambda x: x["name"])
-
-    return available_categories
+def _category_files(roots: tuple[str, ...]) -> Iterator[tuple[str, str]]:
+    for categories_dir in category_dirs(roots):
+        for filename in sorted(os.listdir(categories_dir)):
+            yield categories_dir, filename

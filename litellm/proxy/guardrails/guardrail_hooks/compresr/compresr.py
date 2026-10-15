@@ -520,6 +520,7 @@ class CompresrGuardrail(CustomGuardrail):
         dynamic_min_ratio: float | None = None,
         dynamic_max_ratio: float | None = None,
         compression_params: dict[str, object] | None = None,
+        timeout: float | None = None,
     ):
         raw_api_base: Final = (api_base or get_secret_str("COMPRESR_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.compresr_api_base = _validate_api_base(raw_api_base)
@@ -583,6 +584,7 @@ class CompresrGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            timeout=timeout,
         )
 
     def _should_bypass(self, request_data: dict) -> bool:
@@ -755,7 +757,7 @@ class CompresrGuardrail(CustomGuardrail):
                 url=url,
                 json=payload,
                 headers=self._request_headers(),
-                timeout=_COMPRESS_TIMEOUT_SECONDS,
+                timeout=self.timeout if self.timeout is not None else _COMPRESS_TIMEOUT_SECONDS,
             )
         except asyncio.CancelledError:
             raise
