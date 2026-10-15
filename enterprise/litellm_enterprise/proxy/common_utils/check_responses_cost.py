@@ -8,10 +8,15 @@ with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked man
 managed files hook, so both stay free. The spend event carries the id the client holds, the row's
 unified_object_id, so its spend log is found under that id with the _background_cost suffix.
 A read that finds no row, because the create could not store one, stores it under the reading key
-and bills it the same way, so a response the create left untracked is still billed once.
+and bills it the same way, so a response the create left untracked is still billed once. A streamed
+background create is free on its own; its stream stores the row under the creating key and bills
+the finished response through it before the client sees response.completed.
 A read the caller retargets with client-side credentials, and a delete of a still-pending response,
 settle the bill from a fetch through the configured deployment instead: the client controls what a
 retargeted read returns, and a deleted response leaves the poll nothing to fetch.
+A row stored before this billing model keeps the encrypted create id as its model_object_id. The
+first lookup by that id rekeys it by the provider id, and the poll retires such a row without
+billing it once a read has already tracked the response under the provider id.
 """
 
 import uuid
@@ -80,7 +85,7 @@ class BilledCharge:
 
 
 BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[BilledCharge]]
-UntrackedResponseTracker = Callable[[], Awaitable[bool]]
+UntrackedResponseTracker = Callable[[ResponsesAPIResponse], Awaitable[bool]]
 
 
 def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
@@ -156,6 +161,10 @@ def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[Manage
 
 def _is_response_gone_at_provider(error: Exception, provider_response_id: str) -> bool:
     return getattr(error, "status_code", None) == 404 and provider_response_id in str(error)
+
+
+def _keyed_by_issued_id(job: ManagedObjectRow) -> bool:
+    return decrypted_response_id(job.model_object_id) != job.model_object_id
 
 
 class CheckResponsesCost:
@@ -258,14 +267,17 @@ class CheckResponsesCost:
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
             )
 
-    def _poll_target(self, job: ManagedObjectRow) -> _PollTarget:
-        stored_model: Final = _STORED_RESPONSE_ADAPTER.validate_python(job.file_object).get("model")
-        model_name: Final = stored_model if isinstance(stored_model, str) else None
-        response_id: Final = decrypted_response_id(job.unified_object_id)
+    def _target(self, response_id: str, model_name: str | None) -> _PollTarget:
         return _PollTarget(
             response_id=response_id,
             model_metadata=MappingProxyType({"model": model_name, "model_group": model_name} if model_name else {}),
             deployment=self._resolve_deployment(response_id),
+        )
+
+    def _poll_target(self, job: ManagedObjectRow) -> _PollTarget:
+        stored_model: Final = _STORED_RESPONSE_ADAPTER.validate_python(job.file_object).get("model")
+        return self._target(
+            decrypted_response_id(job.unified_object_id), stored_model if isinstance(stored_model, str) else None
         )
 
     async def _claim_for_billing(self, job: ManagedObjectRow) -> bool:
@@ -323,18 +335,47 @@ class CheckResponsesCost:
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
         return charge
 
-    async def _tracked_job(self, response_id: str) -> ManagedObjectRow | None:
+    async def _job_for_provider_id(self, provider_response_id: str) -> ManagedObjectRow | None:
         return await _managed_object_table(self.prisma_client).find_first(
-            where={
-                "OR": [{"unified_object_id": response_id}, {"model_object_id": decrypted_response_id(response_id)}],
-                "file_purpose": "response",
-            },
+            where={"model_object_id": provider_response_id, "file_purpose": "response"}
         )
 
-    async def _start_tracking(
+    async def _rekey_by_provider_id(self, job: ManagedObjectRow) -> None:
+        await _managed_object_table(self.prisma_client).update_many(
+            where={"id": job.id}, data={"model_object_id": decrypted_response_id(job.model_object_id)}
+        )
+
+    async def _tracked_job(self, response_id: str) -> ManagedObjectRow | None:
+        if tracked := await self._job_for_provider_id(decrypted_response_id(response_id)):
+            return tracked
+        stored_by_issued_id: Final = await _managed_object_table(self.prisma_client).find_first(
+            where={"unified_object_id": response_id, "file_purpose": "response"}
+        )
+        if stored_by_issued_id is not None and _keyed_by_issued_id(stored_by_issued_id):
+            await self._rekey_by_provider_id(stored_by_issued_id)
+        return stored_by_issued_id
+
+    async def _superseded_by_a_provider_id_row(self, job: ManagedObjectRow) -> bool:
+        if not _keyed_by_issued_id(job):
+            return False
+        if await self._job_for_provider_id(decrypted_response_id(job.model_object_id)) is None:
+            await self._rekey_by_provider_id(job)
+            return False
+        await self._claim_for_billing(job)
+        return True
+
+    async def _track_from_deployment(
         self, response_id: str, track_untracked: UntrackedResponseTracker | None
+    ) -> BilledCharge | None:
+        target: Final = self._target(decrypted_response_id(response_id), None)
+        if track_untracked is None or target.deployment is None:
+            return None
+        return await self.bill_if_finished(response_id, await self._fetch_unbilled(target), track_untracked)
+
+    async def _start_tracking(
+        self, response_id: str, response: ResponsesAPIResponse, track_untracked: UntrackedResponseTracker | None
     ) -> ManagedObjectRow | None:
-        if track_untracked is None or not await track_untracked():
+        if track_untracked is None or not await track_untracked(response):
             return None
         return await self._tracked_job(response_id)
 
@@ -346,14 +387,20 @@ class CheckResponsesCost:
     ) -> BilledCharge | None:
         if response.status not in TERMINAL_RESPONSE_STATUSES:
             return None
-        job: Final = await self._tracked_job(response_id) or await self._start_tracking(response_id, track_untracked)
+        job: Final = await self._tracked_job(response_id) or await self._start_tracking(
+            response_id, response, track_untracked
+        )
         if job is None or job.status not in PENDING_RESPONSE_STATUSES:
             return None
         return await self._bill_once(job, self._poll_target(job), response)
 
-    async def bill_from_deployment(self, response_id: str) -> BilledCharge | None:
+    async def bill_from_deployment(
+        self, response_id: str, track_untracked: UntrackedResponseTracker | None = None
+    ) -> BilledCharge | None:
         job: Final = await self._tracked_job(response_id)
-        if job is None or job.status not in PENDING_RESPONSE_STATUSES:
+        if job is None:
+            return await self._track_from_deployment(response_id, track_untracked)
+        if job.status not in PENDING_RESPONSE_STATUSES:
             return None
         target: Final = self._poll_target(job)
         response: Final = await self._fetch_unbilled(target)
@@ -395,6 +442,9 @@ class CheckResponsesCost:
             unified_object_id = job.unified_object_id
 
             try:
+                if await self._superseded_by_a_provider_id_row(job):
+                    verbose_proxy_logger.info(f"Response {unified_object_id} is billed under its provider id row")
+                    continue
                 target = self._poll_target(job)
             except Exception as e:
                 verbose_proxy_logger.warning(f"Skipping job {unified_object_id} due to error: {e}")

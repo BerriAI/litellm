@@ -44,6 +44,7 @@ from litellm.constants import (
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
@@ -457,7 +458,15 @@ def _addresses_a_proxy_issued_response(data: Mapping[str, object]) -> bool:
     )
 
 
-def _with_managed_background_read_marker(request: Mapping[str, object]) -> dict[str, object]:
+def _is_streamed_background_create(request: Mapping[str, object]) -> bool:
+    return (
+        request.get("stream") is True
+        and isinstance(request.get("litellm_metadata"), dict)
+        and requests_background(request)
+    )
+
+
+def _with_managed_background_marker(request: Mapping[str, object]) -> dict[str, object]:
     metadata_field: Final = "litellm_metadata" if isinstance(request.get("litellm_metadata"), dict) else "metadata"
     existing_metadata: Final = request.get(metadata_field)
     return {
@@ -673,10 +682,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
     async def track_untracked_background_response(
-        self, response_id: str, response: ResponsesAPIResponse, user_api_key_dict: UserAPIKeyAuth
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
     ) -> bool:
         if not _addresses_a_proxy_issued_response({"response_id": response_id}):
             return False
+        from prisma import Json
         from prisma.errors import UniqueViolationError
 
         from litellm.proxy.hooks.responses_id_security import decrypted_response_id
@@ -696,6 +710,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "updated_by": user_api_key_dict.user_id,
                     **({"api_key": api_key} if api_key is not None else {}),
                     **({"end_user_id": user_api_key_dict.end_user_id} if user_api_key_dict.end_user_id else {}),
+                    **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
                 }
             )
         except UniqueViolationError:
@@ -1476,6 +1491,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_vs_ids = self.get_vector_store_ids_from_file_search_tools(tools)
                 if unified_vs_ids:
                     await self.check_vector_store_ids_access(unified_vs_ids, user_api_key_dict)
+            create_request: Final = _REQUEST_FIELDS.validate_python(data)
+            if _is_streamed_background_create(create_request):
+                return _with_managed_background_marker(create_request)
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = _is_base64_encoded_unified_file_id(retrieve_file_id) if retrieve_file_id else False
@@ -1536,7 +1554,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         elif call_type in _MANAGED_RESPONSE_READ_CALL_TYPES:
             request: Final = _REQUEST_FIELDS.validate_python(data)
             if _addresses_a_proxy_issued_response(request):
-                return _with_managed_background_read_marker(request)
+                return _with_managed_background_marker(request)
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             fine_tuning_file_ids: Final = tuple(
                 file_id

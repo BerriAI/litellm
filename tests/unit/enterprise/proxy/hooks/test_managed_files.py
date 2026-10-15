@@ -6116,3 +6116,35 @@ async def test_a_read_of_a_raw_provider_response_id_is_not_marked_managed() -> N
 
     assert isinstance(result, dict)
     assert MANAGED_BACKGROUND_RESPONSE_METADATA_KEY not in result["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_fields, marked",
+    [
+        ({"stream": True, "background": True}, True),
+        ({"stream": True, "extra_body": {"background": True}}, True),
+        ({"stream": False, "background": True}, False),
+        ({"stream": True}, False),
+    ],
+    ids=["streamed_background", "streamed_background_in_extra_body", "not_streamed", "not_background"],
+)
+async def test_only_a_streamed_background_create_is_marked_for_the_managed_bill(
+    create_fields: Mapping[str, object], marked: bool
+) -> None:
+    """A streamed background create is billed once through its managed row when its stream ends,
+    so only that create is marked free, and only in litellm_metadata, which never reaches the
+    provider."""
+    from litellm.constants import MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    result: Final = await PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock()).async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice"),
+        cache=MagicMock(),
+        data={"model": "gpt-5.6", "input": "hello", "metadata": {"run": "nightly"}, "litellm_metadata": {}, **create_fields},
+        call_type="aresponses",
+    )
+
+    assert isinstance(result, dict)
+    assert (MANAGED_BACKGROUND_RESPONSE_METADATA_KEY in result["litellm_metadata"]) is marked
+    assert result["metadata"] == {"run": "nightly"}

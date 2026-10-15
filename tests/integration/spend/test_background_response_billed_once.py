@@ -481,21 +481,31 @@ def test_a_read_retargeted_with_a_client_side_api_base_bills_the_real_usage_once
         assert (charged["prompt_tokens"], charged["completion_tokens"]) == (INPUT_TOKENS, OUTPUT_TOKENS)
 
 
-@pytest.mark.timeout(240)
-def test_a_row_stored_before_the_upgrade_bills_the_creating_team_and_user_once(gateway: Gateway) -> None:
+def _id_a_read_returned(gateway: Gateway, key: str, response_id: str) -> str:
+    read: Final = gateway.request("GET", f"/v1/responses/{response_id}", None, key=key)
+    assert read.status_code == 200, read.text
+    return string_value(object_value(read.json())["id"])
+
+
+@pytest.mark.timeout(240 + ONE_POLL_SECONDS)
+@pytest.mark.parametrize("read_by", ["create_id", "id_a_read_returned"])
+def test_a_row_stored_before_the_upgrade_bills_the_creating_team_and_user_once(gateway: Gateway, read_by: str) -> None:
     with gateway.scenario() as scenario:
         key, team_id, user_id = _team_member_key(scenario)
         upstream: Final = scripted_upstream(scenario, background_routes("queued"))
-        response_id: Final = create_background_response(scenario, key, upstream.model)
+        created_id: Final = create_background_response(scenario, key, upstream.model)
+        response_id: Final = (
+            created_id if read_by == "create_id" else _id_a_read_returned(gateway, key, created_id)
+        )
         write_rows(
             'UPDATE "LiteLLM_ManagedObjectTable" SET model_object_id = unified_object_id, api_key = NULL, '
             "request_tags = NULL WHERE unified_object_id = %s",
-            (response_id,),
+            (created_id,),
         )
         upstream.script(background_routes("completed"))
         reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
         assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
-        assert_charged_exactly(lambda: team_spend(team_id), PRICE)
+        held(lambda: team_spend(team_id), costs(PRICE), holding=ONE_POLL_SECONDS, seconds=SPEND_LANDING_SECONDS)
         assert user_spend(user_id) == pytest.approx(PRICE)
         charged: Final = one_charged_row(upstream.model_id)
         assert (charged["team_id"], charged["user"]) == (team_id, user_id)

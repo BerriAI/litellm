@@ -175,6 +175,19 @@ class TestNonInferenceCallBilling:
             "aget_responses", {INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN}, self.FOREGROUND
         ) is True
 
-    def test_inference_calls_are_always_billed(self):
-        assert is_unbilled_non_inference_call("aresponses", self.MANAGED_READ, self.BACKGROUND) is False
-        assert is_unbilled_non_inference_call_from_params("acompletion", None, None) is False
+    def test_inference_calls_are_billed_unless_the_proxy_tracks_their_background_response(self):
+        assert is_unbilled_non_inference_call("aresponses", None, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call("aresponses", self.MANAGED_READ, self.FOREGROUND) is False
+        assert is_unbilled_non_inference_call_from_params("aresponses", {}, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call_from_params("acompletion", {"metadata": self.MANAGED_READ}, None) is False
+
+    def test_a_tracked_streamed_background_create_is_free_in_every_shape_its_stream_logs(self):
+        from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+        finished = ResponsesAPIResponse(**{**self.BACKGROUND, "created_at": 1, "output": []})
+        completed_event = ResponseCompletedEvent(type="response.completed", response=finished)
+        for logged in (finished, completed_event, completed_event.model_dump(), self.BACKGROUND):
+            assert is_unbilled_non_inference_call("aresponses", self.MANAGED_READ, logged) is True
+            assert is_unbilled_non_inference_call_from_params(
+                "aresponses", {"litellm_metadata": self.MANAGED_READ}, logged
+            ) is True

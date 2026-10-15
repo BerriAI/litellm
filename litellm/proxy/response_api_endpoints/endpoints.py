@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
@@ -30,7 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.litellm_core_utils.internal_call_metadata import is_background_response
+from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -402,7 +403,7 @@ async def responses_api(
             proxy_config=proxy_config,
             select_data_generator=(
                 partial(_streamed_background_data_generator, native_data_generator, proxy_logging_obj)
-                if _requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
+                if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
             model=None,
@@ -845,12 +846,12 @@ class _BackgroundResponseStore(Protocol):
     ) -> None: ...
 
     async def track_untracked_background_response(
-        self, response_id: str, response: ResponsesAPIResponse, user_api_key_dict: UserAPIKeyAuth
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
     ) -> bool: ...
-
-
-def _requests_background(request_body: Mapping[str, object]) -> bool:
-    return bool(request_body.get("background")) or is_background_response(request_body.get("extra_body"))
 
 
 def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> _BackgroundResponseStore | None:
@@ -871,26 +872,22 @@ async def _bill_finished_background_response(
         return
     if response.status not in TERMINAL_RESPONSE_STATUSES:
         return
-    if not read_settles_billing:
-        await _settle_background_billing(
-            lambda cost_check: cost_check.bill_from_deployment(response_id), fastapi_response
-        )
-        return
     managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
-    await _settle_background_billing(
-        lambda cost_check: cost_check.bill_if_finished(
-            response_id=response_id,
-            response=response,
-            track_untracked=(
-                partial(
-                    managed_files_hook.track_untracked_background_response, response_id, response, user_api_key_dict
-                )
-                if managed_files_hook is not None
-                else None
-            ),
-        ),
-        fastapi_response,
+    track_untracked: Final = (
+        partial(
+            managed_files_hook.track_untracked_background_response,
+            response_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if managed_files_hook is not None
+        else None
     )
+    charge: Final = await _settle_background_billing(
+        (lambda cost_check: cost_check.bill_if_finished(response_id, response, track_untracked))
+        if read_settles_billing
+        else (lambda cost_check: cost_check.bill_from_deployment(response_id, track_untracked))
+    )
+    _report_charge(charge, fastapi_response)
 
 
 class _BilledCharge(Protocol):
@@ -901,14 +898,19 @@ class _BilledCharge(Protocol):
     def logging_obj(self) -> "LiteLLMLoggingObj": ...
 
 
+_UntrackedResponseTracker: TypeAlias = Callable[[ResponsesAPIResponse], Awaitable[bool]]
+
+
 class _BackgroundCostCheck(Protocol):
-    async def bill_from_deployment(self, response_id: str) -> _BilledCharge | None: ...
+    async def bill_from_deployment(
+        self, response_id: str, track_untracked: _UntrackedResponseTracker | None = None
+    ) -> _BilledCharge | None: ...
 
     async def bill_if_finished(
         self,
         response_id: str,
         response: ResponsesAPIResponse,
-        track_untracked: Callable[[], Awaitable[bool]] | None = None,
+        track_untracked: _UntrackedResponseTracker | None = None,
     ) -> _BilledCharge | None: ...
 
 
@@ -927,18 +929,63 @@ def _background_cost_check() -> _BackgroundCostCheck | None:
     )
 
 
-async def _settle_background_billing(
-    settle: Callable[[_BackgroundCostCheck], Awaitable[_BilledCharge | None]], fastapi_response: Response | None
-) -> None:
+_BillingSettlement: TypeAlias = Callable[[_BackgroundCostCheck], Awaitable[_BilledCharge | None]]
+_BILLING_RETRY_DELAYS_SECONDS: Final = (5.0, 30.0, 120.0)
+_billing_retries: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: the event loop keeps only weak task refs
+
+
+@dataclass(frozen=True, slots=True)
+class _BillingFailed:
+    error: Exception
+
+
+async def _attempt_billing(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck
+) -> _BilledCharge | None | _BillingFailed:
     try:
-        cost_check: Final = _background_cost_check()
-        if cost_check is None:
-            return
-        charge: Final = await settle(cost_check)
+        return await settle(cost_check)
     except Exception as e:
-        verbose_proxy_logger.warning("Billing a finished background response failed: %s", e)
-        return
-    if charge is None or charge.cost is None or fastapi_response is None:
+        return _BillingFailed(e)
+
+
+async def _retry_background_billing(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck, retry_delays: Sequence[float]
+) -> None:
+    for delay in retry_delays:
+        await asyncio.sleep(delay)
+        outcome = await _attempt_billing(settle, cost_check)
+        if not isinstance(outcome, _BillingFailed):
+            return
+        verbose_proxy_logger.warning("Retrying the bill for a finished background response failed: %s", outcome.error)
+    verbose_proxy_logger.error("Gave up billing a finished background response; the cost poll bills it when enabled")
+
+
+def _schedule_billing_retry(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck, retry_delays: Sequence[float]
+) -> None:
+    retry: Final = asyncio.create_task(_retry_background_billing(settle, cost_check, retry_delays))
+    _billing_retries.add(retry)
+    retry.add_done_callback(_billing_retries.discard)
+
+
+async def _settle_background_billing(
+    settle: _BillingSettlement, retry_delays: Sequence[float] = _BILLING_RETRY_DELAYS_SECONDS
+) -> _BilledCharge | None:
+    cost_check: Final = _background_cost_check()
+    if cost_check is None:
+        return None
+    outcome: Final = await _attempt_billing(settle, cost_check)
+    if not isinstance(outcome, _BillingFailed):
+        return outcome
+    verbose_proxy_logger.warning(
+        "Billing a finished background response failed, retrying in background: %s", outcome.error
+    )
+    _schedule_billing_retry(settle, cost_check, retry_delays)
+    return None
+
+
+def _report_charge(charge: _BilledCharge | None, fastapi_response: Response) -> None:
+    if charge is None or charge.cost is None:
         return
     billed_headers: Final = cost_headers(charge.cost, charge.logging_obj)
     fastapi_response.headers.update({name: value for name, value in billed_headers.items() if value is not None})
@@ -971,44 +1018,42 @@ def _streamed_background_data_generator(
     managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
     if managed_files_hook is None:
         return chunks
-    return _record_streamed_background_response(response, chunks, managed_files_hook, user_api_key_dict)
+    track_untracked: Final = partial(
+        managed_files_hook.track_untracked_background_response,
+        user_api_key_dict=user_api_key_dict,
+        request_tags=_background_response_spend_tags(request_data),
+    )
+    return _bill_streamed_background_response(response, chunks, track_untracked)
 
 
-async def _record_streamed_background_response(
+async def _bill_streamed_background_response(
     stream: object,
     chunks: AsyncIterator[str | bytes],
-    managed_files_hook: _BackgroundResponseStore,
-    user_api_key_dict: UserAPIKeyAuth,
+    track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]],
 ) -> AsyncIterator[str | bytes]:
     async for chunk in chunks:
         completed: object = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
         if not isinstance(completed, ResponsesAPIResponse):
             yield chunk
             continue
-        await _store_billed_stream_response(completed, managed_files_hook, user_api_key_dict)
+        await _bill_finished_stream(completed, track_untracked)
         yield chunk
         async for remaining_chunk in chunks:
             yield remaining_chunk
         return
     late_completed: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
     if isinstance(late_completed, ResponsesAPIResponse):
-        await _store_billed_stream_response(late_completed, managed_files_hook, user_api_key_dict)
+        await _bill_finished_stream(late_completed, track_untracked)
 
 
-async def _store_billed_stream_response(
-    response: ResponsesAPIResponse, managed_files_hook: _BackgroundResponseStore, user_api_key_dict: UserAPIKeyAuth
+async def _bill_finished_stream(
+    response: ResponsesAPIResponse, track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]]
 ) -> None:
-    try:
-        await managed_files_hook.store_unified_object_id(
-            unified_object_id=response.id,
-            file_object=response,
-            litellm_parent_otel_span=None,
-            model_object_id=decrypted_response_id(response.id),
-            file_purpose="response",
-            user_api_key_dict=user_api_key_dict,
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning("Recording streamed background response %s as billed failed: %s", response.id, e)
+    if not is_background_response(response):
+        return
+    await _settle_background_billing(
+        lambda cost_check: cost_check.bill_if_finished(response.id, response, partial(track_untracked, response.id))
+    )
 
 
 @router.delete(
@@ -1091,11 +1136,14 @@ async def delete_response(
     # Normal provider response flow
     data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
-    if _caller_may_address_response(response_id, user_api_key_dict, proxy_logging_obj):
-        await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id), None)
+    charge: Final = (
+        await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id))
+        if _caller_may_address_response(response_id, user_api_key_dict, proxy_logging_obj)
+        else None
+    )
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        deleted: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1120,6 +1168,8 @@ async def delete_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    _report_charge(charge, fastapi_response)
+    return deleted
 
 
 @router.get(
@@ -1806,7 +1856,7 @@ async def _responses_websocket_session(
                     }
                 )
             )
-        except Exception:
+        except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         await websocket.close(code=1008, reason="Pre-call error")
         return

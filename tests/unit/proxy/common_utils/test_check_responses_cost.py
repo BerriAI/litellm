@@ -12,6 +12,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from prisma.errors import UniqueViolationError
 from litellm_enterprise.proxy.common_utils.check_responses_cost import BilledBackgroundResponse, BilledCharge
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
@@ -82,10 +83,15 @@ class _InMemoryManagedObjectTable:
     def __init__(self, rows: tuple[_StoredResponse, ...]) -> None:
         self._rows: Final = rows
         self.statuses: Final = {row.id: row.status for row in rows}
+        self.model_object_ids: Final = {row.id: row.model_object_id for row in rows}
 
     def _matches(self, row: _StoredResponse, where: Mapping[str, object]) -> bool:
         def value_of(field: str) -> object:
-            return self.statuses[row.id] if field == "status" else getattr(row, field)
+            if field == "status":
+                return self.statuses[row.id]
+            if field == "model_object_id":
+                return self.model_object_ids[row.id]
+            return getattr(row, field)
 
         def holds(field: str, condition: object) -> bool:
             if field == "OR" and isinstance(condition, list):
@@ -98,7 +104,9 @@ class _InMemoryManagedObjectTable:
 
     def _current(self, where: Mapping[str, object]) -> list[_StoredResponse]:
         return [
-            dataclasses.replace(row, status=self.statuses[row.id]) for row in self._rows if self._matches(row, where)
+            dataclasses.replace(row, status=self.statuses[row.id], model_object_id=self.model_object_ids[row.id])
+            for row in self._rows
+            if self._matches(row, where)
         ]
 
     async def find_many(self, where: Mapping[str, object], **_: object) -> list[_StoredResponse]:
@@ -109,7 +117,13 @@ class _InMemoryManagedObjectTable:
 
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, str]) -> int:
         matched: Final = self._current(where)
-        self.statuses.update({row.id: data["status"] for row in matched})
+        if "model_object_id" in data and any(
+            other.id not in {row.id for row in matched} and value == data["model_object_id"]
+            for other, value in ((other, self.model_object_ids[other.id]) for other in self._rows)
+        ):
+            raise UniqueViolationError({"user_facing_error": {"error_code": "P2002"}})
+        self.statuses.update({row.id: data["status"] for row in matched if "status" in data})
+        self.model_object_ids.update({row.id: data["model_object_id"] for row in matched if "model_object_id" in data})
         return len(matched)
 
 
@@ -1371,6 +1385,74 @@ async def test_a_read_through_a_reissued_response_id_bills_the_stored_response(m
 
     assert len(billed_logger.billed) == 1
     assert table.statuses == {"job-rotated": "completed"}
+
+
+def _issued_ids(monkeypatch: pytest.MonkeyPatch, count: int) -> tuple[str, ...]:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _ROTATION_SALT_KEY)
+    issuer: Final = ResponsesIDSecurity(general_settings_reader=lambda: {}, signing_key_reader=lambda: _ROTATION_SALT_KEY)
+    return tuple(
+        issuer._encrypt_response_id(
+            ResponsesAPIResponse(id="resp_provider_job", created_at=1, output=[], status="queued"),
+            UserAPIKeyAuth(user_id="alice"),
+        ).id
+        for _ in range(count)
+    )
+
+
+def _stored_before_the_upgrade(created_id: str) -> _StoredResponse:
+    return _StoredResponse(
+        id="job-legacy", unified_object_id=created_id, model_object_id=created_id, status="queued"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_response_stored_before_the_upgrade_bills_once_whichever_issued_id_reads_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A row the old proxy stored keys the response by the encrypted id the create returned, so the
+    read that sends that id rekeys it by the provider id, and a read through any later id finds it
+    already billed."""
+    created_id, reissued_id = _issued_ids(monkeypatch, 2)
+    table: Final = _InMemoryManagedObjectTable(rows=(_stored_before_the_upgrade(created_id),))
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    track_untracked: Final = AsyncMock(return_value=False)
+
+    with patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")):
+        await poller.bill_if_finished(response_id=created_id, response=_terminal_response())
+        await poller.bill_if_finished(
+            response_id=reissued_id, response=_terminal_response(), track_untracked=track_untracked
+        )
+
+    assert len(billed_logger.billed) == 1
+    assert table.model_object_ids == {"job-legacy": "resp_provider_job"}
+    track_untracked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "read_rows, billed_by_the_poll",
+    [((), 1), ((_StoredResponse(id="job-read", unified_object_id="read-id", model_object_id="resp_provider_job", status="completed"),), 0)],
+    ids=["no_read_yet", "a_read_already_billed_it"],
+)
+async def test_the_poll_bills_a_response_stored_before_the_upgrade_only_when_no_read_billed_it_first(
+    monkeypatch: pytest.MonkeyPatch, read_rows: tuple[_StoredResponse, ...], billed_by_the_poll: int
+):
+    """A read through a later id misses the old row and tracks the response under its provider id,
+    so the poll retires the old row unbilled when that row exists and bills it once otherwise."""
+    (created_id,) = _issued_ids(monkeypatch, 1)
+    table: Final = _InMemoryManagedObjectTable(rows=(_stored_before_the_upgrade(created_id), *read_rows))
+    billed_logger: Final = _RecordingBilledLogger()
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=_terminal_response()):
+        await _poller_over(table, billed_logger).check_responses_cost()
+        await _poller_over(table, billed_logger).check_responses_cost()
+
+    assert len(billed_logger.billed) == billed_by_the_poll
+    assert table.statuses["job-legacy"] == "completed"
 
 
 @pytest.mark.asyncio

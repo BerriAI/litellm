@@ -34,6 +34,9 @@ class ManagedObjectRow(Protocol):
     def unified_object_id(self) -> str: ...
 
     @property
+    def model_object_id(self) -> str: ...
+
+    @property
     def created_by(self) -> str | None: ...
 
     @property

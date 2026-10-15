@@ -74,6 +74,28 @@ def is_background_response(response: object) -> bool:
     return getattr(response, "background", None) is True
 
 
+def requests_background(request_body: Mapping[str, object]) -> bool:
+    return bool(request_body.get("background")) or is_background_response(request_body.get("extra_body"))
+
+
+_RESPONSE_CREATE_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+
+
+def _finished_response(response: object) -> object:
+    wrapped: Final = response.get("response") if isinstance(response, Mapping) else getattr(response, "response", None)
+    return response if wrapped is None else wrapped
+
+
+def _may_be_unbilled(call_type: str | None, response: object) -> bool:
+    if call_type in _RESPONSE_CREATE_CALL_TYPES:
+        return is_background_response(_finished_response(response))
+    return call_type in NON_INFERENCE_CALL_TYPES
+
+
+def _is_managed_background_call(metadata: Mapping[str, object] | None) -> bool:
+    return metadata is not None and metadata.get(MANAGED_BACKGROUND_RESPONSE_METADATA_KEY) is True
+
+
 def is_unbilled_non_inference_call(
     call_type: str | None,
     metadata: Mapping[str, object] | None,
@@ -86,20 +108,21 @@ def is_unbilled_non_inference_call(
     tracks it as a managed object, the read is marked with
     ``MANAGED_BACKGROUND_RESPONSE_METADATA_KEY`` and stays free, because the one billing event
     the proxy logs from the finished response, stamped with
-    ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN``, bills the job. Any other
+    ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN``, bills the job. A streamed background create
+    the proxy tracks carries the same marker and is free for the same reason. Any other
     read of a background response (the SDK, a proxy without a database) is the only place its
     spend is ever visible, so it prices normally.
     """
-    if call_type not in NON_INFERENCE_CALL_TYPES:
+    if not _may_be_unbilled(call_type, response):
         return False
+    if call_type in _RESPONSE_CREATE_CALL_TYPES:
+        return _is_managed_background_call(metadata)
     origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) if metadata is not None else None
     if origin == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN:
         return False
     if not is_background_response(response):
         return True
-    return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or (
-        metadata is not None and metadata.get(MANAGED_BACKGROUND_RESPONSE_METADATA_KEY) is True
-    )
+    return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or _is_managed_background_call(metadata)
 
 
 def is_unbilled_non_inference_call_from_params(
@@ -109,10 +132,10 @@ def is_unbilled_non_inference_call_from_params(
 ) -> bool:
     """:func:`is_unbilled_non_inference_call` for callers holding raw ``litellm_params``.
 
-    The call-type membership test runs first so that inference traffic, which is every
+    The call-type and background tests run first so that inference traffic, which is every
     request in a normal workload, never pays for the metadata merge behind it.
     """
-    if call_type not in NON_INFERENCE_CALL_TYPES:
+    if not _may_be_unbilled(call_type, response):
         return False
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

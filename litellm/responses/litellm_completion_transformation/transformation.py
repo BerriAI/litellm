@@ -2104,7 +2104,7 @@ class LiteLLMCompletionResponsesConfig:
                     import json as _json
 
                     return _json.dumps(output)
-                except (TypeError, ValueError, RecursionError):
+                except Exception:
                     return str(output)
 
             # Fallback for dict/number/etc.
@@ -2112,7 +2112,7 @@ class LiteLLMCompletionResponsesConfig:
                 import json as _json
 
                 return _json.dumps(output)
-            except (TypeError, ValueError, RecursionError):
+            except Exception:
                 return str(output)
 
         tool_content: Final = _normalize_function_call_output_to_tool_content(tool_call_output.get("output"))
