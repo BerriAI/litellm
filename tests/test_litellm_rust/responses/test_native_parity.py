@@ -157,6 +157,27 @@ AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
 ]
 
 AZURE_MODEL: Final = "azure/my-deployment"
+XAI_MODEL: Final = "xai/grok-4"
+HOSTED_VLLM_MODEL: Final = "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"
+
+XAI_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "model": "grok-4",
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 70,
+            "total_tokens": 82,
+            "cost_in_usd_ticks": 12_345_000_000,
+        },
+    }
+)
+
+XAI_TOOLS: Final[list[JsonValue]] = [
+    {"type": "code_interpreter", "container": {"type": "auto"}},
+    {"type": "web_search", "search_context_size": "high", "filters": {"allowed_domains": ["example.com"]}},
+    {"type": "x_search", "from_date": "2026-01-01", "enable_video_understanding": True},
+]
 
 WEATHER_TOOL_FUNCTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {name: value for name, value in WEATHER_TOOL.items() if name != "type"}
@@ -327,6 +348,21 @@ CASES: Final = (
     Case(
         "azure_forwarded_api_key_header",
         {"model": AZURE_MODEL, "input": "hi", "api_key": None, "extra_headers": {"api-key": "caller-key"}},
+    ),
+    Case("xai_reported_cost", {"model": XAI_MODEL, "input": "hi"}, upstream=XAI_RESPONSE),
+    Case(
+        "xai_tools_metadata_and_max_output_tokens",
+        {"model": XAI_MODEL, "input": "hi", "tools": XAI_TOOLS, "metadata": {"team": "a"}, "max_output_tokens": 8},
+        upstream=XAI_RESPONSE,
+    ),
+    Case("hosted_vllm_placeholder_key", {"model": HOSTED_VLLM_MODEL, "input": "hi", "api_key": None}),
+    Case(
+        "hosted_vllm_keeps_replayed_reasoning_and_ids",
+        {
+            "model": HOSTED_VLLM_MODEL,
+            "input": [*MINTED_REASONING_REPLAY_INPUT, *FOREIGN_TOOL_CALL_REPLAY_INPUT],
+            "max_output_tokens": 4,
+        },
     ),
     Case("azure_o_series_stays_on_python", {"model": "azure/o_series/my-o3", "input": "hi"}, falls_back=True),
     Case(

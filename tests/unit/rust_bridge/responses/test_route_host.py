@@ -5,7 +5,13 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import connection_defaults, decline_reason, map_failure, response
+from litellm.rust_bridge.responses.route_host import (
+    connection_defaults,
+    decline_reason,
+    map_failure,
+    provider_connection,
+    response,
+)
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
@@ -174,3 +180,48 @@ def test_azure_connection_defaults_read_the_azure_key(monkeypatch: pytest.Monkey
     monkeypatch.setattr(litellm, "azure_key", "azure-global")
     monkeypatch.setattr(litellm, "api_base", None)
     assert connection_defaults("azure") == ("azure-global", None)
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "xai_key", "expected"),
+    [
+        pytest.param({"api_key": "xai-explicit"}, None, None, id="explicit_key"),
+        pytest.param({}, "xai-global", None, id="xai_key"),
+        pytest.param({}, None, "native xAI Responses does not implement OAuth", id="no_key"),
+    ],
+)
+def test_xai_without_a_key_stays_on_python(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object], xai_key: str | None, expected: str | None
+) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "xai_key", xai_key)
+    assert decline_reason({"model": "xai/grok-4", "input": "hi", **request_fields}) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    [
+        pytest.param({"api_base": "http://vllm:8000"}, None, id="api_base"),
+        pytest.param({"base_url": "http://vllm:8000"}, None, id="base_url"),
+        pytest.param({}, "native hosted vLLM Responses needs an api_base", id="no_api_base"),
+    ],
+)
+def test_hosted_vllm_without_an_api_base_stays_on_python(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object], expected: str | None
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    assert decline_reason({"model": "hosted_vllm/llama", "input": "hi", **request_fields}) == expected
+
+
+def test_provider_connection_matches_get_llm_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "xai_key", "xai-global")
+    assert provider_connection("xai/grok-4", None, None, None) == ("xai-global", "https://api.x.ai/v1")
+    assert provider_connection("hosted_vllm/llama", None, None, "http://vllm:8000") == (
+        "fake-api-key",
+        "http://vllm:8000",
+    )
+    assert provider_connection("gpt-4.1", None, None, None) == (None, None)

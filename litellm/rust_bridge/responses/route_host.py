@@ -7,7 +7,9 @@ from typing import Final, cast  # noqa: TID251  # narrows caller json the checke
 import litellm
 from litellm import get_llm_provider
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import inference_decline_reason, optional_str
 from litellm.secret_managers.main import get_secret_str
@@ -17,7 +19,12 @@ from litellm.types.router import GenericLiteLLMParams
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
 _NATIVE_PARAMETERS: Final = (*PARAMETERS, "api_version")
 _CONFIGS: Final[Mapping[str, OpenAIResponsesAPIConfig]] = MappingProxyType(
-    {"openai": OpenAIResponsesAPIConfig(), "azure": AzureOpenAIResponsesAPIConfig()}
+    {
+        "openai": OpenAIResponsesAPIConfig(),
+        "azure": AzureOpenAIResponsesAPIConfig(),
+        "xai": XAIResponsesAPIConfig(),
+        "hosted_vllm": HostedVLLMResponsesAPIConfig(),
+    }
 )
 _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
 
@@ -25,6 +32,16 @@ _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:
     provider_key: Final = {"openai": litellm.openai_key, "azure": litellm.azure_key}.get(provider)
     return litellm.api_key or provider_key, litellm.api_base
+
+
+def provider_connection(
+    model: str, custom_llm_provider: str | None, api_key: str | None, api_base: str | None
+) -> tuple[str | None, str | None]:
+    """The key and base `get_llm_provider` fills in before the provider config reads its own defaults"""
+    _, _, provider_key, provider_base = get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider, api_key=api_key, api_base=api_base
+    )
+    return provider_key, provider_base
 
 
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:
@@ -60,9 +77,27 @@ def decline_reason(request: Mapping[str, object]) -> str | None:
         return "native HTTP responses provider"
     return (
         inference_decline_reason(_NATIVE_PARAMETERS, request)
-        or (_azure_decline_reason(model, request) if provider == "azure" else None)
+        or _provider_decline_reason(provider, model, request)
         or _model_rules_decline_reason(config, model, request)
     )
+
+
+def _provider_decline_reason(provider: str, model: str, request: Mapping[str, object]) -> str | None:
+    if provider == "azure":
+        return _azure_decline_reason(model, request)
+    if provider not in ("xai", "hosted_vllm"):
+        return None
+    provider_key, provider_base = provider_connection(
+        str(request["model"]),
+        optional_str(request.get("custom_llm_provider")),
+        optional_str(request.get("api_key")),
+        optional_str(request.get("api_base")) or optional_str(request.get("base_url")),
+    )
+    if provider == "xai" and not (provider_key or litellm.api_key):
+        return "native xAI Responses does not implement OAuth"
+    if provider == "hosted_vllm" and not provider_base:
+        return "native hosted vLLM Responses needs an api_base"
+    return None
 
 
 def _azure_decline_reason(model: str, request: Mapping[str, object]) -> str | None:

@@ -5,8 +5,10 @@ use litellm_host::interceptors::{ProviderIdentity, RequestContext};
 use litellm_llms::{
     azure::responses::transformation::AZURE_RESPONSES_CONFIG,
     base_llm::responses::transformation::BaseResponsesApiConfig,
+    hosted_vllm::responses::transformation::HOSTED_VLLM_RESPONSES_CONFIG,
     openai::responses::transformation::OpenAiResponsesApiConfig,
     openrouter::responses::transformation::OPENROUTER_RESPONSES_CONFIG,
+    xai::responses::transformation::XAI_RESPONSES_CONFIG,
 };
 use litellm_secrets::source::SecretSource;
 use serde_json::Value;
@@ -95,6 +97,8 @@ pub(super) fn resolve_provider(
             ),
             Ok(LlmProviders::Openrouter) => (&OPENROUTER_RESPONSES_CONFIG, resolved.into()),
             Ok(LlmProviders::Azure) => (&AZURE_RESPONSES_CONFIG, resolved.into()),
+            Ok(LlmProviders::Xai) => (&XAI_RESPONSES_CONFIG, resolved.into()),
+            Ok(LlmProviders::HostedVllm) => (&HOSTED_VLLM_RESPONSES_CONFIG, resolved.into()),
             _ => return Err(Error::Unsupported("native HTTP responses provider")),
         };
     Ok(ResponsesProvider {
@@ -144,6 +148,13 @@ mod tests {
     #[case::openrouter_native_id_implicit("openrouter/auto", None, "openrouter", "auto")]
     #[case::azure_prefix("azure/my-deployment", None, "azure", "my-deployment")]
     #[case::azure_explicit("my-deployment", Some("azure"), "azure", "my-deployment")]
+    #[case::xai_prefix("xai/grok-4", None, "xai", "grok-4")]
+    #[case::hosted_vllm_keeps_the_vendor(
+        "hosted_vllm/meta-llama/Llama-3.1-8B",
+        None,
+        "hosted_vllm",
+        "meta-llama/Llama-3.1-8B"
+    )]
     fn providers_and_wire_models_match_python(
         #[case] model: &str,
         #[case] custom_llm_provider: Option<&str>,

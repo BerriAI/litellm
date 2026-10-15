@@ -26,6 +26,8 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "hosted_vllm")]
+    HostedVllm,
     #[strum(serialize = "minimax")]
     Minimax,
     #[strum(serialize = "mistral")]
@@ -42,6 +44,8 @@ pub enum LlmProviders {
     Tencent,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "xai")]
+    Xai,
 }
 
 pub fn get_custom_llm_provider<'a>(

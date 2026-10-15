@@ -9,6 +9,7 @@ pub mod cohere;
 pub mod deepseek;
 pub mod edenai;
 mod error;
+pub mod hosted_vllm;
 pub mod minimax;
 pub mod mistral;
 pub mod openai;
@@ -17,5 +18,6 @@ pub mod openrouter;
 pub mod reducto;
 pub mod tencent;
 pub mod vertex_ai;
+pub mod xai;
 
 pub use error::{Error, ErrorDetail, ErrorSource};

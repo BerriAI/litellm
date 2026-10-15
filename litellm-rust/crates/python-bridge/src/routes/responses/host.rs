@@ -36,6 +36,23 @@ pub(super) fn project(
 ) -> PyResult<ResponsesCall> {
     let mut call = host.project(py, arguments, "input")?;
     ids::restore_input(&mut call.input);
+    let raw = |name: &str| -> PyResult<Option<String>> {
+        host.argument(py, arguments, name)?
+            .map(|value| value.extract())
+            .transpose()
+    };
+    let (provider_key, provider_base): (Option<String>, Option<String>) = py
+        .import(super::ROUTE_HOST_MODULE)?
+        .getattr("provider_connection")?
+        .call1((
+            &call.options.model,
+            &call.options.custom_llm_provider,
+            raw("api_key")?,
+            raw("api_base")?
+                .filter(|base| !base.is_empty())
+                .or(raw("base_url")?),
+        ))?
+        .extract()?;
     let optional_params = call
         .params
         .into_iter()
@@ -61,8 +78,12 @@ pub(super) fn project(
         model: call.options.model,
         input: call.input,
         optional_params,
-        api_key: call.options.api_key,
-        api_base: call.options.api_base,
+        api_key: provider_key
+            .filter(|key| !key.is_empty())
+            .or(call.options.api_key),
+        api_base: provider_base
+            .filter(|base| !base.is_empty())
+            .or(call.options.api_base),
         custom_llm_provider: call.options.custom_llm_provider,
         api_version: host
             .argument(py, arguments, "api_version")?

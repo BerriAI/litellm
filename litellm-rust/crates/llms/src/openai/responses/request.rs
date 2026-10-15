@@ -16,17 +16,23 @@ const REASONING_FIELDS_DROPPED_WHEN_NULL: [&str; 3] = ["status", "content", "enc
 
 /// The host behind the OpenAI wire format. OpenAI and Azure run OpenAI's item validator, which
 /// rejects reasoning it did not mint and tool-call item ids without its prefixes, and Azure also
-/// rejects `status` on replayed reasoning and message items
+/// rejects `status` on replayed reasoning and message items. xAI replaces OpenAI's param mapping,
+/// so it keeps `max_output_tokens` as sent
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponsesHost {
     OpenAi,
     Azure,
     Compatible,
+    Xai,
 }
 
 impl ResponsesHost {
     fn validates_items(self) -> bool {
         matches!(self, Self::OpenAi | Self::Azure)
+    }
+
+    fn raises_max_output_tokens(self) -> bool {
+        !matches!(self, Self::Xai)
     }
 }
 
@@ -35,7 +41,8 @@ pub fn shape(
     mut params: Map<String, Value>,
     host: ResponsesHost,
 ) -> Result<(Value, Map<String, Value>), Error> {
-    if let Some(max_output_tokens) = params.get_mut("max_output_tokens")
+    if host.raises_max_output_tokens()
+        && let Some(max_output_tokens) = params.get_mut("max_output_tokens")
         && max_output_tokens
             .as_i64()
             .is_some_and(|tokens| (1..MIN_MAX_OUTPUT_TOKENS).contains(&tokens))
