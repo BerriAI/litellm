@@ -1,7 +1,8 @@
 """Trace-context + Baggage helpers."""
 
 import os
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Final
 
@@ -9,6 +10,7 @@ from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
+    INVALID_SPAN,
     Link,
     NonRecordingSpan,
     Span,
@@ -20,12 +22,14 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from litellm._internal_context import in_post_response_phase
 from litellm.integrations.otel.model.semconv import HTTP
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
+_W3C_TRACE_HEADERS: Final = frozenset(("traceparent", "tracestate"))
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can
@@ -224,6 +228,72 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     return ctx
 
 
+def resolve_service_span_context(
+    threaded: Span | None = None, end_time_ns: int | None = None
+) -> tuple[Context, tuple[Link, ...]]:
+    """Parent context + links for a service/DB span that ended at ``end_time_ns``.
+
+    Work the caller did not wait for starts its own root trace with a span link
+    back to the parent instead of stretching the parent's trace: anything logged
+    from the post-response phase (success callbacks, the response-cache write,
+    see :func:`litellm._internal_context.post_response_phase`), whether or not
+    the server span has closed yet, and anything that finished after its parent
+    ended. Baggage stays on the returned context.
+    """
+    ctx: Final = resolve_parent_context(threaded)
+    parent: Final = get_current_span(ctx)
+    if not _is_post_response(parent, end_time_ns):
+        return ctx, ()
+    return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
+
+
+_post_response_root: Final["ContextVar[SpanContext | None]"] = ContextVar(
+    "litellm_otel_post_response_root", default=None
+)
+
+
+@contextmanager
+def post_response_root(span: Span) -> Generator[None]:
+    """Nest the post-response service calls inside this block under ``span``."""
+    token: Final = _post_response_root.set(span.get_span_context())
+    try:
+        yield
+    finally:
+        _post_response_root.reset(token)
+
+
+def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(parent, ReadableSpan):
+        return False
+    if in_post_response_phase():
+        return parent.get_span_context() != _post_response_root.get()
+    if parent.end_time is None:
+        return False
+    return end_time_ns is None or end_time_ns > parent.end_time
+
+
+_active_phase_span: Final["ContextVar[Span | None]"] = ContextVar("litellm_otel_active_phase_span", default=None)
+
+
+@contextmanager
+def active_phase(span: Span) -> Generator[None]:
+    """Make ``span`` the phase that request-level spans opened inside the block nest under.
+
+    A ContextVar rather than the ambient span so a close callback whose task was
+    spawned inside the phase still parents to it, while one spawned after the
+    phase exited sees no phase at all.
+    """
+    token: Final = _active_phase_span.set(span)
+    try:
+        yield
+    finally:
+        _active_phase_span.reset(token)
+
+
+def active_phase_span() -> Span | None:
+    return _active_phase_span.get()
+
+
 def resolve_request_span_context() -> Context:
     """The parent context for a request-level span (the LLM call, a guardrail).
 
@@ -235,12 +305,26 @@ def resolve_request_span_context() -> Context:
 
     Unlike :func:`resolve_parent_context` (used by DB/service spans, which DO want
     to nest under the active phase span, e.g. an auth DB lookup under ``auth``),
-    this never returns the active span when an anchor exists.
+    this never returns the momentarily active span when an anchor exists.
     """
     root: Final = request_root_span()
     if root is not None:
         return context_from_span(root)
     return get_current()
+
+
+def resolve_internal_call_span_context() -> Context:
+    """The parent context for an LLM call litellm itself makes while working a request.
+
+    The auto-router classifier runs inside ``route {model_group}``; that phase, opened
+    with :func:`active_phase`, owns the sub-call so it reads as part of routing rather
+    than as a second provider attempt beside the caller's own ``chat``. With no phase
+    open the sub-call anchors like any request-level span.
+    """
+    phase: Final = active_phase_span()
+    if phase is not None:
+        return context_from_span(phase)
+    return resolve_request_span_context()
 
 
 def resolve_mcp_span_context(
@@ -308,6 +392,50 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
         return None
     carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)
+
+
+def _outgoing_trace_context(parent_span: object) -> Context | None:
+    if isinstance(parent_span, Span) and is_recordable_span(parent_span):
+        return context_from_span(parent_span)
+
+    root: Final = request_root_span()
+    if root is not None:
+        return context_from_span(root)
+
+    current: Final = get_current()
+    if is_recordable_span(get_current_span(current)):
+        return current
+    return None
+
+
+def _propagated_context(headers: Mapping[str, str], request_context: Context) -> Context:
+    """``request_context`` when it continues the trace ``headers`` already name, else the
+    caller's own context, so an explicit upstream ``traceparent`` (``x-pass-traceparent``)
+    is never swapped for an unrelated trace and its ``tracestate`` survives."""
+    caller: Final = extract_traceparent(headers)
+    if caller is None:
+        return request_context
+    caller_span: Final = get_current_span(caller).get_span_context()
+    request_span: Final = get_current_span(request_context).get_span_context()
+    if not caller_span.is_valid or caller_span.trace_id == request_span.trace_id:
+        return request_context
+    return caller
+
+
+def inject_trace_context(headers: Mapping[str, str], parent_span: object = None) -> dict[str, str]:
+    """``headers`` plus W3C ``traceparent``/``tracestate`` for this request's span.
+
+    Parent preference: ``parent_span`` (the request span auth stashed on the key), then
+    the anchored request root span, then the ambient active span. Only trace context is
+    injected, never Baggage. Unchanged when no valid span exists anywhere. A ``traceparent``
+    already in ``headers`` from a different trace is forwarded as-is instead of replaced.
+    """
+    context: Final = _outgoing_trace_context(parent_span)
+    if context is None:
+        return dict(headers)
+    carrier: Final = {key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS}
+    _PROPAGATOR.inject(carrier, context=_propagated_context(headers, context))
+    return carrier
 
 
 # The OTLP destinations this request's key or team pointed its traces at, resolved

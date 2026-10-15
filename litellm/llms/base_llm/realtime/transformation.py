@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
+from typing_extensions import Self
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
@@ -19,6 +21,23 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class RealtimeBackend(Protocol):
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    async def send(self, message: str | bytes) -> None: ...
+
+    async def recv(self, decode: bool | None = None) -> str | bytes: ...
+
+    async def close(self) -> None: ...
 
 
 class BaseRealtimeConfig(ABC):
@@ -76,6 +95,9 @@ class BaseRealtimeConfig(ABC):
         return None
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return None
+
+    async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None
 
     def transform_session_created_event(

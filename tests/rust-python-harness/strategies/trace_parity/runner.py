@@ -4,15 +4,11 @@ import importlib
 from collections.abc import Sequence
 from pathlib import Path
 from time import monotonic
-from typing import Final, cast
+from typing import Final
 
-from ...shared.native_build import ensure_trace_bridge
 from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, ResultArtifact, RunStatus, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 from .models import (
-    GatewayRouteSpec,
-    RouteSpec,
-    TraceEngine,
     TraceExecutionFailure,
     TraceScenario,
     TraceSuite,
@@ -47,12 +43,8 @@ def validate_trace_suite(suite: TraceSuite, harness_case: HarnessCase) -> str | 
     if invalid_names:
         return f"scenario names must start with sync- or async-: {', '.join(invalid_names)}"
     surface: Final = harness_case.surface
-    if surface == "sdk" and not isinstance(suite.route, RouteSpec):
-        return "must use RouteSpec for the sdk surface"
-    if surface == "gateway" and not isinstance(suite.route, GatewayRouteSpec):
-        return "must use GatewayRouteSpec for the gateway surface"
-    if surface is None:
-        return "requires an sdk or gateway surface"
+    if surface != "sdk":
+        return "requires the sdk surface"
     if suite.route.route != harness_case.sdk_function:
         return f"route {suite.route.route} does not match case function {harness_case.sdk_function}"
     return None
@@ -89,10 +81,9 @@ def run_trace_scenario(
     surface: Surface,
     nodeid: str,
     on_update: UpdateCallback,
-    engine: TraceEngine = "both",
 ) -> None:
     started_at: Final = monotonic()
-    trace: Final = _execute_scenario(trace_suite, scenario, surface, engine)
+    trace: Final = _execute_scenario(trace_suite, scenario, surface)
     duration: Final = monotonic() - started_at
     if isinstance(trace, TraceExecutionFailure):
         result.record(nodeid, RunStatus.ERROR, duration)
@@ -102,7 +93,7 @@ def run_trace_scenario(
     artifact: Final = ResultArtifact(TRACE_ARTIFACT, trace.model_dump_json())
     if trace.has_errors():
         result.record(nodeid, RunStatus.ERROR, duration, (artifact,))
-        run.failures.append((nodeid, "\n".join(error for error in (trace.python_error, trace.rust_error) if error)))
+        run.failures.append((nodeid, trace.python_error or ""))
     else:
         result.record(nodeid, RunStatus.PASSED, duration, (artifact,))
     on_update(run)
@@ -112,18 +103,10 @@ def _execute_scenario(
     trace_suite: TraceSuite,
     scenario: TraceScenario,
     surface: Surface,
-    engine: TraceEngine,
 ) -> TraceArtifact | TraceExecutionFailure:
-    route: Final = trace_suite.route
-    if isinstance(route, GatewayRouteSpec):
-        if surface != "gateway":
-            return TraceExecutionFailure("harness", "gateway route cannot run on the sdk surface")
-        from .gateway.execution import execute_gateway_trace
-
-        return execute_gateway_trace(route, scenario, engine)
     if surface != "sdk":
-        return TraceExecutionFailure("harness", "sdk route cannot run on the gateway surface")
-    return execute_trace(route, scenario, surface, engine)
+        return TraceExecutionFailure("harness", "trace scenarios only run on the sdk surface")
+    return execute_trace(trace_suite.route, scenario, surface)
 
 
 def _run_case(
@@ -131,7 +114,6 @@ def _run_case(
     harness_case: HarnessCase,
     selected_scenarios: frozenset[str],
     on_update: UpdateCallback,
-    engine: TraceEngine,
 ) -> None:
     result: Final = run.results[harness_case.key]
     spec: Final = harness_case.spec
@@ -154,21 +136,7 @@ def _run_case(
     result.status = RunStatus.RUNNING
     on_update(run)
     for scenario, nodeid in nodeids:
-        run_trace_scenario(run, result, trace_suite, scenario, surface, nodeid, on_update, engine)
-
-
-def runner_selection(runner_args: Sequence[str]) -> tuple[frozenset[str], TraceEngine]:
-    engine: TraceEngine = "both"
-    scenarios: list[str] = []
-    for argument in runner_args:
-        if argument.startswith("--engine="):
-            value = argument.removeprefix("--engine=")
-            if value not in {"python", "rust"}:
-                raise ValueError(f"invalid trace engine: {value}")
-            engine = cast(TraceEngine, value)
-        else:
-            scenarios.append(argument)
-    return frozenset(scenarios), engine
+        run_trace_scenario(run, result, trace_suite, scenario, surface, nodeid, on_update)
 
 
 def run_trace_cases(
@@ -177,18 +145,11 @@ def run_trace_cases(
     on_update: UpdateCallback,
     runner_args: Sequence[str] = (),
 ) -> tuple[int, HarnessRun]:
-    selected_scenarios, engine = runner_selection(runner_args)
+    del repo_root
+    selected_scenarios: Final = frozenset(runner_args)
     run: Final = HarnessRun.from_cases(cases)
-    runnable_cases: Final = tuple(case for case in cases if isinstance(case.spec, ModuleCaseSpec))
-    bridge_error: Final = ensure_trace_bridge(repo_root) if runnable_cases and engine != "python" else None
-    if bridge_error is not None:
-        for harness_case in runnable_cases:
-            _record_setup_failure(run, harness_case, bridge_error, "bridge")
-        run.finished_at = monotonic()
-        on_update(run)
-        return 1, run
     for harness_case in cases:
-        _run_case(run, harness_case, selected_scenarios, on_update, engine)
+        _run_case(run, harness_case, selected_scenarios, on_update)
     run.finished_at = monotonic()
     on_update(run)
     failed: Final = any(

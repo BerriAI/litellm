@@ -1,1 +1,0 @@
-MCP note: **`auth_type: oauth2` with `delegate_auth_to_upstream: true` is deprecated** - LiteLLM admission is required for matching MCP routes. Use `auth_type: oauth_delegate` for client-forwarded OAuth. OAuth discovery endpoints stay public so clients can start the RFC 9728 flow

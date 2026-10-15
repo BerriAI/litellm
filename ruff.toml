@@ -1,6 +1,6 @@
 lint.ignore = ["F405", "E402", "F403"]
 # The second group is the strict gate's graduates: rules the codebase already has zero
-# violations of, so they hard-fail here instead of being ratcheted in ruff-strict-budget.json.
+# violations of, so they hard-fail here instead of being counted by the strict gate.
 # That gives editors and `ruff check --fix` the diagnostic, which the gate script cannot.
 lint.extend-select = [
     "T20", "PGH004", "RUF008", "RUF009", "RUF100",

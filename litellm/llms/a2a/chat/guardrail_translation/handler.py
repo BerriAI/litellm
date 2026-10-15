@@ -26,7 +26,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _A2ATextPart(TypedDict, total=False):
@@ -125,7 +125,7 @@ class A2AGuardrailHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         """
         Process A2A output response by applying guardrails to text content.
 
