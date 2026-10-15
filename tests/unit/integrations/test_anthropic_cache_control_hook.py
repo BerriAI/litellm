@@ -11,6 +11,7 @@ from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -4640,3 +4641,29 @@ def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_requ
 
     assert (census, wire_marks) == (1, 1)
     assert (warnings_from_the_hook, len(caplog.records)) == (0, 1)
+
+
+@pytest.mark.parametrize(
+    "stray_message",
+    [
+        pytest.param("junk", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param(ChatCompletionMessage(role="assistant", content="Checking the weather"), id="openai_sdk_message"),
+    ],
+)
+def test_cache_control_hook_counts_a_marked_tool_call_next_to_a_message_it_cannot_pair(
+    monkeypatch: pytest.MonkeyPatch, stray_message: object
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = [
+        stray_message,
+        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    envelope_census: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        None, request_kwargs={"extra_body": {"messages": messages}}
+    )
+
+    assert (census, envelope_census) == (1, 1)

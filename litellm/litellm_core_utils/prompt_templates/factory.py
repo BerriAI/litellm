@@ -1891,9 +1891,16 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
     )
 
 
-def tool_call_ids_answered_by_client(messages: Sequence[AllMessageValues]) -> frozenset[str]:
-    paired: Final = _pair_tool_calls_with_results(messages) if litellm.modify_params else messages
+def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+    paired: Final = _paired_like_the_request_builder(messages) if litellm.modify_params else messages
     return _tool_call_ids_in_tool_messages(paired) - server_tool_answers_replaced_by_their_result(paired)
+
+
+def _paired_like_the_request_builder(messages: Sequence[object]) -> Sequence[object]:
+    if not all(callable(getattr(message, "get", None)) for message in messages):
+        return messages
+    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: pairing reads messages via get
+    return _pair_tool_calls_with_results(chat_messages)
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]

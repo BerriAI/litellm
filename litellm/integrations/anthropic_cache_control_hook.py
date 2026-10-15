@@ -244,8 +244,7 @@ def _tool_call_ids_answered_by_client_when_a_tool_call_is_marked(messages: Seque
     )
     if not any(_attribute_or_key(tool_call, "cache_control") is not None for tool_call in tool_calls):
         return frozenset()
-    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: request messages the factory sanitizes
-    return tool_call_ids_answered_by_client(chat_messages)
+    return tool_call_ids_answered_by_client(messages)
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
