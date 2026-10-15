@@ -1,8 +1,9 @@
 """What the logging callbacks see on /v1/responses after a pre-call guardrail rewrites input.
 
-PR 45163 refreshes the logging object inside OpenAIResponsesHandler.process_input_messages. These
-cells pin, per input shape and guardrail verdict, the messages/input the payload sink receives, the
-input the provider receives, and the spend row — against a scripted provider and guardrail vendor.
+The common pre-call path restamps the logging snapshot from the guardrail-rewritten input.
+These cells pin, per input shape and guardrail verdict, the messages/input the payload sink
+receives, the input the provider receives, and the spend row — against a scripted provider
+and guardrail vendor.
 """
 
 from __future__ import annotations
