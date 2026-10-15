@@ -8,6 +8,7 @@ Tests that:
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -2806,36 +2807,15 @@ class TestWebSocketChunkTypes:
 
 
 class TestResponsesWebSocketCredentials:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "explicit_key,global_key,expected_key",
-        [
-            ("deployment-key", None, "deployment-key"),
-            ("deployment-key", "global-key", "deployment-key"),
-            (None, "global-key", "global-key"),
-        ],
-    )
-    async def test_openai_websocket_authorization(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        explicit_key: str | None,
-        global_key: str | None,
-        expected_key: str,
-    ) -> None:
+    @staticmethod
+    async def _upstream_handshake_headers(**call_kwargs: object) -> Mapping[str, str]:
         from asyncio import Future, get_running_loop
-        from collections.abc import Mapping
         from types import TracebackType
-        from typing import Final
         from unittest.mock import AsyncMock, patch
 
-        import litellm
         from litellm.responses import main as responses_main
 
-        monkeypatch.setattr(litellm, "api_key", global_key)
-        monkeypatch.setattr(litellm, "openai_key", None)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setenv("LITELLM_RUST", "false")
-        captured_authorization: Final[Future[str]] = get_running_loop().create_future()
+        captured_headers: Final[Future[Mapping[str, str]]] = get_running_loop().create_future()
 
         class FakeConnect:
             def __init__(
@@ -2845,7 +2825,7 @@ class TestResponsesWebSocketCredentials:
                 additional_headers: Mapping[str, str],
                 **_kwargs: object,
             ) -> None:
-                captured_authorization.set_result(additional_headers["Authorization"])
+                captured_headers.set_result(dict(additional_headers))
 
             async def __aenter__(self) -> None:
                 raise RuntimeError("stop at upstream handshake")
@@ -2862,15 +2842,71 @@ class TestResponsesWebSocketCredentials:
         websocket.close = AsyncMock()
         with patch("websockets.connect", FakeConnect):
             await responses_main._aresponses_websocket.__wrapped__(
-                model="gpt-6-astra",
                 websocket=websocket,
-                api_key=explicit_key,
-                api_base="https://upstream.invalid/v1",
                 litellm_logging_obj=MagicMock(),
+                **call_kwargs,
             )
 
-        assert captured_authorization.done()
-        assert captured_authorization.result() == f"Bearer {expected_key}"
+        assert captured_headers.done(), "the request never reached the native upstream websocket"
+        return captured_headers.result()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "api_base,explicit_key,global_key,expected_key",
+        [
+            ("https://upstream.invalid/v1", "deployment-key", None, "deployment-key"),
+            ("https://upstream.invalid/v1", "deployment-key", "global-key", "deployment-key"),
+            ("https://upstream.invalid/v1", None, "global-key", "global-key"),
+            ("https://api.groq.com/openai/v1", "deployment-key", None, "deployment-key"),
+        ],
+    )
+    async def test_openai_websocket_authorization(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        api_base: str,
+        explicit_key: str | None,
+        global_key: str | None,
+        expected_key: str,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "api_key", global_key)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("GROQ_API_KEY", "groq-env-key")
+        monkeypatch.setenv("LITELLM_RUST", "false")
+
+        headers: Final = await self._upstream_handshake_headers(
+            model="gpt-6-astra",
+            custom_llm_provider="openai",
+            api_key=explicit_key,
+            api_base=api_base,
+        )
+
+        assert headers["Authorization"] == f"Bearer {expected_key}"
+
+    @pytest.mark.asyncio
+    async def test_azure_websocket_without_its_own_key_never_gets_the_openai_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.setattr(litellm, "azure_key", None)
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-global-key")
+        monkeypatch.setenv("AZURE_API_KEY", "azure-env-key")
+        monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("LITELLM_RUST", "false")
+
+        headers: Final = await self._upstream_handshake_headers(
+            model="gpt-6-astra",
+            custom_llm_provider="azure",
+            api_base="https://resource.openai.azure.com",
+        )
+
+        assert headers["api-key"] == "azure-env-key"
+        assert "openai-global-key" not in " ".join(headers.values())
 
 
 class TestNativeWebSocketUrlConstruction:

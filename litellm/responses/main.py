@@ -60,7 +60,6 @@ else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
@@ -2493,6 +2492,7 @@ async def _aresponses_websocket(
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
         litellm_params=litellm_params,
@@ -2522,14 +2522,7 @@ async def _aresponses_websocket(
             api_base=resolved_api_base,
         )
 
-    resolved_api_key: Final = (
-        dynamic_api_key
-        or api_key
-        or litellm_params.api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
-    )
+    resolved_api_key: Final = dynamic_api_key or api_key or litellm_params.api_key
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
     _explicit_keys: Final = {
