@@ -1,3 +1,10 @@
+import { useWatch } from "react-hook-form";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import {
+  type ModelThrottling,
+  modelThrottlingError,
+  modelThrottlingUpdate,
+} from "@/components/key_team_helpers/modelThrottling";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -285,6 +292,7 @@ export interface TeamMembership {
     budget_id: string;
     soft_budget: number | null;
     max_budget: number | null;
+    model_throttling?: ModelThrottling | null;
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
@@ -311,6 +319,7 @@ export interface TeamData {
     rpm_limit: number | null;
     tpd_limit?: number | null;
     max_budget: number | null;
+    model_throttling?: ModelThrottling | null;
     soft_budget?: number | null;
     budget_duration: string | null;
     model_max_budget?: StoredModelMaxBudget | null;
@@ -340,6 +349,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number | null;
+      model_throttling?: ModelThrottling | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -635,6 +645,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
+  const throttlingModels = useWatch({ control: form.control, name: "models" });
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const throttlingAccessGroups = useWatch({ control: form.control, name: "access_group_ids" });
+  const [modelThrottling, setModelThrottling] = useState<ModelThrottling | null>(null);
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
@@ -698,6 +712,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
+    setModelThrottling(teamData?.team_info?.model_throttling ?? null);
     setTeamMemberModelMaxBudget(
       (teamData?.team_info?.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget,
     );
@@ -998,6 +1013,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const handleTeamUpdate = async (values: any) => {
+    const throttlingError = modelThrottlingError(modelThrottling, values.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
     try {
       if (!accessToken) return;
       setIsTeamSaving(true);
@@ -1072,6 +1092,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           : storedRequireTraceIdMetadata;
 
       const updateData: any = {
+        ...modelThrottlingUpdate(modelThrottling, info.model_throttling),
         team_id: teamId,
         team_alias: values.team_alias,
         models: normalizeTeamModelSelection(values.models),
@@ -1848,6 +1869,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     )}
                   </FormField>
+
+                  <ModelThrottlingField
+                    value={modelThrottling}
+                    onChange={setModelThrottling}
+                    maxBudget={throttlingBudget}
+                    availableModels={availableModelBudgetModels}
+                    allowedModels={throttlingModels}
+                    accessGroupIds={throttlingAccessGroups}
+                    disabled={!canEditAsProxyAdmin}
+                  />
 
                   <ModelMaxBudgetField
                     premiumUser={premiumUser}

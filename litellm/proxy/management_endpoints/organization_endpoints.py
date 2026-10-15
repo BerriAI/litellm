@@ -55,6 +55,10 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
@@ -335,7 +339,16 @@ def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: st
         if "budget_duration" in budget_updates
         else {}
     )
-    return {**budget_updates, **recomputed_reset_at, "updated_by": updated_by}
+    return {
+        **budget_updates,
+        **recomputed_reset_at,
+        "updated_by": updated_by,
+        **(
+            {"model_throttling": "null"}
+            if "model_throttling" in budget_updates and budget_updates["model_throttling"] is None
+            else {}
+        ),
+    }
 
 
 def handle_nested_budget_structure_in_organization_update_request(
@@ -484,6 +497,8 @@ async def new_organization(
         except Exception:
             pass
 
+    validate_model_throttling_update(data)
+    check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
     if data.budget_id is None:
         """
         Every organization needs a budget attached.
@@ -729,7 +744,7 @@ async def update_organization(
     raw_data_with_flat_budget_fields: Final = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
-    data: Final = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
+    data: Final = LiteLLM_OrganizationTableUpdate.model_validate(raw_data_with_flat_budget_fields)
 
     # Validate budget values are not negative
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
@@ -947,6 +962,15 @@ async def update_organization_v2(
             detail={"error": f"Organization not found for organization_id={organization_id}"},
         )
 
+    existing_budget: Final = (
+        await BudgetRepository(prisma_client).table.find_unique(
+            where={"budget_id": existing_organization_row.budget_id}
+        )
+        if {"max_budget", "model_throttling"}.intersection(data.model_fields_set)
+        else None
+    )
+    validate_model_throttling_update(data, existing_budget)
+    check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
     field_values: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.model_dump())
     present_fields: Final = data.model_fields_set
     budget_updates: Final = {field: field_values[field] for field in present_fields if field in _BUDGET_SETTABLE_FIELDS}

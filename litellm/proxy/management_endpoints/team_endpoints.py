@@ -156,6 +156,10 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     validate_budget_duration,
     validate_team_model_max_budget,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
@@ -1571,6 +1575,8 @@ async def new_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        validate_model_throttling_update(data)
+        check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
@@ -1788,10 +1794,7 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate({**data_json, "model_id": _model_id})
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -2542,7 +2545,11 @@ async def update_team(
             existing_model_max_budget=existing_team_row.model_max_budget,
         )
 
+        validate_model_throttling_update(data, existing_team_row)
+        check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
         updated_kv = data.json(exclude_unset=True)
+        if "model_throttling" in updated_kv and updated_kv["model_throttling"] is None:
+            updated_kv["model_throttling"] = "null"
         if updated_kv.get("require_trace_id") is None:
             updated_kv.pop("require_trace_id", None)
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
@@ -4834,6 +4841,8 @@ def _transform_teams_to_deleted_records(
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
+        record["model_throttling"] = json.dumps(record.get("model_throttling"))
+
         for rel_key in (
             "litellm_model_table",
             "object_permission",
@@ -5668,11 +5677,13 @@ def _convert_teams_to_response_models(
             members_count = len(members_with_roles)
             keys_count = counts.get(team_dict.get("team_id") or "", 0)
             team_list.append(
-                TeamListItem(
-                    **team_dict,
-                    members_count=members_count,
-                    keys_count=keys_count,
-                    access_group_skill_names=None,
+                TeamListItem.model_validate(
+                    {
+                        **team_dict,
+                        "members_count": members_count,
+                        "keys_count": keys_count,
+                        "access_group_skill_names": None,
+                    }
                 )
             )
     return team_list
@@ -6100,10 +6111,8 @@ async def list_team(
 
         try:
             returned_responses.append(
-                TeamListResponseObject(
-                    **team.model_dump(),
-                    team_memberships=_team_memberships,
-                    keys=keys,
+                TeamListResponseObject.model_validate(
+                    {**team.model_dump(), "team_memberships": _team_memberships, "keys": keys}
                 )
             )
         except Exception as e:

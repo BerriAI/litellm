@@ -14,6 +14,7 @@ from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -29,6 +30,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     spend: float = 0.0
     user_email: str | None = None
     models: list = []

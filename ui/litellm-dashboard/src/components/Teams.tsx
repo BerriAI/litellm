@@ -1,3 +1,6 @@
+import { useWatch } from "react-hook-form";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import { type ModelThrottling, modelThrottlingError } from "@/components/key_team_helpers/modelThrottling";
 import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -280,6 +283,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const throttlingModels = useWatch({ control: form.control, name: "models" });
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const throttlingAccessGroups = useWatch({ control: form.control, name: "access_group_ids" });
+  const [modelThrottling, setModelThrottling] = useState<ModelThrottling | null>(null);
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
@@ -360,6 +367,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
     setLoggingSettings([]);
     setModelAliases({});
     setModelMaxBudget({});
+    setModelThrottling(null);
     setTeamMemberModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
@@ -419,9 +427,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   }, [accessToken, userID, userRole]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
+    const throttlingError = modelThrottlingError(modelThrottling, formValues.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
+    if (modelThrottling) formValues.model_throttling = modelThrottling;
     try {
       if (accessToken != null) {
-        let organizationId = formValues?.organization_id || currentOrg?.organization_id;
+        const organizationId = formValues?.organization_id || currentOrg?.organization_id;
         if (organizationId === "" || typeof organizationId !== "string") {
           formValues.organization_id = null;
         } else {
@@ -591,7 +605,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
       return false;
     }
     for (let i = 0; i < team.members_with_roles.length; i++) {
-      let member = team.members_with_roles[i];
+      const member = team.members_with_roles[i];
       if (member.user_id == userID && member.role == "admin") {
         return true;
       }
@@ -832,6 +846,16 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                       />
                     )}
                   </FormField>
+                  {canEditAsProxyAdmin && (
+                    <ModelThrottlingField
+                      value={modelThrottling}
+                      onChange={setModelThrottling}
+                      maxBudget={throttlingBudget}
+                      availableModels={userModels}
+                      allowedModels={throttlingModels}
+                      accessGroupIds={throttlingAccessGroups}
+                    />
+                  )}
                   <ModelMaxBudgetField
                     key={`model-max-budget-${routerSettingsKey}`}
                     premiumUser={premiumUser}

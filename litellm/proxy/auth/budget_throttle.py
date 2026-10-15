@@ -38,6 +38,8 @@ def should_throttle_budget_exceeded(valid_token: UserAPIKeyAuth) -> bool:
     nothing to throttle, so it stays hard-blocked (the safe default) rather than
     serving unlimited requests past its budget.
     """
+    if valid_token.model_throttling is not None:
+        return False
     if (valid_token.metadata or {}).get("throttle_on_budget_exceeded") is not True:
         return False
     if valid_token.tpm_limit is None and valid_token.rpm_limit is None:

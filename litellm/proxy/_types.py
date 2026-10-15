@@ -85,6 +85,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.model_throttling import ModelThrottling
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -1747,6 +1748,7 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
 
 
 class BudgetNewRequest(LiteLLMPydanticObjectBase):
+    model_throttling: ModelThrottling | None = None
     budget_id: str | None = Field(default=None, description="The unique budget id.")
     max_budget: float | None = Field(
         default=None,
@@ -1833,6 +1835,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     alias: str | None = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     budget_id: str | None = None  # give either a budget_id or max_budget
     allowed_model_region: AllowedModelRegion | None = (
         None  # require all user requests to use models in this specific region
@@ -1946,6 +1949,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     policies: Optional[List[str]] = None
     """
 
+    model_throttling: ModelThrottling | None = None
     team_id: str  # required
     team_alias: str | None = None
     organization_id: str | None = None
@@ -3111,6 +3115,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     models: list[str] = []

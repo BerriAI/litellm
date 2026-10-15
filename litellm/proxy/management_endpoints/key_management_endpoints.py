@@ -110,6 +110,10 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (  # n
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_model_to_db,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TEAM_ADMIN_MEMBER_KEY_TYPE,
@@ -1292,6 +1296,8 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    validate_model_throttling_update(data)
+    check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
     raise_on_invalid_key_logging_config(data.metadata)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2765,6 +2771,12 @@ async def prepare_key_update_data(
             # sentinel for Json? columns, so store the JSON literal null
             non_default_values["budget_limits"] = json.dumps(None)
 
+    validate_model_throttling_update(data, existing_key_row)
+    if "model_throttling" in data.model_fields_set:
+        non_default_values["model_throttling"] = (
+            data.model_throttling.model_dump_json() if data.model_throttling is not None else "null"
+        )
+
     _metadata: Final = existing_key_row.metadata or {}
 
     # validate model_max_budget
@@ -3441,6 +3453,7 @@ async def _validate_update_key_data(
     _existing_throttle: Final = (
         _existing_metadata.get("throttle_on_budget_exceeded") if isinstance(_existing_metadata, dict) else None
     )
+    check_model_throttling_permission(data, _is_proxy_admin)
     if data.throttle_on_budget_exceeded is True and _existing_throttle is not True and not _is_proxy_admin:
         raise HTTPException(
             status_code=403,
@@ -4869,6 +4882,7 @@ async def generate_key_helper_fn(
     permissions: dict | None = {},
     model_max_budget: dict | None = {},
     budget_fallbacks: dict | None = None,
+    model_throttling: object = None,
     model_rpm_limit: dict | None = None,
     model_tpm_limit: dict | None = None,
     mcp_rpm_limit: dict | None = None,
@@ -4897,6 +4911,11 @@ async def generate_key_helper_fn(
     llm_router: Router | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.types.proxy.model_throttling import ModelThrottling
+
+    throttling: Final = (
+        ModelThrottling.model_validate(model_throttling).model_dump() if model_throttling is not None else None
+    )
 
     if prisma_client is None:
         raise Exception("Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys ")
@@ -4987,6 +5006,8 @@ async def generate_key_helper_fn(
             "sso_user_id": sso_user_id,
             "object_permission_id": object_permission_id,
         }
+        if request_type == "user" and throttling is not None:
+            user_data["model_throttling"] = json.dumps(throttling)
         if teams is not None:
             user_data["teams"] = teams
         if model_max_budget:
@@ -5017,6 +5038,7 @@ async def generate_key_helper_fn(
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
             "budget_fallbacks": budget_fallbacks_json,
+            "model_throttling": json.dumps(throttling) if request_type == "key" else "null",
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
@@ -5091,7 +5113,7 @@ async def generate_key_helper_fn(
                 # do not create a key if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
-                return user_data
+                return {**user_data, "model_throttling": throttling}
 
             if project_id is not None:
                 await _check_key_project_team(
@@ -5145,7 +5167,7 @@ async def generate_key_helper_fn(
         # if this is a /user/new request update the key_date with user_data fields
         key_data.update(user_data)
 
-    return key_data
+    return {**key_data, "model_throttling": throttling}
 
 
 async def _team_key_deletion_check(
@@ -5429,6 +5451,8 @@ def _transform_verification_tokens_to_deleted_records(
         ]:
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
+
+        record["model_throttling"] = json.dumps(record.get("model_throttling"))
 
         for rel_key in (
             "litellm_budget_table",
@@ -5884,6 +5908,7 @@ async def _execute_virtual_key_regeneration(
             )
 
     if data is not None:
+        check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
             data=data,

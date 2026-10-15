@@ -1,3 +1,7 @@
+import { useWatch } from "react-hook-form";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import { type ModelThrottling, modelThrottlingError } from "@/components/key_team_helpers/modelThrottling";
+import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { ChevronRight } from "lucide-react";
 import React from "react";
 import { z } from "zod";
@@ -40,22 +44,30 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
   const [optionalSettingsOpen, setOptionalSettingsOpen] = React.useState(false);
   const form = useZodForm(budgetSchema, { defaultValues: { budget_id: "" } });
   const createBudget = useCreateBudget();
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const [modelThrottling, setModelThrottling] = React.useState<ModelThrottling | null>(null);
+  const { data: proxyModels } = useAllProxyModels();
 
   const handleCancel = () => {
     setIsModalVisible(false);
     form.reset();
+    setModelThrottling(null);
   };
 
   const handleCreate = async (formValues: BudgetFormValues) => {
+    const throttlingError = modelThrottlingError(modelThrottling, formValues.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
     try {
       toast.info("Making API Call");
       await createBudget.mutateAsync(
-        applyBudgetPrecision(
-          optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
-        ),
+        applyBudgetPrecision({ ...formValues, ...(modelThrottling ? { model_throttling: modelThrottling } : {}) }),
       );
       toast.success("Budget Created");
       form.reset();
+      setModelThrottling(null);
       setIsModalVisible(false);
     } catch (error) {
       console.error("Error creating the budget:", error);
@@ -165,6 +177,12 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
                     </Select>
                   )}
                 </FormField>
+                <ModelThrottlingField
+                  value={modelThrottling}
+                  onChange={setModelThrottling}
+                  maxBudget={throttlingBudget}
+                  availableModels={(proxyModels?.data ?? []).map((model) => model.id)}
+                />
               </CollapsibleContent>
             </Collapsible>
           </FieldGroup>

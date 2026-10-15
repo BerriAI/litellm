@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/lib/http/schema";
 
 import EditBudgetModal from "./edit_budget_modal";
-import { chooseSelectOption } from "../../../../../tests/test-utils";
+import { renderWithProviders, chooseSelectOption } from "../../../../../tests/test-utils";
 
 const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
 
@@ -29,7 +29,9 @@ const EXISTING_BUDGET: BudgetItem = {
 };
 
 const renderModal = () =>
-  render(<EditBudgetModal isModalVisible={true} setIsModalVisible={vi.fn()} existingBudget={EXISTING_BUDGET} />);
+  renderWithProviders(
+    <EditBudgetModal isModalVisible={true} setIsModalVisible={vi.fn()} existingBudget={EXISTING_BUDGET} />,
+  );
 
 const save = async (user: ReturnType<typeof userEvent.setup>) =>
   user.click(screen.getByRole("button", { name: "Save" }));
@@ -45,7 +47,7 @@ describe("EditBudgetModal", () => {
     updateMock.mockResolvedValue(undefined);
   });
 
-  it("submits only the mounted fields when Optional Settings stays collapsed", async () => {
+  it("preserves the saved budget when Optional Settings stays collapsed", async () => {
     const user = userEvent.setup();
     renderModal();
 
@@ -54,11 +56,14 @@ describe("EditBudgetModal", () => {
     await save(user);
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
-    expect(updateMock.mock.calls[0][0]).toEqual({
+    const expected = {
       budget_id: "budget-alpha",
       tpm_limit: 500.57,
       rpm_limit: 10,
-    });
+      max_budget: 100,
+      budget_duration: "7d",
+    };
+    expect(updateMock.mock.calls[0][0]).toEqual(expected);
   });
 
   it("submits every field once Optional Settings is expanded", async () => {

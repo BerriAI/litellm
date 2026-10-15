@@ -40,6 +40,7 @@ from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
     ProblemDetail,
 )
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
@@ -54,6 +55,7 @@ class BudgetListItem(LiteLLMBaseModel):
     decimal strings, and a quoted "60000" breaks arithmetic in the dashboard.
     """
 
+    model_throttling: ModelThrottling | None = None
     budget_id: str
     max_budget: float | None = None
     soft_budget: float | None = None

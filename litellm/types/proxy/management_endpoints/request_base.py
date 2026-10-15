@@ -3,6 +3,7 @@ from typing import Any  # noqa: TID251  # metadata and models stay Any so existi
 from pydantic import ConfigDict, field_validator
 
 from litellm.models.team import BudgetLimitEntry
+from litellm.types.proxy.model_throttling import ModelThrottling
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
@@ -31,6 +32,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     models: list[Any] | None = []
     spend: float | None = 0
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     user_id: str | None = None
     team_id: str | None = None
     agent_id: str | None = None

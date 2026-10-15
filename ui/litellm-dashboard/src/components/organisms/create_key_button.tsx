@@ -1,4 +1,6 @@
-"use client";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import { type ModelThrottling, modelThrottlingError } from "@/components/key_team_helpers/modelThrottling";
+("use client");
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -187,7 +189,7 @@ export const fetchTeamModels = async (
 
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole, true, teamID, true);
-      let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
+      const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
       return available_model_names;
     }
     return [];
@@ -210,7 +212,7 @@ export const fetchUserModels = async (
 
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole);
-      let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
+      const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
       setUserModels(available_model_names);
     }
   } catch (error) {
@@ -280,6 +282,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const throttlingAccessGroups = useWatch({ control: form.control, name: "access_group_ids" }) as string[] | undefined;
+  const [modelThrottling, setModelThrottling] = useState<ModelThrottling | null>(null);
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
@@ -297,6 +302,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const handleCancel = () => {
     setIsModalVisible(false);
+    setModelThrottling(null);
     setApiKey(null);
     setSelectedCreateKeyTeam(null);
     form.reset(formDefaults);
@@ -314,6 +320,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setBudgetLimits([]);
     setTagRateLimits([]);
     setBudgetFallbacks({});
+    setModelThrottling(null);
     setBudgetFallbacksKey((k) => k + 1);
   };
 
@@ -437,9 +444,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
 
   const handleCreate = async (formValues: MountedFormValues) => {
+    const throttlingError = modelThrottlingError(modelThrottling, formValues.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
     try {
       const input: KeyCreateInput = {
-        formValues,
+        formValues: { ...formValues, ...(modelThrottling ? { model_throttling: modelThrottling } : {}) },
         existingKeys: data,
         keyOwner,
         userID,
@@ -490,6 +502,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setBudgetLimits([]);
       setTagRateLimits([]);
       setBudgetFallbacks({});
+      setModelThrottling(null);
       setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
@@ -1079,6 +1092,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
+                      {isProxyAdminRole(userRole ?? "") && (
+                        <ModelThrottlingField
+                          value={modelThrottling}
+                          onChange={setModelThrottling}
+                          maxBudget={throttlingBudget}
+                          availableModels={modelsToPick}
+                          allowedModels={selectedModels}
+                          accessGroupIds={throttlingAccessGroups}
+                        />
+                      )}
                       <Field className="mt-4">
                         <FieldLabel>
                           <span>

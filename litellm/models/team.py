@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 
 class MemberBase(LiteLLMPydanticObjectBase):
@@ -73,6 +74,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
     tpd_limit: int | None = None
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
     budget_limits: list[BudgetLimitEntry] | None = None

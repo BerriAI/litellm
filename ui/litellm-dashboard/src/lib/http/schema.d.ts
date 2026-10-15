@@ -27626,6 +27626,7 @@ export interface components {
             created_at: string;
             /** Max Budget */
             max_budget?: number | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -27674,6 +27675,7 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Rpm Limit
              * @description Max requests per minute, allowed for this budget id.
@@ -27790,6 +27792,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -32550,6 +32553,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -32721,6 +32725,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -33921,6 +33926,7 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -33960,6 +33966,7 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -34050,6 +34057,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -34199,6 +34207,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             };
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -35581,6 +35590,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -35702,6 +35712,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -35799,6 +35810,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -35948,6 +35960,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             };
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -38248,6 +38261,27 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ModelThrottling */
+        ModelThrottling: {
+            /**
+             * Thresholds
+             * @description Intermediate spend thresholds. Paused models accumulate until the budget resets.
+             */
+            thresholds: components["schemas"]["ModelThrottlingThreshold"][];
+        };
+        /** ModelThrottlingThreshold */
+        ModelThrottlingThreshold: {
+            /**
+             * Models
+             * @description Models to pause when this spend threshold is reached.
+             */
+            models: string[];
+            /**
+             * Spend
+             * @description Total budget-period spend in USD that pauses these models.
+             */
+            spend: number;
+        };
         /** ModelTopKeysResponse */
         ModelTopKeysResponse: {
             /** Api Keys */
@@ -38398,6 +38432,7 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Models */
             models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -38617,6 +38652,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: number;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
@@ -38738,6 +38774,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -38915,6 +38952,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: number;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
@@ -39044,6 +39082,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -39217,6 +39256,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -40172,6 +40212,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: number;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
@@ -41751,6 +41792,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -45841,6 +45883,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -45985,6 +46028,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -47690,6 +47734,7 @@ export interface components {
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Models */
             models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -47810,6 +47855,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -48115,6 +48161,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -48313,6 +48360,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: number;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
@@ -48440,6 +48488,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -48546,6 +48595,7 @@ export interface components {
             model_rpm_limit?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: unknown;
@@ -48928,6 +48978,7 @@ export interface components {
             model_spend: {
                 [key: string]: unknown;
             };
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []
@@ -49310,6 +49361,7 @@ export interface components {
                     [key: string]: unknown;
                 };
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /**
              * Models
              * @default []

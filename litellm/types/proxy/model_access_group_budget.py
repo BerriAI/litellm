@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 
 class ModelAccessGroupBudget(LiteLLMBaseModel):
@@ -17,3 +18,4 @@ class ModelAccessGroupBudget(LiteLLMBaseModel):
     access_group_name: str
     spend: float = 0.0
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None

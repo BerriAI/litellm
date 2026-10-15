@@ -1,3 +1,4 @@
+import type { ModelThrottling } from "./modelThrottling";
 import { Member } from "../networking";
 import type { ObjectPermission } from "../object_permission_types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./ModelMaxBudgetEditor";
@@ -106,6 +107,7 @@ export interface KeyResponse {
   object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;
+  model_throttling?: ModelThrottling | null;
   router_settings?: Record<string, unknown> | null;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;

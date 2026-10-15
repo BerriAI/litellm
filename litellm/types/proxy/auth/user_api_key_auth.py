@@ -20,6 +20,7 @@ from litellm.types.proxy.carried_budget_state import (
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
+from litellm.types.proxy.model_throttling import ActiveModelThrottle
 from litellm.types.router import AllowedModelRegion
 
 if TYPE_CHECKING:
@@ -147,6 +148,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # resolve_model_budget validates the single entry a request actually needs.
     user_model_max_budget: Mapping[str, object] | None = None
     team_member_model_max_budget: Mapping[str, object] | None = Field(default=None, exclude=True)
+    active_model_throttles: tuple[ActiveModelThrottle, ...] = Field(default=(), exclude=True)
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path

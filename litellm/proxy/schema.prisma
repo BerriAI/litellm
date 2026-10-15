@@ -11,6 +11,7 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  model_throttling Json?
   budget_id String @id @default(uuid())
   max_budget Float?
   soft_budget Float?
@@ -179,6 +180,7 @@ model LiteLLM_ModelTable {
 
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
+  model_throttling Json?
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?
@@ -249,6 +251,7 @@ model LiteLLM_ProjectTable {
 
 // Audit table for deleted teams - preserves spend and team information for historical tracking
 model LiteLLM_DeletedTeamTable {
+  model_throttling Json?
     id                      String   @id @default(uuid())
     team_id                 String   // Original team_id
     team_alias              String?
@@ -297,6 +300,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+  model_throttling Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
@@ -500,6 +504,7 @@ model LiteLLM_SSOIdentityAssertion {
 
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
+  model_throttling Json?
     token      String   @id
     key_name   String?
     key_alias   String?
@@ -602,6 +607,7 @@ model LiteLLM_DeprecatedVerificationToken {
 
 // Audit table for deleted keys - preserves spend and key information for historical tracking
 model LiteLLM_DeletedVerificationToken {
+  model_throttling Json?
     id                      String   @id @default(uuid())
     token                   String   // Original token (hashed)
     key_name                String?
