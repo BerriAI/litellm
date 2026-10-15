@@ -376,26 +376,8 @@ class TestSuccessorModel:
 
         assert snapshot.imminent[0].successor_model == "new"
 
-    def test_should_take_the_successor_from_the_cost_map_when_the_deployment_has_none(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "model_cost",
-            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "new-model"}}},
-        )
-        router = _make_router(
-            [{"model_name": "old", "litellm_params": {"model": "old-model"}, "model_info": {"id": "1"}}]
-        )
-
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
-
-        assert snapshot.imminent[0].successor_model == "new-model"
-
-    def test_should_prefer_the_deployment_successor_over_the_cost_map(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "model_cost",
-            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "cost-map-pick"}}},
-        )
+    def test_should_name_the_deployment_successor_when_the_date_comes_from_the_cost_map(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {"old-model": {"deprecation_date": "2026-06-10"}})
         router = _make_router(
             [
                 {
@@ -457,53 +439,6 @@ class TestSuccessorModel:
 
         assert [(m.litellm_model, m.successor_model) for m in snapshot.imminent] == [("openai/a", "alias-v2")]
 
-    def test_should_let_a_blank_deployment_successor_hide_the_cost_map_one(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "model_cost",
-            {"old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "new-model"}}},
-        )
-        router = _make_router(
-            [
-                {
-                    "model_name": "hidden",
-                    "litellm_params": {"model": "old-model"},
-                    "model_info": {"successor_model": ""},
-                },
-                {
-                    "model_name": "unset",
-                    "litellm_params": {"model": "old-model"},
-                    "model_info": {"successor_model": None},
-                },
-            ]
-        )
-
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
-
-        assert {m.model_name: m.successor_model for m in snapshot.imminent} == {"hidden": None, "unset": "new-model"}
-
-    def test_should_report_the_cost_map_successor_under_the_model_name_that_serves_it(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "model_cost",
-            {"provider/old-model": {"deprecation_date": "2026-06-10", "metadata": {"successor": "provider/new-model"}}},
-        )
-        router = _make_router(
-            [
-                {"model_name": "old", "litellm_params": {"model": "provider/old-model"}, "model_info": {"id": "1"}},
-                {"model_name": "new", "litellm_params": {"model": "provider/new-model"}, "model_info": {"id": "2"}},
-                {
-                    "model_name": "new-copy",
-                    "litellm_params": {"model": "provider/new-model"},
-                    "model_info": {"id": "3"},
-                },
-            ]
-        )
-
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
-
-        assert [(m.model_name, m.successor_model) for m in snapshot.imminent] == [("old", "new")]
-
     def test_should_name_the_successor_in_the_slack_entry_and_escape_it(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
         router = _make_router(
@@ -532,40 +467,3 @@ class TestSuccessorModel:
         assert "migrate to `&lt;https://evil.example|new&gt;`" in message
         assert "<https://evil.example|new>" not in message
         assert message.count("migrate to") == 1
-
-    def test_should_take_the_cost_map_successor_when_the_deployment_overrides_only_the_date(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "model_cost",
-            {"old-model": {"deprecation_date": "2030-01-01", "metadata": {"successor": "new-model"}}},
-        )
-        router = _make_router(
-            [
-                {
-                    "model_name": "old",
-                    "litellm_params": {"model": "old-model"},
-                    "model_info": {"id": "1", "deprecation_date": "2026-06-10"},
-                }
-            ]
-        )
-
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
-
-        assert snapshot.imminent[0].deprecation_date == date(2026, 6, 10)
-        assert snapshot.imminent[0].successor_model == "new-model"
-
-    def test_should_take_the_cost_map_successor_when_only_the_deployment_sets_a_date(self, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", {"old-model": {"metadata": {"successor": "new-model"}}})
-        router = _make_router(
-            [
-                {
-                    "model_name": "old",
-                    "litellm_params": {"model": "provider/old-model"},
-                    "model_info": {"id": "1", "deprecation_date": "2026-06-10"},
-                }
-            ]
-        )
-
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
-
-        assert snapshot.imminent[0].successor_model == "new-model"

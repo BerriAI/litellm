@@ -9912,9 +9912,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. Each entry also names its `successor_model`
-         *     from `model_info.successor_model`, or else from the cost map's
-         *     `metadata.successor`.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -21205,9 +21204,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. Each entry also names its `successor_model`
-         *     from `model_info.successor_model`, or else from the cost map's
-         *     `metadata.successor`.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -38057,7 +38055,7 @@ export interface components {
             status: "upcoming" | "imminent" | "deprecated";
             /**
              * Successor Model
-             * @description The model to migrate to. It is model_info.successor_model on the deployment when set, where an empty string means none. Otherwise it is metadata.successor on its model cost map entry, reported as the model_name of the first deployment on this proxy that serves it, else as the LiteLLM model id.
+             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
              */
             successor_model?: string | null;
         };

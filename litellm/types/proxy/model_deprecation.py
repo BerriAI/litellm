@@ -34,11 +34,7 @@ class ModelDeprecationInfo(LiteLLMBaseModel):
     litellm_provider: str | None = Field(default=None, description="The provider this model belongs to.")
     successor_model: str | None = Field(
         default=None,
-        description=(
-            "The model to migrate to. It is model_info.successor_model on the deployment when set, where an "
-            "empty string means none. Otherwise it is metadata.successor on its model cost map entry, reported "
-            "as the model_name of the first deployment on this proxy that serves it, else as the LiteLLM model id."
-        ),
+        description=("The model to migrate to, as set in model_info.successor_model on the deployment."),
     )
 
 

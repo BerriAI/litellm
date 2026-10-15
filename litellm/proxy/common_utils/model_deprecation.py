@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from itertools import groupby
 from types import MappingProxyType
@@ -27,7 +27,6 @@ class _ResolvedDeprecation:
     deprecation_date: date
     litellm_model: str | None
     litellm_provider: str | None
-    successor_model: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -48,12 +47,12 @@ def _successor_model(raw_value: object) -> str | None:
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
-def _cost_map_entry(model_key: str) -> Mapping[str, object]:
-    return _mapping_field(litellm.model_cost, model_key)
-
-
-def _cost_map_deprecation(model_key: str) -> _ResolvedDeprecation | None:
-    entry: Final = _cost_map_entry(model_key)
+def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
+    if not isinstance(model_key, str) or not model_key:
+        return None
+    entry: Final = litellm.model_cost.get(model_key)
+    if not isinstance(entry, Mapping):
+        return None
     parsed: Final = _parse_deprecation_date(entry.get("deprecation_date"))
     if parsed is None:
         return None
@@ -65,51 +64,17 @@ def _cost_map_deprecation(model_key: str) -> _ResolvedDeprecation | None:
     )
 
 
-def _cost_map_successor(model_key: str) -> str | None:
-    return _successor_model(_mapping_field(_cost_map_entry(model_key), "metadata").get("successor"))
-
-
 def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, object]:
     value: Final = deployment.get(key)
     return value if isinstance(value, Mapping) else _NO_MODEL_METADATA
 
 
-def _resolve_successor(
-    model_info: Mapping[str, object],
-    cost_map_keys: Sequence[str],
-    served_model_names: Mapping[str, str],
-) -> str | None:
-    """The deployment's own successor_model when set, blank meaning none, else the cost map's under its served name"""
-    configured: Final = model_info.get("successor_model")
-    if isinstance(configured, str):
-        return configured.strip() or None
-    from_cost_map: Final = next(
-        (named for key in cost_map_keys if (named := _cost_map_successor(key)) is not None), None
-    )
-    return None if from_cost_map is None else served_model_names.get(from_cost_map, from_cost_map)
-
-
-def _served_model(deployment: Mapping[str, object]) -> tuple[str, str] | None:
-    model: Final = _mapping_field(deployment, "litellm_params").get("model")
-    model_name: Final = deployment.get("model_name")
-    return (model, model_name) if isinstance(model, str) and isinstance(model_name, str) else None
-
-
 def _resolve_deployment_deprecation(
     deployment: Mapping[str, object],
-    served_model_names: Mapping[str, str],
 ) -> _ResolvedDeprecation | None:
-    """Resolve a deployment's deprecation date and successor, preferring its explicit overrides field by field"""
+    """Resolve a deployment's deprecation date, preferring its explicit override"""
     model_info: Final = _mapping_field(deployment, "model_info")
     raw_model: Final = _mapping_field(deployment, "litellm_params").get("model")
-    unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
-    cost_map_keys: Final = tuple(
-        key for key in (model_info.get("base_model"), raw_model, unprefixed) if isinstance(key, str) and key
-    )
-    from_cost_map: Final = next(
-        (resolved for key in cost_map_keys if (resolved := _cost_map_deprecation(key)) is not None), None
-    )
-    successor: Final = _resolve_successor(model_info, cost_map_keys, served_model_names)
 
     override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
     if override is not None:
@@ -118,9 +83,21 @@ def _resolve_deployment_deprecation(
             deprecation_date=override,
             litellm_model=raw_model if isinstance(raw_model, str) else None,
             litellm_provider=provider if isinstance(provider, str) else None,
-            successor_model=successor,
         )
-    return None if from_cost_map is None else replace(from_cost_map, successor_model=successor)
+
+    unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
+    return next(
+        (
+            resolved
+            for resolved in (
+                _cost_map_lookup(model_info.get("base_model")),
+                _cost_map_lookup(raw_model),
+                _cost_map_lookup(unprefixed),
+            )
+            if resolved is not None
+        ),
+        None,
+    )
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
@@ -131,17 +108,12 @@ def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     return "upcoming"
 
 
-def _build_info(
-    deployment: Mapping[str, object],
-    today: date,
-    warn_within_days: int,
-    served_model_names: Mapping[str, str],
-) -> ModelDeprecationInfo | None:
+def _build_info(deployment: Mapping[str, object], today: date, warn_within_days: int) -> ModelDeprecationInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
         return None
 
-    resolved: Final = _resolve_deployment_deprecation(deployment, served_model_names)
+    resolved: Final = _resolve_deployment_deprecation(deployment)
     if resolved is None:
         return None
 
@@ -153,7 +125,7 @@ def _build_info(
         days_until_deprecation=days_until,
         status=_classify(days_until, warn_within_days),
         litellm_provider=resolved.litellm_provider,
-        successor_model=resolved.successor_model,
+        successor_model=_successor_model(_mapping_field(deployment, "model_info").get("successor_model")),
     )
 
 
@@ -202,17 +174,11 @@ def collect_model_deprecations(
     snapshot_time: Final = datetime.now(timezone.utc)
     effective_today: Final = today or snapshot_time.date()
     deployments: Final = (llm_router.get_model_list() or ()) if llm_router is not None else ()
-    served_model_names: Final = MappingProxyType(
-        dict(served for served in map(_served_model, reversed(deployments)) if served is not None)
-    )
 
     deduped: Final = _dedupe(
         tuple(
             info
-            for info in (
-                _build_info(deployment, effective_today, warn_within_days, served_model_names)
-                for deployment in deployments
-            )
+            for info in (_build_info(deployment, effective_today, warn_within_days) for deployment in deployments)
             if info is not None
         )
     )
