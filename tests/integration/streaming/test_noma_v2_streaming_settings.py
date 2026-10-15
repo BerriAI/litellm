@@ -3,8 +3,9 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
@@ -16,7 +17,7 @@ import openai
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
@@ -455,7 +456,14 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             (directory / f"{SUBCLASS_MODULE}.py").write_text(SUBCLASS_SOURCE)
             config_path: Final = directory / "noma-v2-streaming.yaml"
             config_path.write_text(yaml.safe_dump(_config(provider.url, noma_wire.url, names)))
-            with owned_proxy_process(session_gateway, directory, {}, config=config_path, workers=2) as proxy:
+            with owned_proxy_process(
+                session_gateway,
+                directory,
+                {},
+                config=config_path,
+                workers=2,
+                healthcheck=WorkerHealthcheck.LENIENT,
+            ) as proxy:
                 yield Rig(proxy, noma, noma_wire.url, provider, names, stored)
         finally:
             for identity in stored.values():
@@ -518,9 +526,10 @@ def _send(
     *,
     input_type: str = "response",
     extra: Mapping[str, JsonValue] | None = None,
+    via: Gateway | None = None,
 ) -> Streamed:
     marker: Final = _new_marker(action)
-    response: Final = rig.gateway.request(
+    response: Final = (via or rig.gateway).request(
         "POST", PATHS[endpoint], {**_body(endpoint, marker, guardrail), **(extra or {})}
     )
     scans: Final = rig.noma.for_marker(marker)
@@ -859,14 +868,40 @@ def test_stored_guardrail_info_reports_the_settings_as_stored(rig: Rig, variant:
     assert {key: params.get(key) for key in SETTINGS[variant]} == dict(SETTINGS[variant]), params
 
 
+def _on_one_worker(rig: Rig, pid: int, guardrail: str) -> tuple[Streamed, ...]:
+    """Two blocked-prompt streams answered by worker `pid` alone, every other worker suspended meanwhile."""
+    with (
+        ExitStack() as paused,
+        httpx.Client(
+            base_url=str(rig.gateway.client.base_url),
+            timeout=15,
+            trust_env=False,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        ) as client,
+    ):
+        for other in sorted(rig.proxy.worker_pids() - {pid}):
+            paused.enter_context(rig.proxy.suspended(other))
+        alone: Final = Gateway(client, rig.gateway.key, rig.gateway.upstream_url)
+        return tuple(_send(rig, "chat", guardrail, "block", via=alone) for _ in range(2))
+
+
+def _converged_on(rig: Rig, pid: int, guardrail: str, satisfied: Callable[[Streamed], bool]) -> tuple[Streamed, ...]:
+    return eventually(
+        lambda: _on_one_worker(rig, pid, guardrail),
+        lambda attempts: all(satisfied(attempt) for attempt in attempts),
+        seconds=120,
+    )
+
+
 def test_patching_a_stored_guardrail_applies_the_setting_on_every_worker(rig: Rig) -> None:
     name: Final = f"stored-patched-{uuid.uuid4().hex[:8]}"
+    workers: Final = sorted(eventually(rig.proxy.worker_pids, lambda found: len(found) == 2, seconds=30))
     identity: Final = _store(rig.gateway, rig.noma_url, name, "default")
     try:
-        before: Final = eventually(
-            lambda: tuple(_send(rig, "chat", name, "block") for _ in range(8)),
-            lambda attempts: all(len(attempt.scans) > 0 for attempt in attempts),
-            seconds=120,
+        before: Final = tuple(
+            chain.from_iterable(
+                _converged_on(rig, pid, name, lambda attempt: len(attempt.scans) > 0) for pid in workers
+            )
         )
         assert all(SECRET in attempt.content for attempt in before), [attempt.response.text for attempt in before]
 
@@ -874,10 +909,10 @@ def test_patching_a_stored_guardrail_applies_the_setting_on_every_worker(rig: Ri
             "PATCH", f"/guardrails/{identity}", {"litellm_params": {"streaming_buffer_until_moderated": True}}
         )
         assert patched.status_code == 200, patched.text
-        after: Final = eventually(
-            lambda: tuple(_send(rig, "chat", name, "block") for _ in range(8)),
-            lambda attempts: all(attempt.response.status_code == 400 for attempt in attempts),
-            seconds=120,
+        after: Final = tuple(
+            chain.from_iterable(
+                _converged_on(rig, pid, name, lambda attempt: attempt.response.status_code == 400) for pid in workers
+            )
         )
         assert all(attempt.content == "" and SECRET not in attempt.response.text for attempt in after), [
             attempt.response.text for attempt in after
