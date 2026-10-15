@@ -15,7 +15,11 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
@@ -343,3 +347,30 @@ async def test_vector_store_index_row_without_optional_columns_gets_empty_defaul
 async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
     with pytest.raises(ValidationError):
         await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+
+
+class TestRegistriesDoNotShareDefaultState:
+    def test_adding_to_one_registry_leaves_the_next_one_empty(self):
+        VectorStoreRegistry().add_vector_store_to_registry(
+            LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock")
+        )
+        assert VectorStoreRegistry().vector_stores == []
+
+    def test_upserting_into_one_index_registry_leaves_the_next_one_empty(self):
+        VectorStoreIndexRegistry().upsert_vector_store_index(
+            LiteLLM_ManagedVectorStoreIndex(
+                id="idx-leak",
+                index_name="leak",
+                litellm_params=IndexCreateLiteLLMParams(vector_store_index="vs-leak", vector_store_name="leak"),
+            )
+        )
+        assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
+
+
+def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
+    registry: Final = VectorStoreRegistry()
+    first: Final = registry.get_vector_store_ids_to_run(
+        {"vector_store_ids": ["vs-a"]}, tools=[{"type": "file_search", "vector_store_ids": ["vs-b", "vs-a"]}]
+    )
+    second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
+    assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])
