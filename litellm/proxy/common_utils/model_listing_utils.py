@@ -184,13 +184,13 @@ class CallerAliases:
 @dataclass(frozen=True, slots=True)
 class DeployedModelGroups:
     """Names the router serves from deployments of their own, directly or as a `model_group_alias`,
-    leaving out the `hidden` groups `/v1/models` does not list."""
+    leaving out the `hidden` names and groups `/v1/models` does not list."""
 
     llm_router: Router | None
     hidden: Container[str] = frozenset[str]()
 
     def __contains__(self, name: object) -> bool:
-        if not isinstance(name, str) or self.llm_router is None:
+        if not isinstance(name, str) or self.llm_router is None or name in self.hidden:
             return False
         group: Final = self.llm_router.routable_model_group(name)
         return group not in self.hidden and self.llm_router.get_deployment_by_model_group_name(group) is not None
@@ -318,6 +318,14 @@ def alias_listing_entries(
         and (lookup_id := _added_lookup_id(alias, layers, lookup_by_response, lookup_ids)) is not None
     )
     return (*retargeted, *added)
+
+
+def unlisted_alias_targets(entries: Sequence[tuple[str, str]], aliases: CallerAliases) -> tuple[str, ...]:
+    layers: Final = _alias_layers(aliases)
+    listed: Final = MappingProxyType(dict(entries))
+    names: Final = chain(listed, _alias_names(tuple(alias_map(raw) for raw in aliases.own)))
+    targets: Final = (_dispatch(name, layers)[0] for name in names)
+    return tuple(dict.fromkeys(target for target in targets if target not in listed))
 
 
 def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
