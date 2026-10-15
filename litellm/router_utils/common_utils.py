@@ -14,9 +14,16 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.router import (
+    CredentialLiteLLMParams,
+    Deployment,
+    FallbackSkipReason,
+    LiteLLM_Params,
+    SkippedFallbackTarget,
+)
+from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
 
 _V = TypeVar("_V")
 
@@ -134,15 +141,61 @@ def format_fallback_outcome_message(
     model_group: str | None,
     fallback_model_group: Sequence[object] | None,
     fallback_failure_detail: str,
+    skipped: Sequence[SkippedFallbackTarget] = (),
 ) -> str:
     """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
     lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
+
+    def fallback_target_model_group(target: object) -> str | None:
+        if isinstance(target, str):
+            return target
+        if not isinstance(target, Mapping):
+            return None
+        model: Final = target.get("model")
+        return model if isinstance(model, str) else None
+
+    skipped_targets: Final = frozenset(target.target for target in skipped)
+    attempted_targets: Final = tuple(
+        target for target in fallback_model_group if fallback_target_model_group(target) not in skipped_targets
+    )
+    not_authorized_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.NOT_AUTHORIZED)
+    )
+    over_budget_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
+    )
+    attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
+    not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
+    over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    attempted_failure: Final = (
+        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        if fallback_failure_detail and attempted_targets
+        else ()
+    )
+    not_authorized_sentence: Final = (
+        (
+            f"Fallback to {not_authorized_text} was skipped because the caller is not authorized to call "
+            f"{'it' if len(not_authorized_targets) == 1 else 'them'}.",
+        )
+        if not_authorized_targets
+        else ()
+    )
+    over_budget_sentence: Final = (
+        (
+            f"Fallback to {over_budget_text} was skipped because the caller is over budget for "
+            f"{'it' if len(over_budget_targets) == 1 else 'them'}.",
+        )
+        if over_budget_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    if sentences:
+        return f"{lead} {' '.join(sentences)}"
+
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
-    if not fallback_failure_detail:
-        return f"{lead} Fallback model group(s) configured: {targets}."
-    return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
+    return f"{lead} Fallback model group(s) configured: {targets}."
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -350,6 +403,43 @@ def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | Non
     except BadRequestError:
         return None
     return inferred
+
+
+PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo.__annotations__)
+
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def is_model_capability_field(name: str) -> bool:
+    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (
+        name.startswith("supports_") and name in GetModelCostMap.loaded_model_cost_map_fields()
+    )
+
+
+def without_model_capability_flags(deployment: Deployment) -> Deployment:
+    flags: Final = frozenset(
+        key for key in (deployment.litellm_params.model_extra or {}) if is_model_capability_field(key)
+    )
+    if not flags:
+        return deployment
+    declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump())
+    served_params: Final = {key: value for key, value in declared_params.items() if key not in flags}
+    return deployment.model_copy(update={"litellm_params": LiteLLM_Params.model_validate(served_params)})
+
+
+def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    flags: Final = sorted(
+        key for key, value in litellm_params.items() if value is not None and is_model_capability_field(key)
+    )
+    if not flags:
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets {flags} under litellm_params, where litellm ignores them and never "
+        "sends them to the provider. Move them under model_info for litellm to use them."
+    )
+    verbose_router_logger.warning(warning)
+    return warning
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

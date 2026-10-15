@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from collections.abc import Generator, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from enum import Enum
@@ -37,6 +38,7 @@ DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 CONFIGURATION: Final = TypeAdapter(dict[str, object])
+_DEPLOYMENT_IDS: Final = TypeAdapter(dict[str, list[str]])
 MCP_COVERAGE_CONFIG: Final = Path(__file__).resolve().parents[1] / "mcp_coverage.toml"
 
 
@@ -129,6 +131,18 @@ def _is_stopped(process: psutil.Process) -> bool:
         return False
 
 
+def _suspend(process: psutil.Process) -> None:
+    process.suspend()
+    deadline: Final = time.monotonic() + STRICT_HEALTHCHECK_SECONDS
+    while not _is_stopped(process) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if _is_stopped(process):
+        return
+    with suppress(psutil.NoSuchProcess):
+        process.resume()
+    raise AssertionError(f"Process {process.pid} did not stop within {STRICT_HEALTHCHECK_SECONDS}s of SIGSTOP")
+
+
 def _is_reaped(process: psutil.Process) -> bool:
     try:
         process.status()
@@ -152,7 +166,7 @@ class WorkerKill:
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
-        self.victim.suspend()
+        _suspend(self.victim)
         return self.victim
 
     def __call__(self) -> None:
@@ -196,6 +210,33 @@ class OwnedProxy:
         identity: Final = response.headers.get("x-integration-worker-pid", "")
         return int(identity) if response.status_code == 200 and identity.isdecimal() else None
 
+    def _deployment_ids_on_a_worker(self, model_name: str) -> tuple[int, frozenset[str]] | None:
+        try:
+            with httpx.Client(
+                base_url=str(self.gateway.client.base_url),
+                timeout=2,
+                trust_env=False,
+                limits=httpx.Limits(max_keepalive_connections=0),
+            ) as client:
+                response: Final = client.get("/health/integration-deployment-ids", params={"model_name": model_name})
+        except httpx.TransportError:
+            return None
+        identity: Final = response.headers.get("x-integration-worker-pid", "")
+        if response.status_code != 200 or not identity.isdecimal():
+            return None
+        return int(identity), frozenset(_DEPLOYMENT_IDS.validate_python(response.json())["model_ids"])
+
+    def serves_only_on_every_worker(self, model_name: str, model_id: str) -> bool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            answers: Final = tuple(pool.map(self._deployment_ids_on_a_worker, (model_name,) * 16))
+        samples: Final = tuple(answer for answer in answers if answer is not None)
+        workers: Final = self.worker_pids()
+        return (
+            bool(workers)
+            and workers <= frozenset(pid for pid, _ in samples)
+            and all(model_ids == {model_id} for _, model_ids in samples)
+        )
+
     def _await_replacement(self, before: frozenset[int]) -> int:
         budget: Final = readiness_seconds(1)
         deadline: Final = time.monotonic() + budget
@@ -235,7 +276,7 @@ class OwnedProxy:
         )
         assert pid == self.process.pid or pid in self.worker_pids(), f"{pid} is not part of this proxy"
         target: Final = psutil.Process(pid)
-        target.suspend()
+        _suspend(target)
         try:
             yield target
         finally:
@@ -307,7 +348,7 @@ def kill_stray_process(pid: int) -> None:
 @contextmanager
 def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator[None]:
     target: Final = psutil.Process(process.pid)
-    target.suspend()
+    _suspend(target)
     try:
         yield
     finally:
@@ -482,6 +523,8 @@ def _prisma_running(launch: _Launch) -> bool:
 
 
 def _answer(client: httpx.Client, launch: _Launch) -> tuple[bool, int | None]:
+    if not _owns_listener(launch):
+        return False, None
     try:
         response: Final = client.get("/health/integration-readiness", timeout=2)
     except httpx.ConnectError:
@@ -489,7 +532,7 @@ def _answer(client: httpx.Client, launch: _Launch) -> tuple[bool, int | None]:
     except httpx.TransportError:
         return True, None
     identity: Final = response.headers.get("x-integration-worker-pid", "")
-    ready: Final = response.status_code == 200 and identity.isdecimal() and _owns_listener(launch)
+    ready: Final = response.status_code == 200 and identity.isdecimal()
     return True, int(identity) if ready else None
 
 
@@ -753,6 +796,45 @@ def owned_proxy_process(
 
 
 @contextmanager
+def configless_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    model: str,
+    api_base: str,
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
+    environment: Final = _proxy_environment(gateway, {**overrides, "STORE_MODEL_IN_DB": "False"}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--model",
+        model,
+        "--api_base",
+        api_base,
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        str(workers),
+        "--timeout_worker_healthcheck",
+        str(healthcheck_seconds(WorkerHealthcheck.STRICT)),
+        *DB_PUSH,
+    )
+    launch: Final = _launch_until_bound(command, _proxy_root(), environment, output, _PORT_ATTEMPTS, workers)
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
+    finally:
+        _stop_launch(launch)
+
+
+@contextmanager
 def owned_gateway_image(
     gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
 ) -> Iterator[OwnedProxy]:
@@ -821,7 +903,7 @@ def refused_boot_log(
         with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
             deadline: Final = time.monotonic() + readiness_seconds(1)
             while launch.process.poll() is None:
-                assert not _is_ready(client), (
+                assert not (_owns_listener(launch) and _is_ready(client)), (
                     f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"
                 )
                 assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"

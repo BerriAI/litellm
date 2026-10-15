@@ -25,6 +25,7 @@ from starlette.datastructures import UploadFile
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
@@ -4736,6 +4737,98 @@ async def test_centralized_common_checks_runs_for_standard_auth():
             setattr(_proxy_server_mod, k, v)
 
 
+async def _run_checks_for_cached_user(db_user: LiteLLM_UserTable, token: UserAPIKeyAuth) -> None:
+    """Run the centralized gate for `token` on /chat/completions with `db_user` as
+    the cached row its user_id resolves to."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    key_cache = UserApiKeyCache()
+    key_cache.set_cache(key=db_user.user_id, value=db_user)
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            route="/chat/completions",
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_token():
+    """A proxy_admin token (JWT admin scope, SSO) stays subject to the DB row's
+    max_budget when the row is forced to the admin role, otherwise the personal
+    budget check in common_checks silently no-ops for admins."""
+    from litellm.proxy.utils import ProxyLogging
+
+    db_user = LiteLLM_UserTable(
+        user_id="admin-user", user_role="internal_user", spend=25.0, max_budget=10.0, user_email="admin@example.com"
+    )
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with (
+        patch.object(ProxyLogging, "budget_alerts", new_callable=AsyncMock) as budget_alerts,
+        pytest.raises(litellm.BudgetExceededError) as exc_info,
+    ):
+        await _run_checks_for_cached_user(db_user, token)
+    assert (exc_info.value.max_budget, exc_info.value.current_cost) == (10.0, 25.0)
+    user_alerts = [c.kwargs["user_info"] for c in budget_alerts.call_args_list if c.kwargs["type"] == "user_budget"]
+    assert [a.user_email for a in user_alerts] == ["admin@example.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row_models", [["no-default-models"], ["claude-haiku-4-5"]])
+async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_list(row_models):
+    """A proxy_admin token keeps every model when its DB row carries a personal
+    model list, e.g. no-default-models from default_internal_user_params on a
+    user later promoted to admin; only the row's budget carries over. The same
+    row still refuses gpt-4o to a non-admin token."""
+    db_user = LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", models=row_models, spend=1.0)
+    await _run_checks_for_cached_user(
+        db_user, UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    with pytest.raises(ProxyException):
+        await _run_checks_for_cached_user(
+            db_user, UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.INTERNAL_USER)
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [LITELLM_PROXY_MASTER_KEY_ALIAS, "sk-ui-session"])
+async def test_centralized_common_checks_admin_name_identity_ignores_its_row_budget(api_key):
+    """The master key and the UI username/password login both resolve to the
+    litellm_proxy_admin_name row; that row's max_budget does not apply to them,
+    even once its spend is past the budget. The same row under any other admin
+    user_id is refused."""
+    db_user = LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", spend=25.0, max_budget=10.0)
+    await _run_checks_for_cached_user(
+        db_user, UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await _run_checks_for_cached_user(
+            db_user.model_copy(update={"user_id": "admin-user"}),
+            UserAPIKeyAuth(api_key=api_key, user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
@@ -8037,6 +8130,31 @@ async def test_builder_returns_401_when_db_lookup_reports_missing_key():
         await _run_builder_with_key_lookup(get_key_object)
 
     assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
+    """A wrong key reaches an unauthenticated caller, so its 401 body must carry no key
+    hash, no verification table, and no key-minting endpoint. Regression for the 401 that
+    shipped the key hash plus "Unable to find token in cache or
+    LiteLLM_VerificationTokenTable" to anyone who probed a public deployment. The hash the
+    operator still needs is on the auth failure log line, covered in test_auth_exception_handler."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    submitted_key = "sk-db-lookup-test"
+    key_hash = hash_token(token=submitted_key)
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError(key_hash))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    body = json.dumps(exc_info.value.to_dict())
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in (key_hash, "VerificationToken", "/key/generate", submitted_key[-4:]):
+        assert leaked not in body, f"401 body leaks {leaked!r}: {body}"
 
 
 @pytest.mark.asyncio
