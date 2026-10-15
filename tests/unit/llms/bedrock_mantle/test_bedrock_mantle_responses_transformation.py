@@ -625,6 +625,27 @@ class TestBedrockMantleReasoningSummary:
         )
         assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
 
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_auto_summary_detailed_is_sent_as_auto(self, monkeypatch, drop_params):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=drop_params,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+    def test_auto_summary_leaves_other_unsupported_summaries_rejected(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "concise"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+
     def test_reasoning_summary_kept_on_standard_path(self):
         cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
         params = cfg.map_openai_params(

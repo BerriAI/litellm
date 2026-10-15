@@ -112,6 +112,7 @@ ignored_function_names = [
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "_keep_registered_mode",  # Tested through Router(model_list=...) in test_router_model_cost_isolation.py
 ]
 
 

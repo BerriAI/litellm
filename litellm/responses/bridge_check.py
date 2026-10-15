@@ -15,7 +15,7 @@ from litellm.utils import get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
-_ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
+ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
 
 def deployment_routing_mode(deployment_model_info: Mapping[str, object] | None, custom_llm_provider: str) -> str | None:
@@ -25,7 +25,7 @@ def deployment_routing_mode(deployment_model_info: Mapping[str, object] | None, 
     if deployment_model_info is None or custom_llm_provider in RESPONSES_ONLY_PROVIDERS:
         return None
     mode: Final = deployment_model_info.get("mode")
-    return mode if isinstance(mode, str) and mode in _ROUTABLE_MODES else None
+    return mode if isinstance(mode, str) and mode in ROUTABLE_MODES else None
 
 
 _OPENAI_API_HOST: Final = "api.openai.com"

@@ -134,6 +134,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.responses.bridge_check import RESPONSES_ONLY_PROVIDERS, ROUTABLE_MODES
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -10639,23 +10640,33 @@ class Router:
 
     @staticmethod
     def _keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, object]) -> Mapping[str, object]:
-        """A deployment's ``mode`` routes only that deployment, so it never replaces the mode already
-        registered for its shared backend row, which the SDK and every sibling deployment route by."""
+        """A deployment's ``chat`` or ``responses`` pin routes only that deployment, so it never replaces the
+        routing mode registered for its shared backend row, which the SDK and every sibling deployment route by.
+
+        A ``responses`` pin still marks a row that has no routing mode, and any row of a Responses-only
+        provider, since that is how a model missing from the cost map, or a ``github_copilot`` model,
+        opts into the Responses API. A ``chat`` pin never marks a row, so the outcome does not depend
+        on which deployment registers first."""
+        deployment_mode: Final = shared_model_info.get("mode")
+        if deployment_mode not in ROUTABLE_MODES:
+            return shared_model_info
+        if deployment_mode == "responses" and backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS:
+            return shared_model_info
         registration_key: Final = model_cost_registration_key(
             backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
         )
         registered_row: Final = cast(Mapping[str, object] | None, litellm.model_cost.get(registration_key)) or {}
         registered_mode: Final = registered_row.get("mode")
-        deployment_mode: Final = shared_model_info.get("mode")
+        if registered_mode is None and deployment_mode == "chat":
+            return {key: value for key, value in shared_model_info.items() if key != "mode"}
         if registered_mode is None or registered_mode == deployment_mode:
             return shared_model_info
-        if deployment_mode is not None:
-            verbose_router_logger.warning(
-                "Router: keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
-                registered_mode,
-                registration_key,
-                deployment_mode,
-            )
+        verbose_router_logger.warning(
+            "Router: keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
+            registered_mode,
+            registration_key,
+            deployment_mode,
+        )
         return {**shared_model_info, "mode": registered_mode}
 
     def replay_model_cost_registrations(self) -> None:

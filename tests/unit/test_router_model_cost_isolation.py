@@ -9,9 +9,12 @@ should still use the built-in pricing.
 
 import asyncio
 import copy
+import json
 import logging
 import os
+import pathlib
 import re
+import time
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
@@ -2241,6 +2244,91 @@ def test_a_prefixed_deployment_override_leaves_the_shared_row_limits_alone(monke
     )
 
     assert litellm.model_cost["routing-test-model"] == shared_before
+
+
+@pytest.mark.parametrize("pins", [("chat", "responses"), ("responses", "chat")], ids=["chat first", "responses first"])
+def test_an_unmapped_model_routes_the_same_whichever_pin_registers_first(
+    monkeypatch: pytest.MonkeyPatch, pins: tuple[str, str]
+) -> None:
+    """A model missing from the cost map gets its shared row from the router, so conflicting pins must not
+    leave a row that depends on deployment order, and a ``responses`` pin keeps opting the model in."""
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    Router(
+        model_list=[
+            {
+                "model_name": f"pinned-{mode}",
+                "litellm_params": {"model": "openai/unmapped-routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": f"pinned-{mode}", "mode": mode},
+            }
+            for mode in pins
+        ]
+    )
+
+    shared_info, _ = responses_api_bridge_check(model="unmapped-routing-test-model", custom_llm_provider="openai")
+    assert shared_info.get("mode") == "responses"
+
+
+def test_a_non_routing_mode_pin_still_reaches_the_shared_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only ``chat`` and ``responses`` pins are per-deployment routing. Other modes, such as a realtime
+    model pinned to ``audio_transcription``, are still read from the shared row by name."""
+    _register_routing_test_row(monkeypatch, "chat")
+
+    Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "transcriber-id", "mode": "audio_transcription"},
+            }
+        ]
+    )
+
+    assert litellm.get_model_info(model="routing-test-model", custom_llm_provider="openai")["mode"] == (
+        "audio_transcription"
+    )
+
+
+@pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
+@pytest.mark.parametrize(
+    "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]
+)
+def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    registered_mode: str,
+    pinned_mode: str,
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    """``github_copilot`` dispatches ``/v1/responses`` natively by the shared row's mode, and a ``responses``
+    pin is its documented opt-in, while a ``chat`` pin must not move a Responses-only row off it."""
+    from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
+
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["github_copilot/routing-test-model"] = {
+        "litellm_provider": "github_copilot",
+        "mode": registered_mode,
+        "supported_endpoints": ["/v1/responses"] if registered_mode == "responses" else ["/v1/chat/completions"],
+        "max_input_tokens": 1000,
+    }
+    _invalidate_model_cost_lowercase_map()
+
+    Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {"model": model}
+                | ({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
+                "model_info": {"id": "copilot-pinned", "mode": pinned_mode},
+            }
+        ]
+    )
+
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is True
 
 
 def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):
