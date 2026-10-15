@@ -101,6 +101,28 @@ async def test_google_ai_studio_count_tokens_rejects_image_system_without_reques
 
 
 @pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_answers_with_the_status_google_rejected_it_with() -> None:
+    rejection: Final = '{"error": {"code": 400, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}}'
+    client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, text=rejection, request=request))
+    )
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "Invalid function name" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("system_instruction", "tools", "expected_body"),
     (
@@ -129,9 +151,7 @@ async def test_gemini_count_tokens_sends_optional_request_fields(
     expected_body: dict[str, JsonValue],
 ) -> None:
     peer: Final = _GeminiCountTokensPeer()
-    token_counter: Final = GeminiCountTokensHandler(
-        client=AsyncHTTPHandler(transport=httpx.MockTransport(peer))
-    )
+    token_counter: Final = GeminiCountTokensHandler(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
 
     result: Final = await token_counter.acount_tokens(
         contents=[{"role": "user", "parts": [{"text": "hello"}]}],
@@ -177,18 +197,10 @@ class TestGeminiModelInfo:
         # Test edge cases where model names end with characters from "models/"
         # These would be incorrectly processed if using strip("models/") instead of replace("models/", "")
         models = [
-            {
-                "name": "models/gemini-1.5-pro"
-            },  # ends with 'o' - would become "gemini-1.5-pr" with strip()
-            {
-                "name": "models/test-model"
-            },  # ends with 'l' - would become "gemini/test-mode" with strip()
-            {
-                "name": "models/custom-models"
-            },  # ends with 's' - would become "gemini/custom-model" with strip()
-            {
-                "name": "models/demo"
-            },  # ends with 'o' - would become "gemini/dem" with strip()
+            {"name": "models/gemini-1.5-pro"},  # ends with 'o' - would become "gemini-1.5-pr" with strip()
+            {"name": "models/test-model"},  # ends with 'l' - would become "gemini/test-mode" with strip()
+            {"name": "models/custom-models"},  # ends with 's' - would become "gemini/custom-model" with strip()
+            {"name": "models/demo"},  # ends with 'o' - would become "gemini/dem" with strip()
         ]
 
         result = gemini_model_info.process_model_name(models)
@@ -239,16 +251,10 @@ class TestGoogleAIStudioTokenCounter:
         token_counter = GoogleAIStudioTokenCounter()
 
         # Test with gemini provider - should return True
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value)
-            is True
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value) is True
 
         # Test with other providers - should return False
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value)
-            is False
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value) is False
         assert token_counter.should_use_token_counting_api("anthropic") is False
         assert token_counter.should_use_token_counting_api("vertex_ai") is False
 
@@ -320,9 +326,7 @@ class TestGoogleAIStudioTokenCounter:
                         "functionResponse": {
                             "id": "read_many_files-1757526647518-730a691aac11c",  # This should be removed
                             "name": "read_many_files",
-                            "response": {
-                                "output": "No files matching the criteria were found or all were skipped."
-                            },
+                            "response": {"output": "No files matching the criteria were found or all were skipped."},
                         }
                     }
                 ],
@@ -331,9 +335,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_with_id
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_with_id)
 
         # Verify the 'id' field was removed
         function_response = cleaned_contents[1]["parts"][0]["functionResponse"]
@@ -342,8 +344,7 @@ class TestGoogleAIStudioTokenCounter:
         assert "response" in function_response
         assert function_response["name"] == "read_many_files"
         assert (
-            function_response["response"]["output"]
-            == "No files matching the criteria were found or all were skipped."
+            function_response["response"]["output"] == "No files matching the criteria were found or all were skipped."
         )
 
     def test_clean_contents_for_gemini_api_preserves_other_fields(self):
@@ -359,9 +360,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_without_function_response
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_without_function_response)
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response

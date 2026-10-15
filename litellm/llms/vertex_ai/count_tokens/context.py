@@ -2,7 +2,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -11,6 +11,10 @@ from litellm.types.llms.anthropic import AnthropicMessagesTextParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.exceptions import APIError
+    from litellm.llms.anthropic.pass_through.context_management.result import PolyfillResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,12 +152,64 @@ def count_context_error_response(
     )
 
 
+def provider_error_response(error: "APIError", request_model: str, model_used: str) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model=request_model,
+        model_used=model_used,
+        tokenizer_type="gemini",
+        error=True,
+        error_message=error.message,
+        status_code=error.status_code,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceRequestView:
+    messages: Sequence[Mapping[str, object]]
+    system: object | None
+
+
+def _client_compaction(messages: Sequence[Mapping[str, object]], system: object | None) -> "PolyfillResult | None":
+    from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
+        apply_client_compaction_block_history,
+    )
+
+    chat_messages: Final = [dict(message) for message in messages]
+    if system is None or isinstance(system, str):
+        return apply_client_compaction_block_history(messages=chat_messages, system=system)
+    try:
+        blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
+    except ValidationError:
+        return None
+    return apply_client_compaction_block_history(messages=chat_messages, system=[dict(block) for block in blocks])
+
+
+def inference_request_view(
+    messages: Sequence[Mapping[str, object]], system: object | None, messages_format: TokenCountMessagesFormat
+) -> InferenceRequestView:
+    """Apply the history rewrites /v1/messages runs before it converts a body for Gemini."""
+    from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
+
+    match messages_format:
+        case "openai":
+            return InferenceRequestView(messages=messages, system=system)
+        case "anthropic":
+            normalized: Final = normalize_native_messages(messages)
+            compacted: Final = _client_compaction(normalized, system)
+            if compacted is None:
+                return InferenceRequestView(messages=normalized, system=system)
+            return InferenceRequestView(messages=compacted.messages, system=compacted.system)
+        case _:
+            assert_never(messages_format)
+
+
 def _chat_messages(
     messages: Sequence[Mapping[str, object]],
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
-) -> list[AllMessageValues]:
+) -> Sequence[AllMessageValues]:
     from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     match messages_format:
@@ -174,16 +230,23 @@ async def gemini_count_contents(
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
-) -> list[ContentType]:
+    litellm_params: Mapping[str, object],
+) -> Sequence[ContentType] | VertexGeminiCountContextError:
+    from litellm.exceptions import BadRequestError
     from litellm.litellm_core_utils.asyncify import asyncify
     from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.transformation import should_inline_remote_media
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    chat_messages: Final = _chat_messages(messages, messages_format, model, custom_llm_provider)
-    inlined_messages: Final = await async_inline_remote_media(
-        chat_messages, should_inline=should_inline_remote_media(custom_llm_provider)
-    )
     config: Final = GoogleAIStudioGeminiConfig() if custom_llm_provider == "gemini" else VertexGeminiConfig()
-    return await asyncify(config.transform_messages)(messages=inlined_messages, model=model, litellm_params={})
+    try:
+        chat_messages: Final = await async_inline_remote_media(
+            list(_chat_messages(messages, messages_format, model, custom_llm_provider)),
+            should_inline=should_inline_remote_media(custom_llm_provider),
+        )
+        return await asyncify(config.transform_messages)(
+            messages=chat_messages, model=model, litellm_params=dict(litellm_params)
+        )
+    except BadRequestError as error:
+        return VertexGeminiCountContextError(error_message=error.message)
