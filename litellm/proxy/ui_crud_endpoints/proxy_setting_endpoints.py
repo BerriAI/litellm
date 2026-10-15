@@ -1291,6 +1291,7 @@ async def update_sso_settings(
             detail={"error": f"SSO settings cannot contain null characters: {', '.join(fields_with_null_characters)}"},
         )
     encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
+    sso_values_before_save: Final = proxy_config.environment_values(SSO_FIELD_ENV_VARS.values())
 
     # Save to dedicated SSO table
     await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
@@ -1351,7 +1352,8 @@ async def update_sso_settings(
         )
 
     proxy_config.apply_saved_sso_environment_variables(
-        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
+        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()},
+        sso_values_before_save,
     )
 
     return {
@@ -1472,12 +1474,13 @@ async def update_ui_theme_settings(
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
 
+    theme_values_before_save: Final = proxy_config.environment_values(env_updates.keys())
     # Persist the theme config (litellm_settings). save_config defaults to
     # include_env_vars=False, so it does not snapshot environment_variables.
     await proxy_config.save_config(new_config=config)
     # Persist only the two owned env vars, merged against the existing DB row.
     await proxy_config.save_environment_variables(env_updates)
-    proxy_config.apply_saved_db_environment_variables(env_updates)
+    proxy_config.apply_saved_db_environment_variables(env_updates, theme_values_before_save)
 
     asyncio.create_task(
         create_config_audit_log(

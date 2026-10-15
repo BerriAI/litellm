@@ -1452,6 +1452,47 @@ class TestProxySettingEndpoints:
 
         assert (response.status_code, os.environ.get("GOOGLE_CLIENT_ID")) == (200, "saved-id")
 
+    def test_update_sso_settings_keeps_the_saved_value_over_a_stale_read_after_a_sync_applied_it_during_the_save(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "placeholder")
+        monkeypatch.delenv("GOOGLE_CLIENT_ID")
+
+        def sso_table_with(client_id):
+            table = MagicMock()
+            table.db.litellm_ssoconfig.find_unique = AsyncMock(
+                return_value=SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper(client_id)})
+            )
+            return table
+
+        asyncio.run(proxy_config._init_sso_settings_in_db(prisma_client=sso_table_with("older-id")))
+        assert os.environ.get("GOOGLE_CLIENT_ID") == "older-id"
+
+        async def upsert_seen_by_a_sync_before_the_save_applies(**_):
+            await proxy_config._init_sso_settings_in_db(prisma_client=sso_table_with("saved-id"))
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock(side_effect=upsert_seen_by_a_sync_before_the_save_applies)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        response = client.patch("/update/sso_settings", json={"google_client_id": "saved-id"})
+        mock_proxy_config["clock"].now = 1
+        asyncio.run(proxy_config._init_sso_settings_in_db(prisma_client=sso_table_with("older-id")))
+
+        assert (response.status_code, os.environ.get("GOOGLE_CLIENT_ID")) == (200, "saved-id")
+
     def test_get_ui_theme_settings_includes_favicon_schema(self, mock_proxy_config):
         """Test UI theme settings includes favicon_url in schema"""
         response = client.get("/get/ui_theme_settings")
@@ -4497,5 +4538,60 @@ async def test_update_ui_theme_settings_keeps_the_saved_logo_when_a_sync_reads_t
     await save
     read_released.set()
     await sync
+
+    assert os.environ.get("UI_LOGO_PATH") == saved_logo
+
+
+@pytest.mark.asyncio
+async def test_update_ui_theme_settings_keeps_the_saved_logo_over_a_stale_read_after_a_sync_applied_it_during_the_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeConfig, update_ui_theme_settings
+
+    monkeypatch.setenv("UI_LOGO_PATH", "placeholder")
+    monkeypatch.delenv("UI_LOGO_PATH")
+    older_logo: Final = "https://example.com/older.png"
+    saved_logo: Final = "https://example.com/saved.png"
+    row_written: Final = asyncio.Event()
+    replica_behind: Final = asyncio.Event()
+    clock: Final = _ManualClock()
+
+    async def get_config_param(_, param_name: str) -> SimpleNamespace | None:
+        if param_name != "environment_variables":
+            return None
+        logo: Final = saved_logo if row_written.is_set() and not replica_behind.is_set() else older_logo
+        return SimpleNamespace(param_name=param_name, param_value={"UI_LOGO_PATH": logo})
+
+    class ProxyConfigSyncedDuringTheWrite(proxy_server.ProxyConfig):
+        async def get_config(self, config_file_path: str | None = None) -> dict:
+            return {}
+
+        async def save_config(self, new_config: object = None, include_env_vars: bool = False) -> None:
+            return None
+
+        async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
+            row_written.set()
+            await self._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+
+    pc: Final = ProxyConfigSyncedDuringTheWrite(clock=clock)
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "create_config_audit_log", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", get_config_param)
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+    assert os.environ.get("UI_LOGO_PATH") == older_logo
+
+    await update_ui_theme_settings(
+        UIThemeConfig(logo_url=saved_logo), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    replica_behind.set()
+    clock.now = 1
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
 
     assert os.environ.get("UI_LOGO_PATH") == saved_logo

@@ -1288,12 +1288,43 @@ def _catch_up(pod: ReplicaPod) -> None:
         _store_sso_row(pod.replica_url, row["sso_settings"])
 
 
-@pytest.mark.parametrize("reset", (True, False), ids=("reset", "change"))
+def _only_its_worker_keeps_the_save_until_the_hold_ends(
+    pods: Pods, save: PinnedSave, saved: Mapping[str, str | None], stored: Mapping[str, str | None]
+) -> None:
+    eventually(
+        lambda: _environments(pods.writer, tuple(saved)),
+        lambda seen: (
+            seen.keys() == pods.writer.worker_pids()
+            and all(dict(environment) == _expected_on(pid, save, saved, stored) for pid, environment in seen.items())
+        ),
+        seconds=CONVERGE_SECONDS,
+    )
+    _only_its_worker_keeps_the_save(
+        pods.writer, save, saved, stored, save.started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+    )
+    _settled_on_both(pods, stored)
+
+
+def test_theme_reset_on_another_pod_reaches_the_worker_that_saved_the_logo_once_its_hold_ends(
+    held_pods: Pods,
+) -> None:
+    reset: Final = {"UI_LOGO_PATH": None}
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    _settled(held_pods.writer, reset)
+    save: Final = _pinned_save(held_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+    _settled(held_pods.reader, saved)
+
+    _update_theme(held_pods.reader.gateway, None)
+    _settled(held_pods.reader, reset)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(held_pods, save, saved, reset)
+
+
 def test_theme_change_on_another_pod_reaches_the_worker_that_saved_the_logo_at_its_next_sync(
-    held_pods: Pods, reset: bool
+    held_pods: Pods,
 ) -> None:
     saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
-    stored: Final = {"UI_LOGO_PATH": None if reset else f"{LOGO_URL}?stored-{uuid.uuid4().hex}"}
+    stored: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?stored-{uuid.uuid4().hex}"}
     save: Final = _pinned_save(held_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
     _settled(held_pods.reader, saved)
 
@@ -1302,20 +1333,33 @@ def test_theme_change_on_another_pod_reaches_the_worker_that_saved_the_logo_at_i
     _every_worker_follows_before_the_hold_ends(held_pods, save, stored)
 
 
-@pytest.mark.parametrize("cleared", (True, False), ids=("clear", "change"))
+def test_sso_clear_on_another_pod_reaches_the_worker_that_saved_the_settings_once_its_hold_ends(
+    held_pods: Pods,
+) -> None:
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    _settled(held_pods.writer, CLEARED_SSO_ENVIRONMENT)
+    save: Final = _pinned_save(held_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
+    _settled(held_pods.reader, _sso_environment(saved_id))
+
+    _save_sso(held_pods.reader, CLEARED_SSO_FIELDS)
+    _settled(held_pods.reader, CLEARED_SSO_ENVIRONMENT)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(
+        held_pods, save, _sso_environment(saved_id), CLEARED_SSO_ENVIRONMENT
+    )
+
+
 def test_sso_change_on_another_pod_reaches_the_worker_that_saved_the_settings_at_its_next_sync(
-    held_pods: Pods, cleared: bool
+    held_pods: Pods,
 ) -> None:
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
     stored_id: Final = f"lit9489-stored-{uuid.uuid4().hex}"
     save: Final = _pinned_save(held_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
     _settled(held_pods.reader, _sso_environment(saved_id))
 
-    _save_sso(held_pods.reader, CLEARED_SSO_FIELDS if cleared else _sso_fields(stored_id))
+    _save_sso(held_pods.reader, _sso_fields(stored_id))
 
-    _every_worker_follows_before_the_hold_ends(
-        held_pods, save, CLEARED_SSO_ENVIRONMENT if cleared else _sso_environment(stored_id)
-    )
+    _every_worker_follows_before_the_hold_ends(held_pods, save, _sso_environment(stored_id))
 
 
 def test_theme_save_keeps_its_logo_while_the_read_replica_is_behind(replica_pod: ReplicaPod) -> None:

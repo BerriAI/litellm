@@ -25,7 +25,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, UnionType
@@ -7947,14 +7947,28 @@ class ProxyConfig:
             else:
                 os.environ[key] = value
 
-    def apply_saved_db_environment_variables(self, updates: Mapping[str, str | None]) -> None:
-        self._db_environment_keys = self._applied_saved_environment_keys(self._db_environment_keys, updates)
+    def environment_values(self, keys: Collection[str]) -> Mapping[str, str | None]:
+        return MappingProxyType({key: os.environ.get(key) for key in keys})
 
-    def apply_saved_sso_environment_variables(self, updates: Mapping[str, str | None]) -> None:
-        self._sso_environment_keys = self._applied_saved_environment_keys(self._sso_environment_keys, updates)
+    def apply_saved_db_environment_variables(
+        self, updates: Mapping[str, str | None], values_before_save: Mapping[str, str | None]
+    ) -> None:
+        self._db_environment_keys = self._applied_saved_environment_keys(
+            self._db_environment_keys, updates, values_before_save
+        )
+
+    def apply_saved_sso_environment_variables(
+        self, updates: Mapping[str, str | None], values_before_save: Mapping[str, str | None]
+    ) -> None:
+        self._sso_environment_keys = self._applied_saved_environment_keys(
+            self._sso_environment_keys, updates, values_before_save
+        )
 
     def _applied_saved_environment_keys(
-        self, tracked_keys: frozenset[str], updates: Mapping[str, str | None]
+        self,
+        tracked_keys: frozenset[str],
+        updates: Mapping[str, str | None],
+        values_before_save: Mapping[str, str | None],
     ) -> frozenset[str]:
         saved_at: Final = self._clock()
         self._saved_environment_values = MappingProxyType(
@@ -7962,7 +7976,10 @@ class ProxyConfig:
                 **self._saved_environment_values,
                 **{
                     key: _SavedEnvironmentValue(
-                        saved_at=saved_at, replaced=self._values_replaced_by_save(key, saved_at)
+                        saved_at=saved_at,
+                        replaced=self._values_replaced_by_save(
+                            key, saved_at, values_before_save.get(key, os.environ.get(key))
+                        ),
                     )
                     for key in updates
                 },
@@ -7970,11 +7987,14 @@ class ProxyConfig:
         )
         return self._applied_environment_keys(tracked_keys, updates)
 
-    def _values_replaced_by_save(self, key: str, saved_at: float) -> frozenset[str | None]:
+    def _values_replaced_by_save(
+        self, key: str, saved_at: float, value_before_save: str | None
+    ) -> frozenset[str | None]:
+        replaced: Final = frozenset({value_before_save, os.environ.get(key)})
         earlier: Final = self._saved_environment_values.get(key)
         if earlier is None or saved_at - earlier.saved_at >= _SAVED_ENVIRONMENT_HOLD_SECONDS:
-            return frozenset({os.environ.get(key)})
-        return earlier.replaced | {os.environ.get(key)}
+            return replaced
+        return earlier.replaced | replaced
 
     def _applied_environment_keys(
         self, tracked_keys: frozenset[str], updates: Mapping[str, str | None]
@@ -7991,7 +8011,7 @@ class ProxyConfig:
         self, read_started_at: float, targets: Mapping[str, str | None]
     ) -> frozenset[str]:
         now: Final = self._clock()
-        held_keys: Final = frozenset(
+        return frozenset(
             key
             for key, saved in self._saved_environment_values.items()
             if key in targets
@@ -8000,13 +8020,6 @@ class ProxyConfig:
                 or (now - saved.saved_at < _SAVED_ENVIRONMENT_HOLD_SECONDS and targets[key] in saved.replaced)
             )
         )
-        self._saved_environment_values = MappingProxyType(
-            {
-                key: saved if key in held_keys or key not in targets else replace(saved, replaced=frozenset())
-                for key, saved in self._saved_environment_values.items()
-            }
-        )
-        return held_keys
 
     def decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
