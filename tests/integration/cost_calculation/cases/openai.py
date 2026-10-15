@@ -23,7 +23,7 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 
 
 # gpt-5.3-codex
@@ -11138,7 +11138,17 @@ GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
 )
 
 
+GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
+    update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
+    update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_5_6_SLASH_ALIAS,
+    GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
     GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
@@ -11377,6 +11387,27 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/messages",),
+    ),
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="openai/responses/gpt-5.6"),
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
