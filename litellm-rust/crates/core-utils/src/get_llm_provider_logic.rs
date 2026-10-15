@@ -26,6 +26,8 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "fireworks_ai")]
+    FireworksAi,
     #[strum(serialize = "hosted_vllm")]
     HostedVllm,
     #[strum(serialize = "minimax")]
