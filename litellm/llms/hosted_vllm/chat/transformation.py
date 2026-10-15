@@ -96,10 +96,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if _tools is not None:
             non_default_params["tools"] = _tools
 
-        thinking_effort: Final = reasoning_effort_from_thinking(
-            non_default_params.pop("thinking", None), drop_params=drop_params or litellm.drop_params is True
+        thinking: Final = non_default_params.pop("thinking", None)
+        thinking_effort: Final = (
+            None
+            if "reasoning_effort" in non_default_params
+            else reasoning_effort_from_thinking(thinking, drop_params=drop_params or litellm.drop_params is True)
         )
-        if thinking_effort is not None and "reasoning_effort" not in non_default_params:
+        if thinking_effort is not None:
             non_default_params["reasoning_effort"] = thinking_effort
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)

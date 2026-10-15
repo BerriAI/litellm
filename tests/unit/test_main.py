@@ -8803,22 +8803,25 @@ def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_no
     assert "reasoning_effort" not in sent
 
 
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 @pytest.mark.parametrize("budget_tokens", [500, 9000])
-def test_an_undeclared_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(
-    respx_mock: respx.MockRouter, budget_tokens: int
+def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: int
 ) -> None:
     thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
 
-    claude_named: Final = _chat_body_sent(respx_mock, "hosted_vllm/claude-opus-5-5", None, None, thinking=thinking)
-    kimi_named: Final = _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", None, None, thinking=thinking)
+    claude_named: Final = _chat_body_sent(
+        respx_mock, "hosted_vllm/claude-opus-5-5", None, model_info, thinking=thinking
+    )
+    kimi_named: Final = _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking=thinking)
 
     assert claude_named["reasoning_effort"] == kimi_named["reasoning_effort"]
 
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
-@pytest.mark.parametrize("budget_tokens", ["2048", None])
+@pytest.mark.parametrize("budget_tokens", ["2048", None, True])
 def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | None
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
 ) -> None:
     thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
 
@@ -8826,6 +8829,23 @@ def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(
         _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking=thinking)
 
     assert rejected.value.status_code == 400
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+@pytest.mark.parametrize("budget_tokens", ["2048", None, True])
+def test_an_explicit_reasoning_effort_wins_over_a_non_numeric_thinking_budget(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "hosted_vllm/my-kimi",
+        "low",
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": budget_tokens},
+    )
+
+    assert sent["reasoning_effort"] == "low"
+    assert "thinking" not in sent
 
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])

@@ -186,6 +186,8 @@ def with_adaptive_thinking_as_effort(
 
 
 def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> str | None:
+    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
+        return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
     adaptive_config: Final = as_str_mapping(
         with_adaptive_thinking_as_effort(
             {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
@@ -194,9 +196,7 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
     if adaptive_config is not None:
         adaptive_effort: Final = adaptive_config.get(_EFFORT_KEY)
         return adaptive_effort if isinstance(adaptive_effort, str) else None
-    if custom_llm_provider not in _PROVIDERS_SENDING_THINKING_AS_EFFORT and "thinking" in (
-        get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()
-    ):
+    if "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()):
         return None
     return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
 
