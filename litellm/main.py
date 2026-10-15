@@ -8274,6 +8274,7 @@ def speech(
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     base_url: str | None = None,
+    *,
     stream: bool = False,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:

@@ -254,8 +254,9 @@ class HealthCheckHelpers:
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
+                    "voice": "alloy",
                     **_filter_model_params(model_params=model_params),
-                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
+                    "stream": False,
                 },
                 input=prompt or "test",
             ),

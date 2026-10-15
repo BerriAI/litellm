@@ -120,11 +120,17 @@ def _probe() -> _Probe:
     return probe
 
 
+def _nothing_logged(events: tuple[tuple[str, Logged], ...]) -> bool:
+    return events == ()
+
+
 def _logged_exactly(probe: _Probe, count: int) -> tuple[tuple[str, Logged], ...]:
     return held(probe.events, lambda events: len(events) == count, holding=2)
 
 
-async def _aspeech(api_base: str, call_id: str) -> litellm.HttpxBinaryResponseContent:
+async def _aspeech(
+    api_base: str, call_id: str, metadata: Mapping[str, str] | None = None
+) -> litellm.HttpxBinaryResponseContent:
     return await asyncio.wait_for(
         litellm.aspeech(
             model=_BACKEND,
@@ -133,6 +139,7 @@ async def _aspeech(api_base: str, call_id: str) -> litellm.HttpxBinaryResponseCo
             api_base=api_base,
             api_key=_PROVIDER_KEY,
             stream=True,
+            metadata=metadata,
             litellm_call_id=call_id,
             timeout=_TIMEOUT_SECONDS,
         ),
@@ -161,7 +168,7 @@ async def test_aspeech_stream_returns_at_the_first_audio_and_logs_success_once_a
         response: Final = await _aspeech(wire.url, call_id)
         chunks: Final = await response.aiter_bytes()
         first: Final = await _afirst_bytes(chunks, len(_FIRST))
-        assert probe.events() == ()
+        await asyncio.to_thread(held, probe.events, _nothing_logged, holding=2)
         release.set()
         assert first + b"".join([chunk async for chunk in chunks]) == _CLIP
         logged: Final = await asyncio.to_thread(_logged_exactly, probe, 1)
@@ -179,6 +186,53 @@ async def test_aspeech_stream_closed_early_logs_success_once_with_a_499_marker()
         logged: Final = await asyncio.to_thread(_logged_exactly, probe, 1)
         release.set()
     assert logged == (("async_success", Logged(call_id, "499", "NoneType")),)
+
+
+async def test_aspeech_stream_closed_early_leaves_the_callers_metadata_unmarked_for_its_next_call() -> None:
+    probe: Final = _probe()
+    release: Final = threading.Event()
+    caller_metadata: Final = {"tenant": "caller-owned"}
+    closed_early: Final = str(uuid.uuid4())
+    completed: Final = str(uuid.uuid4())
+    with wire_server(_peer(release)) as wire:
+        first: Final = await _aspeech(wire.url, closed_early, caller_metadata)
+        assert await _afirst_bytes(await first.aiter_bytes(), len(_FIRST)) == _FIRST
+        await first.aclose()
+        await asyncio.to_thread(_logged_exactly, probe, 1)
+        release.set()
+        assert caller_metadata.keys() & {"client_disconnected", "error_information"} == set(), caller_metadata
+        second: Final = await _aspeech(wire.url, completed, caller_metadata)
+        assert b"".join([chunk async for chunk in await second.aiter_bytes()]) == _CLIP
+        logged: Final = await asyncio.to_thread(_logged_exactly, probe, 2)
+    assert caller_metadata["tenant"] == "caller-owned"
+    assert logged == (
+        ("async_success", Logged(closed_early, "499", "NoneType")),
+        ("async_success", Logged(completed, "", "NoneType")),
+    )
+
+
+def test_speech_takes_base_url_in_its_positional_slot() -> None:
+    probe: Final = _probe()
+    call_id: Final = str(uuid.uuid4())
+    text: Final = f"positional base_url {call_id}"
+    with wire_server(_peer()) as wire:
+        positional_through_base_url: Final = (
+            _BACKEND,
+            text,
+            "alloy",
+            _PROVIDER_KEY,
+            *(None,) * 6,
+            _TIMEOUT_SECONDS,
+            *(None,) * 7,
+            wire.url,
+        )
+        response: Final = litellm.speech(*positional_through_base_url, litellm_call_id=call_id)
+        assert response.content == _CLIP
+        received: Final = wire.drain()
+        logged: Final = _logged_exactly(probe, 1)
+    assert [(request.method, request.target) for request in received] == [("POST", "/audio/speech")]
+    assert text.encode() in received[0].body
+    assert logged == (("sync_success", Logged(call_id, "", "NoneType")),)
 
 
 async def test_aspeech_stream_cut_off_raises_a_mapped_error_and_logs_one_failure() -> None:
@@ -204,7 +258,7 @@ def test_speech_stream_returns_at_the_first_audio_and_logs_success_once_after_th
         response: Final = _speech(wire.url, call_id)
         chunks: Final = response.iter_bytes()
         first: Final = _first_bytes(chunks, len(_FIRST))
-        assert probe.events() == ()
+        held(probe.events, _nothing_logged, holding=2)
         release.set()
         assert first + b"".join(chunks) == _CLIP
         logged: Final = _logged_exactly(probe, 1)

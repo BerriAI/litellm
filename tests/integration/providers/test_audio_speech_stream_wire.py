@@ -319,6 +319,66 @@ def test_buffered_speech_is_unchanged(gateway: Gateway, provider: str, stream: b
         _assert_billed(gateway, model, call_id, text)
 
 
+def test_a_deployment_level_stream_true_streams_speech_for_a_caller_that_omits_stream(gateway: Gateway) -> None:
+    release: Final = threading.Event()
+    with wire_server(_audio_peer(release)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, PROVIDERS["elevenlabs"], stream=True)
+        text: Final = _text()
+        call_id: Final = str(uuid.uuid4())
+        heard: Final = _listen(gateway, _speech(model, text), call_id, release)
+        assert (heard.status, heard.body) == (200, _CLIP), heard
+        _assert_reached(wire, PROVIDERS["elevenlabs"].streamed_path, text)
+        _assert_billed(gateway, model, call_id, text)
+
+
+def test_a_caller_stream_false_overrides_a_deployment_level_stream_true(gateway: Gateway) -> None:
+    with wire_server(_audio_peer()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, PROVIDERS["elevenlabs"], stream=True)
+        buffered_twin: Final = _deployment(scenario, wire, PROVIDERS["elevenlabs"])
+        text: Final = _text()
+        call_id: Final = str(uuid.uuid4())
+        response: Final = gateway.request(
+            "POST",
+            _SPEECH,
+            _speech(model, text, stream=False),
+            headers={"x-litellm-call-id": call_id},
+        )
+        assert (response.status_code, response.content) == (200, _CLIP), response.text[:400]
+        _assert_reached(wire, PROVIDERS["elevenlabs"].buffered_path, text)
+        row: Final = _spend_row(call_id)
+        assert (row["status"], row["call_type"], row["model_group"]) == ("success", "aspeech", model), row
+        assert row["spend"] == pytest.approx(_buffered_spend(gateway, buffered_twin, text)), row
+
+
+@pytest.mark.parametrize("provider", ["openai", "elevenlabs"])
+def test_a_health_check_on_a_deployment_level_streamed_speech_model_reports_it_healthy(
+    gateway: Gateway, provider: str
+) -> None:
+    with wire_server(_audio_peer()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, PROVIDERS[provider], stream=True)
+        response: Final = gateway.request("GET", f"/health?model={model}", None)
+        assert response.status_code == 200, response.text[:400]
+        report: Final = object_value(response.json())
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert [request.method for request in wire.drain()] == ["POST"]
+
+
+def _long_audio(request: Request) -> Reply:
+    return Reply(content_type="audio/mpeg", chunks=(bytes(512 * 1024),) * 128)
+
+
+@pytest.mark.parametrize("provider", ["openai", "elevenlabs"])
+def test_a_health_check_on_a_deployment_level_streamed_speech_model_leaves_no_provider_stream_open(
+    gateway: Gateway, provider: str
+) -> None:
+    with wire_server(_long_audio) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, PROVIDERS[provider], stream=True)
+        response: Final = gateway.request("GET", f"/health?model={model}", None)
+        assert response.status_code == 200, response.text[:400]
+        report: Final = object_value(response.json())
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+
+
 def _mistral_peer(request: Request) -> Reply:
     return Reply(body=json.dumps({"audio_data": base64.b64encode(_CLIP).decode()}).encode())
 
@@ -607,13 +667,14 @@ def test_a_deployment_max_parallel_requests_slot_is_freed_by_a_hang_up(
         assert len(wire.drain()) == 2
 
 
-_CHAT_ID: Final = "chatcmpl-nonboolstream"
 _CHAT_USAGE: Final = {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}
 
 
-def _chat_chunk(delta: Mapping[str, JsonValue], finish_reason: str | None, **extra: JsonValue) -> bytes:
+def _chat_chunk(
+    chat_id: str, delta: Mapping[str, JsonValue], finish_reason: str | None, **extra: JsonValue
+) -> bytes:
     chunk: Final = {
-        "id": _CHAT_ID,
+        "id": chat_id,
         "object": "chat.completion.chunk",
         "created": 1,
         "model": "gpt-4o-mini",
@@ -624,17 +685,18 @@ def _chat_chunk(delta: Mapping[str, JsonValue], finish_reason: str | None, **ext
 
 
 def _chat_peer(request: Request) -> Reply:
+    chat_id: Final = f"chatcmpl-{uuid.uuid4().hex}"
     if object_value(JSON_OBJECT.validate_json(request.body)).get("stream"):
         return Reply(
             content_type="text/event-stream",
             chunks=(
-                _chat_chunk({"role": "assistant", "content": "hello"}, None),
-                _chat_chunk({}, "stop", usage=_CHAT_USAGE),
+                _chat_chunk(chat_id, {"role": "assistant", "content": "hello"}, None),
+                _chat_chunk(chat_id, {}, "stop", usage=_CHAT_USAGE),
                 b"data: [DONE]\n\n",
             ),
         )
     completion: Final = {
-        "id": _CHAT_ID,
+        "id": chat_id,
         "object": "chat.completion",
         "created": 1,
         "model": "gpt-4o-mini",
