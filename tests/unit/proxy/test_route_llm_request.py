@@ -1726,13 +1726,17 @@ def _router_with_gpt4o_mini():
     )
 
 
+@pytest.mark.parametrize(
+    "extra_body",
+    [pytest.param({}, id="plain"), pytest.param({"user_config": None}, id="null-user-config")],
+)
 @pytest.mark.asyncio
-async def test_raise_if_model_not_routable_raises_for_unknown_model():
+async def test_raise_if_model_not_routable_raises_for_unknown_model(extra_body):
     from litellm.proxy.route_llm_request import raise_if_model_not_routable
 
     with pytest.raises(ProxyModelNotFoundError) as exc_info:
         await raise_if_model_not_routable(
-            data={"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}]},
+            data={"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}], **extra_body},
             llm_router=_router_with_gpt4o_mini(),
             user_model=None,
             route_type="acompletion",
@@ -2021,3 +2025,69 @@ async def test_null_user_config_is_treated_as_absent() -> None:
     )
 
     assert response.choices[0].message.content == "from the main router"
+
+
+@pytest.mark.asyncio
+async def test_route_request_without_a_model_sends_to_the_team_deployment_by_its_public_name():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-team-gpt",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "from-team"},
+                "model_info": {"id": "team-gpt-1", "team_id": "team-a", "team_public_model_name": "team-gpt"},
+            }
+        ]
+    )
+    data = {
+        "model": None,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_api_key_team_id": "team-a"},
+    }
+
+    llm_call = await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
+    response = await llm_call
+
+    assert response.choices[0].message.content == "from-team"
+    assert data["model"] == "team-gpt"
+
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_sends_through_the_router_it_built(monkeypatch):
+    """With no router loaded yet, a model the read-through finds is sent through the router the read-through built."""
+    import litellm
+    from litellm.proxy import proxy_server
+
+    model_name = "e2e-first-db-model"
+    built_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "fake",
+                    "mock_response": "hello-from-new-router",
+                },
+            }
+        ]
+    )
+    fake_prisma, _ = _fake_prisma_client_with_models([_db_model_row(model_name, "unused")])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    async def build_router_from_db(prisma_client, proxy_logging_obj):
+        monkeypatch.setattr(proxy_server, "llm_router", built_router)
+
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", build_router_from_db)
+
+    llm_call = await route_request(
+        data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+        llm_router=None,
+        user_model=None,
+        route_type="acompletion",
+    )
+    response = await llm_call
+
+    assert response.choices[0].message.content == "hello-from-new-router"
