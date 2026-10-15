@@ -137,6 +137,13 @@ The following arguments are supported:
   * `audio_transcription`
   * `audio_speech`
   * `rerank`
+  * `responses`
+  * `realtime`
+  * `image_edit`
+  * `ocr`
+  * `search`
+  * `video_generation`
+  * `evaluation`
 
 * `tpm` - (Optional) integer. Tokens per minute limit for this model.
 
