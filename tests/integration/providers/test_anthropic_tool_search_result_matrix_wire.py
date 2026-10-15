@@ -7,7 +7,7 @@ import httpx
 import litellm
 import openai
 import pytest
-from integration._support.anthropic_thinking import JSON_LIST, JSON_OBJECT
+from integration._support.anthropic_thinking import JSON_LIST, JSON_OBJECT, chunks_of, deltas_of
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
@@ -377,13 +377,13 @@ def test_search_call_without_a_kept_result_replays_plainly_with_both_answers(
         pytest.param({"tool_results": [search_result("srvtoolu_01Other")]}, id="result-for-another-call"),
     ),
 )
-def test_malformed_kept_results_replay_the_search_call_plainly(gateway: Gateway, fields: JsonValue) -> None:
+def test_malformed_kept_results_drop_the_unanswered_search_call(gateway: Gateway, fields: JsonValue) -> None:
     marker: Final = uuid.uuid4().hex
     assistant: Final = hand_built_assistant((SEARCH_CALL, WEATHER_CALL), fields)
     response, received = _replayed(gateway, replay_messages(marker, assistant))
     assert response.status_code == 200, response.text
     assert len(received) == 1, received
-    assert wire_assistant(received[0]) == [_PLAIN_SEARCH_USE, WEATHER_USE], received[0].body
+    assert wire_assistant(received[0]) == [WEATHER_USE], received[0].body
     assert answered_ids(received[0]) == [WEATHER_ID], received[0].body
 
 
@@ -533,6 +533,11 @@ def _cut_stream_text(gateway: Gateway, body: Event) -> str:
         return repr(error)
 
 
+def _streamed_tool_names(text: str) -> list[JsonValue]:
+    calls: Final = JSON_LIST.validate_python(folded_assistant(deltas_of(chunks_of(text)))["tool_calls"])
+    return [JSON_OBJECT.validate_python(JSON_OBJECT.validate_python(call)["function"])["name"] for call in calls]
+
+
 def test_stream_cut_right_after_the_search_result_leaves_the_proxy_serving(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
 
@@ -544,7 +549,7 @@ def test_stream_cut_right_after_the_search_result_leaves_the_proxy_serving(gatew
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
         text: Final = _cut_stream_text(gateway, chat_body(model, first_messages(marker), stream=True))
-        assert "get_weather" not in text, text
+        assert "get_weather" not in _streamed_tool_names(text), text
         assert gateway.client.get("/health/liveliness").status_code == 200
         follow_up: Final = uuid.uuid4().hex
         recovered: Final = chat(gateway, chat_body(model, first_messages(follow_up), stream=True))
@@ -572,8 +577,6 @@ def test_identical_replays_each_reach_the_provider_and_land_their_own_spend_row(
 
 @_STREAM_MODES
 def test_response_cache_hit_still_carries_the_search_result_for_the_replay(gateway: Gateway, stream: bool) -> None:
-    if stream:
-        pytest.skip("BUG: a streamed response cache hit on the proxy drops the kept tool_search_tool_result")
     marker: Final = uuid.uuid4().hex
     with wire_server(scripted_peer()) as wire, gateway.scenario() as scenario:
         model: Final = deployment(scenario, "anthropic", wire.url, gateway.upstream_url)

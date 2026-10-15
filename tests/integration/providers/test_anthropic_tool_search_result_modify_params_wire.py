@@ -51,6 +51,7 @@ pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _LANE_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _CITIES: Final = ("London", "Paris")
+_SYSTEM_NOTE: Final = "Answer in one sentence."
 
 
 def _modify_params_config(directory: Path) -> Path:
@@ -123,9 +124,8 @@ def _marked_search_turn() -> dict[str, JsonValue]:
     }
 
 
-def test_modify_params_trailing_search_turn_stays_within_the_cache_mark_cap(modify_params_gateway: Gateway) -> None:
-    marker: Final = uuid.uuid4().hex
-    messages: Final[list[JsonValue]] = [
+def _trailing_search_conversation(marker: str) -> list[JsonValue]:
+    return [
         {"role": "system", "content": SYSTEM},
         ask(marked=True),
         {
@@ -137,6 +137,10 @@ def test_modify_params_trailing_search_turn_stays_within_the_cache_mark_cap(modi
         {"role": "user", "content": final_text(marker)},
         _marked_search_turn(),
     ]
+
+
+def test_modify_params_trailing_search_turn_stays_within_the_cache_mark_cap(modify_params_gateway: Gateway) -> None:
+    messages: Final = _trailing_search_conversation(uuid.uuid4().hex)
     with wire_server(anthropic_peer) as wire, modify_params_gateway.scenario() as scenario:
         model: Final = deployment(scenario, "anthropic", wire.url, modify_params_gateway.upstream_url)
         status, _, text = post_chat(
@@ -146,5 +150,25 @@ def test_modify_params_trailing_search_turn_stays_within_the_cache_mark_cap(modi
     assert status == 200, text
     assert len(received) == 1, received
     labels: Final = anthropic_labels(received[0])
-    assert len(labels) <= 4, labels
-    assert labels[:4] == [SYSTEM_LABEL, ASK_LABEL, *(tool_use_label(city) for city in _CITIES)], labels
+    assert labels == [ASK_LABEL, *(tool_use_label(city) for city in _CITIES), f"assistant:tool_use:{SEARCH_ID}"], labels
+    assert SEARCH_ID in answered_ids(received[0]), received[0].body
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+def test_modify_params_trailing_search_turn_before_a_system_message_keeps_the_system_mark_within_the_cap(
+    modify_params_gateway: Gateway, stream: bool
+) -> None:
+    messages: Final = [*_trailing_search_conversation(uuid.uuid4().hex), {"role": "system", "content": _SYSTEM_NOTE}]
+    with wire_server(anthropic_peer) as wire, modify_params_gateway.scenario() as scenario:
+        model: Final = deployment(scenario, "anthropic", wire.url, modify_params_gateway.upstream_url)
+        response: Final = chat(
+            modify_params_gateway, chat_body(model, messages, stream, cache_control_injection_points=POINTS)
+        )
+        received: Final = wire.drain()
+    assert response.status_code == 200, response.text
+    assert answer_text(response, stream) == "sunny", response.text
+    assert len(received) == 1, received
+    labels: Final = anthropic_labels(received[0])
+    assert labels == [SYSTEM_LABEL, ASK_LABEL, *(tool_use_label(city) for city in _CITIES)], labels
+    assert wire_assistant(received[0], 3)[-2:] == [SEARCH_USE, SEARCH_RESULT], received[0].body
+    assert SEARCH_ID not in answered_ids(received[0]), received[0].body
