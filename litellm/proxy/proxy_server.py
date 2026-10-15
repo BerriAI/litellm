@@ -15104,16 +15104,6 @@ def _insensitive_contains(value: str) -> Mapping[str, object]:
     return {"contains": value, "mode": "insensitive"}
 
 
-def _litellm_params_contains(value: str) -> Mapping[str, object]:
-    """Prisma JSON-path filter on the underlying LiteLLM model name."""
-    return {"path": ["model"], "string_contains": value}
-
-
-def _litellm_model_contains(value: str) -> Mapping[str, object]:
-    """Prisma match on the underlying LiteLLM model name substring."""
-    return {"litellm_params": _litellm_params_contains(value)}
-
-
 def _blocked_equals(blocked: bool) -> Mapping[str, object]:
     return {"blocked": blocked}
 
@@ -15149,19 +15139,15 @@ async def _fetch_db_models_for_search(
     Postgres, which let any authenticated caller force a full BYOK-table
     read via `/v2/model/info?search=x`. We rely on the router-side
     filter for `team_public_model_name` instead and keep the DB cost
-    bounded by `search`.
+    bounded by `search`. The upstream model name is encrypted in the DB,
+    so provider/upstream search is limited to router-loaded deployments.
     """
     model_name_condition: Final[Mapping[str, object]] = (
         {"model_name": _insensitive_contains(search_lower)} if model_name is None else {"model_name": model_name}
     )
-    name_conditions: Final[Mapping[str, object]] = (
-        {"OR": [model_name_condition, _litellm_model_contains(search_lower)]}
-        if model_name is None
-        else model_name_condition
-    )
     status_conditions: Final = (_blocked_equals(blocked),) if blocked is not None else ()
     router_conditions: Final = (_not_in_router_ids(db_model_ids_in_router),) if db_model_ids_in_router else ()
-    match_conditions: Final = (name_conditions, *status_conditions, *router_conditions)
+    match_conditions: Final = (model_name_condition, *status_conditions, *router_conditions)
     db_where_condition: Final[Mapping[str, object]] = (
         match_conditions[0] if len(match_conditions) == 1 else {"AND": list(match_conditions)}
     )
