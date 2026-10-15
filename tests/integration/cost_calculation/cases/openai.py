@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
     with_usage,
     COST_MAP,
     BinaryResponse,
@@ -22,7 +23,7 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 
 
 # gpt-5.3-codex
@@ -1929,6 +1930,82 @@ GPT_5_4_MINI_CACHE_READ: Final = CostTrackingTestCase(
                 "prompt_tokens_details": {"cached_tokens": 12288},
             },
         },
+    ),
+    expected=ExactExpected(
+        spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE: Final = CostTrackingTestCase(
+    name="gpt-5.4-mini-stream_cache_read_choice_bearing_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-5.4-mini",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6c1f0b2a9d4e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "scripted answer 6c1f0b2a9d4e"},
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}}],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288},
+                },
+            },
+            done=True,
+        ),
     ),
     expected=ExactExpected(
         spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
@@ -8115,16 +8192,6 @@ GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
                         "reasoning_tokens": 0,
                         "rejected_prediction_tokens": 0,
                     },
-                    "latency_checkpoint": {
-                        "engine_tbt_ms": 23,
-                        "engine_ttft_ms": 484,
-                        "engine_ttlt_ms": 999,
-                        "pre_inference_ms": 151,
-                        "service_tbt_ms": 25,
-                        "service_ttft_ms": 1085,
-                        "service_ttlt_ms": 1610,
-                        "user_visible_ttft_ms": 934,
-                    },
                     "prompt_tokens": 12928,
                     "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
                     "total_tokens": 13308,
@@ -8199,16 +8266,6 @@ GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
                         "reasoning_tokens": 0,
                         "rejected_prediction_tokens": 0,
                     },
-                    "latency_checkpoint": {
-                        "engine_tbt_ms": 7,
-                        "engine_ttft_ms": 110,
-                        "engine_ttlt_ms": 706,
-                        "pre_inference_ms": 254,
-                        "service_tbt_ms": 7,
-                        "service_ttft_ms": 647,
-                        "service_ttlt_ms": 1238,
-                        "user_visible_ttft_ms": 393,
-                    },
                     "prompt_tokens": 12928,
                     "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
                     "total_tokens": 13308,
@@ -8282,16 +8339,6 @@ GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
                         "audio_tokens": 0,
                         "reasoning_tokens": 0,
                         "rejected_prediction_tokens": 0,
-                    },
-                    "latency_checkpoint": {
-                        "engine_tbt_ms": 25,
-                        "engine_ttft_ms": 697,
-                        "engine_ttlt_ms": 1373,
-                        "pre_inference_ms": 142,
-                        "service_tbt_ms": 26,
-                        "service_ttft_ms": 1289,
-                        "service_ttlt_ms": 1956,
-                        "user_visible_ttft_ms": 1147,
                     },
                     "prompt_tokens": 12928,
                     "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 12288},
@@ -11104,7 +11151,50 @@ GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
     ExactExpected(spend=2.41648, input_cost=2.4, output_cost=0.01648, prompt_tokens=300000, completion_tokens=412),
 )
 
+_GPT_6_CACHE_WRITE_USAGE: Final = {
+    "prompt_tokens": 12928,
+    "completion_tokens": 380,
+    "total_tokens": 13308,
+    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+    "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+
+GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_1_SOL_CACHE_READ,
+    "gpt-6.1-sol-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.0358, input_cost=0.032, output_cost=0.0038, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.00179, input_cost=0.0016, output_cost=0.00019, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_ASTRA_CACHE_READ,
+    "gpt-6-astra-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.2148, input_cost=0.192, output_cost=0.0228, prompt_tokens=12928, completion_tokens=380),
+)
+
+
+GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
+    update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
+    update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_5_6_SLASH_ALIAS,
+    GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
     GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
@@ -11157,6 +11247,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_STREAM_FULL_USAGE,
     GPT_5_4_MINI_INPUT_TEXT,
     GPT_5_4_MINI_CACHE_READ,
+    GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE,
     GPT_5_4_MINI_AUDIO_INPUT,
     GPT_5_4_MINI_AUDIO_OUTPUT,
     GPT_5_4_MINI_REASONING,
@@ -11309,6 +11400,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_SOL_CACHE_READ,
     GPT_6_LUNA_CACHE_READ,
     GPT_6_ASTRA_CACHE_READ,
+    GPT_6_1_SOL_CACHE_WRITE_5M,
+    GPT_6_LUNA_CACHE_WRITE_5M,
+    GPT_6_ASTRA_CACHE_WRITE_5M,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -11340,6 +11434,27 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/messages",),
+    ),
+    *bridge_pairs(
+        (
+            GPT_5_6_RESPONSES_NATIVE_JSON,
+            GPT_5_6_RESPONSES_CACHE_READ,
+            GPT_5_6_RESPONSES_REASONING,
+            GPT_5_6_RESPONSES_STREAM,
+            GPT_5_6_RESPONSES_STREAM_CACHE_READ,
+        ),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="openai/responses/gpt-5.6"),
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),

@@ -10410,14 +10410,16 @@ class TestBackgroundResponseCostPollCooldown:
         )
         assert "dep-1" in self._cooled_down_ids(router)
 
-    def test_cost_poll_not_found_does_not_cool_down_deployment(self):
+    @pytest.mark.parametrize("poll_origin", ["background_response_cost_poll", "background_response_status_poll"])
+    def test_background_response_poll_not_found_does_not_cool_down_deployment(self, poll_origin: str):
+        """A client can delete its background response before the poll reads it, so a 404 on either
+        poll read says nothing about the deployment's health."""
         from datetime import datetime
 
         from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
         from litellm.router_utils.router_callbacks.track_deployment_metrics import (
             get_deployment_failures_for_current_minute,
         )
-        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
         router = self._router()
         now = datetime.now()
@@ -10427,9 +10429,7 @@ class TestBackgroundResponseCostPollCooldown:
                     "exception": self._not_found(),
                     "litellm_params": {
                         "model_info": {"id": "dep-1"},
-                        "litellm_metadata": {
-                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-                        },
+                        "litellm_metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: poll_origin},
                     },
                 },
                 None,

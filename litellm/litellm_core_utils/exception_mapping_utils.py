@@ -114,6 +114,9 @@ class ExceptionCheckers:
         if "maximum input length is" in _error_str_lowercase and "tokens" in _error_str_lowercase:
             return True
 
+        if "input too long:" in _error_str_lowercase and "input tokens, limit is" in _error_str_lowercase:
+            return True
+
         return False
 
     @staticmethod

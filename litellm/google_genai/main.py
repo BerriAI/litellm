@@ -145,6 +145,7 @@ class GenerateContentHelper:
             ProviderConfigManager.get_provider_google_genai_generate_content_config(
                 model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
+                litellm_params=litellm_params.model_dump(include={"base_model", "api_base"}),
             )
         )
 
