@@ -1,6 +1,6 @@
 import asyncio
 import importlib
-from typing import List
+from typing import Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -111,6 +111,7 @@ async def test_async_raise_no_deployment_exception():
     # Create a mock LitellmRouter instance
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
+    mock_router.get_candidate_model_ids_for_route.return_value = frozenset()
     mock_router.cooldown_cache.get_min_cooldown.return_value = 30.0
     mock_router.enable_pre_call_checks = True
 
@@ -169,6 +170,7 @@ async def test_async_raise_no_deployment_exception_empty_cooldown_list():
     # Create a mock LitellmRouter instance
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
+    mock_router.get_candidate_model_ids_for_route.return_value = frozenset()
     mock_router.cooldown_cache.get_min_cooldown.return_value = 15.0
     mock_router.enable_pre_call_checks = False
 
@@ -270,3 +272,51 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("global_model", ("shared", "unrelated"))
+async def test_team_cooldown_error_reports_only_the_requested_team(is_async: bool, global_model: str) -> None:
+    from unittest.mock import patch
+
+    from litellm import Router
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": global_model,
+                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+                "model_info": {"id": "global-deployment"},
+            },
+            {
+                "model_name": "team-private",
+                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+                "model_info": {"id": "team-deployment", "team_id": "team-1", "team_public_model_name": "shared"},
+            },
+        ],
+    )
+    team_cooldown: Final = 60.0
+    try:
+        with patch("time.time", return_value=1704067200.0):
+            for deployment_id, duration in (("global-deployment", 5.0), ("team-deployment", team_cooldown)):
+                router.cooldown_cache.add_deployment_to_cooldown(
+                    model_id=deployment_id,
+                    original_exception=Exception("rate limited"),
+                    exception_status=429,
+                    cooldown_time=duration,
+                )
+            with pytest.raises(RouterRateLimitError) as caught:
+                await router.async_get_available_deployment(
+                    model="shared",
+                    request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}},
+                ) if is_async else router.get_available_deployment(
+                    model="shared",
+                    request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}},
+                )
+            assert caught.value.cooldown_list == ["team-deployment"]
+            assert caught.value.cooldown_time == team_cooldown
+            assert caught.value.all_deployments_in_cooldown
+    finally:
+        router.discard()

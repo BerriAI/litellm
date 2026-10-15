@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -50,6 +50,7 @@ else:
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_COOLDOWN_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -550,14 +551,57 @@ def set_cooldown_deployments(
 _set_cooldown_deployments = set_cooldown_deployments
 
 
+def resolve_cooldown_model_ids(
+    litellm_router_instance: LitellmRouter,
+    model_name: str | None = None,
+    healthy_deployments: Sequence[Mapping[str, object]] | None = None,
+    team_id: str | None = None,
+) -> list[str]:  # mutable-ok: [LIT001] CooldownCache APIs accept list[str]
+    if healthy_deployments:
+        model_infos: Final = tuple(
+            _COOLDOWN_MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+            for deployment in healthy_deployments
+        )
+        candidate_ids: Final = [
+            deployment_id for info in model_infos if isinstance(deployment_id := info.get("id"), str)
+        ]
+        if candidate_ids:
+            return candidate_ids
+
+    if model_name is not None:
+        if hasattr(litellm_router_instance, "get_candidate_model_ids_for_route"):
+            try:
+                candidate_ids_route: Final = litellm_router_instance.get_candidate_model_ids_for_route(
+                    model=model_name, team_id=team_id
+                )
+                if candidate_ids_route:
+                    return list(candidate_ids_route)
+            except Exception as e:  # noqa: BLE001  # candidate route resolution is best-effort fallback
+                verbose_router_logger.debug("Failed to resolve candidate model ids for route: %s", e)
+        model_ids: Final = litellm_router_instance.get_model_ids(model_name=model_name)
+        if model_ids:
+            return model_ids
+        return litellm_router_instance.get_model_ids()
+
+    return litellm_router_instance.get_model_ids(model_name=model_name)
+
+
 async def async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
+    model_name: str | None = None,
+    healthy_deployments: Sequence[Mapping[str, object]] | None = None,
+    team_id: str | None = None,
 ) -> list[str]:
     """
     Async implementation of 'get_cooldown_deployments'
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    model_ids: Final = resolve_cooldown_model_ids(
+        litellm_router_instance=litellm_router_instance,
+        model_name=model_name,
+        healthy_deployments=healthy_deployments,
+        team_id=team_id,
+    )
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
         model_ids=model_ids,
         parent_otel_span=parent_otel_span,
@@ -582,11 +626,19 @@ _async_get_cooldown_deployments = async_get_cooldown_deployments
 async def async_get_cooldown_deployments_with_debug_info(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
+    model_name: str | None = None,
+    healthy_deployments: Sequence[Mapping[str, object]] | None = None,
+    team_id: str | None = None,
 ) -> list[tuple[str, CooldownCacheValue]]:
     """
     Async implementation of 'get_cooldown_deployments'
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    model_ids: Final = resolve_cooldown_model_ids(
+        litellm_router_instance=litellm_router_instance,
+        model_name=model_name,
+        healthy_deployments=healthy_deployments,
+        team_id=team_id,
+    )
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
@@ -598,7 +650,13 @@ async def async_get_cooldown_deployments_with_debug_info(
 _async_get_cooldown_deployments_with_debug_info = async_get_cooldown_deployments_with_debug_info
 
 
-def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
+def get_cooldown_deployments(
+    litellm_router_instance: LitellmRouter,
+    parent_otel_span: Span | None,
+    model_name: str | None = None,
+    healthy_deployments: Sequence[Mapping[str, object]] | None = None,
+    team_id: str | None = None,
+) -> list[str]:
     """
     Get the list of models being cooled down for this minute
     """
@@ -607,7 +665,12 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
     # ----------------------
     # Return cooldown models
     # ----------------------
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    model_ids: Final = resolve_cooldown_model_ids(
+        litellm_router_instance=litellm_router_instance,
+        model_name=model_name,
+        healthy_deployments=healthy_deployments,
+        team_id=team_id,
+    )
 
     cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
