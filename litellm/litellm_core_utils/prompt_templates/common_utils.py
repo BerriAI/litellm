@@ -15,6 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -1807,18 +1809,89 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     )
 
 
-LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
+_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _without_prompt_cache_breakpoint(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
+    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _breakpoints_stripped_from(key: str, value: object) -> object:
+    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
+        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
+    return _without_prompt_cache_breakpoint(value) if key == "function" else value
+
+
+def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
+    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
+    its tool calls' and its ``function``'s."""
+    stripped: Final = {
+        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+    }
+    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
+    {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
+)
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | {"reasoning_content"}
+
+
+def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
+    if not isinstance(tool_call, dict):
+        return tool_call
+    fields: Final = cast(dict[str, object], tool_call)  # cast-ok: untyped JSON tool call, keys forwarded verbatim
+    function_fields: Final = (
+        cast("dict[str, object]", fields.get("function"))  # cast-ok: untyped JSON function chunk
+        if isinstance(fields.get("function"), dict)
+        else None
+    )
+    if "provider_specific_fields" not in fields and (
+        function_fields is None or "provider_specific_fields" not in function_fields
+    ):
+        return cast("dict[str, object]", tool_call)  # cast-ok: untyped JSON tool call, no strip needed
+    return {
+        key: (
+            {fkey: fvalue for fkey, fvalue in function_fields.items() if fkey != "provider_specific_fields"}
+            if key == "function" and function_fields is not None
+            else value
+        )
+        for key, value in fields.items()
+        if key != "provider_specific_fields"
+    }
+
+
+def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
+    kept: Final = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
+    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+        AllMessageValues,
+        {
+            **kept,
+            "tool_calls": [
+                _tool_call_without_provider_specific_fields(tool_call)
+                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
+            ],
+        },
+    )
+
+
+def strip_litellm_response_only_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to a returned message (e.g. Anthropic thinking blocks or Responses
+    API items) that no OpenAI-compatible endpoint accepts back, so a reply can be sent to a strict one."""
+    return _message_without_fields(message, LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS)
 
 
 def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
-    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
-    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
-    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
-        return message
-    return cast(  # cast-ok: same TypedDict minus internal keys
-        AllMessageValues,
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
-    )
+    """``strip_litellm_response_only_fields`` plus ``reasoning_content``, for endpoints that reject it too."""
+    return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
@@ -2114,10 +2187,8 @@ def is_unsignable_thinking_block(block: object) -> bool:
     Anthropic verifies the signature cryptographically, so a block with a null,
     empty, or missing signature (e.g. from an open-source reasoning model) is
     rejected with a 400, and so is a block whose signature or data carries
-    another provider's encrypted reasoning. It also rejects a `thinking` block
-    whose text is empty or whitespace-only ("each thinking block must contain
-    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
-    item from a non-Anthropic reasoning provider is replayed through this path.
+    another provider's encrypted reasoning. A signed block is kept whatever its
+    text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
     `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):
@@ -2128,10 +2199,7 @@ def is_unsignable_thinking_block(block: object) -> bool:
     if mapping.get("type") != "thinking":
         return False
     signature: Final = mapping.get("signature")
-    if not (isinstance(signature, str) and len(signature) > 0):
-        return True
-    thinking_text: Final = mapping.get("thinking")
-    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+    return not (isinstance(signature, str) and len(signature) > 0)
 
 
 def native_redacted_thinking_data(data: str) -> str:

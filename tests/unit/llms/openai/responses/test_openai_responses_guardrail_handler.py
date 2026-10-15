@@ -94,6 +94,22 @@ class RecordingMaskingGuardrail(MockGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class ToolCallRecordingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[object] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls.extend(inputs.get("tool_calls", []))
+        return inputs
+
+
 class LastTextDroppingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -1173,6 +1189,39 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert exc_info.value.status_code == 400
         assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_namespaced_function_call_reaches_output_guardrails_in_the_unchanged_tool_call_shape(self):
+        guardrail: Final = ToolCallRecordingGuardrail(guardrail_name="recorder")
+        response: Final = ResponsesAPIResponse(
+            id="resp_namespaced",
+            created_at=1764901066,
+            model="gpt-5.5",
+            object="response",
+            status="completed",
+            output=[
+                ResponseFunctionToolCall(
+                    arguments='{"city":"Paris"}',
+                    call_id="call_namespaced",
+                    name="get_weather",
+                    namespace="weather_tools",
+                    type="function_call",
+                    id="fc_namespaced",
+                    status="completed",
+                )
+            ],
+        )
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            {
+                "id": "call_namespaced",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                "index": 0,
+            }
+        ]
+
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""
         handler = OpenAIResponsesHandler()
@@ -2097,6 +2146,36 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 deliver_ended_stream_rewrites=True,
             )
         assert undeliverable.value.reason == "no stream event carries the rewritten call_id call_999"
+
+    @pytest.mark.asyncio
+    async def test_masking_guardrail_hides_a_faked_custom_tool_call_input_from_every_event(self):
+        from litellm.responses.streaming_iterator import build_synthetic_response_events
+
+        events: Final = list(
+            build_synthetic_response_events(
+                transformed=ResponsesAPIResponse(
+                    id="resp_faked",
+                    created_at=0,
+                    status="completed",
+                    model="gpt-6-luna",
+                    object="response",
+                    output=[CUSTOM_TOOL_CALL_ITEM],
+                ),
+                logging_obj=None,
+                chunk_size=5,
+            )
+        )
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        sent: Final = "".join(event.model_dump_json() for event in events)
+        assert "persimmon" not in sent
+        assert "echo [MASKED]" in sent
 
     @staticmethod
     def _bridged_function_call_stream_events() -> List[dict]:
@@ -3633,6 +3712,43 @@ class TestBuildBlockSseChunks:
         assert completed["id"].startswith("resp_")
         assert completed["model"] == "gpt-5.4-mini"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+
+    @pytest.mark.parametrize("stream_started", [False, True])
+    def test_block_message_reaches_an_sdk_reader_once(self, stream_started):
+        import httpx
+        import openai
+
+        created_event = {
+            "type": "response.created",
+            "response": {
+                "id": "resp_live",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5.4-mini",
+                "status": "in_progress",
+                "output": [],
+            },
+        }
+        yielded = [created_event] if stream_started else []
+        already_sent = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in yielded)
+        block_chunks = OpenAIResponsesHandler().build_block_sse_chunks(
+            self._exc(original_response=yielded), stream_started=stream_started, responses_so_far=yielded
+        )
+        sse_body = already_sent + b"".join(block_chunks)
+        client = openai.OpenAI(
+            api_key="sk-test",
+            base_url="http://guardrail.test/v1",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+                )
+            ),
+        )
+
+        with client.responses.stream(model="gpt-5.4-mini", input="hi") as stream:
+            text_snapshots = [event.snapshot for event in stream if event.type == "response.output_text.delta"]
+
+        assert text_snapshots[-1] == "Blocked by policy."
 
     def test_continuation_appends_item_at_next_output_index_with_real_usage(self):
         handler = OpenAIResponsesHandler()

@@ -1,9 +1,20 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
-from integration.translation.templates.anthropic import ANTHROPIC_MESSAGES_REQUEST, ANTHROPIC_MESSAGES_RESPONSE
+from integration.translation.chat_completions.templates import (
+    CHAT_COMPLETIONS_REQUEST,
+    CHAT_COMPLETIONS_RESPONSE,
+    CODING_AGENT_REQUEST,
+    CODING_AGENT_RESPONSE,
+)
+from integration.translation.templates.anthropic import (
+    ANTHROPIC_AGENT_REQUEST,
+    ANTHROPIC_AGENT_RESPONSE,
+    ANTHROPIC_MESSAGES_REQUEST,
+    ANTHROPIC_MESSAGES_RESPONSE,
+)
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -155,6 +166,202 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens_details": {
                 "cached_tokens": 0,
                 "text_tokens": 18,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_FABLE_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "anthropic/claude-fable-5"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "x-api-key": "synthetic-agent-key",
+        "anthropic-version": "2023-06-01",
+    },
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "model": "claude-fable-5",
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-fable-5",
+        "id": "msg_011Cg3Kre4kW64wgdnJZesno",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_017kyzUjeWYmUvPe1JuA3sP9",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+                "caller": {"type": "direct"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01LJUyCenUD37DbG5waJEG3r",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1184,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "anthropic/claude-fable-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_017kyzUjeWYmUvPe1JuA3sP9",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_01LJUyCenUD37DbG5waJEG3r",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_OPUS_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "anthropic/claude-opus-5"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "content-type": "application/json",
+        "x-api-key": "synthetic-agent-key",
+        "anthropic-version": "2023-06-01",
+    },
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "model": "claude-opus-5",
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-opus-5",
+        "id": "msg_011Cg3Kpga2JLhw4zru2itKu",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01NFinjr4AyFZJJ1g44QYJJJ",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+                "caller": {"type": "direct"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_018ZYT8DgJn6QPmdWqASvZnS",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1180,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "anthropic/claude-opus-5",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_01NFinjr4AyFZJJ1g44QYJJJ",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_018ZYT8DgJn6QPmdWqASvZnS",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1180,
+            "total_tokens": 1285,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1180,
                 "cache_write_tokens": 0,
                 "cache_creation_tokens": 0,
                 "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},

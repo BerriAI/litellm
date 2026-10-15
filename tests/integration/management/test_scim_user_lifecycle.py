@@ -451,11 +451,7 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         expected_refusal: Final = {
             "error": {
-                "message": (
-                    "Authentication Error, Invalid proxy server token passed. "
-                    f"Received API Key = sk-...{key_a[-4:]}, Key Hash (Token) ={sha256(key_a.encode()).hexdigest()}. "
-                    "Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
-                ),
+                "message": "Authentication Error, Invalid API key provided.",
                 "type": "token_not_found_in_db",
                 "param": "key",
                 "code": "401",

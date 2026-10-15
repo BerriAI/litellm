@@ -29,6 +29,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import partial
 from itertools import takewhile
+from operator import attrgetter
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -167,6 +168,7 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_VerificationTokenView,
     Member,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
@@ -5830,7 +5832,7 @@ class PrismaClient:
                 Batch write update queries
                 """
                 batcher = self.db.batch_()
-                for idx, user in enumerate(data_list):
+                for user in sorted(data_list, key=attrgetter("user_id")):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump(exclude_none=True))
                     except Exception:
@@ -8873,13 +8875,19 @@ async def _get_team_object_for_access_groups(
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class _AccessGroupModels:
+    team: tuple[str, ...] = ()
+    key: tuple[str, ...] = ()
+
+
 async def _get_access_group_models(
     user_api_key_dict: "UserAPIKeyAuth",
     team_object: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
-) -> tuple[str, ...]:
+) -> _AccessGroupModels:
     from litellm.proxy.auth.auth_checks import (
         get_authorized_resources_from_key_access_groups,
         get_models_from_access_groups,
@@ -8896,7 +8904,7 @@ async def _get_access_group_models(
         team_object=team_object,
         resource_field="access_model_names",
     )
-    return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
+    return _AccessGroupModels(team=tuple(team_group_models), key=tuple(key_group_models))
 
 
 async def _agent_access_group_visible_models(
@@ -9008,7 +9016,7 @@ async def get_available_models_for_user(
 
     key_models: Final[Sequence[str]] = (
         ()
-        if requested_team_object is not None
+        if requested_team_object is not None and requested_team_object.team_id != user_api_key_dict.team_id
         else get_key_models(
             user_api_key_dict=user_api_key_dict,
             proxy_model_list=proxy_model_list,
@@ -9043,11 +9051,25 @@ async def get_available_models_for_user(
             proxy_logging_obj=proxy_logging_obj,
         )
         if key_models or team_models
-        else ()
+        else _AccessGroupModels()
     )
 
-    granted_key_models: Final = (*key_models, *access_group_models) if key_models else key_models
-    granted_team_models: Final = (*team_models, *access_group_models) if team_models else team_models
+    key_model_names: Final = cast("list[str]", user_api_key_dict.models)  # cast-ok: key models are a string array
+    key_model_check_skipped: Final = (
+        bool(user_api_key_dict.config) or SpecialModelNames.all_team_models.value in key_model_names
+    )
+    granted_key_models: Final = (
+        (
+            *key_models,
+            *access_group_models.key,
+            *(access_group_models.team if key_model_check_skipped else ()),
+        )
+        if key_models
+        else key_models
+    )
+    granted_team_models: Final = (
+        (*team_models, *access_group_models.team, *access_group_models.key) if team_models else team_models
+    )
 
     # Get complete model list
     complete_models: Final = get_complete_model_list(

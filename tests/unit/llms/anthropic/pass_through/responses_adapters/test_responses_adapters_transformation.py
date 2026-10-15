@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -896,6 +897,21 @@ class TestTranslateToolsToResponsesAPI:
     def test_empty_tools_list(self):
         """Empty tools list returns empty list."""
         assert _ADAPTER.translate_tools_to_responses_api([]) == []
+
+    def test_cache_control_cleanup_leaves_caller_schema_untouched(self):
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "tag",
+                "input_schema": {"type": "object", "properties": {"cache_control": {"type": "string"}}},
+            }
+        ]
+
+        translated: Final = _ADAPTER.translate_tools_to_responses_api(tools)
+        OpenAIResponsesAPIConfig().remove_cache_control_flag_from_input_and_tools(
+            model="gpt-5.5", input="hi", tools=translated
+        )
+
+        assert tools[0]["input_schema"] == {"type": "object", "properties": {"cache_control": {"type": "string"}}}
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
+    PiiEntityCategoryMap,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
@@ -1504,7 +1505,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    category_maps: Final = [
+    category_maps: Final[list[PiiEntityCategoryMap]] = [
         {
             "category": category.value,
             "entities": [entity.value for entity in entities],
