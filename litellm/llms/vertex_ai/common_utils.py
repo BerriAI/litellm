@@ -1343,30 +1343,56 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.vertex_ai.count_tokens.context import (
+                VertexGeminiCountContextError,
+                count_context_error_response,
+                vertex_gemini_count_context,
+            )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
                 gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
+            count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+            if isinstance(count_context, VertexGeminiCountContextError):
+                return count_context_error_response(count_context, request_model, model_to_use)
+
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
+                contents
+                if contents is not None
+                else gemini_convert_messages_with_history(
+                    messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
+                )
             )
 
             count_tokens_params: Final = {
                 "model": model_to_use,
                 "contents": resolved_contents,
+                "system_instruction": count_context.system_instruction,
+                "tools": count_context.tools,
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAITokenCounter().acount_tokens(
-                **count_tokens_params_request,
-            )
+            try:
+                result = await VertexAITokenCounter().acount_tokens(
+                    **count_tokens_params_request,
+                )
+            except litellm.APIError as error:
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="gemini",
+                    error=True,
+                    error_message=error.message,
+                    status_code=error.status_code,
+                )
 
-            if result is not None and "totalTokens" in result:
+            if "totalTokens" in result:
                 return TokenCountResponse(
                     total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", ""),
+                    tokenizer_type=result.get("tokenizer_used", "gemini"),
                     original_response=result,
                 )
 
