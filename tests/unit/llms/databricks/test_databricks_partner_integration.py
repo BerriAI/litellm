@@ -188,6 +188,110 @@ class TestRedactHeadersForLogging:
 class TestOAuthM2M:
     """Test cases for OAuth M2M authentication."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_token_cache(self):
+        from litellm.llms.databricks import common_utils
+
+        common_utils._oauth_m2m_token_cache.clear()
+        yield
+        common_utils._oauth_m2m_token_cache.clear()
+
+    @staticmethod
+    def _token_response(token="tok", expires_in=3600):
+        response = Mock()
+        response.status_code = 200
+        body = {"access_token": token}
+        if expires_in is not None:
+            body["expires_in"] = expires_in
+        response.json.return_value = body
+        return response
+
+    def _get(
+        self,
+        base,
+        api_base="https://adb-1.azuredatabricks.net/serving-endpoints",
+        client_id="id",
+        client_secret="secret",
+    ):
+        return base._get_oauth_m2m_token(api_base=api_base, client_id=client_id, client_secret=client_secret)
+
+    def test_oauth_m2m_token_is_reused_until_expiry(self):
+        """Repeated calls with the same credentials request one token."""
+        base = DatabricksBase()
+        with patch("requests.post", return_value=self._token_response("t1")) as mock_post:
+            assert [self._get(base) for _ in range(5)] == ["t1"] * 5
+            assert mock_post.call_count == 1
+
+    def test_oauth_m2m_token_refetched_after_expiry(self):
+        """An expired token (within the 60s skew) is refreshed."""
+        base = DatabricksBase()
+        responses = [self._token_response("t1", 3600), self._token_response("t2", 3600)]
+        with (
+            patch("requests.post", side_effect=responses) as mock_post,
+            patch("litellm.llms.databricks.common_utils.time.monotonic") as mock_time,
+        ):
+            mock_time.return_value = 1000.0
+            assert self._get(base) == "t1"
+            mock_time.return_value = 1000.0 + 3600 - 61
+            assert self._get(base) == "t1"
+            mock_time.return_value = 1000.0 + 3600 - 59
+            assert self._get(base) == "t2"
+            assert mock_post.call_count == 2
+
+    def test_oauth_m2m_short_lived_token_not_cached(self):
+        """A token living less than the skew is never reused."""
+        base = DatabricksBase()
+        with patch("requests.post", return_value=self._token_response("t", 30)) as mock_post:
+            self._get(base)
+            self._get(base)
+            assert mock_post.call_count == 2
+
+    def test_oauth_m2m_missing_or_bad_expires_in_uses_default_ttl(self):
+        base = DatabricksBase()
+        for expires_in in (None, "garbage"):
+            from litellm.llms.databricks import common_utils
+
+            common_utils._oauth_m2m_token_cache.clear()
+            with patch("requests.post", return_value=self._token_response("t", expires_in)) as mock_post:
+                self._get(base)
+                self._get(base)
+                assert mock_post.call_count == 1
+
+    def test_oauth_m2m_cache_is_keyed_by_workspace_and_credentials(self):
+        """Different workspace, client id or secret never share a token."""
+        base = DatabricksBase()
+        with patch(
+            "requests.post", side_effect=lambda *a, **k: self._token_response(f"t{len(mock_post.call_args_list)}")
+        ) as mock_post:
+            self._get(base)
+            self._get(base, api_base="https://adb-2.azuredatabricks.net")
+            self._get(base, client_id="other")
+            self._get(base, client_secret="rotated")
+            assert mock_post.call_count == 4
+
+    def test_oauth_m2m_failed_request_is_not_cached(self):
+        base = DatabricksBase()
+        bad = Mock()
+        bad.status_code = 500
+        bad.text = "boom"
+        with patch("requests.post", side_effect=[bad, self._token_response("ok")]) as mock_post:
+            with pytest.raises(DatabricksException):
+                self._get(base)
+            assert self._get(base) == "ok"
+            assert mock_post.call_count == 2
+
+    def test_oauth_m2m_concurrent_calls_return_valid_token(self):
+        """Stress: many threads hitting the cache never see an error or wrong token."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        base = DatabricksBase()
+        with (
+            patch("requests.post", return_value=self._token_response("t")),
+            ThreadPoolExecutor(max_workers=32) as pool,
+        ):
+            results = list(pool.map(lambda _: self._get(base), range(500)))
+        assert set(results) == {"t"}
+
     def test_oauth_m2m_token_success(self):
         """OAuth M2M token is successfully obtained."""
         databricks_base = DatabricksBase()
