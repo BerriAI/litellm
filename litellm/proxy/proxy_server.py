@@ -7928,9 +7928,7 @@ class ProxyConfig:
             **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
         }
         removed: Final = self._db_environment_keys - row_values.keys() - _SSO_ENVIRONMENT_VARIABLES
-        held_keys: Final = self._environment_keys_held_against_read(
-            read_started_at, {**self._startup_values(removed), **row_values}
-        )
+        held_keys: Final = self._environment_keys_held_against_read(read_started_at, row_values, removed)
         applied: Final = {key: value for key, value in row_values.items() if key not in held_keys}
         self._restore_environment_without_db(removed - held_keys)
         self._db_environment_keys = frozenset(applied) | (self._db_environment_keys & held_keys)
@@ -8004,20 +8002,20 @@ class ProxyConfig:
         os.environ.update(saved)
         return tracked_keys | frozenset(saved)
 
-    def _startup_values(self, keys: frozenset[str]) -> Mapping[str, str | None]:
-        return {key: self._environment_before_db.get(key) for key in keys}
-
     def _environment_keys_held_against_read(
-        self, read_started_at: float, targets: Mapping[str, str | None]
+        self, read_started_at: float, read_values: Mapping[str, str], restored: frozenset[str]
     ) -> frozenset[str]:
         now: Final = self._clock()
         return frozenset(
             key
             for key, saved in self._saved_environment_values.items()
-            if key in targets
+            if (key in restored or key in read_values)
             and (
                 saved.saved_at > read_started_at
-                or (now - saved.saved_at < _SAVED_ENVIRONMENT_HOLD_SECONDS and targets[key] in saved.replaced)
+                or (
+                    now - saved.saved_at < _SAVED_ENVIRONMENT_HOLD_SECONDS
+                    and (key in restored or read_values[key] in saved.replaced)
+                )
             )
         )
 
@@ -8463,7 +8461,8 @@ class ProxyConfig:
         stored_values: Final = self._sso_environment_values(stored_sso_settings).applied
         held_keys: Final = self._environment_keys_held_against_read(
             read_started_at,
-            {key: stored_values.get(key, self._environment_before_db.get(key)) for key in removed_sso_keys},
+            {key: value for key, value in stored_values.items() if key in removed_sso_keys},
+            removed_sso_keys - stored_values.keys(),
         )
         self._sso_environment_keys = self._applied_environment_keys(
             self._sso_environment_keys, {key: stored_values.get(key) for key in removed_sso_keys - held_keys}
@@ -8483,6 +8482,8 @@ class ProxyConfig:
         self, section: Section, value: object, read_started_at: float | None = None
     ) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
+            if not isinstance(value, Mapping):
+                return _EMPTY_SETTINGS_MAPPING
             return self._apply_db_environment_variables(
                 _as_settings_mapping(value), self._clock() if read_started_at is None else read_started_at
             )
@@ -8931,9 +8932,7 @@ class ProxyConfig:
     def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object], read_started_at: float) -> None:
         values: Final = self._sso_environment_values(stored_sso_settings)
         restored: Final = self._sso_environment_keys - values.still_stored - self._db_environment_keys
-        held_keys: Final = self._environment_keys_held_against_read(
-            read_started_at, {**self._startup_values(restored), **values.applied}
-        )
+        held_keys: Final = self._environment_keys_held_against_read(read_started_at, values.applied, restored)
         applied: Final = {key: value for key, value in values.applied.items() if key not in held_keys}
         os.environ.update(applied)
         self._restore_environment_without_db(restored - held_keys)
