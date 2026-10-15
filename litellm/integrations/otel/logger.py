@@ -83,6 +83,9 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # its parameter is annotated as a bare dict
+)
 from litellm.types.utils import captures_span_content
 
 if TYPE_CHECKING:
@@ -529,7 +532,8 @@ class OpenTelemetryV2(CustomLogger):
         rejected at the gate or blocked by a pre-call guardrail before any upstream
         call — so there is nothing to record and no phantom span.
         """
-        call: Final = LLMCallEvent.from_dict(kwargs)
+        event: Final = LLMCallEvent.from_dict(kwargs)
+        call: Final = replace(event, system_instructions=()) if self._redacts_messages(kwargs) else event
         call_id: Final = call.call_id
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
@@ -547,6 +551,17 @@ class OpenTelemetryV2(CustomLogger):
             # After the span has ended, so a release-triggered provider shutdown
             # force-flushes it out rather than racing its enqueue.
             self._release_carrier(carrier)
+
+    def _redacts_messages(self, kwargs: Mapping[str, object]) -> bool:
+        """Whether litellm redacts this call's messages for this callback: the global, per-request and
+        header settings, or this callback's own ``turn_off_message_logging`` / ``message_logging``.
+        Headers it cannot read fail closed, as the complexity router treats them."""
+        if self.turn_off_message_logging or self.message_logging is not True:
+            return True
+        try:
+            return should_redact_message_logging(dict(kwargs))
+        except AttributeError:
+            return True
 
     def _store_open_call(self, call_id: str, carrier: _LLMCallSpan) -> None:
         """Remember an in-flight LLM call, evicting the oldest if over budget.
@@ -595,6 +610,7 @@ class OpenTelemetryV2(CustomLogger):
             trace=call.trace,
             session_id=call.session_id,
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            system_instructions=call.system_instructions,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:

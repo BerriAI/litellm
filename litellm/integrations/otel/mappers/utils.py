@@ -121,6 +121,11 @@ def serialize_messages(messages: Sequence[object]) -> str | None:
     return json.dumps(serialized) if serialized else None
 
 
+def serialize_system_instructions(texts: Sequence[str]) -> str | None:
+    """``gen_ai.system_instructions``: a JSON array of semconv text parts."""
+    return json.dumps([{"type": "text", "content": text} for text in texts]) if texts else None
+
+
 def message_content(message: object) -> str | None:
     """Extract the textual ``content`` from a chat message dict."""
     if not isinstance(message, dict):

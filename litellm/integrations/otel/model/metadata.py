@@ -39,8 +39,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
+
+from pydantic import TypeAdapter
 
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -50,12 +53,21 @@ from litellm.constants import (
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
-from litellm.types.utils import InternalCallOrigin
+from litellm.types.utils import CallTypes, InternalCallOrigin
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
+_SYSTEM_INSTRUCTION_KEY_BY_CALL_TYPE: Final = MappingProxyType(
+    {
+        CallTypes.anthropic_messages.value: "system",
+        CallTypes.aanthropic_messages.value: "system",
+        CallTypes.responses.value: "instructions",
+        CallTypes.aresponses.value: "instructions",
+    }
+)
+_PARTS: Final = TypeAdapter(tuple[object, ...])
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -253,6 +265,7 @@ class LLMCallEvent:
     time_to_first_chunk_seconds: float | None
     trace: TraceControls
     session_id: str | None
+    system_instructions: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
@@ -274,7 +287,34 @@ class LLMCallEvent:
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
+            system_instructions=system_instruction_texts(kwargs),
         )
+
+
+def system_instruction_texts(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    """The text parts of the system prompt a Messages (``system``) or Responses (``instructions``) call
+    sent outside its chat history. ``StandardLoggingPayload.model_parameters`` drops prompt fields, so they
+    are read from the top-level ``optional_params`` copy in the callback kwargs."""
+    key: Final = _SYSTEM_INSTRUCTION_KEY_BY_CALL_TYPE.get(as_str(kwargs.get("call_type")) or "")
+    return _instruction_texts(kwargs.get(key)) if key else ()
+
+
+def _instruction_texts(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(chain.from_iterable(_part_texts(part) for part in _PARTS.validate_python(value)))
+
+
+def _part_texts(part: object) -> tuple[str, ...]:
+    if isinstance(part, str):
+        return _instruction_texts(part)
+    mapping: Final = as_str_mapping(part)
+    if mapping is None:
+        return ()
+    text: Final = mapping.get("text")
+    return (text,) if isinstance(text, str) and text else _instruction_texts(mapping.get("content"))
 
 
 def _epoch_seconds(value: object) -> float | None:

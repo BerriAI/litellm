@@ -10,8 +10,10 @@ import ast
 import asyncio
 import contextlib
 import contextvars
+import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
+import litellm  # noqa: E402
 from litellm._internal_context import (  # noqa: E402
     in_post_response_phase,
     post_response_phase,
@@ -735,6 +738,221 @@ def test_only_a_request_destination_can_turn_on_llm_payload_content(
     (span,) = exporter.get_finished_spans()
     assert ("gen_ai.input.messages" in span.attributes) is captures_content
     assert ("gen_ai.output.messages" in span.attributes) is captures_content
+
+
+_SYSTEM_PROMPT_CASES: Final = (
+    pytest.param(
+        "anthropic_messages",
+        {"system": "You are terse."},
+        [{"type": "text", "content": "You are terse."}],
+        id="anthropic-string-system",
+    ),
+    pytest.param(
+        "anthropic_messages",
+        {
+            "system": [
+                {"type": "text", "text": "You are terse."},
+                {"type": "text", "text": "Cite sources.", "cache_control": {"type": "ephemeral"}},
+            ]
+        },
+        [{"type": "text", "content": "You are terse."}, {"type": "text", "content": "Cite sources."}],
+        id="anthropic-cached-system-blocks",
+    ),
+    pytest.param(
+        "aresponses",
+        {"instructions": "Answer in French."},
+        [{"type": "text", "content": "Answer in French."}],
+        id="responses-instructions",
+    ),
+    pytest.param(
+        "aresponses",
+        {
+            "instructions": [
+                {"role": "developer", "content": [{"type": "input_text", "text": "Answer in French."}]},
+            ]
+        },
+        [{"type": "text", "content": "Answer in French."}],
+        id="responses-instruction-items",
+    ),
+)
+
+
+def _system_prompt_kwargs(call_type: str, request_fields: Mapping[str, object]) -> Mapping[str, object]:
+    payload: Final[object] = _payload(call_type=call_type, messages=[{"role": "user", "content": "hi"}])
+    return {
+        "standard_logging_object": payload,
+        "litellm_params": {"metadata": {}},
+        **request_fields,
+        "call_type": call_type,
+        "api_call_start_time": datetime.now(timezone.utc),
+    }
+
+
+@pytest.mark.parametrize(("call_type", "request_fields", "expected"), _SYSTEM_PROMPT_CASES)
+@pytest.mark.parametrize("opened_at_pre_call", [True, False], ids=["boundary", "deferred"])
+def test_llm_call_span_carries_the_separately_supplied_system_prompt(
+    call_type: str,
+    request_fields: Mapping[str, object],
+    expected: Sequence[Mapping[str, str]],
+    opened_at_pre_call: bool,
+) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs(call_type, request_fields)
+    if opened_at_pre_call:
+        _emit_llm(logger, kwargs)
+    else:
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert json.loads(str((span.attributes or {})[GenAI.SYSTEM_INSTRUCTIONS])) == expected
+
+
+@pytest.mark.parametrize(
+    ("call_type", "request_fields"),
+    [
+        pytest.param("aspeech", {"instructions": "Speak slowly."}, id="speech-voice-instructions"),
+        pytest.param("acompletion", {"instructions": "Answer in French."}, id="chat-instructions"),
+        pytest.param("acompletion", {"system": "You are terse."}, id="chat-system"),
+        pytest.param("aresponses", {"system": "You are terse."}, id="responses-system"),
+        pytest.param("anthropic_messages", {"instructions": "Answer in French."}, id="messages-instructions"),
+    ],
+)
+def test_system_instructions_come_only_from_the_field_the_call_type_defines(
+    call_type: str, request_fields: Mapping[str, object]
+) -> None:
+    logger, exporter = _logger_capturing()
+    _emit_llm(logger, _system_prompt_kwargs(call_type, request_fields))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def test_chat_system_message_stays_in_the_input_messages_only() -> None:
+    logger, exporter = _logger_capturing()
+    messages: Final = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
+    _emit_llm(logger, {**_kwargs(_payload(messages=messages)), "call_type": "acompletion"})
+    (span,) = exporter.get_finished_spans()
+    attributes: Final = span.attributes or {}
+    assert json.loads(str(attributes[GenAI.INPUT_MESSAGES])) == messages
+    assert GenAI.SYSTEM_INSTRUCTIONS not in attributes
+
+
+@pytest.mark.parametrize("request_fields", [{}, {"system": ""}, {"system": []}, {"system": None}])
+def test_llm_call_span_without_a_system_prompt_has_no_system_instructions(
+    request_fields: Mapping[str, object],
+) -> None:
+    logger, exporter = _logger_capturing()
+    _emit_llm(logger, _system_prompt_kwargs("anthropic_messages", request_fields))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def test_system_instructions_are_withheld_while_content_capture_is_off() -> None:
+    logger, exporter = _logger()
+    _emit_llm(logger, _system_prompt_kwargs("anthropic_messages", {"system": "You are terse."}))
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.SYSTEM_INSTRUCTIONS not in (span.attributes or {})
+
+
+def _capturing_logger_with(
+    *, turn_off_message_logging: bool, message_logging: bool
+) -> tuple[OpenTelemetryV2, InMemorySpanExporter]:
+    cfg: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    exporter: Final = InMemorySpanExporter()
+    tracer_provider: Final = providers.build_tracer_provider(cfg, exporter=exporter)
+    return (
+        OpenTelemetryV2(
+            config=cfg,
+            tracer_provider=tracer_provider,
+            turn_off_message_logging=turn_off_message_logging,
+            message_logging=message_logging,
+        ),
+        exporter,
+    )
+
+
+def _emitted_system_instructions(
+    logger: OpenTelemetryV2, exporter: InMemorySpanExporter, kwargs: Mapping[str, object], *, fail: bool
+) -> object:
+    _emit_llm(logger, kwargs, fail=fail)
+    (span,) = exporter.get_finished_spans()
+    return (span.attributes or {}).get(GenAI.SYSTEM_INSTRUCTIONS)
+
+
+_TERSE_SYSTEM: Final = MappingProxyType({"system": "You are terse."})
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+def test_global_message_redaction_withholds_system_instructions(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize(
+    ("turn_off_message_logging", "message_logging"),
+    [(True, True), (False, False)],
+    ids=["turn-off-message-logging", "deprecated-message-logging"],
+)
+def test_callback_message_redaction_withholds_system_instructions(
+    turn_off_message_logging: bool, message_logging: bool, fail: bool
+) -> None:
+    logger, exporter = _capturing_logger_with(
+        turn_off_message_logging=turn_off_message_logging, message_logging=message_logging
+    )
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": True}},
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": "true"}},
+        {"litellm_params": {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}},
+        {"litellm_params": {"metadata": {"headers": None}}},
+    ],
+    ids=["dynamic-param", "dynamic-param-string", "enable-redaction-header", "undecidable-headers-fail-closed"],
+)
+def test_request_message_redaction_withholds_system_instructions(
+    request_fields: Mapping[str, object], fail: bool
+) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = {**_system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM), **request_fields}
+    assert _emitted_system_instructions(logger, exporter, kwargs, fail=fail) is None
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"litellm_params": {"metadata": {"headers": {"litellm-disable-message-redaction": "true"}}}},
+        {"standard_callback_dynamic_params": {"turn_off_message_logging": False}},
+    ],
+    ids=["disable-redaction-header", "dynamic-param-off"],
+)
+def test_request_opt_out_of_global_redaction_keeps_system_instructions(
+    monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger_capturing()
+    kwargs: Final = {**_system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM), **request_fields}
+    assert json.loads(str(_emitted_system_instructions(logger, exporter, kwargs, fail=False))) == [
+        {"type": "text", "content": "You are terse."}
+    ]
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+def test_system_instructions_are_kept_without_message_redaction(fail: bool) -> None:
+    logger, exporter = _logger_capturing()
+    kwargs: Final = _system_prompt_kwargs("anthropic_messages", _TERSE_SYSTEM)
+    assert json.loads(str(_emitted_system_instructions(logger, exporter, kwargs, fail=fail))) == [
+        {"type": "text", "content": "You are terse."}
+    ]
 
 
 def test_mcp_tool_call_failure_marks_error():

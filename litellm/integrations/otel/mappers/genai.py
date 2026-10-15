@@ -17,6 +17,7 @@ from litellm.integrations.otel.mappers.utils import (
     collect,
     output_messages,
     serialize_messages,
+    serialize_system_instructions,
     tool_definition_attrs,
 )
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
@@ -58,6 +59,7 @@ class GenAIMapper:
         ),
         GenAI.REQUEST_SEED: lambda d: d.request_params.seed,
         GenAI.INPUT_MESSAGES: lambda d: serialize_messages(d.messages_in),
+        GenAI.SYSTEM_INSTRUCTIONS: lambda d: serialize_system_instructions(d.system_instructions),
         GenAI.OUTPUT_MESSAGES: lambda d: serialize_messages(output_messages(d)),
         GenAI.RESPONSE_MODEL: lambda d: d.response_model,
         GenAI.RESPONSE_ID: lambda d: d.response_id,

@@ -426,6 +426,7 @@ class LLMCallSpanData:
     # the StandardLoggingPayload. Both are tuples of immutable mappings so the
     # dataclass stays hashable and frozen.
     messages_in: tuple[Mapping[str, object], ...] = ()
+    system_instructions: tuple[str, ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
@@ -454,6 +455,7 @@ class LLMCallSpanData:
         session_id: str | None = None,
         *,
         metadata_keys: tuple[str, ...] = (),
+        system_instructions: tuple[str, ...] = (),
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -496,6 +498,7 @@ class LLMCallSpanData:
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
+            system_instructions=system_instructions if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
