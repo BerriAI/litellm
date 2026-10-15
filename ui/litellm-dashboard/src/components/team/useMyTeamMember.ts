@@ -22,6 +22,8 @@ export interface TeamMemberInfo {
     budget_duration?: string | null;
     budget_reset_at?: string | null;
     allowed_models?: string[] | null;
+    temp_budget_increase?: number | null;
+    temp_budget_expiry?: string | null;
   } | null;
 }
 
