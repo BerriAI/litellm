@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
@@ -7,6 +8,7 @@ from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
 from integration.translation.runner import assert_translation
+from pydantic import JsonValue
 
 CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0: Final = (
     "CAQSiQcKEAgSGAI4AUIIdGhpbmtpbmcSDJmy4nsZ6G9GGfujbxoM2xU6lMsHnAjRbgKPIjDCdWjR2/DWUdgGbUsetewZ+xbrYi08H7fVA3Md"
@@ -23,80 +25,52 @@ CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0: Final = (
     "niP1PuAsUkGk467NXLgH0ulqiRgB"
 )
 
+CLAUDE_SONNET_5_5_CACHE_HIT_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_011Cg32qgbJRU3vZX2TB6vPx",
+    "content": [
+        {
+            "type": "thinking",
+            "thinking": "I'll start by reading shop/validation.py since the user asked for that "
+            "first, then move on to check the related test file after.\n"
+            "\n",
+            "signature": CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0,
+        },
+        {
+            "type": "text",
+            "text": "I need `shop/validation.py` first, because `validate_quantity` at line 18 holds "
+            "the rule. I'll read the function and some of the code around it, in case there "
+            "are helpers or constants it depends on.",
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_01U6Ch75cPbVpbpsBEyPP1AN",
+            "name": "read_file",
+            "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+            "caller": {"type": "direct"},
+        },
+    ],
+    "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 873,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 254,
+        "output_tokens_details": {"thinking_tokens": 92},
+        "service_tier": "standard",
+        "inference_geo": "global",
+    },
+}
+
 CLAUDE_SONNET_5_5_CACHE_HIT_TEST_CASE: Final = replace(
     CLAUDE_SONNET_5_5_TEST_CASE,
     scenario="prompt_cache_hit",
     mock_provider_response={
         **CLAUDE_SONNET_5_5_TEST_CASE.mock_provider_response,
-        "id": "msg_011Cg32qgbJRU3vZX2TB6vPx",
-        "content": [
-            {
-                "type": "thinking",
-                "thinking": "I'll start by reading shop/validation.py since the user asked for that "
-                "first, then move on to check the related test file after.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0,
-            },
-            {
-                "type": "text",
-                "text": "I need `shop/validation.py` first, because `validate_quantity` at line 18 holds "
-                "the rule. I'll read the function and some of the code around it, in case there "
-                "are helpers or constants it depends on.",
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01U6Ch75cPbVpbpsBEyPP1AN",
-                "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
-                "caller": {"type": "direct"},
-            },
-        ],
-        "usage": {
-            "input_tokens": 4,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 873,
-            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 254,
-            "output_tokens_details": {"thinking_tokens": 92},
-            "service_tier": "standard",
-            "inference_geo": "global",
-        },
+        **CLAUDE_SONNET_5_5_CACHE_HIT_RESPONSE_FIELDS,
     },
     expected_litellm_response={
         **CLAUDE_SONNET_5_5_TEST_CASE.expected_litellm_response,
-        "id": "msg_011Cg32qgbJRU3vZX2TB6vPx",
-        "content": [
-            {
-                "type": "thinking",
-                "thinking": "I'll start by reading shop/validation.py since the user asked for that "
-                "first, then move on to check the related test file after.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0,
-            },
-            {
-                "type": "text",
-                "text": "I need `shop/validation.py` first, because `validate_quantity` at line 18 holds "
-                "the rule. I'll read the function and some of the code around it, in case there "
-                "are helpers or constants it depends on.",
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01U6Ch75cPbVpbpsBEyPP1AN",
-                "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
-                "caller": {"type": "direct"},
-            },
-        ],
-        "usage": {
-            "input_tokens": 4,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 873,
-            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 254,
-            "output_tokens_details": {"thinking_tokens": 92},
-            "service_tier": "standard",
-            "inference_geo": "global",
-        },
+        **CLAUDE_SONNET_5_5_CACHE_HIT_RESPONSE_FIELDS,
     },
 )
 

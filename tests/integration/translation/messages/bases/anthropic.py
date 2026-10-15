@@ -1,6 +1,10 @@
+from collections.abc import Mapping
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
+from integration.translation.messages.templates import MESSAGES_REQUEST, MESSAGES_RESPONSE
+from integration.translation.templates.anthropic import ANTHROPIC_MESSAGES_REQUEST, ANTHROPIC_MESSAGES_RESPONSE
+from pydantic import JsonValue
 
 CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -374,86 +378,56 @@ CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1: Final = (
     "PHy3VOS8NxDVLe4HAPDiOM0YAQ=="
 )
 
+CLAUDE_SONNET_5_5_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_011Cg32qT4xpsR9qgkrqjiGw",
+    "content": [
+        {
+            "type": "thinking",
+            "thinking": "The user asked me to read the validation file first, but since reading the "
+            "test file is independent, I can fetch both in parallel without violating "
+            "the intent of their request.\n"
+            "\n",
+            "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0,
+        },
+        {
+            "type": "thinking",
+            "thinking": "I'll check `validate_quantity` in `shop/validation.py` to see how it "
+            "handles zero, negative, and non-integer values, and also review the "
+            "zero-quantity test in `tests/test_validation.py`.\n"
+            "\n",
+            "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1,
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_01WcurCDsB8E8W42GKceb8B4",
+            "name": "read_file",
+            "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+            "caller": {"type": "direct"},
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_01NdHxDmUwwCWpWyaLT2ThJH",
+            "name": "read_file",
+            "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 40},
+            "caller": {"type": "direct"},
+        },
+    ],
+    "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 873,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 416,
+        "output_tokens_details": {"thinking_tokens": 220},
+        "service_tier": "standard",
+        "inference_geo": "global",
+    },
+}
+
 CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
-    litellm_request={
-        "model": "anthropic/claude-sonnet-5-5",
-        "cache": {"no-cache": True},
-        "max_tokens": 1024,
-        "system": "You help maintain a synthetic Python project. Read the relevant files before suggesting a "
-        "fix. Explain which file you need next, then call a read-only tool. Never change files. Use "
-        "the messages client for this project review. Consider zero, negative and non-integer "
-        "quantities before choosing the next file to inspect.",
-        "messages": [
-            {
-                "role": "user",
-                "content": "The checkout rejects quantities of zero. Find the validation code and its tests.",
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "I will locate the quantity validation and its tests."},
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_synthetic_search_01",
-                        "name": "search_files",
-                        "input": {"query": "quantity", "paths": ["shop/", "tests/"]},
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_synthetic_search_01",
-                        "content": '{"matches": [{"path": "shop/validation.py", "line": 18, '
-                        '"text": "def validate_quantity(quantity):"}, {"path": '
-                        '"tests/test_validation.py", "line": 7, "text": "def '
-                        'test_zero_quantity():"}]}',
-                    },
-                    {
-                        "type": "text",
-                        "text": "Read the validation file first so we can understand how zero and "
-                        "negative quantities are handled.",
-                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
-                    },
-                ],
-            },
-        ],
-        "tools": [
-            {
-                "name": "search_files",
-                "description": "Search source and test files for a literal term.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "paths": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["query", "paths"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "read_file",
-                "description": "Read a range of lines from a project file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "integer", "minimum": 1},
-                        "end_line": {"type": "integer", "minimum": 1},
-                    },
-                    "required": ["path", "start_line", "end_line"],
-                    "additionalProperties": False,
-                },
-            },
-        ],
-        "thinking": {"type": "adaptive", "display": "summarized"},
-        "output_config": {"effort": "high"},
-    },
+    litellm_request={**MESSAGES_REQUEST, "model": "anthropic/claude-sonnet-5-5"},
     expected_provider_endpoint="/v1/messages",
     expected_provider_headers={
         "x-api-key": "synthetic-anthropic-key",
@@ -461,186 +435,21 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
-        "messages": [
-            {
-                "role": "user",
-                "content": "The checkout rejects quantities of zero. Find the validation code and its tests.",
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "I will locate the quantity validation and its tests."},
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_synthetic_search_01",
-                        "name": "search_files",
-                        "input": {"query": "quantity", "paths": ["shop/", "tests/"]},
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_synthetic_search_01",
-                        "content": '{"matches": [{"path": "shop/validation.py", "line": 18, '
-                        '"text": "def validate_quantity(quantity):"}, {"path": '
-                        '"tests/test_validation.py", "line": 7, "text": "def '
-                        'test_zero_quantity():"}]}',
-                    },
-                    {
-                        "type": "text",
-                        "text": "Read the validation file first so we can understand how zero and "
-                        "negative quantities are handled.",
-                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
-                    },
-                ],
-            },
-        ],
-        "max_tokens": 1024,
+        **ANTHROPIC_MESSAGES_REQUEST,
         "model": "claude-sonnet-5-5",
+        "messages": MESSAGES_REQUEST["messages"],
+        "system": MESSAGES_REQUEST["system"],
+        "tools": MESSAGES_REQUEST["tools"],
         "stream": False,
-        "system": "You help maintain a synthetic Python project. Read the relevant files before suggesting a "
-        "fix. Explain which file you need next, then call a read-only tool. Never change files. Use "
-        "the messages client for this project review. Consider zero, negative and non-integer "
-        "quantities before choosing the next file to inspect.",
-        "thinking": {"type": "adaptive", "display": "summarized"},
-        "tools": [
-            {
-                "name": "search_files",
-                "description": "Search source and test files for a literal term.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "paths": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["query", "paths"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "read_file",
-                "description": "Read a range of lines from a project file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "integer", "minimum": 1},
-                        "end_line": {"type": "integer", "minimum": 1},
-                    },
-                    "required": ["path", "start_line", "end_line"],
-                    "additionalProperties": False,
-                },
-            },
-        ],
-        "output_config": {"effort": "high"},
     },
     mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        **CLAUDE_SONNET_5_5_RESPONSE_FIELDS,
         "model": "claude-sonnet-5-5",
-        "id": "msg_011Cg32qT4xpsR9qgkrqjiGw",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "thinking",
-                "thinking": "The user asked me to read the validation file first, but since reading the "
-                "test file is independent, I can fetch both in parallel without violating "
-                "the intent of their request.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0,
-            },
-            {
-                "type": "thinking",
-                "thinking": "I'll check `validate_quantity` in `shop/validation.py` to see how it "
-                "handles zero, negative, and non-integer values, and also review the "
-                "zero-quantity test in `tests/test_validation.py`.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1,
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01WcurCDsB8E8W42GKceb8B4",
-                "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
-                "caller": {"type": "direct"},
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01NdHxDmUwwCWpWyaLT2ThJH",
-                "name": "read_file",
-                "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 40},
-                "caller": {"type": "direct"},
-            },
-        ],
-        "container": None,
-        "stop_reason": "tool_use",
-        "stop_sequence": None,
-        "stop_details": None,
-        "usage": {
-            "input_tokens": 4,
-            "cache_creation_input_tokens": 873,
-            "cache_read_input_tokens": 0,
-            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 416,
-            "output_tokens_details": {"thinking_tokens": 220},
-            "service_tier": "standard",
-            "inference_geo": "global",
-        },
-        "diagnostics": None,
     },
     expected_litellm_response={
+        **MESSAGES_RESPONSE,
+        **CLAUDE_SONNET_5_5_RESPONSE_FIELDS,
         "model": "anthropic/claude-sonnet-5-5",
-        "id": "msg_011Cg32qT4xpsR9qgkrqjiGw",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "thinking",
-                "thinking": "The user asked me to read the validation file first, but since reading the "
-                "test file is independent, I can fetch both in parallel without violating "
-                "the intent of their request.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0,
-            },
-            {
-                "type": "thinking",
-                "thinking": "I'll check `validate_quantity` in `shop/validation.py` to see how it "
-                "handles zero, negative, and non-integer values, and also review the "
-                "zero-quantity test in `tests/test_validation.py`.\n"
-                "\n",
-                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1,
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01WcurCDsB8E8W42GKceb8B4",
-                "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
-                "caller": {"type": "direct"},
-            },
-            {
-                "type": "tool_use",
-                "id": "toolu_01NdHxDmUwwCWpWyaLT2ThJH",
-                "name": "read_file",
-                "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 40},
-                "caller": {"type": "direct"},
-            },
-        ],
-        "container": None,
-        "stop_reason": "tool_use",
-        "stop_sequence": None,
-        "stop_details": None,
-        "usage": {
-            "input_tokens": 4,
-            "cache_creation_input_tokens": 873,
-            "cache_read_input_tokens": 0,
-            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 416,
-            "output_tokens_details": {"thinking_tokens": 220},
-            "service_tier": "standard",
-            "inference_geo": "global",
-        },
-        "diagnostics": None,
     },
 )
