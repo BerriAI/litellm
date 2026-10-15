@@ -29,7 +29,7 @@ class ModelResponseIterator:
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
             if len(processed_chunk.choices) == 0:
-                final_usage: Final = getattr(processed_chunk, "usage", None)
+                final_usage: Final[Usage | None] = getattr(processed_chunk, "usage", None)
                 return GenericStreamingChunk(
                     text="",
                     tool_use=None,

@@ -16,6 +16,7 @@ from litellm.integrations.focus.focus_logger import FocusLogger
 
 if TYPE_CHECKING:
     from litellm.integrations.focus.export_engine import FocusExportEngine
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
 TERNARY_USAGE_DATA_JOB_NAME: Final = "ternary_export_usage_data"
 
@@ -127,8 +128,12 @@ class TernaryLogger(FocusLogger):
         """Run the scheduled export under a Ternary-specific pod lock (distinct from FocusLogger's)."""
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None) if proxy_logging_obj else None
-        pod_lock_manager: Final = getattr(writer, "pod_lock_manager", None) if writer is not None else None
+        writer: Final[object] = (
+            getattr(proxy_logging_obj, "db_spend_update_writer", None) if proxy_logging_obj else None
+        )
+        pod_lock_manager: Final[PodLockManager | None] = (
+            getattr(writer, "pod_lock_manager", None) if writer is not None else None
+        )
 
         if pod_lock_manager and pod_lock_manager.redis_cache:
             acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=TERNARY_USAGE_DATA_JOB_NAME)

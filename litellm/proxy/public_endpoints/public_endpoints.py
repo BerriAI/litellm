@@ -201,6 +201,7 @@ def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
 
 _PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(_ProvidersFile)
 _PROVIDER_CREATE_FIELDS_ADAPTER: Final = TypeAdapter(list[ProviderCreateInfo])
+_JSON_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _load_endpoints() -> list[_EndpointEntry]:
@@ -598,7 +599,7 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     tags=["public", "[beta] Agents"],
     response_model=list[AgentCreateInfo],
 )
-async def get_agent_fields() -> list[AgentCreateInfo]:
+async def get_agent_fields() -> Sequence[Mapping[str, object]]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
 
@@ -614,29 +615,40 @@ async def get_agent_fields() -> list[AgentCreateInfo]:
     agent_create_fields_path: Final = os.path.join(base_path, "agent_create_fields.json")
     provider_create_fields_path: Final = os.path.join(base_path, "provider_create_fields.json")
 
-    with open(agent_create_fields_path, "r") as f:
-        agent_create_fields: Final = json.load(f)
-
-    with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
+    agent_create_fields: Final = _read_json_object_list(agent_create_fields_path)
+    provider_create_fields: Final = _read_json_object_list(provider_create_fields_path)
 
     # Build a lookup map for providers by name
     provider_map: Final = {p["provider"]: p for p in provider_create_fields}
 
-    # Merge inherited credential fields
-    for agent in agent_create_fields:
-        inherit_from = agent.get("inherit_credentials_from_provider")
-        if inherit_from and inherit_from in provider_map:
-            provider = provider_map[inherit_from]
-            # Copy provider fields and mark them for inclusion in litellm_params
-            inherited_fields = []
-            for field in provider.get("credential_fields", []):
-                field_copy = field.copy()
-                field_copy["include_in_litellm_params"] = True
-                inherited_fields.append(field_copy)
-            # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
-        # Remove the inherit field from response (not needed by frontend)
-        agent.pop("inherit_credentials_from_provider", None)
+    return [_agent_with_inherited_credential_fields(agent, provider_map) for agent in agent_create_fields]
 
-    return agent_create_fields
+
+def _read_json_object_list(path: str) -> Sequence[Mapping[str, object]]:
+    with open(path, "r") as f:
+        return _JSON_OBJECT_LIST_ADAPTER.validate_python(json.load(f))
+
+
+def _inherited_credential_fields(provider: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return [
+        {**field, "include_in_litellm_params": True}
+        for field in _JSON_OBJECT_LIST_ADAPTER.validate_python(provider.get("credential_fields", []))
+    ]
+
+
+def _agent_with_inherited_credential_fields(
+    agent: Mapping[str, object], provider_map: Mapping[object, Mapping[str, object]]
+) -> Mapping[str, object]:
+    inherit_from: Final = agent.get("inherit_credentials_from_provider")
+    merged_agent: Final = (
+        {
+            **agent,
+            "credential_fields": [
+                *_JSON_OBJECT_LIST_ADAPTER.validate_python(agent.get("credential_fields", [])),
+                *_inherited_credential_fields(provider_map[inherit_from]),
+            ],
+        }
+        if inherit_from and inherit_from in provider_map
+        else agent
+    )
+    return {key: value for key, value in merged_agent.items() if key != "inherit_credentials_from_provider"}

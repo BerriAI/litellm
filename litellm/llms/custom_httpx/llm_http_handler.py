@@ -2531,9 +2531,10 @@ class BaseLLMHTTPHandler:
             **{key: value for key, value in response_api_optional_request_params.items() if key in modified_kwargs},
             **{key: value for key, value in modified_kwargs.items() if key in optional_param_names},
         }
+        current_litellm_params: Final[Mapping[str, object]] = dict(litellm_params)
         updated_litellm_params: Final = GenericLiteLLMParams(
             **{
-                **{key: value for key, value in dict(litellm_params).items() if key in modified_kwargs},
+                **{key: value for key, value in current_litellm_params.items() if key in modified_kwargs},
                 **{
                     key: value
                     for key, value in modified_kwargs.items()

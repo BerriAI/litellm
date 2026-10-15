@@ -1,7 +1,7 @@
 # stdlib imports
 
 # third party imports
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 import click
 
@@ -10,8 +10,8 @@ from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
 from .commands.auth import (
-    CliContextObj,
     auth_group,
+    cli_context_obj,
     context_secret_vault,
     get_stored_api_key,
     login,
@@ -37,12 +37,21 @@ from .commands.users import users
 from .interface import interactive_shell
 
 
-class _CliContextObjView(Protocol):
+class _CliContextObjSlots(Protocol):
+    def __setitem__(
+        self,
+        key: Literal["base_url", "api_key", "api_key_from_token_file", "base_url_explicit"],
+        value: str | bool | None,
+        /,
+    ) -> None: ...
+
+
+class _WritableCliContextView(Protocol):
     @property
-    def obj(self) -> CliContextObj: ...
+    def obj(self) -> _CliContextObjSlots: ...
 
 
-def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+def _writable_cli_context_obj(view: _WritableCliContextView) -> _CliContextObjSlots:
     return view.obj
 
 
@@ -120,16 +129,17 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
         else api_key
     )
 
-    ctx.obj["base_url"] = base_url
-    ctx.obj["api_key"] = resolved_api_key
-    ctx.obj["api_key_from_token_file"] = api_key_from_token_file
+    ctx_obj: Final = _writable_cli_context_obj(ctx)
+    ctx_obj["base_url"] = base_url
+    ctx_obj["api_key"] = resolved_api_key
+    ctx_obj["api_key_from_token_file"] = api_key_from_token_file
     # `--base-url` defaults to localhost:4000 for local dev convenience, but
     # apiKeyHelper is invoked bare (no flags) -- commands that must work
     # unattended (print-token) need to tell "user didn't say" apart from
     # "user said localhost:4000 on purpose" so they can fall back to
     # whatever server the stored token was actually issued for. A base_url
     # saved via `lite config set` counts as the user saying it.
-    ctx.obj["base_url_explicit"] = base_url_provided or (bool(stored_base_url) and not setup_command)
+    ctx_obj["base_url_explicit"] = base_url_provided or (bool(stored_base_url) and not setup_command)
 
     if show_version:
         print_version(base_url, resolved_api_key)
@@ -144,7 +154,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 @click.pass_context
 def version(ctx: click.Context):
     """Show the LiteLLM Proxy CLI and server version."""
-    ctx_obj: Final = _cli_context_obj(ctx)
+    ctx_obj: Final = cli_context_obj(ctx)
     print_version(ctx_obj.get("base_url"), ctx_obj.get("api_key"))
 
 

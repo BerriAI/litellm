@@ -725,11 +725,8 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    return _largest_int(policy.model_dump().values())
-
-
-def _largest_int(values: Iterable[object]) -> int:
-    return max((value for value in values if isinstance(value, int)), default=0)
+    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -1434,7 +1431,7 @@ class Router:
         if not startup_nodes:
             _env_cluster_nodes: Final = get_secret("REDIS_CLUSTER_NODES")
             if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                startup_nodes = json.loads(_env_cluster_nodes)
+                startup_nodes = _OPAQUE_VALUE_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
         if startup_nodes:
             return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})

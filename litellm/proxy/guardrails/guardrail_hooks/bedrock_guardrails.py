@@ -117,6 +117,7 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS: Final = (
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES: Final = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
+_DECODED_JSON: Final = TypeAdapter(object)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -2166,11 +2167,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             try:
                 raw: Final = getattr(response, "content", None)
                 if isinstance(raw, (bytes, bytearray)):
-                    payload = json.loads(raw.decode("utf-8"))
+                    payload = _DECODED_JSON.validate_python(json.loads(raw.decode("utf-8")))
                 else:
                     text: Final = getattr(response, "text", None)
                     if isinstance(text, str):
-                        payload = json.loads(text)
+                        payload = _DECODED_JSON.validate_python(json.loads(text))
             except Exception:
                 # Can't parse -> assume no explicit Exception marker
                 return False

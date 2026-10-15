@@ -51,6 +51,7 @@ class _BflPolledResult(TypedDict):
 
 
 _BFL_POLLED_RESULT_ADAPTER: Final = TypeAdapter(_BflPolledResult)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _BFL_REQUEST_PARAMS: Final = (
@@ -317,7 +318,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            raw_response_data: Final = raw_response.json()
+            raw_response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,

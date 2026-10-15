@@ -1168,7 +1168,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state: Final = getattr(request, "state", None)
+        _request_state: Final[object] = getattr(request, "state", None)
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -3973,7 +3973,7 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
+    if _config_field_endpoints(response) is None:
         response.field_value = [data_dict]
     elif isinstance(response.field_value, list):
         response.field_value.append(data_dict)
@@ -4063,7 +4063,7 @@ async def delete_pass_through_endpoints(
 
     ## Update field by removing endpoint
     pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
-    if response.field_value is None or pass_through_endpoint_data is None:
+    if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "There are no pass-through endpoints setup."},

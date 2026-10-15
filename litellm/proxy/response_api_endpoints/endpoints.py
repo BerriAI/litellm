@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -1351,7 +1353,7 @@ async def _read_ws_model_from_first_frame(
         return None
 
     try:
-        first_event: Final = json.loads(first_message)
+        first_event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(first_message)))
     except json.JSONDecodeError:
         await websocket.send_text(
             json.dumps(
@@ -1367,7 +1369,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
-    if not isinstance(first_event, dict) or first_event.get("type") != "response.create":
+    if first_event is None or first_event.get("type") != "response.create":
         await websocket.send_text(
             json.dumps(
                 {

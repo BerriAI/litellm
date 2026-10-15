@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator, Sequence
 from functools import partial
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -242,7 +242,7 @@ async def anthropic_messages(
     client: AsyncHTTPHandler | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[Any]:
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
@@ -419,8 +419,8 @@ def anthropic_messages_handler(
 ) -> (
     AnthropicMessagesResponse
     | Iterator[bytes]
-    | AsyncIterator[Any]
-    | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
+    | AsyncIterator[object]
+    | Coroutine[object, None, AnthropicMessagesResponse | AsyncIterator[object] | Iterator[bytes]]
 ):
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec

@@ -3,9 +3,13 @@ import json
 from os import PathLike
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 from litellm.types.utils import CallTypes
+
+_DECODED_JSONL_ROW: Final = TypeAdapter(object)
 
 
 class InMemoryFile(io.BytesIO):
@@ -41,7 +45,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         if char == "\n":
             # Try to parse what we have so far
             try:
-                json_object = json.loads(buffer.strip())
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
                 json_objects.append(json_object)
                 buffer = ""  # Reset buffer for next JSON object
             except json.JSONDecodeError:
@@ -51,7 +55,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
     # Handle any remaining content in buffer
     if buffer.strip():
         try:
-            json_object = json.loads(buffer.strip())
+            json_object = _DECODED_JSONL_ROW.validate_python(json.loads(buffer.strip()))
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
             verbose_logger.error("error parsing final buffer: %s..., error: %s", buffer[:100], e)
@@ -116,7 +120,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
                 buffer = ""
                 continue
             try:
-                json_object = json.loads(stripped)
+                json_object = _DECODED_JSONL_ROW.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
             if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -49,6 +50,8 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -313,7 +316,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return None
 
         try:
-            data: Final = json.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(json.loads(json_str))
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:

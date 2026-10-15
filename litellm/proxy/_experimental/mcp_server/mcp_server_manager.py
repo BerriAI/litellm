@@ -2904,7 +2904,7 @@ class MCPServerManager:
             verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
-                for method in ["get", "post", "put", "delete", "patch"]:
+                for method in ("get", "post", "put", "delete", "patch"):
                     if method not in path_item:
                         continue
 

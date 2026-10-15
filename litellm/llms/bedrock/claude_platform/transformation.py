@@ -1,15 +1,20 @@
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from .common_utils import (
     BedrockClaudePlatformMixin,
     filter_claude_platform_request_body,
     resolve_unsupported_override,
 )
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -91,10 +96,10 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(

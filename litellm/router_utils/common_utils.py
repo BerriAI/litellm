@@ -36,7 +36,8 @@ def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else {}
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
     user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
-    return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+    user_role: Final[object] = getattr(user_api_key_auth, "user_role", None)
+    return user_role == "proxy_admin"
 
 
 _is_proxy_admin_request = is_proxy_admin_request

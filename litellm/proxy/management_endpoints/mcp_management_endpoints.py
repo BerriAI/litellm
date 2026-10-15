@@ -103,6 +103,10 @@ class _HasServerId(Protocol):
     server_id: str
 
 
+def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
+    return claims
+
+
 def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server_id: str) -> bool:
     """
     Check if the mcp server with the given id exists in the iterable of mcp servers.
@@ -2195,8 +2199,9 @@ if MCP_AVAILABLE:
                         # UI session cookies may omit exp; don't require it.
                         options={"verify_exp": False, "verify_aud": False},
                     )
-                    if decoded.get("login_method") in ("sso", "username_password"):
-                        cookie_key: Final[str] = decoded.get("key", "")
+                    session_claims: Final = _session_cookie_claims(decoded)
+                    if session_claims.get("login_method") in ("sso", "username_password"):
+                        cookie_key: Final = session_claims.get("key", "")
                         if cookie_key:
                             api_key = f"Bearer {cookie_key}"
                 except _jwt.InvalidTokenError:
@@ -3370,10 +3375,12 @@ if MCP_AVAILABLE:
         "openapi_registry.json",
     )
 
+    _OPENAPI_REGISTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
     @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> dict[str, object]:
         with open(_OPENAPI_REGISTRY_PATH, "r") as f:
-            data: Final[dict[str, object]] = json.load(f)
+            data: Final = _OPENAPI_REGISTRY_ADAPTER.validate_python(json.load(f))
         return data
 
     @router.get(

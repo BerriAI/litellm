@@ -818,7 +818,7 @@ class AWSEventStreamDecoder:
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
-    ) -> Iterator[GChunk | ModelResponseStream | dict]:
+    ) -> Iterator[GChunk | ModelResponseStream | dict[str, object]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 

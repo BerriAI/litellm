@@ -8,6 +8,8 @@ import click
 
 from litellm._logging import verbose_logger
 
+from .commands.auth import cli_context_obj
+
 
 def styled_prompt():
     """Create a styled blue box prompt for user input."""
@@ -113,7 +115,7 @@ def setup_shell(ctx: click.Context):
     show_banner()
 
     # Show server connection info
-    base_url: Final = ctx.obj.get("base_url")
+    base_url: Final = cli_context_obj(ctx).get("base_url")
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
 
     show_commands()

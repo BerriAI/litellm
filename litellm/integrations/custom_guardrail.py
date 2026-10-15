@@ -145,6 +145,10 @@ def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str
     }
 
 
+def _instance_attributes(value: object) -> Mapping[str, object]:
+    return vars(value)
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 
@@ -1581,7 +1585,7 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        for key, value in vars(litellm_params).items():
+        for key, value in _instance_attributes(litellm_params).items():
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(

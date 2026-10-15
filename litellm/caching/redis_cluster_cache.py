@@ -5,6 +5,7 @@ Key differences:
 - RedisClient NEEDs to be re-used across requests, adds 3000ms latency if it's re-created
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.caching.redis_cache import RedisCache
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
     pipeline = Pipeline
     async_redis_client = Redis
-    Span = _Span | Any
+    Span = _Span
 else:
     pipeline = Any
     async_redis_client = Any
@@ -27,13 +28,13 @@ class RedisClusterCache(RedisCache):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
         return self.redis_client.mget_nonatomic(keys=keys)
 
-    async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    async def _async_run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """

@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -182,12 +183,20 @@ def get_error_message(error_obj) -> str | None:
 
 
 ####### EXCEPTION MAPPING ################
+_DECODED_ERROR_BODY: Final = TypeAdapter(object)
+
+
 def _get_body_error_code(error_str: str) -> int | None:
     """Return error.code from a JSON error body, or None if not parseable."""
     try:
-        body: Final = json.loads(error_str)
-        code: Final = body.get("error", {}).get("code")
-        return int(code) if code is not None else None
+        body: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(error_str)))
+        if body is None:
+            return None
+        error: Final = as_str_mapping(body.get("error", {}))
+        if error is None:
+            return None
+        code: Final = error.get("code")
+        return int(code) if isinstance(code, (str, int, float)) else None
     except Exception:
         return None
 

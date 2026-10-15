@@ -37,7 +37,10 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
+    from opentelemetry._logs import SeverityNumber
+    from opentelemetry.sdk._logs._internal import LogRecord
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import SpanContext
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
@@ -128,7 +131,7 @@ class OTELGenAISemconvMixin:
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[type[LogRecord], type[SeverityNumber]]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -227,7 +230,7 @@ class OTELGenAISemconvMixin:
         response_obj: dict,
         provider: str | None,
         otel_logger,
-        parent_ctx,
+        parent_ctx: "SpanContext",
     ) -> None:
         """Emit the consolidated ``gen_ai.client.inference.operation.details``
         log event, correlated to the request span via ``parent_ctx``.

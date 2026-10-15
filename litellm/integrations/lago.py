@@ -147,9 +147,10 @@ class LagoLogger(CustomLogger):
 
             response.raise_for_status()
         except Exception as e:
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_response is not None and hasattr(error_response, "text"):
-                verbose_logger.debug("\nError Message: %s", error_response.text)
+                error_text: Final[object] = getattr(error_response, "text", None)
+                verbose_logger.debug("\nError Message: %s", error_text)
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):

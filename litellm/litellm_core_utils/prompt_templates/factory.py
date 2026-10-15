@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 import litellm.types
@@ -207,6 +207,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -1282,7 +1283,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
                 if signature_from_function_fields:
                     return cast(str, signature_from_function_fields)  # cast-ok: untyped provider response field
         elif hasattr(function, "provider_specific_fields") and getattr(function, "provider_specific_fields"):
-            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields")
+            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields", None)
             if isinstance(function_provider_fields, dict):
                 typed_function_provider_fields: Final = cast(  # cast-ok: provider fields are dynamic
                     dict[str, object], function_provider_fields
@@ -1575,7 +1576,7 @@ def convert_to_gemini_tool_call_result(
     try:
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
-            parsed: Final = json.loads(content_str)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(content_str))
             if isinstance(parsed, dict):
                 response_data = parsed  # Use the parsed JSON directly
             else:
@@ -2913,7 +2914,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
                     for value in _element:
                         try:
                             if value.text is not None:
-                                _value = json.loads(value.text)
+                                _value = _DECODED_JSON.validate_python(json.loads(value.text))
                             else:
                                 continue
                         except json.JSONDecodeError:
@@ -2923,7 +2924,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
             # If property is not an array, append the value directly
             elif _element is not None and _element.text is not None:
                 try:
-                    _value = json.loads(_element.text)
+                    _value = _DECODED_JSON.validate_python(json.loads(_element.text))
                 except json.JSONDecodeError:
                     _value = _element.text
                 params[prop] = _value

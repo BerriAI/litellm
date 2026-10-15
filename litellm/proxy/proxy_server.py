@@ -22,6 +22,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Iterable,
     Mapping,
     MutableMapping,
     Sequence,
@@ -9903,10 +9904,14 @@ def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
         return False
     if getattr(choice, "logprobs", None) is not None:
         return False
-    delta: Final = getattr(choice, "delta", None)
+    delta: Final = choice.delta if hasattr(choice, "delta") else None
     if delta is None:
         return True
-    return all(value is None for value in delta.model_dump().values())
+    return _all_values_none(delta.model_dump().values())
+
+
+def _all_values_none(values: Iterable[object]) -> bool:
+    return all(value is None for value in values)
 
 
 async def _apply_streaming_chunk_hooks(
@@ -13070,6 +13075,10 @@ async def audio_speech(
         )
 
 
+def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in form_data.items() if key != "file"}
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13097,7 +13106,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
-        data = {key: value for key, value in form_data.items() if key != "file"} | data
+        data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -18773,8 +18782,9 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
+    requested_value: Final[object] = data.field_value
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
-        return await _persist_general_settings_ui_litellm_field(data.field_name, data.field_value, user_api_key_dict)
+        return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)
 
     if data.field_name not in ConfigGeneralSettings.model_fields:
         raise HTTPException(
@@ -18783,16 +18793,16 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings.model_validate({data.field_name: data.field_value})
+        ConfigGeneralSettings.model_validate({data.field_name: requested_value})
     except Exception:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid type of field value={type(data.field_value)} passed in."},
+            detail={"error": f"Invalid type of field value={type(requested_value)} passed in."},
         )
 
     if data.field_name == "alerting_args":
         try:
-            SlackAlertingArgs.model_validate(data.field_value)
+            SlackAlertingArgs.model_validate(requested_value)
         except ValidationError as e:
             errors: Final = "; ".join(f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}" for err in e.errors())
             raise HTTPException(
@@ -18817,10 +18827,10 @@ async def update_config_general_settings(
 
     proxy_config.reject_config_owned_writes(
         section_name="general_settings",
-        changed_keys={data.field_name: cast(JsonValue, data.field_value)},  # cast-ok: validated above
+        changed_keys={data.field_name: cast(JsonValue, requested_value)},  # cast-ok: validated above
     )
 
-    field_value = data.field_value
+    field_value = requested_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
 

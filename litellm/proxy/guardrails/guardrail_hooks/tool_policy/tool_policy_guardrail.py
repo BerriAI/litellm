@@ -44,6 +44,10 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
+def _attribute(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
 def _get_request_object_permission_ids(
     request_data: dict,
 ) -> tuple[str | None, str | None]:
@@ -56,8 +60,8 @@ def _get_request_object_permission_ids(
             continue
         auth = meta.get("user_api_key_auth")
         if auth is not None and hasattr(auth, "object_permission_id"):
-            key_op = getattr(auth, "object_permission_id", None)
-            team_op = getattr(auth, "team_object_permission_id", None)
+            key_op = _attribute(auth, "object_permission_id")
+            team_op = _attribute(auth, "team_object_permission_id")
             if key_op is not None or team_op is not None:
                 return (
                     str(key_op).strip() if key_op else None,

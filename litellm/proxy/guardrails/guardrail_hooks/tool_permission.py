@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import Any, Final, Literal, TypedDict
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm import ChatCompletionToolParam
@@ -40,6 +41,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -314,7 +316,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
-                parsed_arguments = json.loads(arguments)
+                parsed_arguments = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
             else:

@@ -1,7 +1,8 @@
 import json
 import os
 import time
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -152,7 +153,7 @@ def completion(
             )
 
         ## Load Config
-        config: Final = litellm.VertexAIConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.VertexAIConfig.get_config())
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
@@ -404,7 +405,7 @@ def completion(
                     completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             usage = Usage(
                 prompt_tokens=prompt_tokens,
@@ -550,7 +551,7 @@ async def async_completion(
                 completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             # set usage
             usage = Usage(

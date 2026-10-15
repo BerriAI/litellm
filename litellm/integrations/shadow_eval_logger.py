@@ -941,7 +941,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
+                {
+                    target: tuple(job for _, job in group)
+                    for target, group in groupby(by_target, key=lambda entry: entry[0])
+                }
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}

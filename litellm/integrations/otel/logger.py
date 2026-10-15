@@ -964,10 +964,14 @@ def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
     callback folds into the preset, whose config is env-only.
     """
     otel_settings: Final = (litellm.callback_settings or {}).get("otel")
-    configured: Final = otel_settings.get("excluded_services") if isinstance(otel_settings, dict) else None
+    configured: Final = _excluded_services_setting(otel_settings) if isinstance(otel_settings, dict) else None
     if configured is None:
         return logger.config.excluded_services
     return excluded_db_systems_from(configured)
+
+
+def _excluded_services_setting(otel_settings: Mapping[str, object]) -> object:
+    return otel_settings.get("excluded_services")
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:

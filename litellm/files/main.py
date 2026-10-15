@@ -11,7 +11,7 @@ import time
 import uuid as uuid_module
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -163,7 +163,7 @@ def create_file(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
+) -> OpenAIFileObject | Coroutine[object, None, OpenAIFileObject]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
@@ -859,8 +859,8 @@ def file_content(
 ) -> (
     HttpxBinaryResponseContent
     | FileContentStreamingResult
-    | Coroutine[Any, Any, HttpxBinaryResponseContent]
-    | Coroutine[Any, Any, FileContentStreamingResult]
+    | Coroutine[object, None, HttpxBinaryResponseContent]
+    | Coroutine[object, None, FileContentStreamingResult]
 ):
     """
     Returns the contents of the specified file.

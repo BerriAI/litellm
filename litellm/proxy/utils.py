@@ -77,6 +77,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
+    attribute_of,
     litellm_call_id_headers,
     openai_error_param,
     with_litellm_call_id,
@@ -6078,9 +6079,9 @@ class PrismaClient:
             if prisma_obj.is_connected() is not True:
                 return 0
             engine: Final = prisma_obj._engine  # pyright: ignore[reportPrivateUsage]  # Prisma engine internals
-            process: Final = getattr(engine, "process", None)
+            process: Final = attribute_of(engine, "process")
             if process is not None:
-                pid: Final[object] = process.pid
+                pid: Final = attribute_of(process, "pid")
                 if isinstance(pid, int):
                     return pid
         except (AttributeError, TypeError):

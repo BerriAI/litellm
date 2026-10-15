@@ -583,13 +583,17 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
+def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
+    return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
+
+
 def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
     stripped: Final[list[str]] = []
-    if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
+    if _opts_out_of_message_redaction(data):
         stripped.append("turn_off_message_logging")
         data.pop("turn_off_message_logging", None)
     for slot_label, metadata in iter_client_callback_metadata_dicts(data):
-        if "turn_off_message_logging" in metadata and _is_false_like(metadata["turn_off_message_logging"]):
+        if _opts_out_of_message_redaction(metadata):
             stripped.append(f"{slot_label}.turn_off_message_logging")
             metadata.pop("turn_off_message_logging", None)
     if stripped:

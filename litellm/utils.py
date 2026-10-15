@@ -24,7 +24,6 @@ import subprocess
 
 # What is this?
 ## Generic utils.py file. Problem-specific utils (e.g. 'cost calculation), should all be in `litellm_core_utils/`.
-import sys
 import textwrap
 import threading
 import time
@@ -447,6 +446,8 @@ if TYPE_CHECKING:
     )
     from litellm.types.rerank import RerankResponse
     from litellm.types.router import AllowedModelRegion, LiteLLM_Params
+
+    executor: BoundedLoggingThreadPoolExecutor
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -1910,7 +1911,7 @@ def client(original_function):
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
-                executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
+                executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
@@ -3572,7 +3573,7 @@ def get_optional_params_transcription(
     passed_params: Final = locals()
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
+    passed_params.pop("custom_llm_provider")
     passed_params.pop("drop_params")
     drop_params = normalize_drop_params(drop_params)
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
@@ -3676,7 +3677,7 @@ def get_optional_params_image_gen(
     provider_config: BaseImageGenerationConfig | None = None,
     drop_params: bool | None = None,
     **kwargs: object,
-):
+) -> dict[str, object]:
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("model", None)
@@ -5131,10 +5132,10 @@ def add_provider_specific_params_to_optional_params(
             dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(
                 param for param in (additional_drop_params or ()) if isinstance(param, str)
             )
-            processed_extra_body: Final = {k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
-
-            ensure_extra_body_is_safe: Final = getattr(sys.modules[__name__], "ensure_extra_body_is_safe")
-            optional_params["extra_body"] = ensure_extra_body_is_safe(extra_body=processed_extra_body)
+            ensure_extra_body_is_safe: Final = litellm_utils.ensure_extra_body_is_safe
+            optional_params["extra_body"] = ensure_extra_body_is_safe(
+                extra_body={k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
+            )
     else:
         for k in passed_params:
             if k not in openai_params and passed_params[k] is not None:
@@ -7277,7 +7278,7 @@ _should_retry = should_retry
 
 
 def _get_retry_after_from_exception_header(
-    response_headers: httpx.Headers | None = None,
+    response_headers: Mapping[str, str] | None = None,
 ):
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
@@ -7291,7 +7292,7 @@ def _get_retry_after_from_exception_header(
         # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
         # details.
         if response_headers is not None:
-            retry_header: Final[str] = response_headers.get("retry-after")
+            retry_header: Final = response_headers.get("retry-after", "")
             try:
                 retry_after = int(retry_header)
             except Exception:
@@ -8050,16 +8051,16 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
         if base_model is not None:
             return cast(str | None, base_model)
         metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
-        base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
-            sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
+        base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
+            litellm_utils.get_base_model_from_litellm_call_metadata
         )
         base_model_from_metadata: Final = base_model_metadata_getter(metadata=metadata)
         if base_model_from_metadata is not None:
             return base_model_from_metadata
 
         litellm_metadata: Final = cast(Mapping[str, object], litellm_params.get("litellm_metadata", {}))
-        litellm_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
-            sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
+        litellm_metadata_getter: Final[_BaseModelFromMetadataGetter] = (
+            litellm_utils.get_base_model_from_litellm_call_metadata
         )
         return litellm_metadata_getter(metadata=litellm_metadata)
     return None

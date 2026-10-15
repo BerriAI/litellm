@@ -1808,6 +1808,10 @@ async def _team_member_within_fallback_model_budget(
     return True
 
 
+def _content_text(fields: Mapping[str, object]) -> str:
+    return str(fields.get("content", ""))
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -4091,7 +4095,7 @@ class ProxyBaseLLMRequestProcessing:
                         try:
                             d = chunk.model_dump(mode="json", exclude_none=True)
                             if isinstance(d, dict):
-                                str_so_far += str(d.get("content", ""))
+                                str_so_far += _content_text(d)
                         except Exception:
                             pass
                     elif isinstance(chunk, dict):
@@ -4312,24 +4316,18 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
     @staticmethod
-    def _openai_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _openai_stream_usage(usage: Mapping[str, Any]) -> Usage:
         prompt_tokens: Final = int(usage.get("prompt_tokens", 0) or 0)
         completion_tokens: Final = int(usage.get("completion_tokens", 0) or 0)
         total_tokens: Final = int(
             usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
         )
-        return MappingProxyType(
-            {
-                key: value
-                for key, value in (
-                    ("prompt_tokens", prompt_tokens),
-                    ("completion_tokens", completion_tokens),
-                    ("total_tokens", total_tokens),
-                    ("completion_tokens_details", usage.get("completion_tokens_details")),
-                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
-                )
-                if value is not None
-            }
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            completion_tokens_details=usage.get("completion_tokens_details"),
+            prompt_tokens_details=usage.get("prompt_tokens_details"),
         )
 
     @staticmethod
@@ -4339,7 +4337,7 @@ class ProxyBaseLLMRequestProcessing:
         if obj.get("type") == "message_delta":
             return AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
         if obj.get("object") == "chat.completion.chunk":
-            return Usage(**ProxyBaseLLMRequestProcessing._openai_stream_usage_kwargs(usage))
+            return ProxyBaseLLMRequestProcessing._openai_stream_usage(usage)
         return None
 
     @staticmethod

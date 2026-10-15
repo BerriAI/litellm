@@ -8,7 +8,7 @@ Docs - https://jina.ai/embeddings/
 
 import types
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -27,6 +27,14 @@ from ..common_utils import JinaAIError
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
     """
     Reference: https://jina.ai/embeddings/
@@ -42,9 +50,10 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -142,7 +151,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _json_body(raw_response)
         ## LOGGING
         logging_obj.post_call(
             input=input,

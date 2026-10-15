@@ -74,6 +74,7 @@ OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_PART_ADAPTER: Final = TypeAdapter(dict[str, object])
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
 
@@ -215,7 +216,7 @@ def _carries_cache_breakpoint(block: object) -> bool:
 
 def _attribute_or_key(value: object, key: str) -> object | None:
     if hasattr(value, key):
-        return getattr(value, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(value, key))
     if isinstance(value, Mapping):
         return value.get(key)
     return None
@@ -969,7 +970,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def maybe_seed_default_injection_points(
-        non_default_params: dict[str, Any],
+        non_default_params: dict[str, object],
         messages: list[AllMessageValues],
         model: str,
         custom_llm_provider: str | None,
@@ -1095,7 +1096,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def maybe_inject_cache_control(
         messages: list[dict],
         system: str | list | None,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
         tools: list[dict] | None = None,

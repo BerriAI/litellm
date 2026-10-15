@@ -233,8 +233,9 @@ class _FetchAttemptRetryable:
 
 
 def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
-    header: Final[str | None] = response.headers.get("Retry-After")
-    if header is None:
+    try:
+        header: Final = response.headers["Retry-After"]
+    except KeyError:
         return None
     try:
         seconds: Final = float(header)
@@ -246,7 +247,7 @@ def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
 def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: random.Random) -> float:
     if outcome.retry_after_seconds is not None:
         return min(outcome.retry_after_seconds, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-    return min(float(2**attempt) + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
+    return min(2.0**attempt + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
 
 
 class _AsyncGetClient(Protocol):

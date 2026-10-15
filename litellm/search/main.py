@@ -6,7 +6,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -67,7 +67,7 @@ async def asearch(
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -170,9 +170,9 @@ def search(
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     **kwargs,
-) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
+) -> SearchResponse | Coroutine[object, object, SearchResponse]:
     """
     Synchronous Search function.
 

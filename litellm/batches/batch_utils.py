@@ -5,6 +5,8 @@ from dataclasses import replace as dataclasses_replace
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -35,6 +37,7 @@ class BatchCostUsageResult:
 
 
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_DECODED_BATCH_LINE: Final = TypeAdapter(object)
 
 
 def _uses_native_vertex_output(
@@ -611,7 +614,7 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict[str, object
 
 def _parse_batch_output_line(line: bytes) -> dict[str, object] | None:
     try:
-        parsed: Final[object] = json.loads(line)
+        parsed: Final = _DECODED_BATCH_LINE.validate_python(json.loads(line))
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None

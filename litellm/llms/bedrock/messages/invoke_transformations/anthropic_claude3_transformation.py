@@ -104,7 +104,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -888,7 +888,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg: dict[str, object] = cast(dict[str, Any], chunk.get("message") or {})
+                msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)

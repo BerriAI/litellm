@@ -5,7 +5,8 @@ Provides guardrail translation support for the OCR endpoint.
 Processes the extracted markdown text from OCR pages.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class OCRHandler(BaseTranslation):
@@ -35,7 +37,7 @@ class OCRHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> Any:
+    ) -> Mapping[str, object]:
         """
         Process OCR input by applying guardrails to the document reference.
 
@@ -89,9 +91,9 @@ class OCRHandler(BaseTranslation):
         response: "OCRResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "OCRResponse":
         """
         Process OCR output by applying guardrails to extracted page text.
 

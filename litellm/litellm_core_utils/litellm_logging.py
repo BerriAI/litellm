@@ -2960,10 +2960,10 @@ class Logging(LiteLLMLoggingBaseClass):
                                 continue
                             else:
                                 print_verbose("reaches supabase for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
-                        model = kwargs["model"]
-                        messages = kwargs["messages"]
+                        model = self._model_call_details_view["model"]
+                        messages = self._model_call_details_view["messages"]
                         optional_params = kwargs.get("optional_params", {})
                         litellm_params = kwargs.get("litellm_params", {})
                         supabaseClient.log_event(
@@ -3002,7 +3002,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 continue
                             else:
                                 print_verbose("reaches logfire for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
                         logfireLogger.log_event(
                             kwargs=self.model_call_details,
@@ -3027,7 +3027,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             if "complete_streaming_response" not in kwargs:
                                 continue
                             else:
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
                         lunaryLogger.log_event(
                             type=type,
@@ -3037,7 +3037,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             input=input,
                             user_id=kwargs.get("user", None),
                             # user_props=self.model_call_details.get("user_props", None),
-                            extra=kwargs.get("optional_params", {}),
+                            extra=self._model_call_details_view.get("optional_params", {}),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -3056,7 +3056,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 continue
                             else:
                                 print_verbose("reaches helicone for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
                         heliconeLogger.log_success(
                             model=model,
@@ -3084,7 +3084,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 continue
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
                         langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
                             globalLangfuseLogger=langFuseLogger,
@@ -3122,7 +3122,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 continue
                             else:
                                 print_verbose("reaches greenscale for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = self._model_call_details_view["complete_streaming_response"]
 
                         greenscaleLogger.log_event(
                             kwargs=kwargs,
@@ -3197,7 +3197,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 self.model_call_details["complete_response"] = self.model_call_details.get(
                                     "complete_streaming_response", {}
                                 )
-                                result = self.model_call_details["complete_response"]
+                                result = self._model_call_details_view["complete_response"]
                             openMeterLogger.log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=result,
@@ -3222,7 +3222,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 self.model_call_details["complete_response"] = self.model_call_details.get(
                                     "complete_streaming_response", {}
                                 )
-                                result = self.model_call_details["complete_response"]
+                                result = self._model_call_details_view["complete_response"]
 
                             callback.log_success_event(
                                 kwargs=self.model_call_details,
@@ -4361,7 +4361,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             model_response: Final = litellm.ModelResponse(id=served_id)
             model_response.model = self.model
-            usage: Final = getattr(result, "usage", None)
+            usage: Final = result.usage
             if usage is not None and ResponseAPILoggingUtils.is_response_api_usage(usage):
                 setattr(
                     model_response,
