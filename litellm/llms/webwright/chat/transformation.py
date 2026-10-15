@@ -37,7 +37,9 @@ class WebwrightChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches the base provider signature that returns a plain list
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: matches the base provider signature that returns a plain list
         """
         WebWright supports the standard OpenAI chat completion parameters.
         Reference: https://webwright.ai/v1
