@@ -1936,6 +1936,82 @@ GPT_5_4_MINI_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE: Final = CostTrackingTestCase(
+    name="gpt-5.4-mini-stream_cache_read_choice_bearing_usage",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="gpt-5.4-mini",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6c1f0b2a9d4e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "scripted answer 6c1f0b2a9d4e"},
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788260,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "delta": {}}],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288},
+                },
+            },
+            done=True,
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00171808, input_cost=0.00065408, output_cost=0.001064, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
 GPT_5_4_MINI_AUDIO_INPUT: Final = CostTrackingTestCase(
     name="gpt-5.4-mini-audio_input",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -11191,6 +11267,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_STREAM_FULL_USAGE,
     GPT_5_4_MINI_INPUT_TEXT,
     GPT_5_4_MINI_CACHE_READ,
+    GPT_5_4_MINI_STREAM_CACHE_READ_CHOICE_BEARING_USAGE,
     GPT_5_4_MINI_AUDIO_INPUT,
     GPT_5_4_MINI_AUDIO_OUTPUT,
     GPT_5_4_MINI_REASONING,
