@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm._logging import JsonFormatter, verbose_logger
 from litellm.router_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_STRENGTH_ORDER,
     RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -503,6 +504,15 @@ def _sent(
     ).value
 
 
+def _bare_map_model_declaring_fewer_levels() -> tuple[str, str]:
+    def declares_fewer(key: str, entry: Mapping[str, object]) -> bool:
+        levels: Final = entry.get("reasoning_effort_levels")
+        return "/" not in key and isinstance(levels, list) and not set(REASONING_EFFORT_STRENGTH_ORDER) <= set(levels)
+
+    model, entry = next((key, entry) for key, entry in litellm.model_cost.items() if declares_fewer(key, entry))
+    return str(entry["litellm_provider"]), model
+
+
 class TestResolveDeploymentReasoningEffort:
     @pytest.mark.parametrize(
         "requested, expected",
@@ -568,6 +578,14 @@ class TestResolveDeploymentReasoningEffort:
         assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
             "medium"
         )
+
+    def test_a_model_info_echoing_a_map_key_rounds_nothing_the_deployment_did_not_declare(self, local_model_cost_map):
+        provider, model = _bare_map_model_declaring_fewer_levels()
+        echoed: Final = {"key": f"{provider}/{model}", "litellm_provider": provider}
+
+        sent: Final = [_sent(level, echoed, model=model, provider=provider) for level in REASONING_EFFORT_STRENGTH_ORDER]
+
+        assert sent == list(REASONING_EFFORT_STRENGTH_ORDER)
 
     @pytest.mark.parametrize(
         "requested, expected",
@@ -675,4 +693,6 @@ class TestThinkingBudgetEffort:
     def test_only_a_provider_that_would_send_an_effort_gets_one(self, model, custom_llm_provider, expected):
         thinking: Final = {"type": "enabled", "budget_tokens": 2048}
 
-        assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider) == expected
+        assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False) == (
+            expected
+        )

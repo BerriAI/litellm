@@ -6,6 +6,7 @@ import json
 from collections.abc import Coroutine
 from typing import Final, Literal, cast, overload
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -95,7 +96,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if _tools is not None:
             non_default_params["tools"] = _tools
 
-        thinking_effort: Final = reasoning_effort_from_thinking(non_default_params.pop("thinking", None))
+        thinking_effort: Final = reasoning_effort_from_thinking(
+            non_default_params.pop("thinking", None), drop_params=drop_params or litellm.drop_params is True
+        )
         if thinking_effort is not None and "reasoning_effort" not in non_default_params:
             non_default_params["reasoning_effort"] = thinking_effort
 

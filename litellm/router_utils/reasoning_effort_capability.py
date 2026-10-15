@@ -92,7 +92,10 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     validate-model-prices-json, but an operator can put this key on a config.yaml model_info block
     where that schema never runs, and one mistyped level must not fail every sibling on the proxy."""
     own: Final = model_info.get(_DECLARED_EFFORTS_KEY)
-    raw: Final = own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY)
+    return _declared_levels(own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY))
+
+
+def _declared_levels(raw: object) -> tuple[str, ...] | None:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return None
     declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
@@ -158,12 +161,18 @@ def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[s
     endpoint accepts, so reading the map here would round requests for siblings and for models
     nobody declared levels on."""
     own_info: Final = as_str_mapping(deployment_model_info)
-    return declared_reasoning_efforts(own_info) if own_info is not None else None
+    return _declared_levels(own_info.get(_DECLARED_EFFORTS_KEY)) if own_info is not None else None
 
 
 def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     return declared is not None and any(level in _STRENGTH_RANK for level in declared)
+
+
+def deployment_rounds_thinking_budget(deployment_model_info: object, custom_llm_provider: str) -> bool:
+    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
+        return deployment_reasoning_effort_levels(deployment_model_info) is not None
+    return deployment_rounds_reasoning_effort(deployment_model_info)
 
 
 def with_adaptive_thinking_as_effort(
@@ -176,7 +185,7 @@ def with_adaptive_thinking_as_effort(
     return translated
 
 
-def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str) -> str | None:
+def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> str | None:
     adaptive_config: Final = as_str_mapping(
         with_adaptive_thinking_as_effort(
             {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
@@ -189,7 +198,7 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
         get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()
     ):
         return None
-    return reasoning_effort_from_thinking(thinking)
+    return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
 
 
 def adaptive_thinking_beside_effort(

@@ -130,7 +130,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.realtime_api.main import realtime_health_check
 from litellm.router_utils.reasoning_effort_capability import (
     adaptive_thinking_beside_effort,
-    deployment_rounds_reasoning_effort,
+    deployment_rounds_thinking_budget,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_deployment_reasoning_effort,
@@ -196,7 +196,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -5489,14 +5489,16 @@ def completion(
             api_base=api_base,
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        drop_unsupported_reasoning: Final = (
+            litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
+        )
         thinking_effort: Final = (
-            thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider)
+            thinking_budget_effort(
+                thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_unsupported_reasoning
+            )
             if reasoning_effort is None
             and thinking is not None
-            and (
-                custom_llm_provider == "hosted_vllm"
-                or deployment_rounds_reasoning_effort(routing_kwargs.get("model_info"))
-            )
+            and deployment_rounds_thinking_budget(routing_kwargs.get("model_info"), custom_llm_provider)
             else None
         )
         deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
@@ -5507,9 +5509,28 @@ def completion(
             model_group=model_group_from_metadata(
                 routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
             ),
-            drop_params=litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
+            drop_params=drop_unsupported_reasoning,
         )
         resolved_reasoning_effort: Final = deployment_reasoning_effort.value
+        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        resolved_output_config: Final = resolve_deployment_reasoning_effort(
+            requested_output_config,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=routing_kwargs.get("model_info"),
+            model_group=model_group_from_metadata(
+                routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
+            ),
+            drop_params=drop_unsupported_reasoning,
+        ).value
+        provider_params: Final = (
+            non_default_params
+            if resolved_output_config is requested_output_config
+            else {
+                **{key: value for key, value in non_default_params.items() if key != "output_config"},
+                **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
+            }
+        )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
@@ -5665,11 +5686,11 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        optional_params = get_optional_params(**optional_param_args, **provider_params)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
-            special_params=non_default_params,
+            special_params=provider_params,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
@@ -5893,7 +5914,7 @@ def completion(
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
             ),
             shared_session=shared_session,
             stream=stream,
