@@ -94,6 +94,7 @@ from litellm.proxy._experimental.mcp_server.interactions import (
     seal_continuation,
     target_digest,
 )
+from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
     _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2216,7 +2217,9 @@ async def _execute_mcp_tool(
             client_ip=client_ip,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            host_progress_callback=host_progress_callback,
+            host_progress_callback=_guarded_progress_callback(
+                host_progress_callback, litellm_logging_obj, user_api_key_auth, kwargs
+            ),
             wire_compat=wire_compat,
             input_responses=input_responses,
             request_state=request_state,
@@ -2309,6 +2312,33 @@ async def _execute_mcp_tool(
         user_api_key_auth=user_api_key_auth,
         request_data=kwargs,
     )
+
+
+def _guarded_progress_callback(
+    callback: ProgressCallback | None,
+    logging_obj: LiteLLMLoggingObj | None,
+    caller: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+) -> ProgressCallback | None:
+    if callback is None:
+        return None
+
+    async def forward(progress: float, total: float | None, message: str | None = None) -> None:
+        if message is None:
+            await callback(progress, total, None)
+            return
+        try:
+            checked: Final = await _run_post_mcp_call_guardrails(
+                CallToolResult(content=[TextContent(type="text", text=message)]), logging_obj, caller, request_data
+            )
+            filtered: Final = TextContent.model_validate(checked.content[0]).text
+        except Exception:  # noqa: BLE001  # any guardrail failure must withhold unverified progress text
+            verbose_logger.warning("Withheld MCP progress text because its output guardrail check failed")
+            await callback(progress, total, None)
+        else:
+            await callback(progress, total, filtered)
+
+    return forward
 
 
 async def _run_post_mcp_call_guardrails(
@@ -2450,6 +2480,20 @@ async def fire_mcp_tool_call_failure_logging(
     )
 
 
+def _single_scoped_server(
+    mcp_servers: Sequence[str] | None, allowed_mcp_servers: Sequence[MCPServer]
+) -> MCPServer | None:
+    """The one server a ``/{server_name}/mcp`` path or ``x-mcp-servers`` header scoped this call to.
+
+    A bare tool name on such a request resolves against that server, the way a REST ``server_id``
+    does, instead of against the per-process tool-name map, which stays empty for a server whose
+    upstream only lists tools with the caller's own credentials until this process has listed it.
+    """
+    if mcp_servers is None or len(mcp_servers) != 1 or len(allowed_mcp_servers) != 1:
+        return None
+    return allowed_mcp_servers[0]
+
+
 @client
 @catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
@@ -2511,6 +2555,7 @@ async def call_mcp_tool(
                 detail="User not allowed to call this tool.",
             )
 
+        scoped_server: Final = _single_scoped_server(mcp_servers, allowed_mcp_servers)
         # Delegate to execute_mcp_tool for execution
         response = await execute_mcp_tool(
             name=name,
@@ -2527,6 +2572,7 @@ async def call_mcp_tool(
             input_responses=input_responses,
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
+            requested_server_id=scoped_server.server_id if scoped_server is not None else None,
             **kwargs,
         )
     except Exception as e:
@@ -3009,11 +3055,12 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except MCPUpstreamAuthError as e:
-        # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
-        # mid-session tool call cannot emit a raw 401 + WWW-Authenticate the way the REST
-        # call path and the connect-time preemptive check do. Return an explicit isError
-        # naming the upstream status (at info level, not a traceback) so the client still
-        # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
+        scope_response: Final = get_scope_response()
+        if scope_response is not None:
+            scope_response.deny(e)
+        # The request-owned response adapter relays managed scope challenges before
+        # Streamable HTTP headers commit. Other auth failures retain the existing
+        # explicit tool error, including failures after streaming has begun.
         verbose_logger.info("Upstream auth failure calling MCP tool: HTTP %s", e.status_code)
         return CallToolResult(
             content=[

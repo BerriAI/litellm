@@ -890,3 +890,20 @@ def test_deepseek_fill_reasoning_content_guard_in_transform_request():
     assert "reasoning_content" not in result["messages"][1], (
         "reasoning_content should not be injected for non-reasoning models"
     )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/deepseek",
+        "https://gateway.example.com/deepseek/",
+        "https://gateway.example.com/deepseek/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        DeepSeekChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="deepseek-chat", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/deepseek/chat/completions"
+    )

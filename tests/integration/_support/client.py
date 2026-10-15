@@ -57,6 +57,17 @@ def eventually(
         time.sleep(0.1)
 
 
+def until_asserted(check: Callable[[], T], *, seconds: float = 10) -> T:
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        try:
+            return check()
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+        time.sleep(0.1)
+
+
 def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
     """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
     deadline: Final = time.monotonic() + seconds
@@ -240,11 +251,20 @@ class Scenario:
         info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
         assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
-    def delete_model(self, identity: str) -> None:
-        self.gateway.post("/model/delete", {"id": identity})
+    def served_model_ids(self) -> frozenset[JsonValue]:
         entries: Final = self.gateway.get("/model/info")["data"]
         assert isinstance(entries, list)
-        assert all(object_value(object_value(entry)["model_info"])["id"] != identity for entry in entries)
+        return frozenset(object_value(object_value(entry)["model_info"])["id"] for entry in entries)
+
+    def delete_model(self, identity: str) -> None:
+        from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+
+        self.gateway.post("/model/delete", {"id": identity})
+        eventually(
+            self.served_model_ids,
+            lambda served: identity not in served,
+            seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+        )
         assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
 
     def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:

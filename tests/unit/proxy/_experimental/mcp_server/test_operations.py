@@ -276,7 +276,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object(), protocol_version="2025-06-18")
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -303,7 +303,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
 
     async def enter_operation():
         async with server._legacy_operation_context(request, trace=True):
@@ -564,6 +564,88 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
 
     assert [tool.name for tool in listing.tools] == ["echo"]
 
+
+
+def _scoped_rig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[MCPServer, MCPServer, AsyncMock, AsyncMock]:
+    """Two config servers that both expose a bare ``list_rules`` on a manager that has listed neither."""
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    memory: Final = MCPServer(
+        server_id="id-memory", name="memory_server", server_name="memory_server", transport=MCPTransport.http
+    )
+    other: Final = MCPServer(
+        server_id="id-other", name="other_server", server_name="other_server", transport=MCPTransport.http
+    )
+    manager.config_mcp_servers = {server.server_id: server for server in (memory, other)}
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(
+        manager, "get_allowed_mcp_servers", AsyncMock(return_value=[memory.server_id, other.server_id])
+    )
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    listing: Final = AsyncMock()
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", listing)
+    handled: Final = AsyncMock(
+        return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    )
+    monkeypatch.setattr(operations, "_handle_managed_mcp_tool", handled)
+    return memory, other, listing, handled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["memory_server", "other_server"])
+async def test_bare_tool_name_on_a_single_server_scope_routes_to_that_server_cold(
+    monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    """``/{server_name}/mcp`` (or ``x-mcp-servers`` naming one server) with the upstream's bare tool name
+    must list and call the scoped server on a process whose tool-name map has never seen it, and when two
+    servers share the bare name the scope decides (BerriAI/litellm#44831)."""
+    memory, other, listing, handled = _scoped_rig(monkeypatch)
+    expected: Final = memory if scope == "memory_server" else other
+
+    async with operations.global_mcp_server_manager.catalog.operation():
+        result: Final = await operations.call_mcp_tool(
+            name="list_rules",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-scoped"),
+            mcp_servers=[scope],
+        )
+
+    assert result.is_error is False
+    assert listing.await_args.kwargs["mcp_servers"] == [expected.server_id]
+    assert handled.await_args.kwargs["server_name"] == expected.name
+    assert handled.await_args.kwargs["name"] == "list_rules"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mcp_servers", [None, ["memory_server", "other_server"]])
+async def test_bare_tool_name_without_a_single_server_scope_is_still_unresolved_cold(
+    monkeypatch: pytest.MonkeyPatch, mcp_servers: list[str] | None
+) -> None:
+    """The scope shortcut only applies when the request names exactly one server; an ambiguous bare name
+    keeps today's answer rather than being guessed onto the first allowed server."""
+    from fastapi import HTTPException
+
+    _memory, _other, listing, handled = _scoped_rig(monkeypatch)
+
+    async with operations.global_mcp_server_manager.catalog.operation():
+        with pytest.raises(HTTPException) as unresolved:
+            await operations.call_mcp_tool(
+                name="list_rules",
+                arguments={},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-scoped"),
+                mcp_servers=mcp_servers,
+            )
+
+    assert unresolved.value.status_code == 404
+    listing.assert_not_awaited()
+    handled.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_tools_call_pre_call_check_enforces_mcp_server_rpm() -> None:
@@ -1205,17 +1287,17 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
     ):
         task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            await asyncio.gather(*(event.wait() for event in ready))
             if outcome == "cancel":
                 task.cancel()
             else:
                 release.set()
             if outcome == "success":
-                result = await asyncio.wait_for(task, 1)
+                result = await task
                 assert result.capabilities.model_dump(exclude_none=True) == {}
             else:
                 with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
-                    await asyncio.wait_for(task, 1)
+                    await task
             assert all(event.is_set() for event in closed)
             assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
         finally:

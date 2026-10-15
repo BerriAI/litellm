@@ -2,11 +2,13 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-from collections.abc import AsyncIterator, Iterator
+import types
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues
@@ -54,14 +56,14 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 
 def validate_dict(
-    data: dict, model: type
+    data: Mapping[str, object], model: type[BaseModel]
 ) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 def _fold_message_cache_control(
-    message: dict[str, object],
-) -> dict[str, object]:
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
     """Move a message-level cache_control marker onto the content block.
 
     litellm's cache_control_injection_points hook attaches cache_control to the
@@ -140,7 +142,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
