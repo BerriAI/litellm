@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -116,11 +117,13 @@ ROUTES: Final[Mapping[str, Callable[[str], object]]] = MappingProxyType(
         "edenai-model-list": lambda api_base: litellm.get_valid_models(
             check_provider_endpoint=True, custom_llm_provider="edenai", api_key=FAKE_KEY, api_base=api_base
         ),
-        "gemini-rag-ingest": lambda api_base: litellm.ingest(
-            ingest_options={
-                "vector_store": {"custom_llm_provider": "gemini", "api_base": api_base, "api_key": FAKE_KEY}
-            },
-            file_data=("notes.txt", b"hello", "text/plain"),
+        "gemini-rag-ingest": lambda api_base: asyncio.run(
+            litellm.aingest(
+                ingest_options={
+                    "vector_store": {"custom_llm_provider": "gemini", "api_base": api_base, "api_key": FAKE_KEY}
+                },
+                file_data=("notes.txt", b"hello", "text/plain"),
+            )
         ),
     }
 )
