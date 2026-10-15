@@ -176,6 +176,33 @@ class TestClaudePlatformActionsCovered:
         )
 
 
+class TestClaudePlatformOutboundIdentityCovered:
+    """Claude Platform on AWS calls ``sts:GetWebIdentityToken`` with the
+    caller's session before serving inference. Without it in the ceiling,
+    every claude_platform request via OIDC auth denies with "no session
+    policy allows the sts:GetWebIdentityToken action" even when the role's
+    identity policy grants it."""
+
+    def test_get_web_identity_token_present(self):
+        assert "sts:GetWebIdentityToken" in _granted_actions(_captured_policy()), (
+            "sts:GetWebIdentityToken missing from session policy — "
+            "bedrock/claude_platform/* requests will 403 on OIDC auth"
+        )
+
+    def test_outbound_identity_statement_is_scoped(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "ClaudePlatformOutboundIdentityLiteLLM")
+        assert stmt["Effect"] == "Allow"
+        assert tuple(stmt["Action"]) == ("sts:GetWebIdentityToken",), (
+            "the outbound identity statement must grant only sts:GetWebIdentityToken"
+        )
+
+    def test_no_sts_wildcard(self):
+        assert "sts:*" not in _granted_actions(_captured_policy()), (
+            "session policy must not grant sts:* — only GetWebIdentityToken is needed"
+        )
+
+
 class TestBedrockMantleActionsCovered:
     """LIT-3859: bedrock_mantle inference authorizes against the
     ``bedrock-mantle`` action namespace, so the session-policy ceiling
