@@ -168,6 +168,21 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["content"] == "Hello world!"
         assert result["messages"][0]["role"] == "user"
 
+    def test_transform_request_keeps_history_think_tags_out_of_thinking_when_inline_extraction_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "disable_inline_reasoning_extraction", True)
+        messages: Final = cast(
+            list[AllMessageValues],
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "<think>plan</think>Hello"}],
+        )
+
+        result: Final = OllamaChatConfig().transform_request(
+            model="qwen3", messages=messages, optional_params={}, litellm_params={}, headers={}
+        )
+
+        assert result["messages"][1] == {"role": "assistant", "content": "<think>plan</think>Hello", "images": []}
+
     def test_transform_request_empty_content_list(self):
         """Test handling of empty content list in transform_request"""
         config = OllamaChatConfig()
