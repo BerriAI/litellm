@@ -757,13 +757,13 @@ class TestResponses:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_responses_azure_openai_dated_chat_api_version_serves_responses_via_responses_api_version(
+    def test_responses_azure_openai_dated_ga_chat_api_version_serves_responses(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model: Final = _register(
             proxy,
             resources,
-            azure_openai_params(api_version="2024-10-21", responses_api_version=AZURE_OPENAI_API_VERSION),
+            azure_openai_params(api_version="2024-10-21"),
             prefix="e2e-responses-azure-dated-chat",
         )
         client: Final = sdk.openai(resources.key())
@@ -775,7 +775,40 @@ class TestResponses:
             extra_body=NO_PROXY_CACHE,
         )
         assert response.output_text.strip(), (
-            f"/responses over an azure deployment pinned to a dated chat api_version returned no output text: "
+            f"/responses over an azure deployment pinned to a dated GA chat api_version returned no output text: "
+            f"{response.output!r}"
+        )
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_azure_openai_responses_api_version_overrides_a_pre_responses_api_version(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        # Azure rejects /openai/responses below api-version 2025-03-01-preview (probed live 2026-10-15),
+        # so this call only succeeds if the proxy sends responses_api_version instead of api_version.
+        model: Final = _register(
+            proxy,
+            resources,
+            azure_openai_params(api_version="2024-10-01-preview", responses_api_version=AZURE_OPENAI_API_VERSION),
+            prefix="e2e-responses-azure-override",
+        )
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="reply with one word",
+            instructions=INSTRUCTIONS,
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert response.output_text.strip(), (
+            f"/responses over an azure deployment with responses_api_version set returned no output text: "
             f"{response.output!r}"
         )
 

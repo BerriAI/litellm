@@ -45,7 +45,7 @@ def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping
     responses_api_version: Final = _str_param(litellm_params, "responses_api_version")
     if responses_api_version is not None:
         return responses_api_version
-    if api_version is None or _DATED_GA_API_VERSION.fullmatch(api_version):
+    if api_version is not None and _DATED_GA_API_VERSION.fullmatch(api_version):
         return AZURE_DEFAULT_RESPONSES_API_VERSION
     return api_version
 

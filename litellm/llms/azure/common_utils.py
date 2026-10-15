@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
@@ -25,6 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -847,7 +849,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+                new_url = str(parsed_url.copy_with(path=_LAST_OPENAI_PATH_SEGMENT.sub(r"\1/v1", parsed_url.path, 1)))
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)

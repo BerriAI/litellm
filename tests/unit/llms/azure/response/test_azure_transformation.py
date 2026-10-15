@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -362,6 +363,33 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert url == api_base
+
+    def test_api_version_in_env_api_base_query_wins_over_a_dated_ga_api_version(self, monkeypatch: pytest.MonkeyPatch):
+        env_api_base: Final = (
+            "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
+        )
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setenv("AZURE_API_BASE", env_api_base)
+
+        url: Final = self.config.get_complete_url(api_base=None, litellm_params={"api_version": "2024-10-21"})
+
+        assert url == env_api_base
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected_path"),
+        [
+            ("https://apim.example.com/openai-gw/team", "/openai-gw/team/openai/v1/responses"),
+            ("https://apim.example.com/openai/team-a", "/openai/team-a/openai/v1/responses"),
+        ],
+    )
+    @pytest.mark.parametrize("litellm_params", [{"api_version": "2024-10-21"}, {"responses_api_version": "v1"}])
+    def test_v1_route_only_rewrites_the_responses_route_segment_of_a_gateway_api_base(
+        self, api_base: str, expected_path: str, litellm_params: dict[str, str]
+    ):
+        url: Final = httpx.URL(self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params))
+
+        assert url.host == "apim.example.com"
+        assert url.path == expected_path
 
     def test_azure_cancel_response_api_request(self):
         """Test Azure cancel response API request transformation"""
@@ -791,7 +819,7 @@ def _azure_chat_bridged_to_responses(api_version: str) -> str | None:
 
 @pytest.mark.parametrize("call_responses", [_azure_responses_create, _azure_chat_bridged_to_responses])
 def test_dated_ga_api_version_sends_responses_to_the_unset_api_version_url(
-    respx_mock: respx.MockRouter, call_responses
+    respx_mock: respx.MockRouter, call_responses: Callable[[str], str | None]
 ) -> None:
     route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(
         return_value=httpx.Response(200, json=_COMPLETED_RESPONSE)
