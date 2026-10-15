@@ -694,6 +694,9 @@ async def test_the_in_process_coordinator_is_retried_until_redis_appears():
         {"GENERIC_TOKEN_ENDPOINT": TOKEN_ENDPOINT, "GENERIC_CLIENT_SECRET": "s"},
         {"GENERIC_TOKEN_ENDPOINT": TOKEN_ENDPOINT, "GENERIC_CLIENT_ID": "litellm"},
         {"GENERIC_TOKEN_ENDPOINT": "", "GENERIC_CLIENT_ID": "litellm", "GENERIC_CLIENT_SECRET": "s"},
+        {"GOOGLE_CLIENT_ID": "google-cid"},
+        {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_CLIENT_SECRET": "s"},
+        {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_TENANT": "tenant"},
     ],
 )
 def test_a_partial_sso_client_is_no_client(env):
@@ -715,6 +718,64 @@ def test_the_configured_sso_client_is_the_one_the_login_used():
     assert config.token_endpoint == TOKEN_ENDPOINT
     assert config.client_id == "litellm"
     assert config.client_secret.get_secret_value() == "s3cret"
+
+
+def test_a_google_login_is_renewed_at_googles_token_endpoint_as_the_google_client():
+    """fastapi-sso's Google login redeems the code at Google's token endpoint with HTTP Basic, so
+    that is where and how the refresh token it handed back is redeemed."""
+    config = sso_client_config({"GOOGLE_CLIENT_ID": "google-cid", "GOOGLE_CLIENT_SECRET": "google-secret"})
+
+    assert config is not None
+    assert config.token_endpoint == "https://oauth2.googleapis.com/token"
+    assert config.client_id == "google-cid"
+    assert config.client_secret.get_secret_value() == "google-secret"
+    assert config.auth_method == "client_secret_basic"
+
+
+def test_a_microsoft_login_is_renewed_at_the_tenant_token_endpoint_as_the_microsoft_client():
+    config = sso_client_config(
+        {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_CLIENT_SECRET": "ms-secret", "MICROSOFT_TENANT": "tenant-123"}
+    )
+
+    assert config is not None
+    assert config.token_endpoint == "https://login.microsoftonline.com/tenant-123/oauth2/v2.0/token"
+    assert config.client_id == "ms-cid"
+    assert config.client_secret.get_secret_value() == "ms-secret"
+    assert config.auth_method == "client_secret_basic"
+
+
+def test_a_custom_microsoft_token_endpoint_wins_over_the_tenant_template():
+    """``MICROSOFT_TOKEN_ENDPOINT`` is what the Microsoft login itself honours for sovereign
+    clouds, so the renewal has to go to the same place."""
+    config = sso_client_config(
+        {
+            "MICROSOFT_CLIENT_ID": "ms-cid",
+            "MICROSOFT_CLIENT_SECRET": "ms-secret",
+            "MICROSOFT_TENANT": "tenant-123",
+            "MICROSOFT_TOKEN_ENDPOINT": "https://login.microsoftonline.us/tenant-123/oauth2/v2.0/token",
+        }
+    )
+
+    assert config is not None
+    assert config.token_endpoint == "https://login.microsoftonline.us/tenant-123/oauth2/v2.0/token"
+
+
+def test_the_client_follows_the_login_callbacks_provider_order():
+    """A deployment carrying a Google and a generic client signs users in through Google, so the
+    stored refresh token belongs to the Google client and only that client can redeem it."""
+    config = sso_client_config(
+        {
+            "GOOGLE_CLIENT_ID": "google-cid",
+            "GOOGLE_CLIENT_SECRET": "google-secret",
+            "GENERIC_TOKEN_ENDPOINT": TOKEN_ENDPOINT,
+            "GENERIC_CLIENT_ID": "litellm",
+            "GENERIC_CLIENT_SECRET": "s3cret",
+        }
+    )
+
+    assert config is not None
+    assert config.client_id == "google-cid"
+    assert config.token_endpoint == "https://oauth2.googleapis.com/token"
 
 
 def test_the_live_store_renews_over_the_database_reader():
