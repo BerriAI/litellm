@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -19,8 +20,9 @@ import anthropic
 import openai
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
+from integration._support.mcp import EntryPoint, McpCaller, echo_tool, register_mcp, scripted_peer, tool_calls
 from integration._support.otlp_sink import AuditConfigWriter, SpanSinks, recorded_spans
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -175,6 +177,7 @@ class Rig:
     chat_model: str
     claude_model: str
     responses_model: str
+    scenario: Scenario
 
     def base(self) -> str:
         return str(self.proxy.client.base_url).rstrip("/")
@@ -183,19 +186,17 @@ class Rig:
         return tuple(request.body.decode() for request in self.provider.drain() if marker.encode() in request.body)
 
     def entries(self, response_id: str, name: str) -> tuple[dict[str, object], ...]:
-        rows: Final = eventually(
-            lambda: read_rows(
-                'SELECT request_id, status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (response_id,)
-            ),
-            lambda values: len(values) >= 1,
-            seconds=70,
+        return _named_entries(
+            'SELECT request_id, status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (response_id,), name
         )
-        assert len(rows) == 1, rows
-        recorded: Final = object_value(rows[0]["metadata"]).get("guardrail_information")
-        assert isinstance(recorded, list), rows[0]
-        return tuple(
-            entry for entry in (object_value(item) for item in recorded) if entry.get("guardrail_name") == name
-        )
+
+
+def _named_entries(query: str, parameters: tuple[str, ...], name: str) -> tuple[dict[str, object], ...]:
+    rows: Final = eventually(lambda: read_rows(query, parameters), lambda values: len(values) >= 1, seconds=70)
+    assert len(rows) == 1, rows
+    recorded: Final = object_value(rows[0]["metadata"]).get("guardrail_information")
+    assert isinstance(recorded, list), rows[0]
+    return tuple(entry for entry in (object_value(item) for item in recorded) if entry.get("guardrail_name") == name)
 
 
 def _findings(entry: dict[str, object]) -> tuple[str, ...]:
@@ -229,7 +230,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         responses: Final = scenario.model(
             model="openai/gpt-5.4-mini", api_base=provider.url + "/v1", api_key="synthetic-openai-key"
         )
-        yield Rig(owned.gateway, provider, chat, claude, responses)
+        yield Rig(owned.gateway, provider, chat, claude, responses, scenario)
 
 
 def _marker() -> str:
@@ -365,6 +366,25 @@ def test_logging_only_flags_tool_arguments_an_enforcing_mode_rejects_and_keeps_s
     ]
 
 
+@pytest.mark.parametrize("entry", ("mcp", "rest"))
+def test_logging_only_block_records_every_match_on_an_mcp_tool_call(rig: Rig, entry: EntryPoint) -> None:
+    alias: Final = "cfmcp" + uuid.uuid4().hex[:8]
+    arguments: Final = {"note": f"{_marker()} {SECRETS}"}
+    with scripted_peer(echo_tool("echo")) as peer:
+        server_id: Final = register_mcp(rig.scenario, peer, alias)
+        key: Final = rig.scenario.key(object_permission={"mcp_servers": [server_id]})
+        outcome: Final = McpCaller(rig.proxy, key, entry, alias).call(f"{alias}-echo", arguments, server_id=server_id)
+        assert (outcome.error, outcome.text) == (None, json.dumps(arguments, sort_keys=True)), outcome.raw
+        assert [call["body"]["params"]["arguments"] for call in tool_calls(peer.drain())] == [arguments]
+
+    entries: Final = _named_entries(
+        'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s',
+        (sha256(key.encode()).hexdigest(), "call_mcp_tool"),
+        OBSERVE_BLOCK,
+    )
+    assert _verdicts(entries) == [("logging_only", "guardrail_flagged", ("aws_access_key", "github_pat"))], entries
+
+
 def test_logging_only_mask_records_every_match(rig: Rig) -> None:
     marker: Final = _marker()
     response_id, answer = _sync_chat(rig, f"{marker} {SECRETS}\n{FORBIDDEN_WORD}")
@@ -489,7 +509,6 @@ def test_guardrails_monitor_counts_observe_only_matches_as_flagged_not_blocked(r
             ),
             lambda body: int(str(body.get("requestsEvaluated", 0))) >= 1,
             seconds=60,
-            return_last_on_timeout=True,
         )
         assert (detail["failRate"], detail["status"]) == (0.0, "healthy"), detail
     finally:
