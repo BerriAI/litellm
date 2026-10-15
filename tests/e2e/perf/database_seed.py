@@ -161,8 +161,8 @@ def initialize(connection: psycopg.Connection[tuple[object, ...]], spec: SeedSpe
             "FROM generate_series(0, 999) AS g"
         )
         connection.execute(
-            'INSERT INTO "LiteLLM_EndUserTable" (user_id, models, blocked) '
-            "SELECT 'perf-end-user-' || g, '{}', true FROM generate_series(0, 99999) AS g"
+            'INSERT INTO "LiteLLM_EndUserTable" (user_id, blocked) '
+            "SELECT 'perf-end-user-' || g, true FROM generate_series(0, 99999) AS g"
         )
         connection.execute(
             'INSERT INTO "LiteLLM_VerificationToken" (token, key_alias, user_id, team_id, models, blocked) '

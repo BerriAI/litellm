@@ -38,9 +38,13 @@ def seed_database(seed_database_url: str) -> Generator[psycopg.Connection[tuple[
         yield connection
 
 
+@pytest.mark.parametrize("legacy_end_user", (False, True))
 def test_metadata_seed_resumes_without_duplicates_and_rolls_up_exact_totals(
     seed_database: psycopg.Connection[tuple[object, ...]],
+    legacy_end_user: bool,
 ) -> None:
+    if legacy_end_user:
+        seed_database.execute('ALTER TABLE "LiteLLM_EndUserTable" DROP COLUMN models')
     initialize(seed_database, SPEC)
     assert seed_batch(seed_database, SPEC, 1000) == 1000
     assert seed_batch(seed_database, SPEC, 1000) == 2000
@@ -89,7 +93,8 @@ def test_metadata_seed_resumes_without_duplicates_and_rolls_up_exact_totals(
         'LEFT JOIN "LiteLLM_VerificationToken" k ON l.api_key = k.token '
         'LEFT JOIN "LiteLLM_TeamTable" t ON l.team_id = t.team_id '
         'LEFT JOIN "LiteLLM_UserTable" u ON l."user" = u.user_id '
-        "WHERE k.token IS NULL OR t.team_id IS NULL OR u.user_id IS NULL"
+        'LEFT JOIN "LiteLLM_EndUserTable" e ON l.end_user = e.user_id '
+        "WHERE k.token IS NULL OR t.team_id IS NULL OR u.user_id IS NULL OR e.user_id IS NULL"
     ).fetchone() == (0,)
     assert seed_database.execute(
         'SELECT EXISTS(SELECT 1 FROM "LiteLLM_SpendLogs" l '
