@@ -233,7 +233,7 @@ class AnthropicAdapter:
     def __init__(self) -> None:
         pass
 
-    def translate_completion_input_params(self, kwargs) -> ChatCompletionRequest | None:
+    def translate_completion_input_params(self, kwargs: Mapping[str, object]) -> ChatCompletionRequest | None:
         """
         Translate Anthropic request params to OpenAI format.
 
