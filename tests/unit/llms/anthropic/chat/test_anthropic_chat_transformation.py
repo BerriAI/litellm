@@ -9399,6 +9399,7 @@ def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_
 _UNRUNNABLE_TOOL_SEARCH_CASES: Final = [
     pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", "anthropic", "server", id="model-without-tool-search"),
     pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, "client", id="client-executed-search"),
+    pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, 123, id="malformed-execution-search"),
 ]
 
 

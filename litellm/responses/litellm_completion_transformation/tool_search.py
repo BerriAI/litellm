@@ -54,7 +54,7 @@ def is_server_tool_search_tool(tool: object) -> bool:
         parsed: Final = _ToolSearchFields.model_validate(tool)
     except ValidationError:
         return False
-    return parsed.type == "tool_search" and parsed.execution != "client"
+    return parsed.type == "tool_search" and parsed.execution in (None, "server")
 
 
 def has_server_tool_search(tools: Sequence[object] | None) -> bool:
