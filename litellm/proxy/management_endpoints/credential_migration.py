@@ -587,9 +587,10 @@ async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-# vantage_settings / cloudzero_settings sensitive fields (see *_endpoints.py).
+# vantage_settings / cloudzero_settings / ternary_settings sensitive fields (see *_endpoints.py).
 _VANTAGE_SENSITIVE: Final = ["api_key", "integration_token"]
 _CLOUDZERO_SENSITIVE: Final = ["api_key"]
+_TERNARY_SENSITIVE: Final = ["api_key"]
 
 
 async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: object) -> list[LocationReport]:
@@ -665,6 +666,7 @@ async def migrate_encryption(
     report.add(await _migrate_callback_vars_table(prisma_client, "verification_token", dry_run))
     report.add(await _migrate_config_settings_row(prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run))
     report.add(await _migrate_config_settings_row(prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run))
+    report.add(await _migrate_config_settings_row(prisma_client, "ternary_settings", _TERNARY_SENSITIVE, dry_run))
     report.add(await _migrate_sso_config(prisma_client, dry_run))
 
     return report
@@ -691,6 +693,9 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     report.add(await _migrate_config_settings_row(prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run=True))
     report.add(
         await _migrate_config_settings_row(prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run=True)
+    )
+    report.add(
+        await _migrate_config_settings_row(prisma_client, "ternary_settings", _TERNARY_SENSITIVE, dry_run=True)
     )
     report.add(await _migrate_sso_config(prisma_client, dry_run=True))
     return report

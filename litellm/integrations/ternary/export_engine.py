@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -184,6 +184,28 @@ async def _read_usage(database: _UsageSource, *, limit: int | None, window: Focu
     return _keep_window_days(data, window)
 
 
+FocusFrame: TypeAlias = _Frame
+
+
+def _focus_transformer() -> _Transformer:
+    return FocusTransformer()
+
+
+def focus_rows_for(data: _Frame) -> _Frame:
+    """The FOCUS rows Ternary receives for `data`, with token counts merged into Tags."""
+    transformed: Final = _focus_transformer().transform(data)
+    if transformed.is_empty():
+        return transformed
+    return _merge_token_tags(transformed, data)
+
+
+def usage_days(data: _Frame) -> tuple[str, ...]:
+    """The sorted UTC days `data` falls on, one upload each."""
+    if "date" not in data.columns:
+        return ()
+    return tuple(sorted({day for day in map(_canonical_day, data.get_column("date").to_list()) if day is not None}))
+
+
 def _day_payload(data: _Frame, *, transformer: _Transformer, serializer: _Serializer) -> bytes:
     transformed: Final = transformer.transform(data)
     if transformed.is_empty():
@@ -252,4 +274,4 @@ class TernaryExportEngine(FocusExportEngine):
         )
 
 
-__all__ = ("TernaryExportEngine",)
+__all__ = ("FocusFrame", "TernaryExportEngine", "focus_rows_for", "usage_days")

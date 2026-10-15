@@ -116,6 +116,10 @@ class TernaryLogger(FocusLogger):
         start_time: Final = (now_utc - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
         return FocusTimeWindow(start_time=start_time, end_time=now_utc, frequency=self.frequency)
 
+    def scheduled_window(self, now: datetime) -> FocusTimeWindow:
+        """The window a scheduled export at `now` sends."""
+        return self._compute_time_window(now)
+
     def _ensure_engine(self) -> FocusExportEngine:
         """Instantiate the polars-backed Ternary export engine lazily."""
         if self._engine is None:
