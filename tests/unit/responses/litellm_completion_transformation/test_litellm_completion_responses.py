@@ -6469,18 +6469,26 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
 _COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Earlier turns covered the Tokyo trip."}
 
 
+_COMPACTION_REQUESTED: Final = ResponsesAPIOptionalRequestParams(
+    context_management=[{"type": "compaction", "compact_threshold": 50000}]
+)
+_SUMMARY_AS_TEXT: Final = {"role": "assistant", "content": _COMPACTION_BLOCK["content"]}
+
+
 @pytest.mark.parametrize(
-    ("model", "replayed_compaction"),
+    ("model", "responses_api_request", "replayed_compaction"),
     [
         (
             "anthropic/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED,
             {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]}},
         ),
-        ("gemini/gemini-3.8-flash", {"role": "assistant", "content": _COMPACTION_BLOCK["content"]}),
+        ("anthropic/claude-sonnet-5-5", ResponsesAPIOptionalRequestParams(), _SUMMARY_AS_TEXT),
+        ("gemini/gemini-3.8-flash", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
     ],
 )
-def test_compaction_input_item_replays_as_a_compaction_block_only_on_anthropic_routes(
-    model: str, replayed_compaction: Mapping[str, object]
+def test_compaction_input_item_replays_as_a_compaction_block_only_when_anthropic_compacts(
+    model: str, responses_api_request: ResponsesAPIOptionalRequestParams, replayed_compaction: Mapping[str, object]
 ) -> None:
     result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model=model,
@@ -6492,7 +6500,7 @@ def test_compaction_input_item_replays_as_a_compaction_block_only_on_anthropic_r
                 {"role": "user", "content": "And Osaka?"},
             ],
         ),
-        responses_api_request={},
+        responses_api_request=responses_api_request,
     )
 
     assert [dict(message) for message in result["messages"]] == [

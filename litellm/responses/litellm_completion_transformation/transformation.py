@@ -79,6 +79,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
+    ContextManagementEntry,
     GenericChatCompletionMessage,
     IncompleteDetails,
     InputTokensDetails,
@@ -341,8 +342,14 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _carries_compaction_item(input: str | ResponseInputParam) -> bool:
-    return isinstance(input, list) and any(item.get("type") == "compaction" for item in input)
+def _replays_compaction_block(
+    input: str | ResponseInputParam, context_management: Sequence[ContextManagementEntry] | None
+) -> bool:
+    return (
+        isinstance(input, list)
+        and any(item.get("type") == "compaction" for item in input)
+        and any(entry.get("type") == "compaction" for entry in context_management or ())
+    )
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
@@ -864,6 +871,7 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         request_kwargs: Final = _STR_KEY_DICT_ADAPTER.validate_python({**kwargs, "drop_params": drop_params})
+        context_management: Final = responses_api_request.get("context_management")
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
@@ -872,7 +880,7 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
-            native_compaction=_carries_compaction_item(input)
+            native_compaction=_replays_compaction_block(input, context_management)
             and provider_builds_anthropic_request(model, custom_llm_provider),
         )
 
@@ -905,7 +913,7 @@ class LiteLLMCompletionResponsesConfig:
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
             "reasoning_summary": reasoning.summary,
-            "context_management": responses_api_request.get("context_management"),
+            "context_management": context_management,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -959,9 +967,10 @@ class LiteLLMCompletionResponsesConfig:
         a strict message schema could refuse.
 
         ``native_compaction`` belongs to callers whose target builds an
-        Anthropic request: a ``compaction`` item then goes back as the
-        provider's own compaction block. Everyone else reads its summary as
-        assistant text.
+        Anthropic request that also asks for compaction in
+        ``context_management``: a ``compaction`` item then goes back as the
+        provider's own compaction block, which Anthropic rejects without that
+        compaction strategy. Everyone else reads its summary as assistant text.
         """
         messages: list[
             AllMessageValues
