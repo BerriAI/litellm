@@ -579,6 +579,30 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_params, uploaded_rows",
+    [
+        ({"model": "gpt-5.5"}, ["a", "c"]),
+        ({"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "p"}, [None, "a", None, "c"]),
+    ],
+    ids=["openai", "vertex_ai"],
+)
+async def test_async_router_acreate_file_keeps_blank_lines_only_for_vertex(litellm_params, uploaded_rows):
+    import json
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    content = b'\n{"custom_id": "a", "body": {"model": "batch-model"}}\n\n{"custom_id": "c", "body": {"model": "batch-model"}}\n'
+    router = litellm.Router(model_list=[{"model_name": "batch-model", "litellm_params": litellm_params}])
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(model="batch-model", purpose="batch", file=BytesIO(content))
+
+    lines = mock_acreate_file.call_args.kwargs["file"].read().decode("utf-8").split("\n")
+    assert [json.loads(line)["custom_id"] if line else None for line in lines] == uploaded_rows
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_passthrough_keeps_the_file_and_forwards_the_flag():
     """A passthrough batch upload must reach the provider byte for byte: the router
     neither rewrites body.model to the deployment model nor drops the flag."""
