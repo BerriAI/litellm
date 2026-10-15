@@ -158,11 +158,7 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
         yield from _config_row_leaves(primary_key, stored)
         return
     if (secret_column.table, secret_column.column) in _LITELLM_PARAMS_SECRET_COLUMNS:
-        params: Final[JsonValue] = stored
-        if isinstance(params, dict):
-            for value in params.values():
-                if isinstance(value, str):
-                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        yield from _top_level_string_leaves(stored)
         return
     if secret_column.table == "LiteLLM_GuardrailsTable":
         yield from _sensitive_prefixed_leaves(stored)
@@ -174,13 +170,7 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
         yield from _mcp_global_env_var_leaves(stored)
         return
     if secret_column.table == "LiteLLM_SSOConfig":
-        # The SSO writer encrypts top-level string fields only; structured fields
-        # (role_mappings, team_mappings, model lists, …) are plaintext by construction.
-        settings: Final[JsonValue] = stored
-        if isinstance(settings, dict):
-            for value in settings.values():
-                if isinstance(value, str):
-                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        yield from _top_level_string_leaves(stored)
         return
     if secret_column.only_rows_with_marked_ciphertexts:
         # The metadata columns' writers store ciphertext only as marked sensitive
@@ -189,6 +179,14 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
         yield from _sensitive_prefixed_leaves(stored)
         return
     yield from _string_leaves(stored)
+
+
+def _top_level_string_leaves(stored: JsonValue) -> Iterator[str]:
+    if not isinstance(stored, dict):
+        return
+    for value in stored.values():
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
 
 
 def _config_row_leaves(primary_key: object, stored: JsonValue) -> Iterator[str]:
