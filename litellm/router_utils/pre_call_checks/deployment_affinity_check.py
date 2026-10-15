@@ -346,9 +346,9 @@ class DeploymentAffinityCheck(CustomLogger):
         model_info: Final = deployment.get("model_info")
         if not isinstance(model_info, dict):
             return None
-        typed_model_info: Final = cast(
+        typed_model_info: Final = cast(  # cast-ok: router deployment payloads are str-keyed dicts
             dict[str, object], model_info
-        )  # cast-ok: router deployment payloads are str-keyed dicts
+        )
         model_id: Final = typed_model_info.get("id")
         return str(model_id) if model_id is not None else None
 
@@ -514,12 +514,12 @@ class DeploymentAffinityCheck(CustomLogger):
                     )
                     if session_deployment is not None:
                         yielded_deployments: Final = await self._yield_session_pin_if_saturated(
-                            session_deployment=cast(
+                            session_deployment=cast(  # cast-ok: router deployment payloads are str-keyed dicts
                                 dict[str, object], session_deployment
-                            ),  # cast-ok: router deployment payloads are str-keyed dicts
-                            healthy_deployments=cast(
+                            ),
+                            healthy_deployments=cast(  # cast-ok: router deployment payloads are str-keyed dicts
                                 Sequence[dict[str, object]], typed_healthy_deployments
-                            ),  # cast-ok: router deployment payloads are str-keyed dicts
+                            ),
                         )
                         if yielded_deployments is not None:
                             return yielded_deployments
