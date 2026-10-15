@@ -14,15 +14,18 @@ from integration.caching.response_cache_case import entry_key, redis_store
 from integration.spend._background_responses import (
     ATTRIBUTION_COLUMNS,
     CONCURRENT_READS,
+    INPUT_COST_PER_TOKEN,
     INPUT_TOKENS,
     MANAGED_READ_MARKER,
     ONE_POLL_SECONDS,
+    OUTPUT_COST_PER_TOKEN,
     OUTPUT_TOKENS,
+    POLL_WINDOW_SECONDS,
     PRICE,
     PROMPT,
     READS,
-    Read,
     SPEND_LANDING_SECONDS,
+    Read,
     Upstream,
     assert_billed_like_its_creator,
     assert_charged_exactly,
@@ -47,13 +50,13 @@ from integration.spend._background_responses import (
     scripted_routes,
     scripted_upstream,
     settling_reads,
+    streamed_reply,
     submissions,
     tag_spend,
     team_spend,
     upstream_log,
     user_spend,
 )
-from integration.cost_calculation.cost_tracking_case import SseResponse
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.responses import Response
 from pydantic import JsonValue
@@ -291,17 +294,17 @@ def test_a_foreground_response_bills_its_create_once_and_its_read_is_free(gatewa
         assert managed_rows(response_id) == []
 
 
-def _sse_frame(event: str, sequence_number: int, response: dict[str, JsonValue]) -> str:
-    return f"event: {event}\ndata: " + json.dumps(
-        {"type": event, "sequence_number": sequence_number, "response": response}, separators=(",", ":")
-    )
+STREAMED_BACKGROUND_FIELDS: Final[Mapping[str, dict[str, JsonValue]]] = {
+    "top_level": {"background": True},
+    "extra_body": {"extra_body": {"background": True}},
+}
 
 
-def _streamed_response_id(gateway: Gateway, key: str, model: str) -> str:
+def _streamed_response_id(gateway: Gateway, key: str, model: str, background: Mapping[str, JsonValue]) -> str:
     with gateway.client.stream(
         "POST",
         "/v1/responses",
-        json={"model": model, "input": PROMPT, "background": True, "store": False, "stream": True},
+        json={"model": model, "input": PROMPT, "store": False, "stream": True, **background},
         headers={"Authorization": f"Bearer {key}"},
     ) as stream:
         assert stream.status_code == 200, stream.read()
@@ -316,15 +319,14 @@ def _streamed_response_id(gateway: Gateway, key: str, model: str) -> str:
 
 
 @pytest.mark.timeout(240)
-def test_a_streamed_background_response_read_later_bills_its_stream_alone(gateway: Gateway) -> None:
+@pytest.mark.parametrize("background_in", STREAMED_BACKGROUND_FIELDS.keys())
+def test_a_streamed_background_response_read_later_bills_its_stream_alone(gateway: Gateway, background_in: str) -> None:
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
-        frames: Final = (
-            _sse_frame("response.created", 0, response_body("queued")),
-            _sse_frame("response.completed", 1, response_body("completed")),
+        upstream: Final = scripted_upstream(scenario, streamed_reply())
+        response_id: Final = _streamed_response_id(
+            gateway, key, upstream.model, STREAMED_BACKGROUND_FIELDS[background_in]
         )
-        upstream: Final = scripted_upstream(scenario, SseResponse(content_type="text/event-stream", frames=frames))
-        response_id: Final = _streamed_response_id(gateway, key, upstream.model)
         scenario.cleanups.callback(forget_row, response_id)
         upstream.script(background_routes("completed"))
         assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
@@ -445,13 +447,14 @@ def test_a_request_tag_carrying_a_nul_is_stored_without_it_and_lands_on_the_bill
 
 
 @pytest.mark.timeout(240)
+@pytest.mark.parametrize("managed_row", ["tracked", "lost"])
 def test_a_read_retargeted_with_a_client_side_api_base_bills_the_real_usage_once(
-    gateway: Gateway,
+    gateway: Gateway, managed_row: str
 ) -> None:
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         upstream: Final = scripted_upstream(
-            scenario, background_routes("completed"), configurable_clientside_auth_params=["api_base"]
+            scenario, background_routes("queued"), configurable_clientside_auth_params=["api_base"]
         )
         provider_id: Final = f"resp_{upstream.model}"
         cheap_body: Final = {
@@ -466,6 +469,9 @@ def test_a_read_retargeted_with_a_client_side_api_base_bills_the_real_usage_once
         scenario.cleanups.callback(delete_scenario, decoy)
         decoy_log: Final = upstream_log(gateway, decoy)
         response_id: Final = create_background_response(scenario, key, upstream.model)
+        if managed_row == "lost":
+            forget_row(response_id)
+        upstream.script(background_routes("completed"))
         retargeted: Final = read_response(
             gateway, key, response_id, {"model": upstream.model, "api_base": decoy.api_base()}
         )
@@ -494,9 +500,7 @@ def test_a_row_stored_before_the_upgrade_bills_the_creating_team_and_user_once(g
         key, team_id, user_id = _team_member_key(scenario)
         upstream: Final = scripted_upstream(scenario, background_routes("queued"))
         created_id: Final = create_background_response(scenario, key, upstream.model)
-        response_id: Final = (
-            created_id if read_by == "create_id" else _id_a_read_returned(gateway, key, created_id)
-        )
+        response_id: Final = created_id if read_by == "create_id" else _id_a_read_returned(gateway, key, created_id)
         write_rows(
             'UPDATE "LiteLLM_ManagedObjectTable" SET model_object_id = unified_object_id, api_key = NULL, '
             "request_tags = NULL WHERE unified_object_id = %s",
@@ -575,3 +579,193 @@ def test_a_background_create_answered_at_once_and_its_cached_twin_bill_the_creat
         assert tuple(reads) == free_reads("completed", 4)
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert len(charged_rows(upstream.model_id)) == 1
+
+
+def _end_user_spend(end_user: str) -> float:
+    rows: Final = read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id = %s', (end_user,))
+    return number(rows[0]["spend"]) if rows else 0.0
+
+
+def _charged_end_users(model_id: str) -> list[JsonValue]:
+    rows: Final = read_rows('SELECT end_user FROM "LiteLLM_SpendLogs" WHERE model_id = %s AND spend > 0', (model_id,))
+    return [row["end_user"] for row in rows]
+
+
+@pytest.mark.timeout(240)
+def test_a_background_response_bills_the_end_user_who_created_it_once(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        end_user: Final = f"audit-end-user-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(gateway.request, "POST", "/end_user/delete", {"user_ids": [end_user]})
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        response_id: Final = create_background_response(
+            scenario,
+            key,
+            upstream.model,
+            body={"model": upstream.model, "input": PROMPT, "background": True, "store": False, "user": end_user},
+        )
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        assert_charged_exactly(lambda: _end_user_spend(end_user), PRICE)
+        assert key_spend(key) == pytest.approx(PRICE)
+        assert _charged_end_users(upstream.model_id) == [end_user]
+
+
+@pytest.mark.timeout(240)
+def test_the_read_that_settles_a_background_response_splits_its_charge_into_input_and_output(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _, response_id = _lose_the_row_then_finish(scenario, key)
+        settling: Final = gateway.request("GET", f"/v1/responses/{response_id}", key=key)
+        later: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS - 1))
+        assert read_of(settling) == Read("completed", "pong", pytest.approx(PRICE))
+        split: Final = tuple(float(settling.headers[f"x-litellm-response-cost-{part}"]) for part in ("input", "output"))
+        assert split == pytest.approx((INPUT_TOKENS * INPUT_COST_PER_TOKEN, OUTPUT_TOKENS * OUTPUT_COST_PER_TOKEN))
+        assert later == free_reads("completed", READS - 1)
+        assert_charged_exactly(lambda: key_spend(key), PRICE)
+
+
+def _answered_at_once(scenario: Scenario, key: str) -> tuple[Upstream, str]:
+    answered: Final = json_reply(response_body("completed"))
+    upstream: Final = scripted_upstream(scenario, scripted_routes(answered, answered))
+    return upstream, create_background_response(scenario, key, upstream.model)
+
+
+def _stored_output(response_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT file_object->'output' AS output, position('pong' in file_object::text) > 0 AS holds_text "
+        'FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+        (response_id,),
+    )
+
+
+STORED_BY: Final[Mapping[str, Callable[[Scenario, str], tuple[Upstream, str]]]] = {
+    "the_create": _answered_at_once,
+    "a_read": _lose_the_row_then_finish,
+}
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("stored_by", STORED_BY.keys())
+def test_a_stored_background_response_keeps_none_of_the_model_output(gateway: Gateway, stored_by: str) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _, response_id = STORED_BY[stored_by](scenario, key)
+        assert read_response(gateway, key, response_id).text == "pong"
+        assert _stored_output(response_id) == [{"output": [], "holds_text": False}]
+
+
+def _model_usage(upstream: Upstream) -> tuple[float, int]:
+    rows: Final = read_rows(
+        "SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(request_count), 0)::bigint AS requests "
+        'FROM "LiteLLM_DailyModelUsage" WHERE model_group IN (%s, %s)',
+        (upstream.model, upstream.model_id),
+    )
+    requests: Final = rows[0]["requests"]
+    assert isinstance(requests, int), rows
+    return number(rows[0]["spend"]), requests
+
+
+@pytest.mark.timeout(240)
+def test_model_usage_counts_a_background_response_once_in_spend_and_only_client_calls_as_requests(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        upstream, response_id = _finished(scenario, key)
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        assert_charged_exactly(lambda: key_spend(key), PRICE)
+        client_calls: Final = 1 + READS
+        held(
+            lambda: _model_usage(upstream),
+            lambda usage: costs(PRICE)(usage[0]) and usage[1] == client_calls,
+            holding=POLL_WINDOW_SECONDS,
+            seconds=POLL_WINDOW_SECONDS + SPEND_LANDING_SECONDS,
+        )
+
+
+BASE_MODEL: Final = "gpt-4o-mini"
+BASE_MODEL_ONLY: Final[Mapping[str, JsonValue]] = {"base_model": BASE_MODEL}
+BASE_MODEL_IN: Final[Mapping[str, tuple[Mapping[str, JsonValue] | None, Mapping[str, JsonValue]]]] = {
+    "model_info": (BASE_MODEL_ONLY, {}),
+    "litellm_params": (None, BASE_MODEL_ONLY),
+}
+
+
+def _unpriced_upstream(
+    scenario: Scenario,
+    unpriced: str,
+    model_info: Mapping[str, JsonValue] | None,
+    litellm_params: Mapping[str, JsonValue],
+) -> Upstream:
+    foreground: Final = json_reply(response_body("completed", background=False, model=unpriced))
+    return scripted_upstream(
+        scenario,
+        scripted_routes(foreground, foreground),
+        model_info=model_info,
+        model=f"openai/{unpriced}",
+        input_cost_per_token=None,
+        output_cost_per_token=None,
+        **litellm_params,
+    )
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("base_model_in", BASE_MODEL_IN.keys())
+def test_a_background_response_on_a_base_model_deployment_bills_what_a_foreground_response_costs(
+    gateway: Gateway, base_model_in: str
+) -> None:
+    with gateway.scenario() as scenario:
+        foreground_key: Final = scenario.key()
+        background_key: Final = scenario.key()
+        unpriced: Final = f"audit-unpriced-{uuid.uuid4().hex[:12]}"
+        reference: Final = _unpriced_upstream(scenario, unpriced, BASE_MODEL_ONLY, {})
+        created: Final = gateway.request(
+            "POST", "/v1/responses", {"model": reference.model, "input": PROMPT, "store": False}, key=foreground_key
+        )
+        foreground_cost: Final = read_of(created).cost
+        assert foreground_cost is not None and foreground_cost > 0, created.headers
+        upstream: Final = _unpriced_upstream(scenario, unpriced, *BASE_MODEL_IN[base_model_in])
+        upstream.script(background_routes("completed", model=unpriced))
+        response_id: Final = create_background_response(scenario, background_key, upstream.model)
+        reads: Final = tuple(read_response(gateway, background_key, response_id) for _ in range(READS))
+        settled: Final = (
+            Read("completed", "pong", pytest.approx(foreground_cost)),
+            *free_reads("completed", READS - 1),
+        )
+        assert reads in (settled, free_reads("completed", READS))
+        assert_charged_exactly(lambda: key_spend(background_key), foreground_cost)
+        background_rows: Final = [
+            row for row in charged_rows(upstream.model_id) if row["api_key"] == hashed(background_key)
+        ]
+        assert [number(row["spend"]) for row in background_rows] == [pytest.approx(foreground_cost)]
+
+
+@pytest.mark.timeout(240)
+def test_a_client_cannot_make_a_background_create_free_by_forging_the_managed_marker(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        answered: Final = json_reply(response_body("completed"))
+        upstream: Final = scripted_upstream(scenario, scripted_routes(answered, answered))
+        forged: Final[dict[str, JsonValue]] = {MANAGED_READ_MARKER: True}
+        created: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": upstream.model,
+                "input": PROMPT,
+                "background": True,
+                "store": False,
+                "metadata": forged,
+                "litellm_metadata": forged,
+            },
+            key=key,
+        )
+        assert read_of(created) == Read("completed", "pong", pytest.approx(PRICE))
+        response_id: Final = string_value(object_value(created.json())["id"])
+        scenario.cleanups.callback(forget_row, response_id)
+        assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
+        assert_charged_exactly(lambda: key_spend(key), PRICE)

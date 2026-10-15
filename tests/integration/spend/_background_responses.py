@@ -1,4 +1,5 @@
 import itertools
+import json
 import math
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -102,6 +103,22 @@ def background_routes(read_status: str, **fields: JsonValue) -> RoutedResponse:
     )
 
 
+def sse_frame(event: str, sequence_number: int, response: dict[str, JsonValue]) -> str:
+    return f"event: {event}\ndata: " + json.dumps(
+        {"type": event, "sequence_number": sequence_number, "response": response}, separators=(",", ":")
+    )
+
+
+def streamed_reply(*, background: bool = True) -> SseResponse:
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            sse_frame("response.created", 0, response_body("queued", background=background)),
+            sse_frame("response.completed", 1, response_body("completed", background=background)),
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Upstream:
     model: str
@@ -113,7 +130,11 @@ class Upstream:
 
 
 def scripted_upstream(
-    scenario: Scenario, response: RoutedResponse | SseResponse, **litellm_params: JsonValue
+    scenario: Scenario,
+    response: RoutedResponse | SseResponse,
+    *,
+    model_info: Mapping[str, JsonValue] | None = None,
+    **litellm_params: JsonValue,
 ) -> Upstream:
     scenario_id: Final = f"bgonce-{uuid.uuid4().hex[:12]}"
     handle: Final = register_scenario(scenario_id, response)
@@ -130,6 +151,7 @@ def scripted_upstream(
                 "output_cost_per_token": OUTPUT_COST_PER_TOKEN,
                 **litellm_params,
             },
+            **({"model_info": dict(model_info)} if model_info else {}),
         },
     )
     model_id: Final = string_value(object_value(created["model_info"])["id"])

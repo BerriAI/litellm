@@ -9,13 +9,14 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows, scratch_database
+from integration._support.client import Gateway, Scenario, eventually, held, object_value, string_value
+from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.otlp_sink import Span, configure_sink, owned_sinks, recorded_spans
 from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
+from integration._support.prometheus_series import Sample, scrape
 from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from integration.cost_calculation.cost_tracking_case import RoutedResponse
+from integration.cost_calculation.cost_tracking_case import RoutedResponse, SseResponse
 from integration.spend._background_responses import (
     INPUT_COST_PER_TOKEN,
     MANAGED_READ_MARKER,
@@ -25,18 +26,23 @@ from integration.spend._background_responses import (
     PROMPT,
     PROVIDER_ID,
     READS,
+    Read,
     assert_charged_exactly,
     background_routes,
+    costs,
     create_background_response,
+    free_reads,
     hashed,
     json_reply,
     key_spend,
     managed_rows,
     number,
     read_response,
+    reported_cost,
     response_body,
     scripted_routes,
     settling_reads,
+    streamed_reply,
 )
 from pydantic import JsonValue, TypeAdapter
 
@@ -45,6 +51,7 @@ OWNED_PROXY_SECONDS: Final = 2 * graceful_stop_seconds() + 240
 NO_DATABASE: Final = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA")
 POLL_OFF: Final = {"PROXY_BATCH_POLLING_ENABLED": "false"}
 SINK_DELAY_SECONDS: Final = 4.0
+SPEND_RETRY_SECONDS: Final = 60
 BURST_RESPONSES: Final = 6
 RESTART_RESPONSES: Final = 3
 COOLDOWN_SECONDS: Final = 300
@@ -59,7 +66,7 @@ CHAT_COMPLETION: Final[dict[str, JsonValue]] = {
 
 
 @contextmanager
-def _scripted(response: RoutedResponse, count: int = 1) -> Iterator[tuple[ScenarioHandle, ...]]:
+def _scripted(response: RoutedResponse | SseResponse, count: int = 1) -> Iterator[tuple[ScenarioHandle, ...]]:
     with ExitStack() as stack:
         handles: Final = tuple(register_scenario(f"bgonce-{uuid.uuid4().hex[:12]}", response) for _ in range(count))
         for handle in handles:
@@ -402,3 +409,161 @@ def test_background_responses_left_pending_across_a_proxy_restart_are_billed_onc
             )
             assert_charged_exactly(lambda: key_spend(key), RESTART_RESPONSES * PRICE)
             _assert_each_billed_once_as_background_cost(key, RESTART_RESPONSES)
+
+
+DELETED: Final[dict[str, JsonValue]] = {"id": PROVIDER_ID, "object": "response.deleted", "deleted": True}
+REFUSAL_HOLD_SECONDS: Final = 10
+
+
+def _deletable(read_status: str) -> RoutedResponse:
+    return RoutedResponse(
+        content_type="application/x-routed",
+        routes={**background_routes(read_status).routes, f"DELETE /responses/{PROVIDER_ID}": json_reply(DELETED)},
+    )
+
+
+@pytest.mark.timeout(OWNED_PROXY_SECONDS + 120)
+def test_a_delete_bills_a_finished_background_response_once_and_only_for_a_caller_that_may_address_it(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _scripted(_deletable("queued")) as (handle,):
+        config: Final = _config(tmp_path, (handle,))
+        with (
+            _scratch_proxy(gateway, tmp_path, monkeypatch, config, POLL_OFF) as proxy,
+            proxy.scenario() as scenario,
+        ):
+            creator: Final = _team_member_key(scenario)
+            stranger: Final = _team_member_key(scenario)
+            response_id: Final = create_background_response(scenario, creator, handle.scenario_id)
+            _rescript((handle,), _deletable("completed"))
+            refused: Final = proxy.request("DELETE", f"/v1/responses/{response_id}", key=stranger)
+            assert refused.status_code == 403, refused.text
+            held(lambda: key_spend(creator), costs(0.0), holding=REFUSAL_HOLD_SECONDS)
+            assert [row["status"] for row in managed_rows(response_id)] == ["queued"]
+            deleted: Final = proxy.request("DELETE", f"/v1/responses/{response_id}", key=creator)
+            assert deleted.status_code == 200, deleted.text
+            assert object_value(deleted.json())["deleted"] is True
+            assert reported_cost(deleted.headers) == pytest.approx(PRICE)
+            assert_charged_exactly(lambda: key_spend(creator), PRICE)
+            _assert_each_billed_once_as_background_cost(creator, 1)
+            assert key_spend(stranger) == 0
+            assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
+
+
+@contextmanager
+def _billing_claims_refused() -> Iterator[None]:
+    write_rows(
+        "CREATE FUNCTION audit_refuse_billing_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.status = 'completed' AND OLD.status IS DISTINCT FROM 'completed' THEN "
+        "RAISE EXCEPTION 'audit refuses the billing claim'; END IF; RETURN NEW; END $$",
+        (),
+    )
+    write_rows(
+        'CREATE TRIGGER audit_refuse_billing_claim BEFORE UPDATE ON "LiteLLM_ManagedObjectTable" '
+        "FOR EACH ROW EXECUTE FUNCTION audit_refuse_billing_claim()",
+        (),
+    )
+    try:
+        yield
+    finally:
+        write_rows('DROP TRIGGER audit_refuse_billing_claim ON "LiteLLM_ManagedObjectTable"', ())
+        write_rows("DROP FUNCTION audit_refuse_billing_claim()", ())
+
+
+@pytest.mark.timeout(OWNED_PROXY_SECONDS + 180)
+def test_a_finished_read_whose_bill_fails_to_settle_bills_the_creator_once_after_the_database_recovers(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _scripted(background_routes("queued")) as (handle,):
+        config: Final = _config(tmp_path, (handle,))
+        with (
+            _scratch_proxy(gateway, tmp_path, monkeypatch, config, POLL_OFF) as proxy,
+            proxy.scenario() as scenario,
+        ):
+            key: Final = _team_member_key(scenario)
+            response_id: Final = create_background_response(scenario, key, handle.scenario_id)
+            _rescript((handle,), background_routes("completed"))
+            with _billing_claims_refused():
+                unsettled: Final = read_response(proxy, key, response_id)
+                statuses: Final = [row["status"] for row in managed_rows(response_id)]
+            assert unsettled == Read("completed", "pong", 0.0)
+            assert statuses == ["queued"]
+            eventually(lambda: key_spend(key), costs(PRICE), seconds=SPEND_RETRY_SECONDS)
+            assert tuple(read_response(proxy, key, response_id) for _ in range(READS)) == free_reads("completed", READS)
+            assert_charged_exactly(lambda: key_spend(key), PRICE)
+            _assert_each_billed_once_as_background_cost(key, 1)
+            assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
+
+
+REMAINING_KEY_BUDGET: Final = "litellm_remaining_api_key_budget_metric"
+KEY_BUDGET: Final = 10.0
+
+
+def _remaining_key_budget(samples: Sequence[Sample], key: str) -> list[float]:
+    return [
+        sample.value
+        for sample in samples
+        if sample.name == REMAINING_KEY_BUDGET and sample.labels.get("hashed_api_key") == hashed(key)
+    ]
+
+
+@pytest.mark.timeout(OWNED_PROXY_SECONDS + ONE_POLL_SECONDS + 60)
+def test_a_background_response_the_poll_bills_lowers_its_creating_keys_remaining_budget_by_its_price(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _scripted(background_routes("completed")) as (handle,):
+        config: Final = _config(tmp_path, (handle,), litellm_settings={"callbacks": ["prometheus"]})
+        with _scratch_proxy(gateway, tmp_path, monkeypatch, config) as proxy, proxy.scenario() as scenario:
+            key: Final = scenario.key(max_budget=KEY_BUDGET)
+            response_id: Final = create_background_response(scenario, key, handle.scenario_id)
+            eventually(
+                lambda: [row["status"] for row in managed_rows(response_id)],
+                lambda statuses: statuses == ["completed"],
+                seconds=ONE_POLL_SECONDS,
+            )
+            assert_charged_exactly(lambda: key_spend(key), PRICE)
+            eventually(
+                lambda: _remaining_key_budget(scrape(proxy), key),
+                lambda values: values == [pytest.approx(KEY_BUDGET - PRICE)],
+                seconds=30,
+            )
+
+
+CACHE_POLLING: Final[dict[str, JsonValue]] = {"responses": {"background_mode": {"polling_via_cache": "all"}}}
+CACHE_POLLED_CREATES: Final[Mapping[str, tuple[dict[str, JsonValue], bool]]] = {
+    "streamed_with_background_in_extra_body": ({"stream": True, "extra_body": {"background": True}}, True),
+    "unstreamed": ({}, False),
+}
+
+
+def _cache_polled_create(proxy: Gateway, key: str, model: str, create: Mapping[str, JsonValue]) -> str:
+    created: Final = proxy.request(
+        "POST",
+        "/v1/responses",
+        {"model": model, "input": PROMPT, "background": True, "store": False, **create},
+        key=key,
+    )
+    assert created.status_code == 200, created.text
+    return string_value(object_value(created.json())["id"])
+
+
+@pytest.mark.timeout(OWNED_PROXY_SECONDS + 120)
+@pytest.mark.parametrize("create", CACHE_POLLED_CREATES.keys())
+def test_a_background_response_the_proxy_polls_through_its_cache_bills_its_creator_once(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create: str
+) -> None:
+    body, provider_sees_background = CACHE_POLLED_CREATES[create]
+    with _scripted(streamed_reply(background=provider_sees_background)) as (handle,):
+        config: Final = _config(tmp_path, (handle,), litellm_settings=CACHE_POLLING)
+        with _scratch_proxy(gateway, tmp_path, monkeypatch, config, POLL_OFF) as proxy, proxy.scenario() as scenario:
+            key: Final = _team_member_key(scenario)
+            polling_id: Final = _cache_polled_create(proxy, key, handle.scenario_id, body)
+            finished: Final = eventually(
+                lambda: read_response(proxy, key, polling_id),
+                lambda read: read.status == "completed",
+                seconds=SPEND_RETRY_SECONDS,
+            )
+            assert finished.text == "pong"
+            assert_charged_exactly(lambda: key_spend(key), PRICE)
+            assert [read_response(proxy, key, polling_id).text for _ in range(READS)] == ["pong"] * READS
+            assert_charged_exactly(lambda: key_spend(key), PRICE)
