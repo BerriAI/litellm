@@ -6,6 +6,7 @@ anthropic_messages, embedding and rerank surfaces leave it unset, which used to 
 the callback raise before any spend was recorded, so those budgets never moved.
 """
 
+from datetime import datetime, timezone
 from typing import Final
 
 import litellm
@@ -165,6 +166,90 @@ async def test_deployment_budget_tracked_when_provider_is_unresolvable(disable_b
     assert await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d") == 0.25
 
 
+_MONTHLY_DEPLOYMENT: Final = {
+    "model_name": "some-model",
+    "litellm_params": {"model": "openai/gpt-4o", "max_budget": 10.0, "budget_duration": "1mo"},
+    "model_info": {"id": "deployment-1"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limiter_config", "tag_budget_config", "spend_key", "start_time_key"),
+    [
+        (
+            {"provider_budget_config": {"openai": {"budget_limit": 10.0, "time_period": "1mo"}}},
+            None,
+            "provider_spend:openai:1mo",
+            "provider_budget_start_time:openai",
+        ),
+        (
+            {"provider_budget_config": None, "model_list": [_MONTHLY_DEPLOYMENT]},
+            None,
+            "deployment_spend:deployment-1:1mo",
+            "deployment_budget_start_time:deployment-1",
+        ),
+        (
+            {"provider_budget_config": None},
+            {"release": {"budget_limit": 10.0, "time_period": "1mo"}},
+            "tag_spend:release:1mo",
+            "tag_budget_start_time:release",
+        ),
+    ],
+    ids=["provider", "deployment", "tag"],
+)
+@pytest.mark.parametrize(
+    ("opened_at", "charged_at", "closes_at"),
+    [
+        (
+            datetime(2026, 1, 15, 12, tzinfo=timezone.utc),
+            datetime(2026, 2, 1, 12, tzinfo=timezone.utc),
+            datetime(2026, 2, 15, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 2, 15, 12, tzinfo=timezone.utc),
+            datetime(2026, 3, 1, 12, tzinfo=timezone.utc),
+            datetime(2026, 3, 15, 12, tzinfo=timezone.utc),
+        ),
+    ],
+    ids=["opened_in_a_long_month", "opened_in_february"],
+)
+async def test_a_monthly_router_budget_ends_a_calendar_month_after_it_opens(
+    disable_budget_sync,
+    monkeypatch,
+    limiter_config,
+    tag_budget_config,
+    spend_key,
+    start_time_key,
+    opened_at,
+    charged_at,
+    closes_at,
+):
+    """
+    The spend counter's Redis expiry is when the router lets the provider,
+    deployment or tag take traffic again.
+
+    Regression: it was a month counted from the charge, so a window opened on January 15
+    and charged on February 1 unblocked on February 12 instead of February 15.
+    """
+    monkeypatch.setattr(litellm, "tag_budget_config", tag_budget_config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    limiter = RouterBudgetLimiting(dual_cache=DualCache(), clock=charged_at.timestamp, **limiter_config)
+    await limiter.dual_cache.async_set_cache(key=start_time_key, value=opened_at.timestamp())
+
+    await _log_success(
+        limiter,
+        {
+            **_success_kwargs(provider_in_litellm_params="openai", provider_in_payload="openai"),
+            "metadata": {"tags": ["release"]},
+        },
+    )
+
+    assert limiter.redis_increment_operation_queue == [
+        {"key": spend_key, "increment_value": 0.25, "ttl": int((closes_at - charged_at).total_seconds())}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_get_budget_config_for_provider():
     """
@@ -177,9 +262,7 @@ async def test_get_budget_config_for_provider():
         "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
     }
 
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config=config
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=config)
 
     # Test existing providers
     openai_config = provider_budget._get_budget_config_for_provider("openai")
@@ -232,16 +315,9 @@ async def test_get_current_provider_spend():
 
 @pytest.mark.asyncio
 async def test_get_llm_provider_for_deployment_resolves_provider_prefixes() -> None:
-    provider_budget: Final = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
-    assert (
-        provider_budget._get_llm_provider_for_deployment(
-            {"litellm_params": {"model": "openai/gpt-4o"}}
-        )
-        == "openai"
-    )
+    assert provider_budget._get_llm_provider_for_deployment({"litellm_params": {"model": "openai/gpt-4o"}}) == "openai"
     assert (
         provider_budget._get_llm_provider_for_deployment(
             {"litellm_params": {"model": "azure/gpt-4o", "api_base": "https://example.azure.com"}}
@@ -253,9 +329,7 @@ async def test_get_llm_provider_for_deployment_resolves_provider_prefixes() -> N
 
 @pytest.mark.asyncio
 async def test_budget_start_time_is_created_once() -> None:
-    provider_budget: Final = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     first_start: Final = await provider_budget._get_or_set_budget_start_time(
         start_time_key="provider_budget_start_time:openai",
@@ -274,9 +348,7 @@ async def test_budget_start_time_is_created_once() -> None:
 
 @pytest.mark.asyncio
 async def test_new_budget_window_sets_spend_and_start_time() -> None:
-    provider_budget: Final = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     start_time: Final = await provider_budget._handle_new_budget_window(
         spend_key="provider_spend:openai:1d",
@@ -288,22 +360,13 @@ async def test_new_budget_window_sets_spend_and_start_time() -> None:
 
     assert start_time == 1000.0
     assert await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d") == 0.5
-    assert (
-        await provider_budget.dual_cache.async_get_cache(
-            "provider_budget_start_time:openai"
-        )
-        == 1000.0
-    )
+    assert await provider_budget.dual_cache.async_get_cache("provider_budget_start_time:openai") == 1000.0
 
 
 @pytest.mark.asyncio
 async def test_spend_increment_updates_memory_and_queues_redis_operation() -> None:
-    provider_budget: Final = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
-    await provider_budget.dual_cache.async_set_cache(
-        key="provider_spend:openai:1d", value=1.0, ttl=86400
-    )
+    provider_budget: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
+    await provider_budget.dual_cache.async_set_cache(key="provider_spend:openai:1d", value=1.0, ttl=86400)
 
     await provider_budget._increment_spend_in_current_window(
         spend_key="provider_spend:openai:1d",
@@ -311,10 +374,7 @@ async def test_spend_increment_updates_memory_and_queues_redis_operation() -> No
         ttl=86400,
     )
 
-    assert (
-        await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d")
-        == 1.5
-    )
+    assert await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d") == 1.5
     assert provider_budget.redis_increment_operation_queue == [
         {
             "key": "provider_spend:openai:1d",
