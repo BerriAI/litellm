@@ -8295,6 +8295,32 @@ def _apply_stream_usage_tracking(
 
 
 class TestApplyStreamUsageTracking:
+    @pytest.mark.parametrize(
+        ("general_settings", "requested_stream_options", "expected_stream_options"),
+        [
+            ({"always_include_stream_usage": False}, None, {"include_usage": False}),
+            ({}, None, None),
+            ({"always_include_stream_usage": False}, {"include_usage": True}, {"include_usage": True}),
+        ],
+    )
+    def test_generate_content_stream_passes_only_the_admin_opt_out(
+        self,
+        general_settings: dict[str, bool],
+        requested_stream_options: dict[str, bool] | None,
+        expected_stream_options: dict[str, bool] | None,
+    ):
+        data = {
+            "stream": True,
+            "model": "grok-4.20-non-reasoning",
+            **({} if requested_stream_options is None else {"stream_options": requested_stream_options}),
+        }
+
+        _apply_stream_usage_tracking(
+            data=data, general_settings=general_settings, route_type="agenerate_content_stream"
+        )
+
+        assert data.get("stream_options") == expected_stream_options
+
     def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
         data = {"stream": True, "model": "gpt-5.4-nano"}
 

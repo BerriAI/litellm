@@ -556,12 +556,11 @@ def cost_per_token(
 
     assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
 
-    model_without_prefix = model
     model_parts: Final = model.split("/", 1)
-    if len(model_parts) > 1:
-        model_without_prefix = model_parts[1]
-    else:
-        model_without_prefix = model
+    model_is_provider_relative: Final = (
+        model_with_provider == f"{custom_llm_provider}/{model}" and model_with_provider in model_cost_ref
+    )
+    model_without_prefix: Final = model if len(model_parts) == 1 or model_is_provider_relative else model_parts[1]
     """
     Code block that formats model to lookup in litellm.model_cost
     Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1

@@ -464,6 +464,22 @@ def _openai_sse_chunk(chunk_id: str, model: str, choices: list[JsonValue]) -> by
     return f"data: {json.dumps(body)}\n\n".encode()
 
 
+def _openai_sse_usage_chunk(chunk_id: str, model: str, *, prompt_tokens: int, completion_tokens: int) -> bytes:
+    body: Final[dict[str, JsonValue]] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter, model: str) -> None:
@@ -684,6 +700,7 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
                 [{"index": 0, "delta": {"content": "crossed the sky."}, "finish_reason": None}],
             ),
             _openai_sse_chunk("chatcmpl-bridge", "gpt-3.5-turbo", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            _openai_sse_usage_chunk("chatcmpl-bridge", "gpt-3.5-turbo", prompt_tokens=12, completion_tokens=6),
             b"data: [DONE]\n\n",
         )
     )
@@ -738,7 +755,7 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
             "candidates": [
                 {"content": {"parts": [], "role": "model"}, "finishReason": "STOP", "index": 0, "safetyRatings": []}
             ],
-            "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
+            "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6, "totalTokenCount": 18},
         },
     )
 

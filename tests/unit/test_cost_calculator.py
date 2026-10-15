@@ -9222,6 +9222,28 @@ def test_live_session_uses_latest_snapshot_when_closed_usage_is_missing(_local_m
     assert cost == pytest.approx(15 * rate)
 
 
+def test_vertex_partner_model_cost_keeps_its_publisher_prefix(_local_model_cost_map: None) -> None:
+    entry: Final = litellm.model_cost["vertex_ai/xai/grok-4.20-non-reasoning"]
+    usage: Final = Usage(
+        prompt_tokens=340,
+        completion_tokens=1,
+        total_tokens=341,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=320),
+    )
+    response: Final = ModelResponse(model="xai/grok-4.20-non-reasoning", usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response, model="xai/grok-4.20-non-reasoning", custom_llm_provider="vertex_ai"
+    )
+
+    expected: Final = (
+        20 * entry["input_cost_per_token"]
+        + 320 * entry["cache_read_input_token_cost"]
+        + 1 * entry["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("query, expected_queries", [("litellm release notes", 1), (["a", "b", "c"], 3)])
 def test_completion_cost_search_uses_search_tool_input_cost_per_query(
     _local_model_cost_map: None, query: str | list[str], expected_queries: int
