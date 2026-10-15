@@ -147,29 +147,6 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
     assert call_kwargs["metadata"] is metadata
 
 
-def test_internal_async_marker_bypasses_native() -> None:
-    response: Final = ModelResponse()
-    called: Final[list[bool]] = []
-
-    def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: records public call shape
-        called.append(True)
-        return response
-
-    def native(request: NativeCall) -> ModelResponse:
-        pytest.fail("acompletion's inner completion call must stay on Python")
-
-    result: Final = _DISPATCH.run(
-        ("gpt-4o", MESSAGES),
-        {"acompletion": True},
-        python=python,
-        binding=completion_binding(native),
-        native=native_call_hook,
-        rules=RUST_RULES,
-    )
-    assert result is response
-    assert called == [True]
-
-
 @pytest.mark.parametrize(
     ("args", "kwargs"),
     (
@@ -308,33 +285,31 @@ async def test_async_completion_falls_back_after_native_declines() -> None:
     assert response is expected
 
 
-def test_internal_acompletion_marker_bypasses_native() -> None:
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
-    expected: Final = ModelResponse()
-
-    def python(*args: object, **kwargs: object) -> ModelResponse:
-        return expected
-
-    def native(request: NativeCall) -> ModelResponse:
-        pytest.fail("acompletion's inner completion call must stay on Python")
-
-    binding: Final[NativeBinding[NativeCompletion]] = NativeBinding("completion", validate=lambda _: None)
-    binding.override(native)
-    response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
-        ("test-model", MESSAGES),
-        {"custom_llm_provider": "openai", "acompletion": True},
-        python=python,
-        binding=binding,
-        native=native_call_hook,
-        rules=rules,
-    )
-
-    assert response is expected
-
-
 def test_positional_parameters_remain_available_to_native_projection() -> None:
     request: Final = _DISPATCH.request(("anthropic/test-model", MESSAGES, 12.0, 0.25), {})
     assert request is not None
     assert request.resolved["timeout"] == 12.0
     assert request.resolved["temperature"] == 0.25
     assert request.resolved["messages"] is MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[NativeCall]] = []
+    expected: Final = ModelResponse()
+
+    async def native(call: NativeCall) -> ModelResponse:
+        captured.append(call)
+        return expected
+
+    NATIVE_ACOMPLETION.override(native)
+    NATIVE_COMPLETION.override(lambda call: pytest.fail("a coroutine-returning call must use the async binding"))
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
+    try:
+        result: Final = await public_completion(model="gpt-4o", messages=MESSAGES, acompletion=True)
+    finally:
+        NATIVE_ACOMPLETION.reset()
+        NATIVE_COMPLETION.reset()
+    assert result is expected
+    assert [dict(request.kwargs) for request in captured] == [{"model": "gpt-4o", "messages": MESSAGES}]

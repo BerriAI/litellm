@@ -50,7 +50,6 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aembedding") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
@@ -64,6 +63,15 @@ def embedding(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public embedding call shape
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
+    if kwargs.get("aembedding") is True:
+        return _DISPATCH.defer(
+            args,
+            kwargs,
+            flag="aembedding",
+            python=_PYTHON_EMBEDDING,
+            binding=NATIVE_AEMBEDDING,
+            native=native_call_hook,
+        )
     return _DISPATCH.run(
         args,
         kwargs,

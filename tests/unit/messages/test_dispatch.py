@@ -13,17 +13,15 @@ from litellm.messages.dispatch import (
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.proxy import proxy_server
-from litellm.rust_bridge import catalog
+from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules
+from litellm.rust_bridge.catalog import Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
-DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
-CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 PYTHON_RULES: Final[Rules] = ()
 RUST_RULES: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
 
@@ -172,81 +170,43 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     assert call_kwargs["litellm_metadata"] is metadata
 
 
-def test_internal_async_marker_bypasses_native() -> None:
-    args: Final[tuple[object, ...]] = (16, MESSAGES, "claude-sonnet-4-5")
-    kwargs: Final[Mapping[str, object]] = {"is_async": True}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    expected: Final = response()
-
-    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
-        captured.append((call_args, call_kwargs))
-        return expected
-
-    def native(
-        request: NativeCall,
-    ) -> AnthropicMessagesResponse:
-        pytest.fail("The async handler's inner sync call must stay on Python")
-
-    result: Final = _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
-    )
-    assert result is expected
-    assert captured == [(args, kwargs)]
-
-
 @pytest.mark.parametrize(
-    ("model", "custom_llm_provider"),
-    [
-        ("vertex_ai/gemini-2.5-pro", None),
-        ("gemini-2.5-pro", "vertex_ai"),
-    ],
+    ("model", "kwargs", "passes_through"),
+    (
+        ("vertex_ai/claude-sonnet-4-5@20250929", {}, True),
+        ("claude-sonnet-4-5@20250929", {"custom_llm_provider": "vertex_ai"}, True),
+        ("deepseek/deepseek-v4-flash", {}, True),
+        ("openai/gpt-5", {"model_info": {"supported_endpoints": ["/v1/messages"]}}, True),
+        ("vertex_ai/gemini-2.5-pro", {}, False),
+        ("gemini-2.5-pro", {"custom_llm_provider": "vertex_ai"}, False),
+        ("openai/gpt-5", {}, False),
+        ("groq/llama-3.3-70b-versatile", {}, False),
+    ),
 )
-def test_vertex_models_other_than_claude_stay_on_python(model: str, custom_llm_provider: str | None) -> None:
-    args: Final[tuple[object, ...]] = (16, MESSAGES, model)
-    kwargs: Final[Mapping[str, object]] = {"custom_llm_provider": custom_llm_provider}
-    expected: Final = response(model)
+def test_only_requests_that_pass_through_to_a_messages_api_reach_a_messages_target_rule(
+    model: str, kwargs: Mapping[str, object], passes_through: bool
+) -> None:
+    python_result: Final = response(model)
+    native_result: Final = response(model)
 
-    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
-        return expected
-
-    def native(request: NativeCall) -> AnthropicMessagesResponse:
-        pytest.fail("Rust serves only Claude on Vertex AI")
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return python_result
 
     result: Final = _DISPATCH.run(
-        args,
+        (16, MESSAGES, model),
         kwargs,
         python=python,
-        binding=messages_binding(native),
+        binding=messages_binding(lambda request: native_result),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),),
     )
-    assert result is expected
+    assert result is (native_result if passes_through else python_result)
 
 
-def test_vertex_claude_reaches_native() -> None:
-    args: Final[tuple[object, ...]] = (16, MESSAGES, "vertex_ai/claude-sonnet-4-5@20250929")
-    expected: Final = response("vertex_ai/claude-sonnet-4-5@20250929")
-
-    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
-        pytest.fail("Claude on Vertex AI is served natively")
-
-    result: Final = _DISPATCH.run(
-        args,
-        {},
-        python=python,
-        binding=messages_binding(lambda request: expected),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
-    )
-    assert result is expected
+DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
+CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "kwargs", "general_settings", "serves_python"),
     (
@@ -263,7 +223,7 @@ def test_vertex_claude_reaches_native() -> None:
         ("anthropic/claude-sonnet-4-5", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, False),
     ),
 )
-async def test_python_keeps_the_requests_it_answers_with_safeguard_results(
+def test_shipped_rules_keep_proxy_classified_safeguards_on_python(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
     kwargs: Mapping[str, object],
@@ -274,20 +234,20 @@ async def test_python_keeps_the_requests_it_answers_with_safeguard_results(
     python_result: Final = response(model)
     native_result: Final = response(model)
 
-    async def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
         return python_result
 
-    async def native(request: NativeCall) -> AnthropicMessagesResponse:
-        return native_result
-
-    result: Final = await _ADISPATCH.arun(
-        (16, MESSAGES, model),
-        kwargs,
-        python=python,
-        binding=amessages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
-    )
+    configuration.rust(True)
+    try:
+        result: Final = _DISPATCH.run(
+            (16, MESSAGES, model),
+            kwargs,
+            python=python,
+            binding=messages_binding(lambda request: native_result),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
+        )
+    finally:
+        configuration.rust(None)
     assert result is (python_result if serves_python else native_result)
 
 
@@ -462,31 +422,27 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
     assert response is expected
 
 
-def test_internal_is_async_marker_bypasses_native() -> None:
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
-    expected: Final = AnthropicMessagesResponse(model="claude-test")
+@pytest.mark.asyncio
+async def test_is_async_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[NativeCall]] = []
+    expected: Final = response()
 
-    def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        captured.append(request)
         return expected
 
-    def native(request: NativeCall) -> AnthropicMessagesResponse:
-        pytest.fail("anthropic_messages' inner handler call must stay on Python")
-
-    binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
-    binding.override(native)
-    response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
-        (),
-        {
-            "model": "claude-test",
-            "messages": MESSAGES,
-            "max_tokens": 10,
-            "custom_llm_provider": "anthropic",
-            "is_async": True,
-        },
-        python=python,
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
+    NATIVE_AMESSAGES.override(native)
+    NATIVE_MESSAGES.override(lambda request: pytest.fail("a coroutine-returning call must use the async binding"))
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_handler: Final = cast(
+        Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic_messages_handler
     )
-
-    assert response is expected
+    try:
+        result: Final = await public_handler(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5", is_async=True)
+    finally:
+        NATIVE_AMESSAGES.reset()
+        NATIVE_MESSAGES.reset()
+    assert result is expected
+    assert [dict(request.kwargs) for request in captured] == [
+        {"max_tokens": 16, "messages": MESSAGES, "model": "claude-sonnet-4-5"}
+    ]
