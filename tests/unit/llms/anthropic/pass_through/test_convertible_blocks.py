@@ -130,3 +130,29 @@ def test_tool_result_content_both_conversions_drop_is_named(inner: Mapping[str, 
     assert [message.get("content") for message in chat] == [""]
     assert [item.get("output") for item in responses] == [""]
     assert unconvertible_anthropic_blocks([{"role": "user", "content": [block]}]) == (label,)
+
+
+def test_replayed_web_search_turn_is_accepted_because_inference_flattens_it_to_text() -> None:
+    messages: Final = [
+        {"role": "user", "content": "What is new?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "news"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://docs.litellm.ai/release_notes",
+                            "title": "Release notes",
+                            "encrypted_content": "",
+                            "snippet": "weekly release candidate",
+                        }
+                    ],
+                },
+            ],
+        },
+    ]
+    assert unconvertible_anthropic_blocks(messages) == ()

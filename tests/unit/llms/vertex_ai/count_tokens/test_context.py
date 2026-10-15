@@ -316,3 +316,37 @@ def test_remote_media_is_fetched_without_blocking_the_event_loop(
 
     assert {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}} in contents[0]["parts"]
     assert ticks >= 10
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+) -> None:
+    snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
+    messages: Final = (
+        {"role": "user", "content": "What is new?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "news"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://docs.litellm.ai/release_notes",
+                            "title": "Release notes",
+                            "encrypted_content": "",
+                            "snippet": snippet,
+                        }
+                    ],
+                },
+            ],
+        },
+        {"role": "user", "content": "Thanks."},
+    )
+
+    contents: Final = asyncio.run(gemini_count_contents(messages, "anthropic", "gemini-2.5-flash", custom_llm_provider))
+
+    assert snippet in str(contents)

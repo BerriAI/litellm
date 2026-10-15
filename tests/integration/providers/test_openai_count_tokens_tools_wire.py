@@ -60,7 +60,26 @@ _RESPONSES_REPLY: Final[Mapping[str, JsonValue]] = {
     ],
     "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
 }
+_WRAPPED_REASONING: Final = "litellm_enc:bW9kZWxfaWQ6ZGVwbG95bWVudC0x;gAAAAoriginal"
+_ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"answer": {"type": "string"}}}
 _ANTHROPIC_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = {
+    "structured-output": {
+        "output_config": {"format": {"type": "json_schema", "schema": _ANSWER_SCHEMA}},
+        "messages": [{"role": "user", "content": "Answer in JSON."}],
+    },
+    "affinity-wrapped-reasoning": {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{_WRAPPED_REASONING}"},
+                    {"type": "text", "text": "OK"},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+    },
     "base64-pdf": {
         "messages": [
             {
@@ -85,6 +104,37 @@ _ANTHROPIC_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = {
                     {"type": "text", "text": "What is this?"},
                 ],
             }
+        ],
+    },
+    "replayed-web-search": {
+        "messages": [
+            {"role": "user", "content": "What is the newest LiteLLM release?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_01",
+                        "name": "web_search",
+                        "input": {"query": "newest LiteLLM release"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://docs.litellm.ai/release_notes",
+                                "title": "Release notes",
+                                "encrypted_content": "",
+                                "snippet": "LiteLLM ships a weekly release candidate and a stable line.",
+                            }
+                        ],
+                    },
+                    {"type": "text", "text": "The newest release is in the release notes."},
+                ],
+            },
+            {"role": "user", "content": "Thanks."},
         ],
     },
     "tool-turns": {
@@ -123,7 +173,7 @@ def _body_for(wire_requests: tuple[Request, ...], target: str) -> dict[str, Json
 
 
 def _counted_fields(body: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    return {key: body[key] for key in ("input", "instructions", "tools") if body.get(key) is not None}
+    return {key: body[key] for key in ("input", "instructions", "tools", "text") if body.get(key) is not None}
 
 
 def _count_body(wire: Wire) -> dict[str, JsonValue]:
@@ -311,3 +361,33 @@ def test_messages_count_tokens_rejects_blocks_it_cannot_convert(counting_proxy: 
         assert response.status_code == 400, response.text
         assert "document with a text source, search_result, search_result inside a tool_result" in response.text
         assert wire.drain() == ()
+
+
+def test_messages_count_tokens_without_a_role_answers_400_before_calling_openai(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_count_response) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": model, "messages": [{"role": "user", "content": "hello"}, {"content": "no role"}]},
+        )
+        assert response.status_code == 400, response.text
+        assert "messages.1.role: Field required" in response.text
+        assert wire.drain() == ()
+
+
+def test_google_count_tokens_sends_the_system_instruction_text(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_count_response) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request(
+            "POST",
+            f"/v1beta/models/{model}:countTokens",
+            {
+                "systemInstruction": {"parts": [{"text": "Be brief."}, {"text": "Answer in English."}]},
+                "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert _count_body(wire)["instructions"] == "Be brief.\nAnswer in English."

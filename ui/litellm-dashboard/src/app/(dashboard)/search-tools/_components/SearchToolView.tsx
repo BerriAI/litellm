@@ -92,6 +92,17 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
 
         <Card>
           <CardContent>
+            <p className="text-sm text-muted-foreground">Cost per Query</p>
+            <p className="mt-2 text-foreground">
+              {typeof searchTool.litellm_params.input_cost_per_query === "number"
+                ? `$${searchTool.litellm_params.input_cost_per_query}`
+                : "Provider default"}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent>
             <p className="text-sm text-muted-foreground">Created At</p>
             <p className="mt-2 text-foreground">
               {searchTool.created_at ? new Date(searchTool.created_at).toLocaleString() : "Unknown"}

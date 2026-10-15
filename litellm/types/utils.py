@@ -1802,6 +1802,9 @@ class PromptTokensDetailsWrapper(
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
+
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 

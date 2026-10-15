@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
 
 _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
@@ -83,7 +84,8 @@ def _message_labels(message: Mapping[str, JsonValue]) -> Iterator[str]:
 
 
 def unconvertible_anthropic_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    return tuple(sorted(set(chain.from_iterable(_message_labels(message) for message in _json_messages(messages)))))
+    normalized: Final = _json_messages(normalize_native_messages(messages))
+    return tuple(sorted(set(chain.from_iterable(_message_labels(message) for message in normalized))))
 
 
 def unconvertible_blocks_error(

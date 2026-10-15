@@ -29,7 +29,7 @@ class LoggingCallbackManager:
     # healthy maximum number of callbacks - unlikely someone needs more than 20
     MAX_CALLBACKS = 30
 
-    def _is_async_callable(self, callback) -> bool:
+    def _is_async_callable(self, callback: object) -> bool:
         """Check if a callback is async. Used to auto-route callbacks to the correct list."""
         try:
             from litellm.litellm_core_utils.coroutine_checker import coroutine_checker

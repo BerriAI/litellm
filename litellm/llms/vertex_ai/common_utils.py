@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -1279,6 +1279,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         import copy
 

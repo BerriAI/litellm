@@ -369,13 +369,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, dict]:
-        """POST /{api_version}/interactions/{interaction_id}:cancel (if supported)"""
+        """POST /{api_version}/interactions/{interaction_id}/cancel"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}/cancel",
             {},
         )
 

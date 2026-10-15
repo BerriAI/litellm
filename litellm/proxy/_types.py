@@ -62,6 +62,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
+    MCPDisabledCapabilities,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -112,7 +113,6 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
-    TokenCountMessagesFormat,
     TranscriptionResponse,
 )
 from litellm.types.videos.main import VideoObject
@@ -2886,9 +2886,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
         "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
+    mcp_disabled_capabilities: MCPDisabledCapabilities | None = Field(
+        None,
+        description="MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. "
+        "A disabled capability is left out of the initialize and server/discover responses, its list operations "
+        "return an empty list without contacting any upstream MCP server, and its get/read operations answer "
+        "METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.",
+    )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_require_explicit_server_scope: bool = Field(
+        default=False,
+        description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
     mcp_client_id_header: str | None = Field(
         None,
@@ -3391,7 +3402,6 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
 
     tools: list[dict] | None = None
     system: Any | None = None
-    messages_format: TokenCountMessagesFormat = "openai"
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export

@@ -33,6 +33,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
+        text: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
@@ -53,6 +54,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 input=input,
                 tools=tools,
                 instructions=instructions,
+                text=text,
             )
 
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)
