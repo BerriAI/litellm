@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -71,6 +71,7 @@ _GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
+_DECODED_JSON: Final = TypeAdapter(object)
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -400,7 +401,7 @@ def _get_gcs_object_content_type(
         return None
 
     try:
-        payload: Final = response.json()
+        payload: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError as e:
         if explicit_vertex_auth_provided:
             raise litellm.BadRequestError(

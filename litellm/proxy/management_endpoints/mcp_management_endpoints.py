@@ -61,6 +61,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -585,13 +586,13 @@ if MCP_AVAILABLE:
         if decrypted_json is None:
             return None
         try:
-            loaded: Final = json.loads(decrypted_json)
+            loaded: Final = _CACHED_VALUE.validate_python(json.loads(decrypted_json))
         except Exception as e:
             verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
             return None
-        if not isinstance(loaded, dict):
+        payload_dict: Final = as_str_mapping(loaded)
+        if payload_dict is None:
             return None
-        payload_dict: Final[dict[str, object]] = loaded
 
         try:
             return MCPServer.model_validate(payload_dict)

@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -76,6 +77,9 @@ def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
 _FIRST_OBJECT_KEY: Final = re.compile(r'^\s*\{\s*"((?:[^"\\]|\\.)*)"\s*:')
 _OBJECT_KEY_PREFIX: Final = re.compile(r'^\s*(?:\{\s*(?:"(?:[^"\\]|\\.)*\\?(?:"\s*)?)?)?$')
@@ -123,7 +127,7 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
     try:
-        payload: Final[object] = json.loads(held)
+        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
     except (json.JSONDecodeError, RecursionError):
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)

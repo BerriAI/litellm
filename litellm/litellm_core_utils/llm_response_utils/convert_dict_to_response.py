@@ -388,6 +388,7 @@ class _ParallelToolUseArgs(TypedDict):
 
 
 _PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+_DECODED_TOOL_ARGUMENTS: Final = TypeAdapter(object)
 
 
 def handle_invalid_parallel_tool_calls(
@@ -407,7 +408,7 @@ def handle_invalid_parallel_tool_calls(
             if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
                 continue
             current_function = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+            function_args = _DECODED_TOOL_ARGUMENTS.validate_python(json.loads(tool_call.function.arguments))
             if current_function == "multi_tool_use.parallel":
                 verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
                 for _fake_i, _fake_tool_use in enumerate(

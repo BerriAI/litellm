@@ -113,12 +113,12 @@ class QualityRouter(CustomLogger):
             return getattr(model_info, "litellm_routing_preferences", None)
 
         # Pydantic-object deployment.
-        model_info = getattr(deployment, "model_info", None)
-        if model_info is None:
+        deployment_model_info: Final[object] = getattr(deployment, "model_info", None)
+        if deployment_model_info is None:
             return None
-        if isinstance(model_info, dict):
-            return model_info.get("litellm_routing_preferences")
-        return getattr(model_info, "litellm_routing_preferences", None)
+        if isinstance(deployment_model_info, dict):
+            return deployment_model_info.get("litellm_routing_preferences")
+        return getattr(deployment_model_info, "litellm_routing_preferences", None)
 
     def _get_deployment_input_cost(self, deployment: object) -> float | None:
         """
