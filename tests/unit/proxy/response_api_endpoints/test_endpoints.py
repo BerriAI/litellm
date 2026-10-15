@@ -305,6 +305,63 @@ async def test_responses_api_background_polling_accepts_input_from_prompt_templa
 
 
 @pytest.mark.asyncio
+async def test_a_cache_polled_background_stream_is_priced_by_its_own_stream():
+    """Cache polling runs the stream without the settlement wrapper, so a stream the managed files hook
+    marked as billed later must still be priced when it finishes, or the generation is never billed."""
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.constants import MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+    from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    marked_by_the_hook: Final = {
+        "model": "gpt-5.6",
+        "input": "hello",
+        "stream": True,
+        "background": True,
+        "extra_body": {"background": True},
+        "litellm_metadata": {MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True, "user_api_key_alias": "creator"},
+    }
+    processor: Final = MagicMock()
+    processor.common_processing_pre_call_logic = AsyncMock(return_value=(marked_by_the_hook, MagicMock()))
+    body: Final = json.dumps(
+        {"model": "gpt-5.6", "input": "hello", "stream": True, "background": True, "extra_body": {"background": True}}
+    ).encode()
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: background task is imported inside the endpoint
+            "litellm.proxy.response_polling.background_streaming.background_streaming_task",
+            new_callable=AsyncMock,
+        ) as polled_stream,
+        patch(  # test-quality-ok: polling handler is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.ResponsePollingHandler.create_initial_state",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await responses_api(
+            request=_request_for("POST", "/v1/responses", body),
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-creator"),
+        )
+        await asyncio.sleep(0)
+
+    polled_metadata: Final = polled_stream.call_args.kwargs["data"]["litellm_metadata"]
+    finished: Final = _background_response("resp_cache_polled", "completed", 100)
+    assert is_unbilled_non_inference_call("aresponses", marked_by_the_hook["litellm_metadata"], finished)
+    assert not is_unbilled_non_inference_call("aresponses", polled_metadata, finished)
+    assert polled_metadata["user_api_key_alias"] == "creator"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["queued", "completed"])
 async def test_responses_api_background_create_persists_the_creating_keys_attribution(status: str):
     """The cost poll bills a background job off its managed object row, so the create must persist

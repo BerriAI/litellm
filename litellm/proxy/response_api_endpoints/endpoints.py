@@ -29,7 +29,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import EMPTY_MAPPING, TERMINAL_RESPONSE_STATUSES
+from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -366,7 +366,7 @@ async def responses_api(
         asyncio.create_task(
             background_streaming_task(
                 polling_id=polling_id,
-                data=data.copy(),
+                data=dict(_without_managed_background_marker(data)),
                 polling_handler=polling_handler,
                 request=request,
                 fastapi_response=fastapi_response,
@@ -1002,6 +1002,20 @@ def _caller_may_address_response(
     except HTTPException:
         return False
     return True
+
+
+def _without_managed_background_marker(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = request_data.get("litellm_metadata")
+    if not isinstance(metadata, Mapping):
+        return dict(request_data)
+    return {
+        **request_data,
+        "litellm_metadata": {
+            key: value
+            for key, value in _PROXY_SERVER_REQUEST_ADAPTER.validate_python(metadata).items()
+            if key != MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+        },
+    }
 
 
 def _streamed_background_data_generator(
