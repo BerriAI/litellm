@@ -43,6 +43,7 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -144,6 +145,7 @@ else:
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 default_vertex_config: Final = None
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
@@ -654,10 +656,16 @@ async def typesafe_proxy_route(
         custom_llm_provider="typesafe",
         region_name=None,
     )
+    danger_zone_headers: Final = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
+    }
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={
+            **danger_zone_headers,
             "Authorization": f"Bearer {typesafe_api_key}",
             "Content-Type": "application/json",
         },
@@ -3542,7 +3550,7 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
     if not raw_body:
         return frozenset()
     try:
-        parsed: Final[object] = json.loads(raw_body)  # any-ok: json.loads -> Any
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return frozenset(parsed) if isinstance(parsed, dict) else None

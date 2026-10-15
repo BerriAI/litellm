@@ -346,6 +346,7 @@ jobs:
               tests/unit/llms/tinyfish
               tests/unit/llms/together_ai
               tests/unit/llms/tool_loop
+              tests/unit/llms/topaz
               tests/unit/llms/triton
               tests/unit/llms/v0
               tests/unit/llms/valkey
@@ -417,6 +418,7 @@ jobs:
               tests/unit/rag
               tests/unit/realtime_api
               tests/unit/rerank_api
+              tests/unit/search
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"
@@ -454,11 +456,11 @@ jobs:
               tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: load
 
           - shard: proxy-auth
             test-path: |-
@@ -573,7 +575,7 @@ jobs:
               tests/unit/proxy/_experimental/mcp_server/test_operations.py
               tests/integration/mcp/test_interactions.py
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60

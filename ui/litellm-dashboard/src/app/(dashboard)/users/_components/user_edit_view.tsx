@@ -403,6 +403,7 @@ export function UserEditView({
                     onChange={onChange}
                     value={value}
                     accessToken={accessToken || ""}
+                    userId={isBulkEdit ? null : userData.user_id}
                     placeholder="Select MCP servers or access groups (optional)"
                   />
                 )}

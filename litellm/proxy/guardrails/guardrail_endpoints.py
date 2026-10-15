@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -65,6 +65,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
+    PiiEntityCategoryMap,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
@@ -88,6 +89,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1504,7 +1506,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    category_maps: Final = [
+    category_maps: Final[list[PiiEntityCategoryMap]] = [
         {
             "category": category.value,
             "entities": [entity.value for entity in entities],
@@ -1618,7 +1620,7 @@ async def get_major_airlines():
         with open(airlines_path, "r", encoding="utf-8") as f:
             import json
 
-            airlines: Final = json.load(f)
+            airlines: Final = _DECODED_JSON.validate_python(json.load(f))
         return {"airlines": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e

@@ -1,3 +1,4 @@
+import functools
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -40,8 +41,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     is_session_bearer_shaped,
 )
+from litellm.proxy._experimental.mcp_server.utils import asgi_scope_fields
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    LiteLLM_AccessGroupTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     ProxyException,
@@ -53,8 +56,10 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    AgentAccessGroupCeiling,
     CeilingResolver,
     resolve_agent_access_group_ceiling,
+    resolve_managed_agent_ceilings,
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
@@ -124,6 +129,22 @@ class UnloadableEntitlementError(Exception):
     Deliberately distinct from a lookup that fails before the principal's entitlement is known at
     all. Not knowing whether someone is entitled is the state that existed before the level did, so
     it places no ceiling; denying there would refuse MCP to every caller during a cold-cache fault."""
+
+
+@dataclass(frozen=True, slots=True)
+class KeyGroupTools:
+    """``owned``: tools the key's owned groups grant on a server, ``None`` when they place no bound.
+    ``owns_server``: whether an owned group grants the server at all, so an unbounded owned grant is told
+    apart from no owned grant. ``attached``: the bound every attached group, owned or not, places there,
+    applied only when the key holds no grant of its own on the server."""
+
+    owned: Sequence[str] | None
+    owns_server: bool
+    attached: Sequence[str] | None
+
+
+_NO_KEY_GROUP_TOOLS: Final = KeyGroupTools(owned=None, owns_server=False, attached=None)
+_UNREADABLE_KEY_GROUP_TOOLS: Final = KeyGroupTools(owned=(), owns_server=False, attached=())
 
 
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
@@ -249,6 +270,15 @@ def _agent_capped_servers(
         if (not agent_servers or s in agent_servers)
         and (agent_access_group_servers is None or s in agent_access_group_servers)
     )
+
+
+def _intersect_tool_ceiling(own: Sequence[str] | None, ceiling: Sequence[str] | None) -> Sequence[str] | None:
+    """The agent's own tool grants capped by its access-group ceiling, ``None`` only when neither bounds."""
+    if ceiling is None:
+        return own
+    if own is None:
+        return ceiling
+    return tuple(set(own) & set(ceiling))
 
 
 def is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
@@ -664,6 +694,7 @@ class MCPRequestHandler:
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 admitted_credential=admitted_credential,
+                preserve_jwt_subject=bool(validated_user_api_key_auth.jwt_claims),
             )
 
             return (
@@ -703,6 +734,7 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
         admitted_credential: str | None,
+        preserve_jwt_subject: bool = False,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
         """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
         header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
@@ -716,6 +748,14 @@ class MCPRequestHandler:
 
         # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
+        preserve_subject: Final = bool(
+            preserve_jwt_subject
+            and not admitted
+            and authz
+            and not _normalize_caller_admission_credential(authz).startswith("sk-")
+            and not MCPRequestHandler._is_gateway_admission_credential(authz)
+            and MCPRequestHandler._is_caller_admission_key(authz, admitted_credential)
+        )
         if admitted or cred(authz):
             oauth2_headers = None
 
@@ -724,7 +764,9 @@ class MCPRequestHandler:
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key" or not ((admitted and k.lower() == "authorization") or cred(v))
+            if k.lower() == "x-litellm-api-key"
+            or (preserve_subject and k.lower() == "authorization")
+            or not ((admitted and k.lower() == "authorization") or cred(v))
         }
 
         # 3. Deprecated x-mcp-auth value.
@@ -1676,7 +1718,7 @@ class MCPRequestHandler:
         ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
         a comma-combinable field), so fail closed with a 400.
         """
-        raw_headers: Final = scope.get("headers", [])
+        raw_headers: Final = asgi_scope_fields(scope).get("headers", [])
         MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
@@ -2363,16 +2405,177 @@ class MCPRequestHandler:
     def _union_tool_grants(
         direct: Sequence[str] | None,
         via_toolsets: Sequence[str] | None,
+        via_access_groups: Sequence[str] | None = None,
     ) -> Sequence[str] | None:
-        """Union of one level's direct tool grants and its toolset-granted tools on one server,
-        ``None`` when neither source restricts (allow-all from this level). A direct grant
-        containing ``MCP_ALL_TOOLS_WILDCARD`` makes the level unrestricted, so it returns
-        ``None`` whatever the toolsets name."""
+        """Union of one level's direct tool grants, its toolset-granted tools and its unified
+        access-group tools on one server, ``None`` when no source restricts (allow-all from this
+        level). A direct grant containing ``MCP_ALL_TOOLS_WILDCARD`` makes the level unrestricted,
+        so it returns ``None`` whatever the toolsets or groups name."""
         if direct is not None and MCP_ALL_TOOLS_WILDCARD in direct:
             return None
-        if direct is None and via_toolsets is None:
+        if direct is None and via_toolsets is None and via_access_groups is None:
             return None
-        return tuple({*(direct or ()), *(via_toolsets or ())})
+        return tuple({*(direct or ()), *(via_toolsets or ()), *(via_access_groups or ())})
+
+    @staticmethod
+    def access_group_tools_for_server(
+        groups: Sequence[LiteLLM_AccessGroupTable], server_id: str
+    ) -> Sequence[str] | None:
+        """Tools the unified access groups grant on ``server_id``: the union of each granting group's
+        ``mcp_tool_permissions`` entry for it. A granting group with no entry grants every tool, so
+        ``None`` wins. A group that does not grant the server contributes nothing, and an explicit
+        ``[]`` entry on a granting group grants no tools. ``None`` when no group grants the server."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        def granted_tools(group: LiteLLM_AccessGroupTable) -> Sequence[str] | None:
+            if not MCPRequestHandler._group_grants_server(group, server_id):
+                return None
+            permissions: Final = {
+                server: list(allowed) for server, allowed in (group.mcp_tool_permissions or {}).items()
+            }
+            tools: Final = global_mcp_server_manager.expand_tool_permissions(permissions)
+            return tools.get(server_id, (MCP_ALL_TOOLS_WILDCARD,))
+
+        grants: Final = tuple(granted_tools(group) for group in groups)
+        named: Final = tuple(grant for grant in grants if grant is not None)
+        if not named or any(MCP_ALL_TOOLS_WILDCARD in grant for grant in named):
+            return None
+        return tuple({tool for grant in named for tool in grant})  # comprehension-ok: flatten
+
+    @staticmethod
+    def _group_grants_server(group: LiteLLM_AccessGroupTable, server_id: str) -> bool:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        return server_id in global_mcp_server_manager.expand_permission_list(list(group.access_mcp_server_ids))
+
+    @staticmethod
+    def _key_tool_scope(
+        direct: Sequence[str] | None,
+        via_toolsets: Sequence[str] | None,
+        groups: KeyGroupTools,
+        grants_server: bool,
+    ) -> Sequence[str] | None:
+        """The key's own tool scope on a server when it holds any grant there (a direct server grant with
+        or without a tool entry, a toolset or an owned group), so an unrestricted grant stays unrestricted.
+        Only a key with no grant of its own takes the bound its attached groups place."""
+        if grants_server or direct is not None or via_toolsets is not None or groups.owns_server:
+            return MCPRequestHandler._union_tool_grants(direct, via_toolsets, groups.owned)
+        return groups.attached
+
+    @staticmethod
+    def _group_authorizes_key(group: LiteLLM_AccessGroupTable, team_id: str | None, token: str | None) -> bool:
+        """Mirror of ``get_authorized_resources_from_key_access_groups``: a group a key merely names
+        binds only when the group lists the key's team or the key itself as an owner."""
+        return bool(team_id and team_id in group.assigned_team_ids) or bool(token and token in group.assigned_key_ids)
+
+    @staticmethod
+    def _loaded_group_tools_for_server(
+        groups: Sequence[LiteLLM_AccessGroupTable], requested: Sequence[str], server_id: str
+    ) -> Sequence[str] | None:
+        """Tool grants of the agent groups that loaded. A named agent group that did not load exists but
+        could not be read (a group that does not exist never reaches the ceiling), so the level grants no
+        tools on ``server_id`` rather than shedding a restriction while the fault lasts."""
+        if {group.access_group_id for group in groups} != set(requested):
+            return ()
+        return MCPRequestHandler.access_group_tools_for_server(groups, server_id)
+
+    @staticmethod
+    async def _key_direct_servers(
+        key_obj_perm: LiteLLM_ObjectPermissionTable | None, *, requires_fresh_policy: bool
+    ) -> AbstractSet[str]:
+        """Servers the key's object permission grants on its own: ``mcp_servers`` by id, name or alias and
+        legacy ``mcp_access_groups`` by the tag the server carries, exactly as server admission resolves
+        them. A tag never doubles as a server name, so a tag that collides with one grants nothing by itself."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        if key_obj_perm is None:
+            return frozenset()
+        try:
+            tagged: Final = (
+                await MCPRequestHandler.get_mcp_servers_from_access_groups(
+                    key_obj_perm.mcp_access_groups, requires_fresh_policy=requires_fresh_policy
+                )
+                if key_obj_perm.mcp_access_groups
+                else ()
+            )
+        except Exception as e:  # noqa: BLE001  # a key naming tags we cannot resolve must deny, not widen
+            raise UnloadableEntitlementError(f"key access group tags unreadable: {e}") from e
+        return frozenset(global_mcp_server_manager.expand_permission_list(key_obj_perm.mcp_servers or [])) | frozenset(
+            tagged
+        )
+
+    @staticmethod
+    async def _key_access_group_tools_for_server(user_api_key_auth: UserAPIKeyAuth, server_id: str) -> KeyGroupTools:
+        """Tool bounds the key's attached groups place on ``server_id``. Attaching a group to a key admits
+        the group's servers (``_get_key_access_group_mcp_server_extras``), so an attached group the key
+        does not own still carries its own tool permissions onto the servers it admits, it just cannot
+        add tools to a grant the key already holds there. Only owned groups are grant sources. A named
+        group that does not exist grants and bounds nothing, one that exists but cannot be read denies."""
+        from litellm.proxy.auth.auth_checks import get_access_group_tables
+
+        if not user_api_key_auth.access_group_ids:
+            return _NO_KEY_GROUP_TOOLS
+        try:
+            groups: Final = await get_access_group_tables(
+                access_group_ids=user_api_key_auth.access_group_ids,
+                check_db_only=bool(user_api_key_auth.requires_fresh_policy),
+                unreadable="raise",
+            )
+        except Exception as e:  # noqa: BLE001  # a key naming groups we cannot read must deny, not widen
+            if user_api_key_auth.requires_fresh_policy:
+                raise UnloadableEntitlementError(f"key access groups unreadable: {e}") from e
+            return _UNREADABLE_KEY_GROUP_TOOLS
+        owned: Final = tuple(
+            group
+            for group in groups
+            if MCPRequestHandler._group_authorizes_key(group, user_api_key_auth.team_id, user_api_key_auth.token)
+        )
+        return KeyGroupTools(
+            owned=MCPRequestHandler.access_group_tools_for_server(owned, server_id),
+            owns_server=any(MCPRequestHandler._group_grants_server(group, server_id) for group in owned),
+            attached=MCPRequestHandler.access_group_tools_for_server(groups, server_id),
+        )
+
+    @staticmethod
+    async def _team_access_group_tools_for_server(
+        user_api_key_auth: UserAPIKeyAuth, server_id: str
+    ) -> Sequence[str] | None:
+        from litellm.proxy.auth.auth_checks import get_access_group_tables, get_team_object
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+        if not user_api_key_auth.team_id or user_api_key_auth.team_id == UI_TEAM_ID or prisma_client is None:
+            return None
+        try:
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth.requires_fresh_policy),
+            )
+        except Exception as e:  # noqa: BLE001  # a team we cannot read must deny, not widen
+            raise UnloadableEntitlementError(f"team unreadable: {e}") from e
+        if not team_obj.access_group_ids:
+            return None
+        try:
+            groups: Final = await get_access_group_tables(
+                access_group_ids=team_obj.access_group_ids,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth.requires_fresh_policy),
+                unreadable="raise",
+            )
+        except Exception as e:  # noqa: BLE001  # team groups we cannot read grant no tools, they never widen
+            if user_api_key_auth.requires_fresh_policy:
+                raise UnloadableEntitlementError(f"team access groups unreadable: {e}") from e
+            return ()
+        return MCPRequestHandler.access_group_tools_for_server(groups, server_id)
 
     @staticmethod
     async def _key_object_permission_hydrated(
@@ -2493,7 +2696,17 @@ class MCPRequestHandler:
                 else None
             )
 
-            key_tools: Final = _as_list(MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools))
+            key_group_tools: Final = await MCPRequestHandler._key_access_group_tools_for_server(
+                user_api_key_auth, server_id
+            )
+            key_direct_servers: Final = await MCPRequestHandler._key_direct_servers(
+                key_obj_perm, requires_fresh_policy=bool(user_api_key_auth.requires_fresh_policy)
+            )
+            key_tools: Final = _as_list(
+                MCPRequestHandler._key_tool_scope(
+                    key_direct_tools, key_toolset_tools, key_group_tools, server_id in key_direct_servers
+                )
+            )
             team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
@@ -2505,11 +2718,17 @@ class MCPRequestHandler:
             team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
                 team_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
-            team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
+            team_group_tools: Final = await MCPRequestHandler._team_access_group_tools_for_server(
+                user_api_key_auth, server_id
+            )
+            team_tools: Final = MCPRequestHandler._union_tool_grants(
+                team_direct_tools, team_toolset_tools, team_group_tools
+            )
 
-            # Apply same inheritance logic as get_allowed_mcp_servers
-            if team_tools:
-                if key_tools:
+            # Apply same inheritance logic as get_allowed_mcp_servers. ``is not None`` so an explicit
+            # empty allowlist stays a deny instead of reading as "no restriction".
+            if team_tools is not None:
+                if key_tools is not None:
                     # Both have restrictions → intersection
                     allowed_tools = list(set(team_tools) & set(key_tools))
                 else:
@@ -3525,6 +3744,9 @@ class MCPRequestHandler:
             team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
                 team_obj_perm, server_id, requires_fresh_policy=caller_auth.requires_fresh_policy
             )
+            team_group_tools: Final = await MCPRequestHandler._team_access_group_tools_for_server(
+                caller_auth, server_id
+            )
         except Exception as e:  # noqa: BLE001  # an unresolved caller team must deny, not widen
             verbose_logger.warning(
                 "MCP agent caller team tool ceiling unresolvable, denying tools on %r: %s", server_id, e
@@ -3535,7 +3757,9 @@ class MCPRequestHandler:
             if team_obj_perm
             else None
         )
-        team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
+        team_tools: Final = MCPRequestHandler._union_tool_grants(
+            team_direct_tools, team_toolset_tools, team_group_tools
+        )
         team_capped: Final = (
             allowed_tools
             if team_tools is None
@@ -3729,12 +3953,50 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
+        ceilings: Final = await MCPRequestHandler._agent_access_group_ceilings(user_api_key_auth, resolve_ceiling)
+        if not ceilings:
+            return None
+        expanded: Final[tuple[frozenset[str], ...]] = tuple(
+            frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
+            for ceiling in ceilings
+        )
+        return functools.reduce(lambda acc, servers: acc & servers, expanded[1:], expanded[0])
+
+    @staticmethod
+    async def _get_agent_access_group_tool_ceiling(
+        user_api_key_auth: UserAPIKeyAuth,
+        server_id: str,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+    ) -> Sequence[str] | None:
+        """Ceiling the agent's attached unified access groups place on ``server_id`` tools, the tools axis
+        twin of ``_get_agent_access_group_server_ceiling``. None when the agent has no groups attached or
+        no attached group bounds tools on the server. The agent's own grants are intersected with it."""
+        ceilings: Final = await MCPRequestHandler._agent_access_group_ceilings(user_api_key_auth, resolve_ceiling)
+        if not ceilings:
+            return None
+        bounds: Final = tuple(
+            MCPRequestHandler._loaded_group_tools_for_server(ceiling.access_groups, ceiling.access_group_ids, server_id)
+            for ceiling in ceilings
+        )
+        return functools.reduce(_intersect_tool_ceiling, bounds[1:], bounds[0])
+
+    @staticmethod
+    async def _agent_access_group_ceilings(
+        user_api_key_auth: UserAPIKeyAuth,
+        resolve_ceiling: CeilingResolver,
+    ) -> tuple[AgentAccessGroupCeiling, ...]:
+        """A managed agent is bounded by the groups on its admitted policy, the same source server admission
+        reads, never by the registry row that policy may have superseded. Empty means no groups attached."""
         if not user_api_key_auth.agent_id:
-            return None
-        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
-        if ceiling is None:
-            return None
-        return frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
+            return ()
+        managed: Final = managed_agent_policy(user_api_key_auth)
+        try:
+            if managed is not None:
+                return await resolve_managed_agent_ceilings(managed)
+            ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
+        except Exception as e:  # noqa: BLE001  # agent groups we cannot read must deny, not widen
+            raise UnloadableEntitlementError(f"agent access groups unreadable: {e}") from e
+        return (ceiling,) if ceiling is not None else ()
 
     @staticmethod
     async def get_agent_tool_permissions_for_server(
@@ -3764,14 +4026,17 @@ class MCPRequestHandler:
             if agent_object_permission is not None
             else await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
         )
-        if obj_perm is None:
-            return None
 
         try:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
+            group_tools: Final = await MCPRequestHandler._get_agent_access_group_tool_ceiling(
+                user_api_key_auth, server_id
+            )
+            if obj_perm is None:
+                return _as_list(group_tools)
             direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions).get(server_id)
                 if obj_perm.mcp_tool_permissions
@@ -3780,7 +4045,8 @@ class MCPRequestHandler:
             toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
                 obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
-            agent_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
+            own_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
+            agent_tools: Final = _intersect_tool_ceiling(own_tools, group_tools)
             return list(agent_tools) if agent_tools is not None else None
         except Exception as e:
             if managed_agent_policy(user_api_key_auth) is not None or isinstance(e, UnloadableEntitlementError):

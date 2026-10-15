@@ -89,6 +89,7 @@ export const getAutoRouterAssembledPromptCall = async (
 import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
+import { normalizeBackendPageUrlToUiOrigin } from "@/utils/returnUrlUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -189,6 +190,9 @@ const _initialWorkerUrl = (() => {
   return null;
 })();
 export let proxyBaseUrl: string | null = _initialWorkerUrl ?? defaultProxyBaseUrl;
+let discoveredProxyBaseUrl: string | null = defaultProxyBaseUrl;
+let gatewayBaseUrl: string | null = null;
+let runtimeBackendBaseUrl: string | null = null;
 if (isLocal != true) {
   console.log = function () {};
 }
@@ -204,14 +208,13 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
-  // If a worker URL is in localStorage, don't let getUiConfig overwrite it
-  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
-    return;
-  }
-  proxyBaseUrl = resolveApiBase({
+  const resolvedProxyBaseUrl = resolveApiBase({
     explicitBase: receivedProxyBaseUrl || resolveDefaultBase(getWindowLocation()?.origin ?? null),
     serverRootPath,
   });
+  discoveredProxyBaseUrl = resolvedProxyBaseUrl || null;
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) return;
+  proxyBaseUrl = resolvedProxyBaseUrl;
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
@@ -224,6 +227,26 @@ export const getProxyBaseUrl = (): string => {
   }
   const browserLocation = getWindowLocation();
   return browserLocation?.origin ?? "";
+};
+
+export const getRuntimeBackendBaseUrl = (): string | null => runtimeBackendBaseUrl;
+
+export const getUiPageUrl = (url: string, relativePath = false): string => {
+  const browserLocation = getWindowLocation();
+  return normalizeBackendPageUrlToUiOrigin(url, runtimeBackendBaseUrl, browserLocation?.origin ?? null, relativePath);
+};
+
+const normalizeHttpUrl = (url: string | null | undefined): string | null => {
+  const trimmedUrl = (url ?? "").trim();
+  if (!trimmedUrl || !isValidHttpUrl(trimmedUrl)) return null;
+  return trimmedUrl.replace(/\/+$/, "");
+};
+
+export const getGatewayBaseUrl = (): string => {
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
+    return getProxyBaseUrl();
+  }
+  return gatewayBaseUrl ?? getProxyBaseUrl();
 };
 
 /**
@@ -252,7 +275,7 @@ export function switchToWorkerUrl(workerUrl: string | null): void {
       window.localStorage.removeItem(WORKER_URL_KEY);
     }
   }
-  proxyBaseUrl = workerUrl ?? defaultProxyBaseUrl;
+  proxyBaseUrl = workerUrl ?? discoveredProxyBaseUrl;
 }
 
 const HTTP_REQUEST = {
@@ -392,6 +415,7 @@ export interface WorkerInfo {
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
+  gateway_base_url?: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
@@ -509,6 +533,12 @@ export const apiClient = createApiClient({
   onError: handleError,
 });
 
+export const gatewayApiClient = createApiClient({
+  getBaseUrl: getGatewayBaseUrl,
+  getAuthHeaderName: getGlobalLitellmHeaderName,
+  onError: handleError,
+});
+
 registerBaseUrlGetter(getProxyBaseUrl);
 registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
@@ -531,8 +561,31 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
 
 export const getUiConfig = async () => {
   /**Special route to get the proxy base url and server root path */
-  const url = defaultProxyBaseUrl
-    ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config`
+  const runtimeBackendUrl = defaultProxyBaseUrl
+    ? null
+    : await (async (): Promise<string | null> => {
+        try {
+          // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
+          const response = await fetch("/ui/litellm-runtime-config.json", { cache: "no-store" });
+          if (!response.ok) return null;
+          const runtimeConfig: unknown = await response.json();
+          if (
+            typeof runtimeConfig !== "object" ||
+            runtimeConfig === null ||
+            !("backend_url" in runtimeConfig) ||
+            typeof runtimeConfig.backend_url !== "string"
+          ) {
+            return null;
+          }
+          return normalizeHttpUrl(runtimeConfig.backend_url);
+        } catch {
+          return null;
+        }
+      })();
+  runtimeBackendBaseUrl = runtimeBackendUrl;
+  const discoveryBaseUrl = defaultProxyBaseUrl ?? runtimeBackendUrl;
+  const url = discoveryBaseUrl
+    ? `${discoveryBaseUrl}/litellm/.well-known/litellm-ui-config`
     : `/litellm/.well-known/litellm-ui-config`;
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
@@ -540,7 +593,8 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   updateServerRootPath(jsonData.server_root_path);
-  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url || runtimeBackendUrl);
+  gatewayBaseUrl = normalizeHttpUrl(jsonData.gateway_base_url);
   return jsonData;
 };
 
@@ -1550,6 +1604,7 @@ export const modelInfoCall = async (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly?: boolean,
+  blocked?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1586,6 +1641,9 @@ export const modelInfoCall = async (
     }
     if (wildcardOnly) {
       params.append("wildcard_only", "true");
+    }
+    if (blocked !== undefined) {
+      params.append("blocked", blocked ? "true" : "false");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -1792,7 +1850,7 @@ export const modelAvailableCall = async (
    * Get all the models user has access to
    */
   try {
-    return await apiClient.get(`/models`, {
+    return await gatewayApiClient.get(`/models`, {
       accessToken,
       query: {
         include_model_access_groups: "True",
@@ -2282,7 +2340,7 @@ export const testModelGroupConnection = async (
 ): Promise<ModelGroupConnectionResult> => {
   const { path, body } = buildModelGroupTestRequest(modelGroup, mode, requestParams);
   try {
-    await apiClient.post(path, { accessToken, body });
+    await gatewayApiClient.post(path, { accessToken, body });
     return { status: "success" };
   } catch (error) {
     return { status: "error", error: error instanceof Error ? error.message : String(error) };
@@ -3708,7 +3766,7 @@ export const testMCPSemanticFilter = async (accessToken: string, model: string, 
    * Returns both the response data and headers containing filter information
    */
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/responses` : `/v1/responses`;
+    const url = `${getGatewayBaseUrl()}/v1/responses`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4676,9 +4734,14 @@ export const discoverAgentCardCall = async (
   url: string,
   options?: DiscoverAgentCardOptions,
 ): Promise<DiscoverAgentCardResponse> => {
-  const { data } = await fetchClient.POST("/v1/a2a/discover", {
+  const body: components["schemas"]["DiscoverAgentRequest"] = {
+    url,
+    ...options,
+    discovery_mode: options?.discovery_mode ?? "well_known_fallback",
+  };
+  const data = await gatewayApiClient.post<components["schemas"]["DiscoverAgentResponse"]>("/v1/a2a/discover", {
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-    body: { url, ...options, discovery_mode: options?.discovery_mode ?? "well_known_fallback" },
+    body,
   });
   if (!data) throw new Error("Agent discovery response is empty");
   return { ...data, agent_card: toAgentCard(data.agent_card) };
@@ -4795,11 +4858,20 @@ export interface ConnectFlowStatus {
 export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
   apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
+export const fetchMCPServers = async (
+  accessToken: string,
+  teamId?: string | null,
+  connectedAppView?: boolean,
+  userId?: string | null,
+) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {
       accessToken,
-      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+      query: {
+        team_id: teamId || undefined,
+        connected_app_view: connectedAppView || undefined,
+        user_id: userId || undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
@@ -5582,7 +5654,7 @@ export interface IndexesListResponse {
 
 export const indexesListCall = async (accessToken: string): Promise<IndexesListResponse> => {
   try {
-    return await apiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
+    return await gatewayApiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
   } catch (error) {
     console.error("Error listing indexes:", error);
     throw error;
@@ -5674,7 +5746,8 @@ export const ragIngestCall = async (
   providerSpecificParams?: Record<string, any>,
 ): Promise<any> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
+    const gatewayBaseUrl = getGatewayBaseUrl();
+    const url = gatewayBaseUrl ? `${gatewayBaseUrl}/rag/ingest` : `/rag/ingest`;
 
     const formData = new FormData();
     formData.append("file", file);
@@ -6226,7 +6299,7 @@ export const applyGuardrail = async (
 };
 
 export const decisionsTestCall = async (accessToken: string, requestBody: DecisionTestBody, signal?: AbortSignal) =>
-  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
+  gatewayApiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
 
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
@@ -6812,7 +6885,7 @@ export const vectorStoreSearchCall = async (
   query: string,
 ): Promise<any> => {
   try {
-    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const url = `${getGatewayBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -6845,7 +6918,7 @@ export const searchToolQueryCall = async (
   maxResults?: number,
 ): Promise<any> => {
   try {
-    const url = `${getProxyBaseUrl()}/v1/search/${searchToolName}`;
+    const url = `${getGatewayBaseUrl()}/v1/search/${searchToolName}`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -7834,7 +7907,7 @@ export const fetchMemoryList = async (
     pageSize?: number;
   } = {},
 ): Promise<MemoryListResponse> => {
-  const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const base = `${getGatewayBaseUrl()}/v1/memory`;
   const params = new URLSearchParams();
   // Backend precedence is search > key_prefix > key; only the winner is sent
   // to keep the URL clean and intent obvious.
@@ -7866,7 +7939,7 @@ export const createMemory = async (
   accessToken: string,
   payload: { key: string; value: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const url = `${getGatewayBaseUrl()}/v1/memory`;
   const body: Record<string, unknown> = {
     key: payload.key,
     value: payload.value,
@@ -7893,7 +7966,7 @@ export const updateMemory = async (
   payload: { value?: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
+  const url = `${getGatewayBaseUrl()}/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "PUT",
     headers: {
@@ -7911,7 +7984,7 @@ export const updateMemory = async (
 
 export const deleteMemory = async (accessToken: string, key: string): Promise<void> => {
   const encoded = encodeMemoryKeyForPath(key);
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory/${encoded}` : `/v1/memory/${encoded}`;
+  const url = `${getGatewayBaseUrl()}/v1/memory/${encoded}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: {

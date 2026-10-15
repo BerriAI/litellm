@@ -422,6 +422,31 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
 
 
+def test_a_request_body_cannot_turn_on_box_questions_for_a_proxy_without_a_router(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "openai/gpt-6-luna")
+    upstream: Final = respx_mock.post("https://fake-openai.example/v1/decisions").respond(json={})
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "openai/gpt-6-luna",
+            "input": "A phone screen with a diagonal crack.",
+            "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+            "model_info": {"supports_box_questions": True},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "['box questions']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
 _OPENAI_FORMAT_REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
     "input": [
@@ -996,6 +1021,38 @@ def test_malformed_images_are_refused_unless_the_deployment_drops_params(
     assert response.status_code == 200, response.text
     assert json.loads(upstream.calls[0].request.content) == {
         "model": "clef",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_malformed_assets_for_a_deployment_without_asset_support_are_dropped_only_when_it_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch,
+        {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": deployment_drops_params},
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={**_IMAGE_REQUEST_BODIES[1], "assets": {"photo-1": {"type": "image", "part": "file1"}}},
+    )
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "assets" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
         "state": _IMAGE_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }

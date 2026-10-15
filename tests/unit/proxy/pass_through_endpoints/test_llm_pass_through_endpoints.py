@@ -7822,6 +7822,20 @@ class TestTypeSafePassthroughRoute:
             assert sent.headers["authorization"] == "Bearer typesafe-test-key"
             assert json.loads(sent.content or b"{}") == (body or {})
 
+    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            client.post(
+                "/typesafe/v1/systemone",
+                json={"state": "x"},
+                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
+            )
+
+            sent: Final = route.calls.last.request.headers
+            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
+
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (

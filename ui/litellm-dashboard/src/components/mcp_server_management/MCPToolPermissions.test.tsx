@@ -83,7 +83,7 @@ describe("MCPToolPermissions", () => {
 
     // Verify API calls
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined, undefined, undefined);
     // listMCPTools uses the accessToken prop directly
     expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId);
   });
@@ -1060,6 +1060,50 @@ describe("MCPToolPermissions", () => {
       expect(readGroupToggle).toBeChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
       expect(screen.getByRole("checkbox", { name: "delete_document" })).not.toBeChecked();
+    });
+  });
+
+  describe("preserveUnrestrictedServers", () => {
+    const tools = [
+      { name: "read_file", description: "Read a file" },
+      { name: "delete_file", description: "Delete a file" },
+    ];
+    const server = { server_id: "srv-files", server_name: "Files", alias: "files" };
+
+    beforeEach(() => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools, error: false });
+    });
+
+    it("keeps an unrestricted server stored by alias unrestricted when tools load", async () => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["files"]}
+          toolPermissions={{}}
+          onChange={onChange}
+          preserveUnrestrictedServers={["files"]}
+        />,
+      );
+
+      expect(await screen.findByText("read_file")).toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("still defaults a newly added server to non-delete tools", async () => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["files"]}
+          toolPermissions={{}}
+          onChange={onChange}
+          preserveUnrestrictedServers={["some-other-server"]}
+        />,
+      );
+
+      await waitFor(() => expect(onChange).toHaveBeenCalledWith({ "srv-files": ["read_file"] }));
     });
   });
 });

@@ -64,9 +64,10 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     get_cached_byok_credential,
 )
 from litellm.proxy._experimental.mcp_server.capabilities import (
-    GATEWAY_OPERATIONS,
     build_discovery,
     configured_versions,
+    disabled_capabilities,
+    enabled_gateway_operations,
 )
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
@@ -2217,7 +2218,9 @@ async def _execute_mcp_tool(
             client_ip=client_ip,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            host_progress_callback=host_progress_callback,
+            host_progress_callback=_guarded_progress_callback(
+                host_progress_callback, litellm_logging_obj, user_api_key_auth, kwargs
+            ),
             wire_compat=wire_compat,
             input_responses=input_responses,
             request_state=request_state,
@@ -2310,6 +2313,33 @@ async def _execute_mcp_tool(
         user_api_key_auth=user_api_key_auth,
         request_data=kwargs,
     )
+
+
+def _guarded_progress_callback(
+    callback: ProgressCallback | None,
+    logging_obj: LiteLLMLoggingObj | None,
+    caller: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+) -> ProgressCallback | None:
+    if callback is None:
+        return None
+
+    async def forward(progress: float, total: float | None, message: str | None = None) -> None:
+        if message is None:
+            await callback(progress, total, None)
+            return
+        try:
+            checked: Final = await _run_post_mcp_call_guardrails(
+                CallToolResult(content=[TextContent(type="text", text=message)]), logging_obj, caller, request_data
+            )
+            filtered: Final = TextContent.model_validate(checked.content[0]).text
+        except Exception:  # noqa: BLE001  # any guardrail failure must withhold unverified progress text
+            verbose_logger.warning("Withheld MCP progress text because its output guardrail check failed")
+            await callback(progress, total, None)
+        else:
+            await callback(progress, total, filtered)
+
+    return forward
 
 
 async def _run_post_mcp_call_guardrails(
@@ -3063,6 +3093,8 @@ async def _execute_list_prompts(
 
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
+    if "prompts" in disabled_capabilities():
+        return ListPromptsResult(prompts=[])
     try:
         catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
         result: Final = await catalog.list(context, ListPromptsRequest(params=params))
@@ -3085,6 +3117,8 @@ async def _execute_get_prompt(
 ) -> GetPromptResult | InputRequiredResult:
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
+    if "prompts" in disabled_capabilities():
+        _reject_disabled_capability("prompts")
     (
         user_api_key_auth,
         mcp_auth_header,
@@ -3123,6 +3157,8 @@ async def _execute_list_resources(
 
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
+    if "resources" in disabled_capabilities():
+        return ListResourcesResult(resources=[])
     try:
         catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
         result: Final = await catalog.list(context, ListResourcesRequest(params=params))
@@ -3151,6 +3187,8 @@ async def _execute_list_resource_templates(
 
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
+    if "resources" in disabled_capabilities():
+        return ListResourceTemplatesResult(resource_templates=[])
     try:
         catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
         result: Final = await catalog.list(context, ListResourceTemplatesRequest(params=params))
@@ -3173,6 +3211,8 @@ async def _execute_read_resource(
 ) -> ReadResourceResult | InputRequiredResult:
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
+    if "resources" in disabled_capabilities():
+        _reject_disabled_capability("resources")
     (
         user_api_key_auth,
         mcp_auth_header,
@@ -3205,6 +3245,13 @@ def _reject_mcp_proxy_operation() -> NoReturn:
     from mcp.types import METHOD_NOT_FOUND
 
     raise MCPError(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy")
+
+
+def _reject_disabled_capability(capability: str) -> NoReturn:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import METHOD_NOT_FOUND
+
+    raise MCPError(code=METHOD_NOT_FOUND, message=f"MCP {capability} are disabled on this gateway")
 
 
 def prepare_context(
@@ -3346,10 +3393,14 @@ class GatewayOperations:
     async def _execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
+                disabled: Final = disabled_capabilities()
                 listings: Final = (
                     ()
                     if context.mcp_proxy_mode
-                    else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
+                    else (
+                        *(() if "prompts" in disabled else (ListPromptsRequest(),)),
+                        *(() if "resources" in disabled else (ListResourcesRequest(), ListResourceTemplatesRequest())),
+                    )
                 )
                 memo_token: Final = _mcp_server_admission_memo.set({})
                 tasks: Final = (
@@ -3376,7 +3427,7 @@ class GatewayOperations:
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
                     transport=MCPTransport.http,
-                    authorized_operations=GATEWAY_OPERATIONS,
+                    authorized_operations=enabled_gateway_operations(disabled),
                     upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
                     capabilities=ServerCapabilities(
                         tools=ToolsCapability()
