@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, OpenAIToolSearchToolParam, ResponseInputParam
 from litellm.types.responses.main import OutputToolSearchCall
 from litellm.types.utils import LlmProviders, Message
 
@@ -24,12 +25,16 @@ __all__ = [
     "chat_route_rejects_unanswered_tool_calls",
     "has_server_tool_search",
     "holds_tool_search_use",
+    "input_without_unanswered_anthropic_tool_search_calls",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
+    "is_openai_tool_search_tool",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
     "runs_tool_search_on_the_server",
     "tool_search_call_ids",
+    "tools_with_anthropic_tool_search_mapped",
+    "tools_without_anthropic_tool_search",
     "unanswered_tool_search_call_ids",
     "without_tool_search_calls",
     "without_tool_search_uses",
@@ -74,8 +79,84 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
     return AnthropicToolSearchToolRegex(type=ANTHROPIC_TOOL_SEARCH_TOOL_TYPE, name=ANTHROPIC_TOOL_SEARCH_TOOL_NAME)
 
 
-def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
-    return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+def _tool_type(tool: object) -> str:
+    try:
+        return _ToolSearchFields.model_validate(tool).type
+    except ValidationError:
+        return ""
+
+
+def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
+    tool_type: Final = _tool_type(tool)
+    return tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def is_openai_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) == "tool_search"
+
+
+def tools_with_anthropic_tool_search_mapped(
+    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+    if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+        return tools
+    if any(is_openai_tool_search_tool(tool) for tool in tools):
+        return tools_without_anthropic_tool_search(tools)
+    first_search_index: Final = next(
+        index for index, tool in enumerate(tools) if is_anthropic_tool_search_chat_tool(tool)
+    )
+    server_tool_search: Final[OpenAIToolSearchToolParam] = {"type": "tool_search", "execution": "server"}
+    return tuple(
+        server_tool_search if index == first_search_index else tool
+        for index, tool in enumerate(tools)
+        if index == first_search_index or not is_anthropic_tool_search_chat_tool(tool)
+    )
+
+
+def tools_without_anthropic_tool_search(
+    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
+) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    return tuple(tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool))
+
+
+class _FunctionCallItemFields(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str = ""
+    call_id: str = ""
+    name: str = ""
+
+
+def _function_call_fields(item: object) -> _FunctionCallItemFields:
+    try:
+        return _FunctionCallItemFields.model_validate(item)
+    except ValidationError:
+        return _FunctionCallItemFields()
+
+
+def _is_unanswered_anthropic_tool_search_call(fields: _FunctionCallItemFields, answered_call_ids: Set[str]) -> bool:
+    return (
+        fields.type == "function_call"
+        and is_anthropic_tool_search_use(fields.call_id, fields.name)
+        and fields.call_id not in answered_call_ids
+    )
+
+
+def input_without_unanswered_anthropic_tool_search_calls(
+    input: str | ResponseInputParam,
+) -> str | ResponseInputParam:
+    if isinstance(input, str):
+        return input
+    item_fields: Final = tuple(map(_function_call_fields, input))
+    answered_call_ids: Final = frozenset(
+        fields.call_id for fields in item_fields if fields.type == "function_call_output"
+    )
+    kept: Final = [
+        item
+        for item, fields in zip(input, item_fields)
+        if not _is_unanswered_anthropic_tool_search_call(fields, answered_call_ids)
+    ]
+    return input if len(kept) == len(input) else kept
 
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
