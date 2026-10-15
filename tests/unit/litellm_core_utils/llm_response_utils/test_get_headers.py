@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     _get_llm_provider_headers,
     get_response_headers,
     get_provider_request_id,
+    provider_request_id_headers,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -87,6 +88,31 @@ def test_native_clients_receive_the_provider_request_id(header: str) -> None:
 @pytest.mark.parametrize("headers", (None, {}, {"request-id": ""}, {"request-id": 42}))
 def test_invalid_provider_request_ids_remain_absent(headers: object) -> None:
     assert get_provider_request_id(headers) is None
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    (
+        (
+            {"X-Amzn-RequestId": "amzn-1", "retry-after": "7", "content-type": "text/event-stream"},
+            {"x-amzn-requestid": "amzn-1"},
+        ),
+        (
+            {"x-request-id": "req_1", "cf-ray": "ray-1", "x-ratelimit-remaining-requests": "0"},
+            {"x-request-id": "req_1", "cf-ray": "ray-1"},
+        ),
+        ({"retry-after": "7"}, None),
+        ({"x-request-id": 7, "request-id": None, "x-amzn-requestid": "amzn-2"}, {"x-amzn-requestid": "amzn-2"}),
+        ({"x-amzn-requestid": "amzn-\u00fc", "x-request-id": "req_2"}, {"x-request-id": "req_2"}),
+        ({}, None),
+        (None, None),
+    ),
+)
+def test_provider_request_id_headers_keeps_only_request_id_headers(
+    headers: dict[str, object] | None, expected: dict[str, str] | None
+) -> None:
+    result = provider_request_id_headers(headers)
+    assert (None if result is None else dict(result)) == expected
 
 
 @pytest.fixture(autouse=True)

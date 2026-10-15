@@ -74,18 +74,31 @@ def _make_error_chunk(error_type: str, code: str, message: str = "err") -> Error
     "code,status", (("server_error", 500), ("rate_limit_exceeded", 429), ("invalid_request_error", 400))
 )
 def test_stream_error_preserves_provider_request_id(provider: str, header: str | None, code: str, status: int) -> None:
-    response: Final = httpx.Response(200, headers={header: "provider-request-id"} if header else {})
+    stream_headers: Final = {"retry-after": "7", "content-type": "text/event-stream"}
+    response: Final = httpx.Response(
+        200, headers={**stream_headers, header: "provider-request-id"} if header else stream_headers
+    )
     logging: Final = LiteLLMLoggingObj(
-        model="test-model", messages=[], stream=True, call_type="responses",
-        start_time=datetime(2026, 1, 1), litellm_call_id="test-call", function_id="test-function",
+        model="test-model",
+        messages=[],
+        stream=True,
+        call_type="responses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call",
+        function_id="test-function",
     )
     iterator: Final = BaseResponsesAPIStreamingIterator(
-        response=response, model="test-model", responses_api_provider_config=None,
-        logging_obj=logging, custom_llm_provider=provider,
+        response=response,
+        model="test-model",
+        responses_api_provider_config=None,
+        logging_obj=logging,
+        custom_llm_provider=provider,
     )
     expected_id: Final = "provider-request-id" if header else None
+    expected_headers: Final = {header.lower(): "provider-request-id"} if header else {}
     mapped: Final = iterator._map_error_event_exception({"type": code, "code": code, "message": "failure"})
     assert _get_provider_request_id(mapped) == expected_id
+    assert dict(getattr(mapped, "litellm_response_headers", None) or {}) == expected_headers
     expected_status: Final = 503 if provider == "bedrock" and status == 500 else status
     with pytest.raises((litellm.BadRequestError, MidStreamFallbackError)) as raised:
         iterator._maybe_raise_for_error_event(_make_error_chunk(code, code, "failure"))
@@ -94,6 +107,7 @@ def test_stream_error_preserves_provider_request_id(provider: str, header: str |
     assert response.status_code == 200
     if status in (429, 500):
         assert isinstance(raised.value, MidStreamFallbackError)
+        assert dict(raised.value.response.headers) == expected_headers
         assert raised.value.response.status_code == expected_status
         assert str(raised.value.response.request.url) == f"https://{provider}.com/v1/"
         assert raised.value.generated_content == ""

@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -260,7 +261,7 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
 
 
 def _map_stream_error_to_exception(
-    error_obj: object, model: str, custom_llm_provider: str, headers: Mapping[str, str] | None = None
+    error_obj: object, model: str, custom_llm_provider: str, headers: httpx.Headers | None = None
 ) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -271,7 +272,7 @@ def _map_stream_error_to_exception(
         status_code=status_code,
         message=f"Error code: {status_code} - {{'error': {error_body}}}",
         body=error_body,
-        headers=dict(headers) if headers is not None else None,
+        headers=headers,
     )
     try:
         return litellm.exception_type(
@@ -668,7 +669,10 @@ class BaseResponsesAPIStreamingIterator:
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return _map_stream_error_to_exception(
-            error_obj, self.model or "", self.custom_llm_provider or "", headers=self._raw_response_headers
+            error_obj,
+            self.model or "",
+            self.custom_llm_provider or "",
+            headers=provider_request_id_headers(self._raw_response_headers),
         )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
@@ -685,16 +689,20 @@ class BaseResponsesAPIStreamingIterator:
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
-        fallback_error: Final = MidStreamFallbackError(
+        mapped_status: Final = getattr(mapped_exception, "status_code", None)
+        raise MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
+            response=httpx.Response(
+                status_code=int(mapped_status) if mapped_status is not None else 503,
+                headers=provider_request_id_headers(self._raw_response_headers),
+                request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
+            ),
             generated_content=self._generated_content,
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
-        fallback_error.response.headers.update(self._raw_response_headers)
-        raise fallback_error
 
     def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
         openai_types: Final = get_openai_response_types()
