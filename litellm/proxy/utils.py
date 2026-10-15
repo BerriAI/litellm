@@ -5434,6 +5434,7 @@ class PrismaClient:
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
                             b.tpd_limit AS litellm_budget_table_tpd_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
+                            b.model_throttling AS litellm_budget_table_model_throttling,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,
                             o.organization_alias as organization_alias,

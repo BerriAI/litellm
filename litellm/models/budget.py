@@ -11,6 +11,7 @@ from typing import Final
 from pydantic import ConfigDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
@@ -24,6 +25,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_id: str | None = None
     soft_budget: float | None = None
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     max_parallel_requests: int | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None

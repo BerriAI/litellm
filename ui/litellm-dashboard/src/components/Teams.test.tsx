@@ -144,8 +144,8 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: vi.fn().mockReturnValue({
     data: [
-      { access_group_id: "ag-1", access_group_name: "Group 1" },
-      { access_group_id: "ag-2", access_group_name: "Group 2" },
+      { access_group_id: "ag-1", access_group_name: "Group 1", access_model_names: [] },
+      { access_group_id: "ag-2", access_group_name: "Group 2", access_model_names: [] },
     ],
     isLoading: false,
     isError: false,

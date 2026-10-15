@@ -2459,6 +2459,10 @@ class ProxyBaseLLMRequestProcessing:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
                         continue
+                    from litellm.proxy.auth.model_throttling import model_throttle_for
+
+                    if model_throttle_for(fallback_model, user_api_key_dict, llm_router) is not None:
+                        continue
                     if not await _team_member_within_fallback_model_budget(
                         user_api_key_dict=user_api_key_dict,
                         model=fallback_model,

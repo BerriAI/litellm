@@ -1,3 +1,11 @@
+import { useWatch } from "react-hook-form";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import {
+  type ModelThrottling,
+  modelThrottlingError,
+  modelThrottlingUpdate,
+} from "@/components/key_team_helpers/modelThrottling";
+import { useSeededState } from "../key_team_helpers/useSeededState";
 import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -16,14 +24,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
-import { estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
+import { withNormalizedEstimates } from "./estimatedOutputTokens";
 import {
   currentValuePlaceholder,
   keyTypeFromRoutes,
@@ -32,7 +39,9 @@ import {
 } from "./keyEditFieldNormalizers";
 import {
   KeyAgentAndSkillFields,
+  KeyOutputEstimateFields,
   KeyBudgetNumberField,
+  KeyBudgetResetField,
   KeyMetadataField,
   KeyRateLimitFields,
   KeyTypeSelect,
@@ -102,7 +111,6 @@ export function KeyEditView({
   const canViewPolicies = hasCapability(userRole, "viewPolicies");
   const canViewPrompts = hasCapability(userRole, "viewPrompts");
   const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
-  const estimateTooltip = estimateTooltips(canEditEstimates);
   const form = useZodForm<KeyEditFormValues, KeyEditFormValues>(keyEditFormSchema, {
     defaultValues: toKeyEditFormValues(keyData),
   });
@@ -129,6 +137,12 @@ export function KeyEditView({
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const throttlingAccessGroups = useWatch({ control: form.control, name: "access_group_ids" });
+  const [modelThrottling, setModelThrottling] = useSeededState<ModelThrottling | null>(
+    keyData,
+    () => keyData.model_throttling ?? null,
+  );
   const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
   const storedEndUserBudgetIdValue = storedEndUserBudgetId(keyData.metadata);
   const [endUserBudgetId, setEndUserBudgetId] = useState<string | null>(storedEndUserBudgetIdValue || null);
@@ -143,7 +157,7 @@ export function KeyEditView({
   const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
   const allowedRoutesValue = form.watch("allowed_routes");
-  const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
+  const selectedModels = useWatch({ control: form.control, name: "models" }) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
   const mcpSelection = form.watch("mcp_servers_and_groups") as
@@ -220,6 +234,12 @@ export function KeyEditView({
   }, [accessToken]);
 
   const handleSubmit = async (values: any) => {
+    const throttlingError = modelThrottlingError(modelThrottling, values.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
+    Object.assign(values, modelThrottlingUpdate(modelThrottling, keyData.model_throttling));
     try {
       setIsKeySaving(true);
 
@@ -462,17 +482,19 @@ export function KeyEditView({
             placeholder="Get alerts when spend crosses this value, without blocking requests"
           />
 
-          <FormField control={form.control} name="budget_duration" label="Reset Budget">
-            {({ value, onChange, id }) => (
-              <BudgetDurationDropdown
-                id={id}
-                value={value as string | null}
-                onChange={(next) => onChange(next ?? null)}
-                placeholder="Never resets"
-              />
-            )}
-          </FormField>
+          <KeyBudgetResetField control={form.control} />
 
+          {(canEditEstimates || modelThrottling !== null) && (
+            <ModelThrottlingField
+              value={modelThrottling}
+              onChange={setModelThrottling}
+              maxBudget={throttlingBudget}
+              availableModels={availableModels}
+              allowedModels={selectedModels}
+              accessGroupIds={throttlingAccessGroups}
+              disabled={!canEditEstimates}
+            />
+          )}
           <Field>
             <FieldLabel>
               {labelWithHint(
@@ -576,31 +598,7 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField
-            control={form.control}
-            name="default_estimated_output_tokens"
-            label={labelWithHint("Estimated Output Tokens", estimateTooltip.estimate)}
-          >
-            {({ ref: _ref, ...field }) => (
-              <NumericalInput {...field} value={field.value ?? ""} min={1} step={1} disabled={!canEditEstimates} />
-            )}
-          </FormField>
-
-          <FormField
-            control={form.control}
-            name="default_estimated_output_tokens_per_model"
-            label={labelWithHint("Estimated Output Tokens Per Model", estimateTooltip.perModel)}
-          >
-            {(field) => (
-              <Textarea
-                {...field}
-                value={(field.value as string | undefined) ?? ""}
-                rows={4}
-                placeholder='{"gpt-4": 4096}'
-                disabled={!canEditEstimates}
-              />
-            )}
-          </FormField>
+          <KeyOutputEstimateFields control={form.control} editable={canEditEstimates} />
 
           <Field>
             <FieldLabel>

@@ -1,3 +1,12 @@
+import { useWatch } from "react-hook-form";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import {
+  type ModelThrottling,
+  modelThrottlingError,
+  modelThrottlingUpdate,
+} from "@/components/key_team_helpers/modelThrottling";
+import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
 import React, { useMemo, useState } from "react";
 import { z } from "zod";
 import { all_admin_roles } from "@/utils/roles";
@@ -162,6 +171,10 @@ export function UserEditView({
 }: UserEditViewProps) {
   const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
+  const [modelThrottling, setModelThrottling] = useSeededState<ModelThrottling | null>(
+    userData,
+    () => userData.user_info?.model_throttling ?? null,
+  );
   const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
     userData.user_id,
     () => userData.user_info?.model_max_budget ?? {},
@@ -170,6 +183,9 @@ export function UserEditView({
   const form = useZodForm(schema, {
     defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
   });
+
+  const throttlingModels = useWatch({ control: form.control, name: "models" });
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
 
   React.useEffect(() => {
     const maxBudget = userData.user_info?.max_budget;
@@ -185,6 +201,11 @@ export function UserEditView({
   };
 
   const handleSubmit = (values: UserEditFormValues) => {
+    const throttlingError = modelThrottlingError(modelThrottling, unlimitedBudget ? null : values.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
     const metadata = parseMetadata(values.metadata);
     if (!metadata.ok) {
       return;
@@ -196,6 +217,7 @@ export function UserEditView({
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
     const payload = {
       ...formValues,
+      ...modelThrottlingUpdate(modelThrottling, userData.user_info?.model_throttling),
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
@@ -366,6 +388,17 @@ export function UserEditView({
                 )}
               </FormField>
             </>
+          )}
+
+          {!isBulkEdit && (isProxyAdminRole(userRole ?? "") || modelThrottling !== null) && (
+            <ModelThrottlingField
+              value={modelThrottling}
+              onChange={setModelThrottling}
+              maxBudget={unlimitedBudget ? null : throttlingBudget}
+              availableModels={userModels}
+              allowedModels={throttlingModels}
+              disabled={!isProxyAdminRole(userRole ?? "")}
+            />
           )}
 
           {/* Bulk edit forwards a fixed field list and has no single stored budget to

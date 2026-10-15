@@ -231,9 +231,6 @@
     "max-lines": {
       "count": 1
     },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
     "react/no-unescaped-entities": {
       "count": 2
     }
@@ -1347,9 +1344,6 @@
     },
     "no-nested-ternary": {
       "count": 2
-    },
-    "prefer-const": {
-      "count": 2
     }
   },
   "src/components/TeamsPage/teamTableColumns.tsx": {
@@ -1775,11 +1769,6 @@
       "count": 1
     }
   },
-  "src/components/molecules/cost_optimization_feedback_banner.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/navbar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1802,7 +1791,7 @@
       "count": 140
     },
     "prefer-const": {
-      "count": 29
+      "count": 28
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1821,9 +1810,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 4

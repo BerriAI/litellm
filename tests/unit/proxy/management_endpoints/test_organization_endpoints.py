@@ -1573,3 +1573,39 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear", (False, True))
+async def test_organization_throttling_edits_persist_and_reject_an_incompatible_cap(
+    monkeypatch: pytest.MonkeyPatch, clear: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_OrganizationTable, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+    from litellm.proxy.utils import jsonify_object
+    from litellm.types.proxy.model_throttling import ModelThrottling, ModelThrottlingThreshold
+
+    config: Final = ModelThrottling(thresholds=(ModelThrottlingThreshold(spend=60, models=("premium",)),))
+    budget: Final = LiteLLM_BudgetTable(budget_id="throttled-budget", max_budget=100, model_throttling=config)
+    saved: Final = LiteLLM_OrganizationTable(
+        organization_id="throttled-org", budget_id=budget.budget_id, created_by="admin", updated_by="admin"
+    )
+    database: Final = MagicMock()
+    database.jsonify_object = jsonify_object
+    database.db.litellm_organizationtable.find_unique = AsyncMock(return_value=saved)
+    database.db.litellm_organizationtable.update = AsyncMock(return_value=saved)
+    database.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
+    database.db.litellm_budgettable.update = AsyncMock(return_value=budget)
+    database.db.tx.return_value = _FakeTxContext(database.db)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
+    with pytest.raises(HTTPException, match="below the final budget"):
+        await update_organization_v2(saved.organization_id, OrganizationUpdateRequestV2(max_budget=50), admin)
+    database.db.litellm_budgettable.update.assert_not_awaited()
+    await update_organization_v2(
+        saved.organization_id, OrganizationUpdateRequestV2(model_throttling=None if clear else config), admin
+    )
+    persisted: Final = json.loads(database.db.litellm_budgettable.update.call_args.kwargs["data"]["model_throttling"])
+    assert persisted == (None if clear else config.model_dump(mode="json"))
+    assert "max_budget" not in database.db.litellm_budgettable.update.call_args.kwargs["data"]

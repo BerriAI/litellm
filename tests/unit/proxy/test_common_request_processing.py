@@ -6775,7 +6775,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
+                user_api_key_dict=ProxyUserAPIKeyAuth(router_settings=None),
                 version=None,
                 proxy_config=MagicMock(),
                 user_model=None,
@@ -6817,7 +6817,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(router_settings=None),
                     version=None,
                     proxy_config=MagicMock(),
                     user_model=None,
@@ -6856,7 +6856,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(router_settings=None),
                     version=None,
                     proxy_config=MagicMock(),
                     user_model=None,
@@ -6889,10 +6889,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = MagicMock()
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
-        user_api_key_dict = MagicMock()
-        user_api_key_dict.router_settings = {
-            "fallbacks": [{"gpt-4": ["claude-3-haiku"]}]
-        }
+        user_api_key_dict: Final = ProxyUserAPIKeyAuth(
+            router_settings={"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
+        )
 
         with patch.object(
             processor,
@@ -6946,7 +6945,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(router_settings=None),
                     version=None,
                     proxy_config=MagicMock(),
                     user_model=None,
@@ -6990,7 +6989,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(router_settings=None),
                     version=None,
                     proxy_config=MagicMock(),
                     user_model=None,
@@ -7303,6 +7302,26 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert "user_api_key_auth" not in requester_metadata
         assert data["metadata"]["litellm_parent_otel_span"] is key.parent_otel_span
         assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_local_rate_limit_skips_a_model_paused_by_budget_throttling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.types.proxy.model_throttling import ActiveModelThrottle, ModelThrottlingThreshold
+
+        key: Final = self._otel_key(model_rpm_limit={"primary": 1}).model_copy(
+            update={"active_model_throttles": (
+                ActiveModelThrottle(
+                    scope="team", spend=60, threshold=ModelThrottlingThreshold(spend=60, models=("premium",))
+                ),
+            )}
+        )
+        rig: Final = self._v3_limiter_rig(monkeypatch, key, [{"primary": ["premium", "economy"]}])
+        request: Final = {"model": "primary", "messages": [{"role": "user", "content": "hi"}]}
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+        assert data["model"] == "economy"
+        assert rig[3] == ["primary", "primary", "economy"]
 
     @pytest.mark.asyncio
     async def test_v3_limiter_with_otel_span_returns_429_when_fallbacks_exhausted(

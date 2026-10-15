@@ -29,6 +29,10 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 
@@ -51,6 +55,7 @@ async def new_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -81,6 +86,8 @@ async def new_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    validate_model_throttling_update(budget_obj)
+    check_model_throttling_permission(budget_obj, user_api_key_dict.user_role == "proxy_admin", creating=True)
     validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present
@@ -135,6 +142,8 @@ async def update_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -165,6 +174,14 @@ async def update_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    existing_budget: Final = (
+        await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_obj.budget_id})
+        if {"max_budget", "model_throttling"}.intersection(budget_obj.model_fields_set)
+        else None
+    )
+    validate_model_throttling_update(budget_obj, existing_budget)
+    check_model_throttling_permission(budget_obj, user_api_key_dict.user_role == "proxy_admin")
+
     validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present in update
@@ -193,6 +210,11 @@ async def update_budget(
         {
             **budget_obj.model_dump(exclude_unset=True),
             **recomputed_reset_at,
+            **(
+                {"model_throttling": "null"}
+                if "model_throttling" in budget_obj.model_fields_set and budget_obj.model_throttling is None
+                else {}
+            ),
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         }
     )

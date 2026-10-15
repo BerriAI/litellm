@@ -1,10 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import BudgetModal from "./budget_modal";
-import { chooseSelectOption } from "../../../../../tests/test-utils";
+import { renderWithProviders, chooseSelectOption } from "../../../../../tests/test-utils";
 
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 
@@ -20,7 +20,7 @@ const FULL_PAYLOAD = {
   budget_duration: "30d",
 };
 
-const renderModal = () => render(<BudgetModal isModalVisible={true} setIsModalVisible={vi.fn()} />);
+const renderModal = () => renderWithProviders(<BudgetModal isModalVisible={true} setIsModalVisible={vi.fn()} />);
 
 const create = async (user: ReturnType<typeof userEvent.setup>) =>
   user.click(screen.getByRole("button", { name: "Create Budget" }));
@@ -72,7 +72,7 @@ describe("BudgetModal", () => {
     expect(createMock.mock.calls[0][0]).toEqual(FULL_PAYLOAD);
   });
 
-  it("drops Optional Settings values again when the section is collapsed before submit", async () => {
+  it("preserves Optional Settings when the section is collapsed before submit", async () => {
     const user = userEvent.setup();
     renderModal();
 
@@ -87,7 +87,11 @@ describe("BudgetModal", () => {
     await create(user);
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
-    expect(createMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha" });
+    expect(createMock.mock.calls[0][0]).toEqual({
+      budget_id: "budget-alpha",
+      max_budget: 42.57,
+      budget_duration: "30d",
+    });
   });
 
   it("submits a cleared number field as null", async () => {

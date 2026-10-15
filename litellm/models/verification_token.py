@@ -11,6 +11,7 @@ from pydantic import ConfigDict
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.proxy.model_throttling import ModelThrottling
 
 
 class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
@@ -20,6 +21,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     total_spend: float = 0.0
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     expires: str | datetime | None = None
     models: list = []
     aliases: dict = {}

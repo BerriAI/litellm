@@ -104,6 +104,10 @@ class RouterFallbackAccessCheck:
             return True
         if _is_search_request(request_kwargs):
             return await is_search_tool_authorized_for_token(search_tool_name=model, valid_token=valid_token)
+        from litellm.proxy.auth.model_throttling import model_throttle_for
+
+        if model_throttle_for(model, valid_token, llm_router) is not None:
+            return False
         if not self.is_enforced():
             return True
         return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=llm_router)

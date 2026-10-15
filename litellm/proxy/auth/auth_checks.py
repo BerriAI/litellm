@@ -351,6 +351,9 @@ def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthT
 
 class _PrismaMaxBudgetRow(Protocol):
     @property
+    def model_throttling(self) -> object: ...
+
+    @property
     def max_budget(self) -> float | None: ...
 
 
@@ -1111,6 +1114,9 @@ async def common_checks(
         or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
     )
 
+    if valid_token is not None:
+        valid_token.active_model_throttles = ()  # rebind-ok: request-only budget state must not survive a reset
+
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
     )
@@ -1452,6 +1458,30 @@ async def common_checks(
         budget_error: Final = next((r for r in budget_results if isinstance(r, BaseException)), None)
         if budget_error is not None:
             raise budget_error
+
+    if valid_token is not None and not route_skips_budget_checks(route=route) and _model:
+        from litellm.proxy.auth.model_throttling import enforce_model_throttling, load_model_throttles
+        from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+
+        valid_token.active_model_throttles = (  # rebind-ok: carry request-only restrictions through router fallbacks
+            await load_model_throttles(
+                valid_token=valid_token,
+                team=team_object,
+                user=user_object,
+                end_user=end_user_object,
+                project=project_object,
+                membership=loaded_team_membership,
+                tags=get_tags_from_request_body(request_body=_typed_request_body(request_body)),
+                apply_user_budget_to_team_keys=general_settings["apply_user_budget_to_team_keys"] is True
+                if "apply_user_budget_to_team_keys" in general_settings
+                else False,
+            )
+        )
+        enforce_model_throttling(
+            ((_model,) if isinstance(_model, str) else tuple(_model)),
+            valid_token,
+            llm_router,
+        )
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
@@ -2405,10 +2435,15 @@ async def _fetch_uncached_model_access_group_budgets(
 
 def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
     budget_table: Final = row.litellm_budget_table
+    from litellm.types.proxy.model_throttling import ModelThrottling
+
     return ModelAccessGroupBudget(
         access_group_name=row.access_group_name,
         spend=row.spend or 0.0,
         max_budget=None if budget_table is None else budget_table.max_budget,
+        model_throttling=ModelThrottling.model_validate(budget_table.model_throttling)
+        if budget_table is not None and budget_table.model_throttling is not None
+        else None,
     )
 
 
@@ -5457,11 +5492,14 @@ async def can_key_call_resolved_model(
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
 ) -> None:
+    from litellm.proxy.auth.model_throttling import enforce_model_throttling
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
+
+    enforce_model_throttling((model,), valid_token, llm_router)
 
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models

@@ -156,6 +156,10 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     validate_budget_duration,
     validate_team_model_max_budget,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
@@ -1468,6 +1472,7 @@ async def new_team(
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -1571,6 +1576,10 @@ async def new_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        validate_model_throttling_update(data)
+        check_model_throttling_permission(
+            data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN, creating=True
+        )
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
@@ -1788,10 +1797,7 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate({**data_json, "model_id": _model_id})
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -2247,6 +2253,8 @@ async def update_team(
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -2542,7 +2550,11 @@ async def update_team(
             existing_model_max_budget=existing_team_row.model_max_budget,
         )
 
+        validate_model_throttling_update(data, existing_team)
+        check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
         updated_kv = data.json(exclude_unset=True)
+        if "model_throttling" in updated_kv and updated_kv["model_throttling"] is None:
+            updated_kv["model_throttling"] = "null"
         if updated_kv.get("require_trace_id") is None:
             updated_kv.pop("require_trace_id", None)
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
@@ -4834,6 +4846,8 @@ def _transform_teams_to_deleted_records(
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
+        record["model_throttling"] = json.dumps(record.get("model_throttling"))
+
         for rel_key in (
             "litellm_model_table",
             "object_permission",
@@ -5668,11 +5682,13 @@ def _convert_teams_to_response_models(
             members_count = len(members_with_roles)
             keys_count = counts.get(team_dict.get("team_id") or "", 0)
             team_list.append(
-                TeamListItem(
-                    **team_dict,
-                    members_count=members_count,
-                    keys_count=keys_count,
-                    access_group_skill_names=None,
+                TeamListItem.model_validate(
+                    {
+                        **team_dict,
+                        "members_count": members_count,
+                        "keys_count": keys_count,
+                        "access_group_skill_names": None,
+                    }
                 )
             )
     return team_list
@@ -6100,10 +6116,8 @@ async def list_team(
 
         try:
             returned_responses.append(
-                TeamListResponseObject(
-                    **team.model_dump(),
-                    team_memberships=_team_memberships,
-                    keys=keys,
+                TeamListResponseObject.model_validate(
+                    {**team.model_dump(), "team_memberships": _team_memberships, "keys": keys}
                 )
             )
         except Exception as e:

@@ -37,6 +37,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -344,6 +348,7 @@ async def new_end_user(
     - alias: Optional[str] - A human-friendly alias for the user.
     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -445,12 +450,14 @@ async def new_end_user(
         new_end_user_obj: dict[str, object] = {}
 
         ## CREATE BUDGET ## if set
+        validate_model_throttling_update(data)
+        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin", creating=True)
         _new_budget: Final = new_budget_request(data)
         if _new_budget is not None:
             try:
                 budget_record: Final = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
-                        **_new_budget.model_dump(exclude_unset=True),
+                        **prisma_client.jsonify_object(_new_budget.model_dump(exclude_unset=True)),
                         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
@@ -617,6 +624,8 @@ async def update_end_user(
     - alias: Optional[str] = None  # human-friendly alias
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
@@ -693,6 +702,8 @@ async def update_end_user(
 
         ## Get budget table data ##
         end_user_budget_table: Final = end_user_table_data_typed.litellm_budget_table
+        validate_model_throttling_update(data, end_user_budget_table)
+        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
 
         ## Get all params for budget table ##
         budget_table_data: Final = dict[str, object]()
@@ -706,6 +717,11 @@ async def update_end_user(
 
             elif k in LiteLLM_EndUserTable.model_fields:
                 update_end_user_table_data[k] = v
+
+        if "model_throttling" in data.model_fields_set:
+            budget_table_data["model_throttling"] = (
+                data.model_throttling.model_dump_json() if data.model_throttling is not None else "null"
+            )
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)
         await _handle_customer_object_permission_update(

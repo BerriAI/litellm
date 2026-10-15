@@ -75,6 +75,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_endpoints.model_throttling import (
+    check_model_throttling_permission,
+    validate_model_throttling_update,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -504,6 +508,7 @@ async def new_user(
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -599,6 +604,10 @@ async def new_user(
             user_api_key_dict=user_api_key_dict,
         )
 
+        validate_model_throttling_update(data)
+        check_model_throttling_permission(
+            data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN, creating=True
+        )
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
@@ -1174,6 +1183,7 @@ async def user_info_v2(
             teams=user_data.get("teams") or [],
             object_permission=user_data.get("object_permission"),
             model_max_budget=user_data.get("model_max_budget"),
+            model_throttling=user_data.get("model_throttling"),
             model_max_budget_usage=await build_model_max_budget_usage(
                 entity_type=Litellm_EntityType.USER,
                 entity_id=user_data.get("user_id", user_id),
@@ -1354,6 +1364,11 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 budget_duration=non_default_values["budget_duration"]
             )
 
+    if "model_throttling" in fields_set:
+        non_default_values["model_throttling"] = (
+            data.model_throttling.model_dump_json() if data.model_throttling is not None else "null"
+        )
+
     return non_default_values
 
 
@@ -1532,7 +1547,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "model_max_budget",
+            "model_throttling",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1541,6 +1563,9 @@ async def _update_single_user_helper(
                         "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
                     },
                 )
+
+    validate_model_throttling_update(user_request, existing_user_row)
+    check_model_throttling_permission(user_request, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
 
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
@@ -1707,6 +1732,8 @@ async def user_update(
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)

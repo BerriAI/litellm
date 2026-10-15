@@ -1,3 +1,5 @@
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { estimateTooltips } from "./estimatedOutputTokens";
 import React from "react";
 import { Control, UseFormReturn } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -193,3 +195,57 @@ export const KeyBudgetNumberField = ({
     )}
   </FormField>
 );
+
+export function KeyOutputEstimateFields({
+  control,
+  editable,
+}: {
+  control: Control<KeyEditFormValues>;
+  editable: boolean;
+}) {
+  const estimateTooltip = estimateTooltips(editable);
+  return (
+    <>
+      <FormField
+        control={control}
+        name="default_estimated_output_tokens"
+        label={labelWithHint("Estimated Output Tokens", estimateTooltip.estimate)}
+      >
+        {({ ref: _ref, ...field }) => (
+          <NumericalInput {...field} value={field.value ?? ""} min={1} step={1} disabled={!editable} />
+        )}
+      </FormField>
+
+      <FormField
+        control={control}
+        name="default_estimated_output_tokens_per_model"
+        label={labelWithHint("Estimated Output Tokens Per Model", estimateTooltip.perModel)}
+      >
+        {(field) => (
+          <Textarea
+            {...field}
+            value={(field.value as string | undefined) ?? ""}
+            rows={4}
+            placeholder='{"gpt-4": 4096}'
+            disabled={!editable}
+          />
+        )}
+      </FormField>
+    </>
+  );
+}
+
+export function KeyBudgetResetField({ control }: { control: Control<KeyEditFormValues> }) {
+  return (
+    <FormField control={control} name="budget_duration" label="Reset Budget">
+      {({ value, onChange, id }) => (
+        <BudgetDurationDropdown
+          id={id}
+          value={value as string | null}
+          onChange={(next) => onChange(next ?? null)}
+          placeholder="Never resets"
+        />
+      )}
+    </FormField>
+  );
+}

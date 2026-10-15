@@ -1,6 +1,14 @@
+import { useSeededState } from "@/components/key_team_helpers/useSeededState";
+import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
+import {
+  type ModelThrottling,
+  modelThrottlingError,
+  modelThrottlingUpdate,
+} from "@/components/key_team_helpers/modelThrottling";
+import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { ChevronRight } from "lucide-react";
 import React, { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
@@ -42,6 +50,12 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
   const [optionalSettingsOpen, setOptionalSettingsOpen] = React.useState(false);
   const form = useForm<EditBudgetFormValues>({ defaultValues: toFormValues(existingBudget) });
   const updateBudget = useUpdateBudget();
+  const throttlingBudget = useWatch({ control: form.control, name: "max_budget" });
+  const [modelThrottling, setModelThrottling] = useSeededState<ModelThrottling | null>(
+    existingBudget,
+    () => existingBudget.model_throttling ?? null,
+  );
+  const { data: proxyModels } = useAllProxyModels();
 
   useEffect(() => {
     form.reset(toFormValues(existingBudget));
@@ -49,16 +63,23 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
 
   const handleCancel = () => {
     setIsModalVisible(false);
-    form.reset();
+    form.reset(toFormValues(existingBudget));
+    setModelThrottling(existingBudget.model_throttling ?? null);
   };
 
   const handleUpdate = async (formValues: EditBudgetFormValues) => {
+    const throttlingError = modelThrottlingError(modelThrottling, formValues.max_budget);
+    if (throttlingError) {
+      toast.error(throttlingError);
+      return;
+    }
     try {
       toast.info("Making API Call");
       await updateBudget.mutateAsync(
-        applyBudgetPrecision(
-          optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
-        ),
+        applyBudgetPrecision({
+          ...formValues,
+          ...modelThrottlingUpdate(modelThrottling, existingBudget.model_throttling),
+        }),
       );
       toast.success("Budget Updated");
       form.reset();
@@ -171,6 +192,12 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
                     </Select>
                   )}
                 </FormField>
+                <ModelThrottlingField
+                  value={modelThrottling}
+                  onChange={setModelThrottling}
+                  maxBudget={throttlingBudget}
+                  availableModels={(proxyModels?.data ?? []).map((model) => model.id)}
+                />
               </CollapsibleContent>
             </Collapsible>
           </FieldGroup>

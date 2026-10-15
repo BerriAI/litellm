@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
   tags: {} as Record<string, { name: string }>,
   teams: [] as { team_id: string; team_alias: string; models: string[]; organization_id?: string }[],
   organizations: [] as { organization_id: string; organization_alias: string }[],
-  accessGroups: [] as { access_group_id: string; access_group_name: string }[],
+  accessGroups: [] as { access_group_id: string; access_group_name: string; access_model_names: string[] }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
 }));
 
@@ -485,7 +485,7 @@ describe("CreateKey", () => {
     });
 
     it("routes a chosen access group into access_group_ids", async () => {
-      state.accessGroups = [{ access_group_id: "ag-1", access_group_name: "Group One" }];
+      state.accessGroups = [{ access_group_id: "ag-1", access_group_name: "Group One", access_model_names: [] }];
       await openModal();
       await nameTheKey();
       await openSection(/Optional Settings/i);
