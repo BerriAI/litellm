@@ -172,3 +172,55 @@ def test_modify_params_trailing_search_turn_before_a_system_message_keeps_the_sy
     assert labels == [SYSTEM_LABEL, ASK_LABEL, *(tool_use_label(city) for city in _CITIES)], labels
     assert wire_assistant(received[0], 3)[-2:] == [SEARCH_USE, SEARCH_RESULT], received[0].body
     assert SEARCH_ID not in answered_ids(received[0]), received[0].body
+
+
+def _with_tokyo_call(identity: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [tool_call("Tokyo", cache_control=EPHEMERAL, id=identity)],
+    }
+
+
+_MALFORMED_MESSAGES: Final = (
+    pytest.param(_with_tokyo_call({"id": call_id("Tokyo")}), id="tool-call-id-object"),
+    pytest.param(_with_tokyo_call([call_id("Tokyo")]), id="tool-call-id-list"),
+    pytest.param(
+        {"role": "tool", "tool_call_id": {"id": call_id("Paris")}, "content": "sunny."}, id="answer-id-object"
+    ),
+)
+
+
+@pytest.mark.parametrize("malformed", _MALFORMED_MESSAGES)
+@pytest.mark.parametrize("modify_params", [False, True], ids=["modify-params-off", "modify-params-on"])
+def test_marked_tool_calls_next_to_a_malformed_tool_id_and_a_later_system_message_answer_400(
+    gateway: Gateway,
+    modify_params_gateway: Gateway,
+    modify_params: bool,
+    malformed: dict[str, JsonValue],
+) -> None:
+    proxy: Final = modify_params_gateway if modify_params else gateway
+    marker: Final = uuid.uuid4().hex
+    messages: Final[list[JsonValue]] = [
+        {"role": "system", "content": SYSTEM},
+        ask(marked=False),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [tool_call(city, cache_control=EPHEMERAL) for city in _CITIES],
+        },
+        *({"role": "tool", "tool_call_id": call_id(city), "content": "sunny."} for city in _CITIES),
+        malformed,
+        {"role": "user", "content": final_text(marker)},
+        {"role": "system", "content": _SYSTEM_NOTE},
+    ]
+    with wire_server(anthropic_peer) as wire, proxy.scenario() as scenario:
+        model: Final = deployment(scenario, "anthropic", wire.url, proxy.upstream_url)
+        status, _, text = post_chat(
+            proxy, chat_body(model, messages, stream=False, cache_control_injection_points=POINTS)
+        )
+        received: Final = wire.drain()
+    assert status == 400, text
+    assert '"error"' in text, text
+    assert received == (), [request.target for request in received]
+    assert proxy.client.get("/health/liveliness").status_code == 200
