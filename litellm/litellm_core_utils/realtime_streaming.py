@@ -501,6 +501,17 @@ class RealTimeStreaming:
                 self._usage_meter.observe_client_event(sent_event)
         return True
 
+    async def _notify_client_of_dropped_session_update(self) -> None:
+        """Send the client the provider's explanation for a session.update it
+        cannot forward, so a dropped configuration is never mistaken for an
+        applied one"""
+        if self.provider_config is None:
+            return
+        client_error: Final = self.provider_config.dropped_session_update_client_error()
+        if not isinstance(client_error, str) or not client_error:
+            return
+        await self.websocket.send_text(realtime_error_event(client_error, error_type="invalid_request_error"))
+
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
 
@@ -1587,6 +1598,8 @@ class RealTimeStreaming:
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
+                if not sent and msg_type == "session.update":
+                    await self._notify_client_of_dropped_session_update()
 
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Backend closed while forwarding a client message: %s", e)

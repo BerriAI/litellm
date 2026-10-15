@@ -1691,3 +1691,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "setup": setup_config,
             }
         )
+
+    def dropped_session_update_client_error(self) -> str:
+        return (
+            "session.update cannot be applied because the Gemini Live setup was already sent "
+            "when the session connected. Gemini Live accepts setup as the first and only "
+            "client message, so the tools and instructions in this update do not reach the "
+            "model. Set litellm.gemini_live_defer_setup = True "
+            "(env LITELLM_GEMINI_LIVE_DEFER_SETUP=true) to defer setup until your first "
+            "session.update so it carries your configuration."
+        )

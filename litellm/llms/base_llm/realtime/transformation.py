@@ -94,6 +94,11 @@ class BaseRealtimeConfig(ABC):
     def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
         return None
 
+    def dropped_session_update_client_error(self) -> str | None:
+        """Explanation the relay sends to the client when its ``session.update``
+        cannot be forwarded to the provider, or ``None`` to keep the drop silent"""
+        return None
+
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 
