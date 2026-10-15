@@ -73953,6 +73953,7 @@
     },
     "xai/grok-voice-3.0": {
         "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
         "litellm_provider": "xai",
         "mode": "realtime",
         "source": "https://docs.x.ai/developers/pricing",
@@ -73973,6 +73974,7 @@
     },
     "xai/grok-voice-latest": {
         "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
         "litellm_provider": "xai",
         "mode": "realtime",
         "source": "https://docs.x.ai/developers/pricing",
@@ -73993,6 +73995,7 @@
     },
     "xai/grok-voice-2.0": {
         "input_cost_per_second": 0.001333333333333,
+        "input_cost_per_text_message": 0.004,
         "litellm_provider": "xai",
         "mode": "realtime",
         "source": "https://docs.x.ai/developers/pricing",
