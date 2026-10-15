@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict, field_validator
 
 import litellm
 from litellm.models.credentials import CredentialSource
@@ -64,6 +65,7 @@ def _list_credentials():
 def _prisma_without_credential_rows() -> MagicMock:
     prisma_client = MagicMock()
     prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
     return prisma_client
 
 
@@ -1078,7 +1080,7 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         assert litellm.credential_list == [config_credential]
 
     def test_proxy_admin_can_delete_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
-        """The gate lets the admin through to the row delete. The 400 that follows is the rule for
+        """The gate lets the admin through to the row lookup. The 405 that follows is the rule for
         every config-only credential (no row to delete, the entry is back on the next boot), so the
         in-memory entry stays put too."""
         config_credential = _wif_credential("config-wif", source="config")
@@ -1089,7 +1091,7 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         assert response.status_code == 405, response.text
         assert response.headers["allow"] == "GET"
         assert "defined in config" in response.json()["error"]["message"]
-        repository.delete_by_name.assert_awaited_once_with("config-wif")
+        repository.delete_by_name.assert_not_awaited()
         assert litellm.credential_list == [config_credential]
 
     def test_non_admin_cannot_shadow_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
@@ -1230,6 +1232,7 @@ class TestManagementReadsTheStoredCredential:
         )
         prisma = MagicMock()
         prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
 
         with patch.object(
             litellm, "credential_list", [only_in_memory]
@@ -1268,7 +1271,11 @@ def test_delete_credential_still_answers_200_and_drops_the_credential_from_memor
         credential_values={"api_key": "sk-keep"},
         credential_info={},
     )
-    credential_store(in_memory=(stored, survivor), delete_by_name=AsyncMock(return_value=MagicMock()))
+    credential_store(
+        in_memory=(stored, survivor),
+        find_by_name=AsyncMock(return_value=stored),
+        delete_by_name=AsyncMock(return_value=MagicMock()),
+    )
 
     response = _delete_credential("doomed")
 
@@ -1666,6 +1673,7 @@ def test_deleting_the_credential_purges_user_connections(monkeypatch, credential
     rows = [_connection_row(user_id="u1"), _connection_row(user_id="u2")]
     credential_store(
         in_memory=[_per_user_credential()],
+        find_by_name=AsyncMock(return_value=_per_user_credential()),
         delete_by_name=AsyncMock(return_value=_per_user_credential()),
     )
     prisma_client = MagicMock()
@@ -1675,6 +1683,7 @@ def test_deleting_the_credential_purges_user_connections(monkeypatch, credential
     prisma_client.db.litellm_userprovidercredentials = table
     prisma_client.writer_db = prisma_client.db
     prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
 
@@ -2517,3 +2526,155 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+class _CredentialRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    credential_name: str
+    display_name: str | None = None
+    credential_values: dict[str, object]
+    credential_info: dict[str, object]
+
+    @field_validator("credential_values", "credential_info", mode="before")
+    @classmethod
+    def _decode_json_column(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) else value
+
+
+class _CredentialsTable:
+    """In-memory litellm_credentialstable keyed by the exact stored name, as the unique index is."""
+
+    def __init__(self, *names: str) -> None:
+        self.rows = {
+            name: _CredentialRow(credential_name=name, credential_values={}, credential_info={}) for name in names
+        }
+
+    async def find_unique(self, where):
+        return self.rows.get(where["credential_name"])
+
+    async def find_many(self, where):
+        needle = where["credential_name"]["contains"]
+        return [row for name, row in self.rows.items() if needle in name]
+
+    async def create(self, data):
+        row = _CredentialRow.model_validate(data)
+        self.rows[row.credential_name] = row
+        return row
+
+    async def update(self, where, data):
+        name = where["credential_name"]
+        self.rows[name] = _CredentialRow.model_validate({**self.rows[name].model_dump(), **data})
+        return self.rows[name]
+
+    async def delete(self, where):
+        return self.rows.pop(where["credential_name"], None)
+
+
+@pytest.fixture
+def credentials_table(monkeypatch, restore_credential_list):
+    """A database holding the given credential names, served through the real repository."""
+
+    def install(*names: str) -> _CredentialsTable:
+        table = _CredentialsTable(*names)
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_credentialstable = table
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(credential_name=name, credential_values={"api_key": "sk-old"}, credential_info={})
+                for name in names
+            ],
+        )
+        return table
+
+    return install
+
+
+class TestCredentialNameWhitespace:
+    def test_create_stores_the_name_without_surrounding_whitespace(self, credentials_table):
+        table = credentials_table()
+
+        response = _post_credential(
+            {"credential_name": " test-cred ", "credential_values": {"api_key": "sk-new"}, "credential_info": {}}
+        )
+
+        assert response.status_code == 200, response.text
+        assert list(table.rows) == ["test-cred"]
+        assert [entry["credential_name"] for entry in _list_credentials().json()["credentials"]] == ["test-cred"]
+
+    @pytest.mark.parametrize("credential_name", ["", "   "])
+    def test_create_rejects_a_blank_name(self, credentials_table, credential_name):
+        table = credentials_table()
+
+        response = _post_credential(
+            {"credential_name": credential_name, "credential_values": {"api_key": "sk-new"}, "credential_info": {}}
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["param"] == "credential_name"
+        assert table.rows == {}
+        assert litellm.credential_list == []
+
+    def test_get_by_trimmed_name_finds_a_legacy_padded_credential(self, credentials_table):
+        credentials_table("Openrouter 11/08 ")
+
+        response = _call_as("GET", "/credentials/by_name/Openrouter%2011/08")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["credential_name"] == "Openrouter 11/08 "
+
+    def test_delete_by_trimmed_name_removes_a_legacy_padded_credential(self, credentials_table):
+        table = credentials_table("Openrouter 11/08 ", "keeper")
+
+        response = _delete_credential("Openrouter%2011/08")
+
+        assert response.status_code == 200, response.text
+        assert list(table.rows) == ["keeper"]
+        assert [credential.credential_name for credential in litellm.credential_list] == ["keeper"]
+
+    def test_patch_by_trimmed_name_updates_the_legacy_padded_row_in_place(self, credentials_table):
+        table = credentials_table("Openrouter 11/08 ")
+
+        response = _patch_credential(
+            "Openrouter%2011/08",
+            {
+                "credential_name": "Openrouter 11/08  ",
+                "credential_values": {"api_key": "sk-new"},
+                "credential_info": {},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert list(table.rows) == ["Openrouter 11/08 "]
+        assert "api_key" in table.rows["Openrouter 11/08 "].credential_values
+        assert [c.credential_values["api_key"] for c in litellm.credential_list] == ["sk-new"]
+
+    def test_an_exact_match_wins_over_a_padded_one(self, credentials_table):
+        table = credentials_table("foo", "foo ")
+
+        response = _delete_credential("foo")
+
+        assert response.status_code == 200, response.text
+        assert list(table.rows) == ["foo "]
+
+    def test_a_trimmed_name_matching_several_padded_rows_deletes_nothing(self, credentials_table):
+        table = credentials_table("foo ", " foo")
+
+        response = _delete_credential("foo")
+
+        assert response.status_code == 404, response.text
+        assert sorted(table.rows) == [" foo", "foo "]
+
+    @pytest.mark.parametrize("method", ["GET", "DELETE"])
+    def test_a_trimmed_name_does_not_match_a_longer_padded_name(self, credentials_table, method):
+        table = credentials_table("foobar ")
+        path = "/credentials/by_name/foo" if method == "GET" else "/credentials/foo"
+
+        response = _call_as(method, path)
+
+        assert response.status_code == 404, response.text
+        assert list(table.rows) == ["foobar "]

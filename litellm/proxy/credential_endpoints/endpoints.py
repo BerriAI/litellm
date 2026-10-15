@@ -193,6 +193,18 @@ class CredentialHelperUtils:
         )
 
 
+def _normalized_credential_name(credential_name: str) -> str:
+    trimmed: Final = credential_name.strip()
+    if not trimmed:
+        raise ProxyException(
+            message="credential_name cannot be blank.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="credential_name",
+        )
+    return trimmed
+
+
 def _normalized_display_name(display_name: str | None) -> str | None:
     if display_name is None:
         return None
@@ -308,6 +320,7 @@ async def create_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        credential_name: Final = _normalized_credential_name(credential.credential_name)
         credential_values: Final = (
             _resolve_deployment_credentials(llm_router, credential.model_id)
             if credential.model_id
@@ -320,11 +333,11 @@ async def create_credential(
             )
         _reject_non_admin_wif_fields(server_owned_wif_fields_named(credential_values), user_api_key_dict)
         _reject_non_admin_wif_fields(
-            await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
+            await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        _reject_config_defined_name(credential.credential_name)
+        _reject_config_defined_name(credential_name)
         processed_credential: Final = CredentialItem(
-            credential_name=credential.credential_name,
+            credential_name=credential_name,
             display_name=_normalized_display_name(credential.display_name),
             credential_values=_without_null_values(_CREDENTIAL_DICT_ADAPTER.validate_python(credential_values)),
             credential_info=credential.credential_info,
@@ -345,7 +358,7 @@ async def create_credential(
         except Exception as e:
             if not is_unique_violation(e):
                 raise
-            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
+            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential_name))
 
         ## ADD TO LITELLM ##
         CredentialAccessor.upsert_credentials([processed_credential])
@@ -395,15 +408,15 @@ async def get_credential_by_name(
     [BETA] endpoint. This might change unexpectedly.
     """
     try:
-        for credential in litellm.credential_list:
-            if credential.credential_name == credential_name:
-                return _credential_view(
-                    credential,
-                    get_masked_values(credential.credential_values, unmasked_length=4, number_of_asterisks=4),
-                )
-        raise HTTPException(
-            status_code=404,
-            detail="Credential not found. Got credential name: " + credential_name,
+        credential: Final = CredentialAccessor.find_credential(credential_name)
+        if credential is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Credential not found. Got credential name: " + credential_name,
+            )
+        return _credential_view(
+            credential,
+            get_masked_values(credential.credential_values, unmasked_length=4, number_of_asterisks=4),
         )
     except Exception as e:
         verbose_proxy_logger.exception(e)
@@ -827,15 +840,19 @@ async def delete_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
-        if deleted is None:
+        credentials_repository: Final = CredentialsRepository(prisma_client)
+        stored: Final = await credentials_repository.find_by_name(credential_name)
+        if stored is None:
             raise _not_found_unless_config_defined(
                 credential_name, "Credential not found. Got credential name: " + credential_name
             )
+        await credentials_repository.delete_by_name(stored.credential_name)
 
         ## DELETE FROM LITELLM ##
-        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
-        await _purge_user_connections_for_credential(credential_name)
+        litellm.credential_list = [
+            cred for cred in litellm.credential_list if cred.credential_name != stored.credential_name
+        ]
+        await _purge_user_connections_for_credential(stored.credential_name)
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -897,7 +914,7 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        if credential.credential_name and credential.credential_name != credential_name:
+        if credential.credential_name and credential.credential_name.strip() != credential_name.strip():
             raise ProxyException(
                 message="credential_name is immutable. Set display_name to change how the credential is labeled.",
                 type=ProxyErrorTypes.validation_error.value,
@@ -922,8 +939,9 @@ async def update_credential(
         if db_credential is None:
             raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")
         _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
+        stored_name: Final = db_credential.credential_name
         patch: Final = CredentialItem(
-            credential_name=credential_name,
+            credential_name=stored_name,
             display_name=(
                 requested_display_name if "display_name" in credential.model_fields_set else db_credential.display_name
             ),
@@ -936,7 +954,7 @@ async def update_credential(
             "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
         )
         await credentials_repository.update_by_name(
-            credential_name,
+            stored_name,
             data={
                 **credential_object_jsonified,
                 "display_name": merged_credential.display_name,
@@ -945,14 +963,14 @@ async def update_credential(
         )
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        _sync_in_memory_credential(patch, credential_name)
+        _sync_in_memory_credential(patch, stored_name)
 
         merged_values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
             Mapping[object, object], merged_credential.credential_values
         )
         still_per_user: Final = merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         if not still_per_user:
-            await _purge_user_connections_for_credential(credential_name)
+            await _purge_user_connections_for_credential(stored_name)
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:

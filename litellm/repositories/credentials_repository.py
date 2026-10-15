@@ -72,8 +72,15 @@ class CredentialsRepository:
         return await self.table.create(data=data)
 
     async def find_by_name(self, credential_name: str) -> CredentialItem | None:
+        """The row named ``credential_name``, else the single row whose name only differs by
+        surrounding whitespace, which older versions stored verbatim from the UI."""
         record: Final = await self.table.find_unique(where={"credential_name": credential_name})
-        return self._to_model(record)
+        if record is not None:
+            return self._to_model(record)
+        stripped: Final = credential_name.strip()
+        candidates: Final = await self.table.find_many(where={"credential_name": {"contains": stripped}})
+        padded: Final = tuple(candidate for candidate in candidates if candidate.credential_name.strip() == stripped)
+        return self._to_model(padded[0]) if len(padded) == 1 else None
 
     async def update_by_name(
         self, credential_name: str, data: Mapping[str, object]

@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # narrows untyped credential values at the decrypt boundary
 
 import litellm
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -128,8 +129,8 @@ async def named_credential_wif_fields(
     fields would see none and allow the write. This reads both and returns the union, so the gate
     refuses whenever either side says the credential is server-owned.
     """
-    matching: Final = tuple(c for c in litellm.credential_list if c.credential_name == credential_name)
-    in_memory: Final = tuple(chain.from_iterable(server_owned_wif_fields_named(c.credential_values) for c in matching))
+    matching: Final = CredentialAccessor.find_credential(credential_name)
+    in_memory: Final = () if matching is None else server_owned_wif_fields_named(matching.credential_values)
     if prisma_client is None:
         return in_memory
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
