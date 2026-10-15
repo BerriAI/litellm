@@ -933,7 +933,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         contains_null: Final = len(non_null_branches) < len(anyof)
         anyof[:] = non_null_branches or anyof[:1]
         for atype in anyof:
-            if isinstance(atype, dict) and not atype:
+            if not isinstance(atype, dict):
+                continue
+            if not atype:
                 atype["type"] = "object"
             if contains_null:
                 # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python

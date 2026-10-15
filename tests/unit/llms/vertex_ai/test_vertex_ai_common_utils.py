@@ -222,6 +222,25 @@ def test_anyof_conversion_forwards_a_non_list_anyof_unchanged(malformed: JsonVal
     assert schema == {"type": "object", "properties": {"example": {"anyOf": malformed}}}
 
 
+@pytest.mark.parametrize(
+    ("branches", "expected"),
+    [
+        ([{"type": "null"}, 5], [5]),
+        ([True, {"type": "null"}], [True]),
+        ([{"type": "null"}, 5, {"type": "string"}], [5, {"type": "string", "nullable": True}]),
+    ],
+    ids=["null-int", "true-null", "null-int-string"],
+)
+def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge(
+    branches: list[JsonValue], expected: list[JsonValue]
+):
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": branches}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
+
+
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
     # generate a schema with excessive nesting

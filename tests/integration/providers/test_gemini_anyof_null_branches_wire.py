@@ -43,6 +43,7 @@ _GEMINI_KEY: Final = "sk-scripted-gemini"
 _COUNT: Final = 777
 _FAIL_MARKER: Final = "scripted-invalid-argument"
 _STRING_ANYOF: Final = re.compile(rb'"anyOf":\s*"')
+_SCALAR_BRANCH: Final = re.compile(rb'"anyOf":\s*\[\s*(?:true|false|-?\d)')
 _PNG: Final = base64.b64encode(b"\x89PNG\r\n\x1a\nscripted").decode()
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
@@ -101,6 +102,10 @@ def _google(request: Request) -> Reply:
         return _rejection(f"{_FAIL_MARKER}: the scripted tool schema was refused")
     if _STRING_ANYOF.search(request.body):
         return _rejection("Invalid value at 'tools[0].function_declarations[0].parameters' (anyOf), not a list")
+    if _SCALAR_BRANCH.search(request.body):
+        return _rejection(
+            "Invalid value at 'tools[0].function_declarations[0].parameters.properties[0].value.any_of[0]'"
+        )
     path: Final = request.target.split("?")[0]
     if path.endswith(":countTokens"):
         return Reply(body=json.dumps({"totalTokens": _COUNT}).encode())
@@ -309,20 +314,24 @@ def test_a_google_rejection_of_a_folded_union_reaches_the_caller(gateway: Gatewa
 
 
 @pytest.mark.parametrize(
-    "union",
-    ({"anyOf": [True, _NULL]}, {"anyOf": [_NULL, 5]}),
+    ("union", "sent"),
+    (({"anyOf": [True, _NULL]}, {"anyOf": [True]}), ({"anyOf": [_NULL, 5]}, {"anyOf": [5]})),
     ids=("true-null", "null-int"),
 )
-def test_a_union_branch_that_is_not_an_object_fails_locally_and_the_next_request_still_works(
-    gateway: Gateway, union: JsonValue
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_a_union_branch_that_is_not_an_object_reaches_google_and_its_400_reaches_the_caller(
+    gateway: Gateway, provider: Provider, union: JsonValue, sent: JsonValue
 ) -> None:
     with wire_server(_google) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, "vertex_ai")
-        path, broken = _request_body("chat", model, _description(), _parameters(union), False)
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        rejected_description: Final = _description()
+        path, broken = _request_body("chat", model, rejected_description, _parameters(union), False)
         failed: Final = gateway.request("POST", path, broken)
-        assert failed.status_code >= 400, failed.text
-        assert "error" in _json(failed), failed.text
-        assert _generate_requests(wire) == ()
+        assert failed.status_code == 400, failed.text
+        assert "any_of[0]" in failed.text, failed.text
+        rejected: Final = _generate_requests(wire)
+        assert len(rejected) == 1, [request.target for request in rejected]
+        assert _sent_declarations(_body(rejected[0])) == [_declaration(rejected_description, sent)]
         description: Final = _description()
         _, valid = _request_body("chat", model, description, _parameters({"anyOf": [_NULL, _NULL, _STRING]}), False)
         recovered: Final = gateway.request("POST", path, valid)
