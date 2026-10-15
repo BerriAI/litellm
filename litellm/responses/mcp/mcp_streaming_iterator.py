@@ -775,7 +775,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
-                                    "arguments": tool_arguments or "{}",
+                                    "arguments": "",
                                     "name": tool_name,
                                     "server_label": "litellm",
                                 },

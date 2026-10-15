@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
@@ -18,7 +19,6 @@ from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
-    MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR,
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
@@ -1022,7 +1022,11 @@ class ProxyExtrasDBManager:
     def _setup_database_v2(use_migrate: bool) -> bool:
         if not use_migrate:
             return ProxyExtrasDBManager._run_database_v2(False)
-        from litellm_proxy_extras.migration_lock import migration_environment, migration_lock
+        from litellm_proxy_extras.migration_lock import (
+            migration_environment,
+            migration_lock,
+            prisma_migration_lock,
+        )
         from litellm_proxy_extras.migration_recovery import (
             baseline_current_schema,
             recover_completed_migration,
@@ -1056,7 +1060,9 @@ class ProxyExtrasDBManager:
                     migration_environment(_get_prisma_env()),
                 )
 
-        while not ProxyExtrasDBManager._run_database_v2(True, recover_completed, baseline_existing):
+        while not ProxyExtrasDBManager._run_database_v2(
+            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url)
+        ):
             continue
         return True
 
@@ -1065,6 +1071,7 @@ class ProxyExtrasDBManager:
         use_migrate: bool,
         recover_completed: Callable[[str], bool] = lambda name: False,
         baseline_existing: "Callable[[str], None] | None" = None,
+        deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
     ) -> bool:
         """
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
@@ -1127,11 +1134,12 @@ class ProxyExtrasDBManager:
             while not budget.exhausted:
                 attempt_started = time.monotonic()
                 try:
-                    result = prisma_toolchain.run_prisma(
-                        [_get_prisma_command(), "migrate", "deploy"],
-                        timeout=deploy_timeout,
-                        env=migration_env,
-                    )
+                    with deploy_lock():
+                        result = prisma_toolchain.run_prisma(
+                            [_get_prisma_command(), "migrate", "deploy"],
+                            timeout=deploy_timeout,
+                            env=migration_env,
+                        )
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
                     return True
 
@@ -1156,6 +1164,7 @@ class ProxyExtrasDBManager:
                         e,
                         budget,
                         time.monotonic() - attempt_started,
+                        deploy_lock=deploy_lock,
                     )
 
                 if next_budget.attempts_left < budget.attempts_left:
@@ -1165,10 +1174,9 @@ class ProxyExtrasDBManager:
             raise RuntimeError(
                 f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "
                 "attempts that made no progress (timeouts, lock timeouts or deadlock retries). "
-                "Check database connectivity, load, long-running transactions on the migrated tables, "
-                "and _prisma_migrations ledger state. Raise "
-                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out, or "
-                f"{MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if they timed out waiting for a table lock."
+                "Check database connectivity, load and _prisma_migrations ledger state. "
+                "If a migration hit SET LOCAL lock_timeout, check for long-running transactions on the migrated tables. "
+                f"Raise {PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
             )
         finally:
             os.chdir(original_dir)
@@ -1189,15 +1197,19 @@ class ProxyExtrasDBManager:
         return match.group(1) if match else None
 
     @staticmethod
-    def _v2_roll_back_migration_best_effort(migration_name: str) -> None:
+    def _v2_roll_back_migration_best_effort(
+        migration_name: str,
+        deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+    ) -> None:
         from litellm_proxy_extras.migration_lock import migration_environment
 
         try:
-            prisma_toolchain.run_prisma(
-                [_get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
-                timeout=prisma_command_timeout(),
-                env=migration_environment(_get_prisma_env()),
-            )
+            with deploy_lock():
+                prisma_toolchain.run_prisma(
+                    [_get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
+                    timeout=prisma_command_timeout(),
+                    env=migration_environment(_get_prisma_env()),
+                )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
 
@@ -1206,6 +1218,7 @@ class ProxyExtrasDBManager:
         error: subprocess.CalledProcessError,
         budget: "_MigrateAttemptBudget",
         attempt_seconds: float = 0.0,
+        deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
     ) -> "_MigrateAttemptBudget":
         """Recover from one failed `prisma migrate deploy`, and price the pass.
 
@@ -1227,14 +1240,14 @@ class ProxyExtrasDBManager:
                         "deadlock race, rolling its ledger row back and retrying",
                         migration_name,
                     )
-                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name, deploy_lock)
                     return budget.spend()
                 if ledger_logs and _MIGRATION_LOCK_TIMEOUT_MARKER in ledger_logs:
                     logger.info(
                         "Migration %s timed out waiting for a table lock, rolling its ledger row back and retrying",
                         migration_name,
                     )
-                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name, deploy_lock)
                     return budget.spend()
                 if ProxyExtrasDBManager._failed_migration_recovered(migration_name, started_at):
                     logger.info(
@@ -1278,17 +1291,17 @@ class ProxyExtrasDBManager:
                     "rolling its ledger row back and retrying",
                     migration_name,
                 )
-                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name, deploy_lock)
                 return budget.spend()
 
             if migration_name and _MIGRATION_LOCK_TIMEOUT_MARKER in stderr:
                 ProxyExtrasDBManager._log_migration_lock_holders(migration_name)
                 logger.warning(
-                    "Migration %s timed out waiting for a table lock, rolling its ledger row back and retrying. "
-                    f"Raise {MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if the database needs longer.",
+                    "Migration %s timed out waiting for a table lock after hitting SET LOCAL lock_timeout, rolling "
+                    "its ledger row back and retrying. Check for long-running transactions on the migrated tables.",
                     migration_name,
                 )
-                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name, deploy_lock)
                 return budget.spend()
 
             raise RuntimeError(

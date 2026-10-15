@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 from typing import Final, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -548,9 +549,11 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
             mock_callback, "async_log_stream_event"
         ) as mock_async_log_stream_event,
     ):
+        existing_tasks = asyncio.all_tasks()
         await test_streaming_handler_with_usage(
             sync_mode=sync_mode, final_usage_block=final_usage_block
         )
+        spawned_tasks = asyncio.all_tasks() - existing_tasks
         if sync_mode:
             time.sleep(1)
             mock_log_success_event.assert_called_once()
@@ -560,7 +563,7 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
                 == final_usage_block
             )
         else:
-            await asyncio.sleep(1)
+            await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
             mock_async_log_success_event.assert_called_once()
             # mock_async_log_stream_event.assert_called()
             assert (
@@ -729,6 +732,42 @@ def test_set_response_id_propagation_valid_to_invalid(
     assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
 
 
+@pytest.mark.parametrize(
+    "last_delta",
+    [
+        Delta(content="Hello"),
+        Delta(provider_specific_fields={"stop_reason": "refusal"}),
+    ],
+    ids=["content", "provider_specific_fields"],
+)
+def test_logged_response_keeps_received_model_id_when_the_finish_chunk_is_synthesized(
+    logging_obj: Logging, last_delta: Delta
+):
+    upstream_id: Final = "chatcmpl-upstream-id"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(
+                    id=upstream_id,
+                    model="gpt-4o-mini",
+                    choices=[StreamingChoices(index=0, delta=last_delta, finish_reason="content_filter")],
+                )
+            ]
+        ),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    emitted: Final = list(wrapper)
+    logged: Final = litellm.stream_chunk_builder(chunks=wrapper.chunks)
+
+    assert len(emitted) == 2
+    assert [chunk._hidden_params.get("received_model_id") for chunk in emitted] == [upstream_id, upstream_id]
+    assert logged is not None
+    assert logged._hidden_params.get("received_model_id") == upstream_id
+
+
 @pytest.mark.asyncio
 async def test_streaming_completion_start_time(logging_obj: Logging):
     """Test that the start time is set correctly"""
@@ -750,10 +789,12 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
         logging_obj=logging_obj,
     )
 
+    existing_tasks = asyncio.all_tasks()
     async for chunk in response:
         print(chunk)
 
-    await asyncio.sleep(2)
+    spawned_tasks = asyncio.all_tasks() - existing_tasks
+    await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
 
     assert logging_obj.model_call_details["completion_start_time"] is not None
     assert (
@@ -888,6 +929,40 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
     assert excinfo.value.message == f"litellm.MidStreamFallbackError: {rate_limit_error}"
     assert excinfo.value.is_pre_first_chunk is True
     assert excinfo.value.generated_content == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(logging_obj: Logging, sync_mode: bool):
+    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    provider_headers: Final = {"retry-after": "3", "x-request-id": "req-abc123"}
+
+    def _raise_rate_limit(**kwargs: object) -> NoReturn:
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=provider_headers)
+
+    async def _araise_rate_limit(**kwargs: object) -> NoReturn:
+        _raise_rate_limit(**kwargs)
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit if sync_mode else _araise_rate_limit,
+    )
+
+    async def _read_first_chunk() -> object:
+        return next(response) if sync_mode else await response.__anext__()
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _read_first_chunk()
+
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.litellm_response_headers.get("retry-after") == "3"
+    assert excinfo.value.litellm_response_headers.get("x-request-id") == "req-abc123"
 
 
 def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
@@ -2952,15 +3027,19 @@ async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_it
     """
 
     class BlockingIterator:
-        def __init__(self, chunks, delay_s: float):
+        def __init__(self, chunks: list[ModelResponseStream]) -> None:
             self._it = iter(chunks)
-            self._delay_s = delay_s
+            self.entered = threading.Event()
+            self.release = threading.Event()
+            self.returned = threading.Event()
 
-        def __iter__(self):
+        def __iter__(self) -> "BlockingIterator":
             return self
 
-        def __next__(self):
-            time.sleep(self._delay_s)  # simulate blocking I/O
+        def __next__(self) -> ModelResponseStream:
+            self.entered.set()
+            self.release.wait(timeout=5)
+            self.returned.set()
             return next(self._it)
 
     test_chunk = ModelResponseStream(
@@ -2988,34 +3067,23 @@ async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_it
         usage=None,
     )
 
-    # Delay is intentionally > the wait_for timeout used to detect event loop blocking.
+    blocking_iterator = BlockingIterator([test_chunk])
     wrapper = CustomStreamWrapper(
-        completion_stream=BlockingIterator([test_chunk], delay_s=0.3),
+        completion_stream=blocking_iterator,
         model="test-model",
         logging_obj=logging_obj,
         custom_llm_provider="cached_response",
     )
 
-    tick_event = asyncio.Event()
+    anext_task = asyncio.create_task(wrapper.__anext__())
+    try:
+        assert await asyncio.to_thread(blocking_iterator.entered.wait, 5)
+        assert not blocking_iterator.returned.is_set(), "Event loop was blocked by the sync iterator"
+    finally:
+        blocking_iterator.release.set()
 
-    async def background_tick():
-        await asyncio.sleep(0.05)
-        tick_event.set()
-
-    # Run the two coroutines concurrently and measure wall time.
-    # If __anext__ blocks the event loop, background_tick can't run and the gather
-    # takes the full 0.3 s delay; if non-blocking both finish within ~0.35 s total.
-    start = asyncio.get_event_loop().time()
-
-    out, _ = await asyncio.gather(
-        wrapper.__anext__(),
-        background_tick(),
-    )
-
-    elapsed = asyncio.get_event_loop().time() - start
+    out = await anext_task
     assert isinstance(out, ModelResponseStream)
-    # background_tick sleeps 0.05 s; total must finish well under 2 × 0.3 s
-    assert elapsed < 0.5, f"Event loop was likely blocked (elapsed={elapsed:.2f}s)"
 
 
 @pytest.mark.asyncio
@@ -6417,3 +6485,51 @@ def validate_last_format(chunk):
         assert isinstance(
             choice["finish_reason"], str
         ), "'finish_reason' should be a string."
+
+
+class _RecordingProviderStream:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def __iter__(self) -> "_RecordingProviderStream":
+        return self
+
+    def __next__(self) -> object:
+        raise StopIteration
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def _wrapper_over(stream: _RecordingProviderStream) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=stream,
+        model="gpt-5.6",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+
+
+def test_close_releases_the_provider_stream_once_and_ends_iteration():
+    stream: Final = _RecordingProviderStream()
+    wrapper: Final = _wrapper_over(stream)
+    wrapper.close()
+    wrapper.close()
+    assert stream.close_calls == 1
+    with pytest.raises(StopIteration):
+        next(wrapper)
+
+
+def test_leaving_a_with_block_closes_the_provider_stream():
+    stream: Final = _RecordingProviderStream()
+    with _wrapper_over(stream):
+        pass
+    assert stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_leaving_an_async_with_block_closes_the_provider_stream():
+    stream: Final = _RecordingProviderStream()
+    async with _wrapper_over(stream):
+        pass
+    assert stream.close_calls == 1
