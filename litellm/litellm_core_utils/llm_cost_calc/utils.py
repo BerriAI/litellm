@@ -1953,6 +1953,7 @@ class CostCalculatorUtils:
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
+        data_residency: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
