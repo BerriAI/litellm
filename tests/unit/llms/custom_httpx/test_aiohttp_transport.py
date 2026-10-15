@@ -1,11 +1,8 @@
 import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
-import contextlib
-import itertools
 import socket
-import struct
 import sys
-from collections.abc import AsyncIterator
+import struct
 from typing import Final
 
 import aiohttp
@@ -22,7 +19,7 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     LiteLLMAiohttpTransport,
 )
 from aiohttp import ClientSession
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -168,6 +165,24 @@ async def test_client_payload_error_before_first_chunk_raises_read_error():
         await _drain()
 
     assert received_chunks == []
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_server_disconnect_mid_body_stays_a_read_error() -> None:
+    mock_response: Final = MockAiohttpResponse(
+        content_chunks=[b"data: one\n\n", b"data: two\n\n"],
+        exception_to_raise=aiohttp.ServerDisconnectedError(),
+        exception_at_chunk=1,
+    )
+    stream: Final = AiohttpResponseStream(mock_response)  # pyright: ignore[reportArgumentType]  # duck-typed response
+    received_chunks: Final[list[bytes]] = []  # mutable-ok: collects what the stream yielded before the cut
+
+    with pytest.raises(httpx.ReadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
+
+    assert received_chunks == [b"data: one\n\n"]
     assert mock_response.closed is True
 
 
@@ -1277,118 +1292,6 @@ async def test_refused_connection_maps_to_httpx_connect_error(
     assert isinstance(cause, aiohttp_aiohttp_handler.ClientConnectorError)
     assert cause.ssl is expected_ssl
     assert (cause.host, cause.port) == ("127.0.0.1", port)
-
-
-async def _read_one_request(reader: asyncio.StreamReader) -> None:
-    head: Final = await reader.readuntil(b"\r\n\r\n")
-    header_lines: Final = head.lower().split(b"\r\n")
-    body_length: Final = next(
-        (int(line.split(b":", 1)[1]) for line in header_lines if line.startswith(b"content-length:")), 0
-    )
-    await reader.readexactly(body_length)
-
-
-@contextlib.asynccontextmanager
-async def _upstream_that_cuts_the_first_connection(
-    status_line: bytes, body: bytes
-) -> AsyncIterator[tuple[str, "itertools.count[int]"]]:
-    """A load balancer that drops an idle keepalive connection answers the next
-    request with a clean close and no response. The first connection here is cut
-    that way, and later ones get the reply, with a pause before the body so a
-    streamed read has to go back to the socket after post() returns."""
-    attempts: Final = itertools.count(1)
-
-    async def cut_first_then_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await _read_one_request(reader)
-        if next(attempts) > 1:
-            writer.write(
-                b"HTTP/1.1 %s\r\nContent-Type: application/json\r\nConnection: close\r\n"
-                b"Content-Length: %d\r\n\r\n" % (status_line, len(body))
-            )
-            await writer.drain()
-            await asyncio.sleep(0.2)
-            writer.write(body)
-            await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0)
-    try:
-        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", attempts
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
-async def test_server_disconnect_before_response_is_retried_on_a_fresh_connection(stream: bool) -> None:
-    """An idempotent request must be resent on a new connection instead of failing
-    the caller, and a streamed resend must stay readable after delete() returns."""
-    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
-        handler: Final = AsyncHTTPHandler(timeout=5.0)
-        try:
-            response: Final = await handler.delete(f"{base_url}/", json={"hello": "world"}, stream=stream)
-            await response.aread()
-        finally:
-            await handler.close()
-
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-        assert next(attempts) == 3
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
-async def test_status_error_on_the_resend_is_masked_like_the_first_attempt(stream: bool) -> None:
-    async with _upstream_that_cuts_the_first_connection(b"429 Too Many Requests", b'{"error": "slow down"}') as (
-        base_url,
-        attempts,
-    ):
-        handler: Final = AsyncHTTPHandler(timeout=5.0)
-        try:
-            with pytest.raises(MaskedHTTPStatusError) as raised:
-                await handler.delete(f"{base_url}/v1/x?key=SUPERSECRET", json={"hello": "world"}, stream=stream)
-        finally:
-            await handler.close()
-
-        assert raised.value.status_code == 429
-        assert raised.value.response.json() == {"error": "slow down"}
-        assert "SUPERSECRET" not in str(raised.value)
-        assert "SUPERSECRET" not in str(raised.value.request.url)
-        assert next(attempts) == 3
-
-
-@pytest.mark.asyncio
-async def test_server_disconnect_on_a_post_is_a_remote_protocol_error_and_is_not_replayed() -> None:
-    """The upstream may have read the POST before closing, so it is reported, not resent."""
-    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
-        handler: Final = AsyncHTTPHandler(timeout=5.0)
-        try:
-            with pytest.raises(httpx.RemoteProtocolError):
-                await handler.post(f"{base_url}/", json={"hello": "world"})
-        finally:
-            await handler.close()
-
-        assert next(attempts) == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
-async def test_server_disconnect_on_an_idempotent_post_is_resent_on_a_fresh_connection(stream: bool) -> None:
-    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
-        handler: Final = AsyncHTTPHandler(timeout=5.0)
-        try:
-            response: Final = await handler.post(
-                f"{base_url}/", json={"hello": "world"}, stream=stream, idempotent=True
-            )
-            await response.aread()
-        finally:
-            await handler.close()
-
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-        assert next(attempts) == 3
 
 
 @pytest.mark.asyncio

@@ -123,7 +123,7 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             if "Connection closed" not in str(e):
                 raise
             raise httpx.ReadError(str(e)) from e
-        except aiohttp.http_exceptions.TransferEncodingError as e:
+        except (aiohttp.http_exceptions.TransferEncodingError, aiohttp.ServerDisconnectedError) as e:
             raise httpx.ReadError(str(e)) from e
         except Exception:
             # For other exceptions, use the normal mapping

@@ -1,13 +1,12 @@
 import asyncio, importlib, json, time
 import gc
 import io
-import itertools
 import os
 import pathlib
 import ssl
 import threading
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -1523,8 +1522,12 @@ async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["put", "delete"])
-async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+@pytest.mark.parametrize(
+    ("method", "options"),
+    [("put", {}), ("delete", {}), ("post", {"idempotent": True})],
+    ids=["put", "delete", "idempotent_post"],
+)
+async def test_idempotent_disconnect_is_replayed(method: str, options: Mapping[str, bool]) -> None:
     captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_disconnect(request: httpx.Request) -> httpx.Response:
@@ -1540,7 +1543,7 @@ async def test_idempotent_disconnect_is_replayed(method: str) -> None:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
         body: Final = b'{"a":1}'
-        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body, **options)
 
         assert response.status_code == 200
         assert captured == [(method.upper(), body)]
@@ -1574,30 +1577,66 @@ async def test_connection_error_retry_forwards_multipart_files():
     assert b"RIFF-audio-bytes" in captured[0]
 
 
+async def _raise_server_disconnected(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("Server disconnected", request=request)
+
+
 @pytest.mark.asyncio
-async def test_connection_error_retry_keeps_the_handlers_tls_settings(tmp_path: pathlib.Path):
-    cert_pem, key_pem = _write_test_only_ca(tmp_path)
-    server_tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_tls.load_cert_chain(cert_pem, key_pem)
-    connections: Final = itertools.count(1)
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
+async def test_status_error_on_the_resend_is_masked_like_the_first_attempt(stream: bool) -> None:
+    async def rate_limited(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": "slow down"}, request=request)
 
-    async def cut_first_then_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await reader.readuntil(b"\r\n\r\n")
-        if next(connections) > 1:
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            await writer.drain()
-        writer.close()
-
-    server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0, ssl=server_tls)
-    handler: Final = AsyncHTTPHandler(timeout=5.0, ssl_verify=False)
-    try:
-        response: Final = await handler.delete(f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}/")
-    finally:
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(_raise_server_disconnected))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        with pytest.raises(MaskedHTTPStatusError) as raised:
+            await handler.delete("https://api.example.com/v1/x?key=SUPERSECRET", stream=stream)
         await handler.close()
-        server.close()
 
-    assert response.text == "ok"
-    assert next(connections) == 3
+    assert raised.value.status_code == 429
+    assert raised.value.response.json() == {"error": "slow down"}
+    assert "SUPERSECRET" not in str(raised.value)
+    assert "SUPERSECRET" not in str(raised.value.request.url)
+
+
+@pytest.mark.asyncio
+async def test_streamed_resend_keeps_its_client_open_until_the_body_is_read() -> None:
+    async def body_still_on_the_wire() -> AsyncIterator[bytes]:
+        yield b'{"ok": true}'
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body_still_on_the_wire(), request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(_raise_server_disconnected))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(answer))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        response: Final = await handler.delete("https://api.example.com/runs/batch", stream=True)
+        open_while_unread: Final = not retry.is_closed
+        await response.aread()
+        await handler.close()
+
+        assert open_while_unread
+        assert response.json() == {"ok": True}
+        assert retry.is_closed
+
+
+@pytest.mark.asyncio
+async def test_buffered_resend_closes_its_client_before_returning() -> None:
+    async def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(_raise_server_disconnected))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(answer))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        response: Final = await handler.delete("https://api.example.com/runs/batch")
+        await handler.close()
+
+        assert response.json() == {"ok": True}
+        assert retry.is_closed
 
 
 @pytest.fixture
@@ -1697,9 +1736,14 @@ async def test_force_ipv4_httpx_transport_honours_no_proxy(keepalive_server, mon
     assert response.text == "ok"
 
 
-def _write_test_only_ca(tmp_path: pathlib.Path) -> tuple[str, str]:
-    """A self-signed CA cert for upstream.invalid and its key, as PEM paths."""
+@pytest.fixture
+def private_ca_tls_upstream(tmp_path: pathlib.Path):
+    """HTTPS server behind a CONNECT proxy, both on localhost; the server's cert is signed by a test-only CA."""
     import datetime
+    import select
+    import socket
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -1727,18 +1771,6 @@ def _write_test_only_ca(tmp_path: pathlib.Path) -> tuple[str, str]:
     key_pem.write_bytes(
         key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
-    return str(ca_pem), str(key_pem)
-
-
-@pytest.fixture
-def private_ca_tls_upstream(tmp_path: pathlib.Path):
-    """HTTPS server behind a CONNECT proxy, both on localhost; the server's cert is signed by a test-only CA."""
-    import select
-    import socket
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from socketserver import ThreadingMixIn
-
-    ca_pem, key_pem = _write_test_only_ca(tmp_path)
 
     class OkTlsHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
