@@ -64,7 +64,7 @@ def mantle_cost_map_model_id(model: str) -> str:
     prefix so ``us.openai.gpt-6.1-sol`` resolves to the
     ``openai.gpt-6.1-sol`` row. The model id sent to AWS is unchanged.
     """
-    bare = split_mantle_region_prefix(model)[1]
+    bare: Final = split_mantle_region_prefix(model)[1]
     for prefix in _MANTLE_GEO_PROFILE_PREFIXES:
         if bare.startswith(prefix):
             return bare[len(prefix) :]
