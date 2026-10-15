@@ -112,7 +112,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
-        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        requested_service_tier: Final[object] = request.get("service_tier")
+        service_tier: Final = (
+            _CHATGPT_SERVICE_TIERS.get(requested_service_tier) if isinstance(requested_service_tier, str) else None
+        )
         if service_tier is not None:
             filtered["service_tier"] = service_tier
         return filtered

@@ -29,6 +29,67 @@ from litellm.types.utils import (
 )
 
 
+@pytest.mark.parametrize("value,expected", (("1200", 1200), (1.5, 1), (0, 0), (-1, -1), (True, None), ("bad", None)))
+def test_native_model_info_preserves_legacy_limits_without_a_context_contract(
+    value: object, expected: int | None
+) -> None:
+    info: Final = ModelInfo(max_input_tokens=value)
+    assert info.max_input_tokens == expected
+
+
+@pytest.mark.parametrize("value", ("1200", 1.5, 0, -1, True, "bad"))
+def test_native_context_contract_does_not_invent_invalid_input_capacity(value: object) -> None:
+    info: Final = ModelInfo(context_window=2000, max_input_tokens=value)
+    assert info.context_window == 2000
+    assert info.max_input_tokens is None
+
+
+def test_native_deployment_compiles_private_policy_and_keeps_it_separate_from_mutable_request_body() -> None:
+    from litellm.router import Router
+    from litellm.types.llms.openrouter import OpenRouterProviderPolicy
+
+    policy: Final = OpenRouterProviderPolicy(provider="openrouter", only=("synthetic/fp8",))
+    native: Final = Router(
+        model_list=[
+            {
+                "model_name": "public-model",
+                "litellm_params": {"model": "openrouter/org/backend", "extra_body": {"temperature": 0.5}},
+                "model_info": {"id": "private-deployment"},
+                "provider_policy": policy,
+            }
+        ]
+    )
+    deployment: Final = native.get_deployment("private-deployment")
+    assert deployment is not None
+    assert deployment.provider_policy == policy
+    assert deployment.litellm_params.extra_body == {
+        "temperature": 0.5,
+        "provider": {"only": ["synthetic/fp8"], "allow_fallbacks": False},
+    }
+    assert "provider_policy" not in deployment.model_dump()
+    assert "provider_policy" not in deployment.model_info.model_dump()
+    deployment.litellm_params.extra_body["provider"]["only"].append("caller/override")
+    assert native.get_deployment("private-deployment").provider_policy.only == ("synthetic/fp8",)
+
+
+@pytest.mark.parametrize(
+    "model,body",
+    (
+        ("openai/org/backend", {}),
+        ("openrouter/org/backend", {"provider": {"only": ["other"], "allow_fallbacks": True}}),
+    ),
+)
+def test_native_deployment_rejects_policy_provider_or_body_conflicts(model: str, body: dict[str, object]) -> None:
+    from litellm.types.llms.openrouter import OpenRouterProviderPolicy
+
+    with pytest.raises(ValidationError, match=r"provider|routing body"):
+        Deployment(
+            model_name="public-model",
+            litellm_params=LiteLLM_Params(model=model, extra_body=body),
+            provider_policy=OpenRouterProviderPolicy(provider="openrouter", only=("synthetic/fp8",)),
+        )
+
+
 def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
     timeout: Final = SDKTimeout(connect=2.0, read=None, write=5.0, pool=7.0)
     params: Final = GenericLiteLLMParams(timeout=timeout)

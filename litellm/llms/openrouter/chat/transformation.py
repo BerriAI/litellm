@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING, Final, cast
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+import litellm
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
@@ -46,6 +48,10 @@ def openrouter_model_supports_cache_control(model: str) -> bool:
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str:
+        return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Include reasoning parameters regardless of model-map capabilities.
@@ -60,10 +66,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
-        if non_default_params.get("reasoning_effort") == "max":
-            non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
-
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # OpenRouter-only parameters

@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import partial
-from itertools import takewhile
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -82,9 +82,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     with_litellm_call_id,
 )
+from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.router import guaranteed_token_limit, resolve_model_metadata
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
@@ -9092,6 +9094,9 @@ async def get_available_models_for_user(
     return capped
 
 
+_MODEL_LISTING_RESPONSE_ADAPTER: Final = TypeAdapter(ModelInfoResponse)
+
+
 def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
     try:
         return get_model_info(model)
@@ -9174,6 +9179,15 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+def _merged_listing_info(candidates: tuple[ModelInfo, ...]) -> Mapping[str, object]:
+    fields: Final = tuple(dict.fromkeys(chain.from_iterable(candidate.keys() for candidate in candidates)))
+    return {
+        field: next(candidate.get(field) for candidate in candidates if candidate.get(field) is not None)
+        for field in fields
+        if any(candidate.get(field) is not None for candidate in candidates)
+    }
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -9191,13 +9205,6 @@ def create_model_info_response(
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    base: Final[ModelInfoResponse] = {
-        "id": model_id,
-        "object": "model",
-        "created": DEFAULT_MODEL_CREATED_AT_TIME,
-        "owned_by": provider,
-    }
-
     alias_target: Final = (
         resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
     )
@@ -9210,9 +9217,14 @@ def create_model_info_response(
     deployment_models: Final[tuple[str | None, ...]] = (
         listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
     )
-    listed_info: Final = _safe_get_model_info(lookup_model, get_model_info)
+    authoritative_metadata: Final = (
+        llm_router is not None and getattr(llm_router, "model_metadata_authoritative", False) is True
+    )
+    listed_info: Final = None if authoritative_metadata else _safe_get_model_info(lookup_model, get_model_info)
     candidate_sets: Final = tuple(
-        _resolve_listing_model_info(
+        ()
+        if authoritative_metadata
+        else _resolve_listing_model_info(
             deployment_model=deployment_model,
             listed_model=lookup_model,
             listed_info=listed_info,
@@ -9221,8 +9233,6 @@ def create_model_info_response(
         for deployment_model in deployment_models
     )
 
-    max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
-    max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
     mode: Final = next(
         (
             m
@@ -9235,27 +9245,55 @@ def create_model_info_response(
         ),
         None,
     )
-    if mode is not None:
-        base["mode"] = mode
+    configured_mode: Final = llm_router.get_configured_mode(lookup_model) if llm_router is not None else None
+    effective_mode: Final = configured_mode if isinstance(configured_mode, str) else mode
 
-    if listing_info is not None:
-        if listing_info.max_input_tokens is not None:
-            max_input_tokens = listing_info.max_input_tokens
-        if listing_info.max_output_tokens is not None:
-            max_output_tokens = listing_info.max_output_tokens
-
-    if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
-        if isinstance(configured_mode, str):
-            base["mode"] = configured_mode
-
-    if max_input_tokens is not None:
-        base["max_input_tokens"] = max_input_tokens
-    if max_output_tokens is not None:
-        base["max_output_tokens"] = max_output_tokens
+    candidates_by_model: Final = dict(zip(deployment_models, candidate_sets))
+    discovery_sources: Final = (
+        tuple(
+            resolve_model_metadata(
+                _merged_listing_info(candidates_by_model.get(deployment.cost_map_key, candidate_sets[0])),
+                deployment.model_info,
+            )
+            for deployment in listing_info.deployments
+        )
+        if listing_info is not None and listing_info.deployments
+        else tuple(resolve_model_metadata(_merged_listing_info(candidates), {}) for candidates in candidate_sets)
+    )
+    has_context_contract: Final = any(source.context_window is not None for source in discovery_sources)
+    max_input_tokens: Final = (
+        guaranteed_token_limit(discovery_sources, "max_input_tokens")
+        if has_context_contract
+        else listing_info.max_input_tokens
+        if listing_info is not None and listing_info.max_input_tokens is not None
+        else _group_token_limit(candidate_sets, "max_input_tokens")
+    )
+    max_output_tokens: Final = (
+        guaranteed_token_limit(discovery_sources, "max_output_tokens")
+        if has_context_contract
+        else listing_info.max_output_tokens
+        if listing_info is not None and listing_info.max_output_tokens is not None
+        else _group_token_limit(candidate_sets, "max_output_tokens")
+    )
+    known_limits: Final = {
+        field: value
+        for field, value in (("max_input_tokens", max_input_tokens), ("max_output_tokens", max_output_tokens))
+        if value is not None
+    }
+    discovered_base: Final[ModelInfoResponse] = _MODEL_LISTING_RESPONSE_ADAPTER.validate_python(
+        {
+            "id": model_id,
+            "object": "model",
+            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "owned_by": provider,
+            **({"mode": effective_mode} if effective_mode is not None else {}),
+            **known_limits,
+            **discover_model_metadata(discovery_sources),
+        }
+    )
 
     if not include_metadata:
-        return base
+        return discovered_base
 
     effective_fallback_type: Final = fallback_type if fallback_type is not None else "general"
 
@@ -9271,7 +9309,7 @@ def create_model_info_response(
         llm_router=llm_router,
         fallback_type=effective_fallback_type,
     )
-    return {**base, "metadata": {"fallbacks": fallbacks}}
+    return {**discovered_base, "metadata": {"fallbacks": fallbacks}}
 
 
 def validate_model_access(

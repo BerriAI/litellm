@@ -3408,7 +3408,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+    api_base = litellm.OpenrouterConfig.get_api_base(api_base)
 
     api_key = (
         api_key
@@ -6728,9 +6728,7 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "openrouter":
-            api_base = (
-                api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-            )
+            api_base = litellm.OpenrouterConfig.get_api_base(api_base)
 
             api_key = (
                 api_key

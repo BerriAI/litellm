@@ -30069,6 +30069,11 @@ export interface components {
              */
             model_list_healthy_only?: boolean | null;
             /**
+             * Model Offerings Path
+             * @description Path to the authoritative external offering file, reloaded without restarting the proxy
+             */
+            model_offerings_path?: string | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */
@@ -31629,6 +31634,8 @@ export interface components {
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
             model_name: string;
+            /** @description Gateway-owned supplier selection, excluded from public model metadata */
+            provider_policy?: components["schemas"]["OpenRouterProviderPolicy"] | null;
         } & {
             [key: string]: unknown;
         };
@@ -38279,6 +38286,21 @@ export interface components {
             /** Model Name */
             model_name: string;
         };
+        /** ModelRequestDefaults */
+        ModelRequestDefaults: {
+            /**
+             * Output Token Budget
+             * @description Default requested output budget, not a physical model limit
+             */
+            output_token_budget?: number | null;
+            /**
+             * Output Token Budget By Reasoning Effort
+             * @description Requested output budgets keyed by exact reasoning effort
+             */
+            output_token_budget_by_reasoning_effort?: {
+                [key: string]: number;
+            } | null;
+        };
         /** ModelResponse */
         ModelResponse: {
             /** Choices */
@@ -39545,6 +39567,22 @@ export interface components {
              * @constant
              */
             type: "openIdConnect";
+        };
+        /** OpenRouterProviderPolicy */
+        OpenRouterProviderPolicy: {
+            /**
+             * Allow Fallbacks
+             * @default false
+             * @constant
+             */
+            allow_fallbacks: false;
+            /** Only */
+            only: string[];
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "openrouter";
         };
         /** OpenSourceClassifierConfig */
         OpenSourceClassifierConfig: {
@@ -49841,6 +49879,16 @@ export interface components {
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
             base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /**
+             * Context Window
+             * @description Maximum combined input and generated output tokens
+             */
+            context_window?: number | null;
+            /**
+             * Default Reasoning Effort
+             * @description Effort used when the request omits it
+             */
+            default_reasoning_effort?: string | null;
             /** Discoverable */
             discoverable?: boolean | null;
             /** Id */
@@ -49850,6 +49898,16 @@ export interface components {
              * @default 0
              */
             input_cost_per_token: number | null;
+            /**
+             * Max Input Tokens
+             * @description Independent maximum input tokens
+             */
+            max_input_tokens?: number | null;
+            /**
+             * Max Output Tokens
+             * @description Independent maximum generated output tokens
+             */
+            max_output_tokens?: number | null;
             /**
              * Max Tokens
              * @default 2048
@@ -49862,6 +49920,43 @@ export interface components {
              * @default 0
              */
             output_cost_per_token: number | null;
+            /**
+             * Reasoning Effort Levels
+             * @description Exact effort values this route accepts
+             */
+            reasoning_effort_levels?: string[] | null;
+            /** @description Configured request defaults, independent of supplier capability limits */
+            request_defaults?: components["schemas"]["ModelRequestDefaults"] | null;
+            /**
+             * Supported Endpoints
+             * @description Inference endpoints exposed by this route
+             */
+            supported_endpoints?: string[] | null;
+            /**
+             * Supported Modalities
+             * @description Accepted input modalities
+             */
+            supported_modalities?: string[] | null;
+            /**
+             * Supported Output Modalities
+             * @description Supported output modalities
+             */
+            supported_output_modalities?: string[] | null;
+            /**
+             * Supports Function Calling
+             * @description Whether this model accepts tool calls
+             */
+            supports_function_calling?: boolean | null;
+            /**
+             * Supports Parallel Function Calling
+             * @description Whether this model accepts parallel tool calls
+             */
+            supports_parallel_function_calling?: boolean | null;
+            /**
+             * Supports Reasoning
+             * @description Whether this model supports reasoning controls
+             */
+            supports_reasoning?: boolean | null;
         } & {
             [key: string]: unknown;
         };
@@ -49890,6 +49985,11 @@ export interface components {
             cache_creation_input_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /**
+             * Context Window
+             * @description Maximum combined input and generated output tokens
+             */
+            context_window?: number | null;
             /** Cost Per Ptu Per Hour */
             cost_per_ptu_per_hour?: number | null;
             /** Created At */
@@ -49901,6 +50001,11 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /**
+             * Default Reasoning Effort
+             * @description Effort used when the request omits it
+             */
+            default_reasoning_effort?: string | null;
             /** Discoverable */
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
@@ -49913,6 +50018,16 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /**
+             * Max Input Tokens
+             * @description Independent maximum input tokens
+             */
+            max_input_tokens?: number | null;
+            /**
+             * Max Output Tokens
+             * @description Independent maximum generated output tokens
+             */
+            max_output_tokens?: number | null;
             /**
              * Member Auto Router
              * @default false
@@ -49928,6 +50043,43 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /**
+             * Reasoning Effort Levels
+             * @description Exact effort values this route accepts
+             */
+            reasoning_effort_levels?: string[] | null;
+            /** @description Configured request defaults, independent of supplier capability limits */
+            request_defaults?: components["schemas"]["ModelRequestDefaults"] | null;
+            /**
+             * Supported Endpoints
+             * @description Inference endpoints exposed by this route
+             */
+            supported_endpoints?: string[] | null;
+            /**
+             * Supported Modalities
+             * @description Accepted input modalities
+             */
+            supported_modalities?: string[] | null;
+            /**
+             * Supported Output Modalities
+             * @description Supported output modalities
+             */
+            supported_output_modalities?: string[] | null;
+            /**
+             * Supports Function Calling
+             * @description Whether this model accepts tool calls
+             */
+            supports_function_calling?: boolean | null;
+            /**
+             * Supports Parallel Function Calling
+             * @description Whether this model accepts parallel tool calls
+             */
+            supports_parallel_function_calling?: boolean | null;
+            /**
+             * Supports Reasoning
+             * @description Whether this model supports reasoning controls
+             */
+            supports_reasoning?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */

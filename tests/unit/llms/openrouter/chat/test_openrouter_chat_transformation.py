@@ -562,9 +562,9 @@ def test_openrouter_non_reasoning_models_support_reasoning_params():
     assert "thinking" in supported_params
 
 
-def test_openrouter_reasoning_effort_max_maps_to_xhigh():
+def test_openrouter_reasoning_effort_max_is_preserved():
     """
-    OpenRouter expects 'xhigh' instead of 'max' for reasoning_effort.
+    Preserve the exact gateway effort, which need not be the backend's alias.
     """
     config = OpenrouterConfig()
 
@@ -575,7 +575,7 @@ def test_openrouter_reasoning_effort_max_maps_to_xhigh():
         drop_params=False,
     )
 
-    assert result["reasoning_effort"] == "xhigh"
+    assert result["reasoning_effort"] == "max"
 
 
 def test_openrouter_reasoning_effort_max_does_not_mutate_caller_dict():

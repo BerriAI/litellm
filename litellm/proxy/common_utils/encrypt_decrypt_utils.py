@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import os
 from collections.abc import Mapping
 from typing import Final, Literal, cast
@@ -27,6 +29,7 @@ ALGO_AES_GCM: Final = "aes-256-gcm"
 
 _ALGO_AES_GCM: Final = ALGO_AES_GCM
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
+_MODEL_OFFERING_PROCESS_KEY: Final = os.urandom(32)
 
 
 def get_salt_key() -> str | None:
@@ -41,6 +44,20 @@ def get_salt_key() -> str | None:
 
 
 _get_salt_key: Final = get_salt_key
+
+
+def model_offering_identity_fingerprint(value: bytes) -> str:
+    """Opaque stable connection identity, never an unkeyed hash of supplier secrets.
+
+    Use the same server-owned key source as encryption. With a configured salt or
+    master key identities survive process restarts; standalone/development callers
+    without either key use a private process key and do not retain that stability.
+    """
+    configured_key: Final = _get_salt_key()
+    key: Final = (
+        configured_key.encode() if isinstance(configured_key, str) and configured_key else _MODEL_OFFERING_PROCESS_KEY
+    )
+    return hmac.new(key, b"litellm:model-offering-identity:v1\0" + value, hashlib.sha256).hexdigest()
 
 
 def _get_encryption_algorithm() -> str:

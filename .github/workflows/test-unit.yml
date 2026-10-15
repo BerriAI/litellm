@@ -372,6 +372,7 @@ jobs:
             test-path: >-
               tests/unit/llms/openai
               tests/unit/llms/meta
+              tests/unit/llms/test_model_inventory.py
             python-version: "3.12"
             workers: 4
             reruns: 0

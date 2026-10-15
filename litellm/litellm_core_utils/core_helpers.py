@@ -170,7 +170,7 @@ def is_expected_client_error(exception: BaseException | None) -> bool:
     return 400 <= status < 500
 
 
-def coerce_token_limit(value: object) -> int | None:
+def coerce_token_limit(value: object, *, strict_positive: bool = False) -> int | None:
     """
     Coerce a max_input_tokens / max_output_tokens value to an int, treating a
     malformed value as absent.
@@ -182,11 +182,14 @@ def coerce_token_limit(value: object) -> int | None:
 
     Args:
         value: The raw configured or cost-map value
+        strict_positive: Require positive integers without legacy numeric coercion
 
     Returns:
         The value as an int, or None if it is missing or not a usable number.
         Bools are rejected because True/False is never a meaningful token limit.
     """
+    if strict_positive:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
     if isinstance(value, bool):
         return None
     if isinstance(value, int):

@@ -853,3 +853,53 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+def test_schema_and_model_info_preserve_independent_total_context(committed_schema, monkeypatch):
+    entry = {
+        "litellm_provider": "openai",
+        "context_window": 1200,
+        "max_input_tokens": 1100,
+        "max_output_tokens": 200,
+        "max_tokens": 200,
+    }
+    # The trusted-base generated catalog schema permits optional unknown properties.
+    # Runtime metadata supplies and validates the separate total-context contract.
+    assert build_validator(committed_schema).is_valid({"fixture-model": entry})
+    monkeypatch.setattr(litellm, "model_cost", {"fixture-model": entry})
+    info = litellm.get_model_info("fixture-model")
+    assert (info["context_window"], info["max_input_tokens"], info["max_output_tokens"], info["max_tokens"]) == (
+        1200,
+        1100,
+        200,
+        200,
+    )
+
+
+def test_native_model_info_and_lookup_preserve_reasoning_capabilities_and_request_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.router import ModelInfo
+
+    metadata: Final = {
+        "context_window": 1200,
+        "max_input_tokens": 1100,
+        "max_output_tokens": 200,
+        "supports_function_calling": True,
+        "supports_parallel_function_calling": False,
+        "supports_reasoning": True,
+        "reasoning_effort_levels": ["low", "max"],
+        "default_reasoning_effort": "low",
+        "supported_endpoints": ["/v1/responses"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"],
+        "request_defaults": {
+            "output_token_budget": 100,
+            "output_token_budget_by_reasoning_effort": {"max": 180},
+        },
+    }
+    native: Final = ModelInfo(**metadata)
+    assert native.request_defaults.output_budget("max") == 180
+    monkeypatch.setattr(litellm, "model_cost", {"fixture-model": {"litellm_provider": "openai", **metadata}})
+    info: Final = litellm.get_model_info("fixture-model")
+    assert {field: info.get(field) for field in metadata} == metadata
