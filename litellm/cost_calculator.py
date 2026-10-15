@@ -3448,38 +3448,7 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
         return None
 
 
-def _transcription_rate_value(
-    info: ModelInfo,
-    key: Literal[
-        "input_cost_per_second",
-        "input_cost_per_audio_token",
-        "input_cost_per_token",
-        "output_cost_per_token",
-    ],
-) -> float | None:
-    match key:
-        case "input_cost_per_second":
-            return info.get("input_cost_per_second")
-        case "input_cost_per_audio_token":
-            return info.get("input_cost_per_audio_token")
-        case "input_cost_per_token":
-            return info.get("input_cost_per_token")
-        case "output_cost_per_token":
-            return info.get("output_cost_per_token")
-
-
-def _declared_transcription_rate(
-    info: ModelInfo | None,
-    keys: tuple[
-        Literal[
-            "input_cost_per_second",
-            "input_cost_per_audio_token",
-            "input_cost_per_token",
-            "output_cost_per_token",
-        ],
-        ...,
-    ],
-) -> float | None:
+def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
     """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
     because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
@@ -3488,28 +3457,12 @@ def _declared_transcription_rate(
     if declared is None:
         return None
     return next(
-        (
-            float(value)
-            for key in keys
-            if declared.get(key) is not None and (value := _transcription_rate_value(info, key)) is not None
-        ),
+        (float(value) for key in keys if declared.get(key) is not None and (value := info.get(key)) is not None),
         None,
     )
 
 
-def _transcription_rate(
-    keys: tuple[
-        Literal[
-            "input_cost_per_second",
-            "input_cost_per_audio_token",
-            "input_cost_per_token",
-            "output_cost_per_token",
-        ],
-        ...,
-    ],
-    override: ModelInfo | None,
-    base: ModelInfo | None,
-) -> float:
+def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
     rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
     return next((rate for rate in rates if rate is not None), 0.0)
 

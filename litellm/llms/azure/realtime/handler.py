@@ -6,7 +6,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -28,15 +28,7 @@ from ..azure import AzureChatCompletion
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
 
 
-class _RealtimeTextSink(Protocol):
-    async def send_text(self, data: str) -> None: ...
-
-
-class _RealtimeMessageSource(Protocol):
-    async def recv(self) -> str: ...
-
-
-async def forward_messages(client_ws: _RealtimeTextSink, backend_ws: _RealtimeMessageSource) -> None:
+async def forward_messages(client_ws: Any, backend_ws: Any):
     import websockets
 
     try:

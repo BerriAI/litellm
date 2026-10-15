@@ -2679,7 +2679,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
             break
 
         try:
-            decoded: tuple[object, int] = decoder.raw_decode(raw, idx)
+            obj, end_idx = decoder.raw_decode(raw, idx)
         except json.JSONDecodeError as e:
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
@@ -2689,7 +2689,6 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
                 e,
             )
             break
-        obj, end_idx = decoded
         if isinstance(obj, dict):
             results.append(obj)
         else:
@@ -2728,10 +2727,9 @@ def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ..
         if idx >= length:
             break
         try:
-            salvaged: tuple[object, int] = decoder.raw_decode(stripped, idx)
+            obj, end_idx = decoder.raw_decode(stripped, idx)
         except json.JSONDecodeError:
             return ()
-        obj, end_idx = salvaged
         if not isinstance(obj, dict):
             return ()
         idx = end_idx

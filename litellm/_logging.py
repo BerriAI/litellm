@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from datetime import datetime
 from logging import Formatter
 from typing import Final, TextIO
@@ -422,11 +422,6 @@ def _render_exception(record: logging.LogRecord) -> str | None:
         return "REDACTED"
 
 
-def _record_attrs(record: logging.LogRecord) -> Mapping[str, object]:
-    """Read-only view of a record's attributes, including those passed via ``extra``."""
-    return record.__dict__
-
-
 def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit: int, redact: bool) -> bool:
     if _is_redacted(record):
         return True
@@ -443,7 +438,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
                     key, substituted_color if key == "color_message" and substituted_color is not None else value
                 ),
             )
-            for key, value in _record_attrs(record).items()
+            for key, value in record.__dict__.items()
             if key not in _STANDARD_RECORD_ATTRS
             and key != _REDACTED_RECORD_ATTR
             and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
@@ -762,7 +757,7 @@ class JsonFormatter(Formatter):
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in _record_attrs(record).items():
+        for key, value in record.__dict__.items():
             if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 

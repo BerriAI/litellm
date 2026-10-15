@@ -300,7 +300,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     def _build_output(
         inputs: GenericGuardrailAPIInputs,
         final_texts: list[str],
-        final_tool_calls: _ToolCalls | None,
+        final_tool_calls: Any,
     ) -> GenericGuardrailAPIInputs:
         # When nothing was changed, return the input shape verbatim so the guardrail
         # logs "allow" rather than "mask". When a text or a tool-call argument was
@@ -315,7 +315,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             guardrailed["images"] = inputs["images"]
         if "tools" in inputs:
             guardrailed["tools"] = inputs["tools"]
-        if tool_calls_changed and final_tool_calls is not None:
+        if tool_calls_changed:
             guardrailed["tool_calls"] = final_tool_calls
         return guardrailed
 

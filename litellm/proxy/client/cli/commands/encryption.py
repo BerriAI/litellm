@@ -41,16 +41,15 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
     """
     client: Final = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
-    response: Final[object] = (
-        client.request("GET", "/credentials/migrate-encryption/check")
-        if check_only
-        else client.request(
+    if check_only:
+        response = client.request("GET", "/credentials/migrate-encryption/check")
+    else:
+        response = client.request(
             "POST",
             "/credentials/migrate-encryption",
             json={},
             params={"dry_run": "true"} if dry_run else None,
         )
-    )
 
     rich.print_json(data=response)
 

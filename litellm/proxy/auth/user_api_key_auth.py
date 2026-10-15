@@ -200,10 +200,6 @@ except ImportError as e:
 user_api_key_service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 
 
-class _VerificationTokenTable(Protocol):
-    async def delete(self, *, where: Mapping[str, str]) -> object: ...
-
-
 def _normalize_public_auth_route(route: str) -> str:
     if route != "/" and route.endswith("/"):
         return route.rstrip("/")
@@ -1619,10 +1615,7 @@ async def _auto_register_jwt_mapping(
             if minted:
                 try:
                     async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
-                        verification_token_table: Final[_VerificationTokenTable] = (
-                            prisma_client.db.litellm_verificationtoken
-                        )
-                        await verification_token_table.delete(where={"token": token_hash})
+                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.
@@ -2672,7 +2665,7 @@ async def user_api_key_auth_builder(
                     and valid_token.last_refreshed_at is not None
                     and team_obj.last_refreshed_at > valid_token.last_refreshed_at
                 ):
-                    team_obj_dict: Final[Mapping[str, object]] = team_obj.__dict__
+                    team_obj_dict: Final = team_obj.__dict__
 
                     for k, v in team_obj_dict.items():
                         field_name = f"team_{k}"

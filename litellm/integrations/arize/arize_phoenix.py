@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final, TypeAlias
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span: TypeAlias = _Span
+    Span = _Span | Any
     OpenTelemetry = _OpenTelemetry
     LITELLM_TRACER_NAME: str
 else:
@@ -100,7 +100,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         if getattr(self, "_use_injected_tracer_provider", False):
             return
 
-        shared_processor: Final[SpanProcessor | None] = getattr(self, "_shared_span_processor", None)
+        shared_processor: Final = getattr(self, "_shared_span_processor", None)
         if shared_processor is not None:
             try:
                 shared_processor.force_flush()
@@ -111,7 +111,7 @@ class ArizePhoenixLogger(OpenTelemetry):
                 )
 
         with getattr(self, "_project_providers_lock", threading.Lock()):
-            providers: Final[tuple[TracerProvider, ...]] = tuple(getattr(self, "_project_providers", {}).values())
+            providers: Final = list(getattr(self, "_project_providers", {}).values())
 
         for provider in providers:
             try:
@@ -193,7 +193,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         primary ``otel`` callback which handles proxy-level parent spans.
         """
 
-    def set_attributes(self, span: Span, kwargs, response_obj: object):
+    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
 
     @staticmethod
