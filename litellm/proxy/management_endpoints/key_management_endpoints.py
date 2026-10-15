@@ -3980,9 +3980,9 @@ async def update_key_fn(
             raise Exception("Not connected to DB!")
 
         is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
-        update_fields: Final[Mapping[str, object]] = cast(
+        update_fields: Final[Mapping[str, object]] = cast(  # cast-ok: prepare_key_update_data returns a bare dict
             "Mapping[str, object]", non_default_values
-        )  # cast-ok: prepare_key_update_data returns a bare dict
+        )
         object_permission_upsert: Final = await _prepare_key_update_object_permission(
             object_permission_data=update_fields.get("object_permission"),
             existing_key_row=existing_key_row,
