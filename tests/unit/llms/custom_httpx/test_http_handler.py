@@ -1499,11 +1499,14 @@ async def test_connection_error_retry_forwards_content(method: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "patch"])
-async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
+@pytest.mark.parametrize(
+    "cut", [httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError], ids=["closed", "reset", "write_failed"]
+)
+async def test_disconnect_after_send_is_not_replayed(method: str, cut: type[httpx.TransportError]) -> None:
     retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_disconnect(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+        raise cut("connection dropped after send", request=request)
 
     async def capture_retry(request: httpx.Request) -> httpx.Response:
         retried_requests.append(request)
@@ -1514,7 +1517,7 @@ async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
     async with first, retry:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-        with pytest.raises(httpx.RemoteProtocolError):
+        with pytest.raises(cut):
             await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
 
         assert retried_requests == []
@@ -1547,6 +1550,58 @@ async def test_idempotent_disconnect_is_replayed(method: str, options: Mapping[s
 
         assert response.status_code == 200
         assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cut", [httpx.ReadError, httpx.WriteError], ids=["reset", "write_failed"])
+async def test_idempotent_post_is_resent_when_the_connection_is_reset(cut: type[httpx.TransportError]) -> None:
+    captured: Final[list[bytes]] = []  # mutable-ok: async closure capture buffer
+
+    async def reset(request: httpx.Request) -> httpx.Response:
+        raise cut("[Errno 54] Connection reset by peer", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append(request.content)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(reset))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        response: Final = await handler.post("https://api.example.com/check", content=b'{"a":1}', idempotent=True)
+        await handler.close()
+
+    assert response.status_code == 200
+    assert captured == [b'{"a":1}']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "options", "cut"),
+    [
+        ("post", {}, httpx.ConnectError),
+        ("post", {"idempotent": True}, httpx.RemoteProtocolError),
+        ("put", {}, httpx.RemoteProtocolError),
+        ("patch", {}, httpx.ConnectError),
+    ],
+    ids=["post_connect_error", "idempotent_post_disconnect", "put_disconnect", "patch_connect_error"],
+)
+async def test_a_timeout_on_the_resend_is_a_litellm_timeout_like_the_first_attempt(
+    method: str, options: Mapping[str, bool], cut: type[httpx.TransportError]
+) -> None:
+    async def broken(request: httpx.Request) -> httpx.Response:
+        raise cut("connection dropped", request=request)
+
+    async def hangs(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("Timeout on reading data from socket", request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(broken))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(hangs))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        with pytest.raises(LitellmTimeout):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b"{}", **options)
         await handler.close()
 
 
@@ -2189,7 +2244,9 @@ def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints() -> No
     assert realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws") is shared
 
 
-def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
     selected: Final = realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws")
     assert isinstance(selected, ssl.SSLContext)
@@ -2205,7 +2262,10 @@ def _ollama_generate_route(respx_mock: respx.MockRouter, stream: bool) -> respx.
     final: Final = {"model": "llama3.1", "response": "", "done": True, "prompt_eval_count": 2, "eval_count": 1}
     if stream:
         return respx_mock.post("http://ollama.test:11434/api/generate").respond(
-            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False}) + "\n" + json.dumps(final) + "\n",
+            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False})
+            + "\n"
+            + json.dumps(final)
+            + "\n",
             headers={"content-type": "application/x-ndjson"},
         )
     return respx_mock.post("http://ollama.test:11434/api/generate").respond(json={**final, "response": "Sunny"})

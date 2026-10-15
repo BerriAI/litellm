@@ -724,6 +724,126 @@ class TestStructuredMessagesInResponse:
         assert guardrailed_inputs["texts"] == ["Never repeat an SSN.", "Look up [REDACTED] for me."]
 
     @pytest.mark.asyncio
+    async def test_rows_echoed_without_the_keys_the_server_does_not_know_leave_the_rewrite_to_texts(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """A server that parses rows with its own message types echoes them back without
+        the keys those types lack, and its texts redaction must still reach the LLM."""
+        original_rows = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+                ],
+                "refusal": None,
+                "annotations": [],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+            {"role": "user", "content": "my ssn is 123-45-6789"},
+        ]
+
+        def echo_known_keys_and_redact_texts(url, json, headers, **_kwargs):
+            rows = json["structured_messages"]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": [text.replace("123-45-6789", "[SSN]") for text in json["texts"]],
+                "structured_messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": None,
+                        "tool_calls": [
+                            {key: value for key, value in rows[0]["tool_calls"][0].items() if key != "index"}
+                        ],
+                    },
+                    rows[1],
+                    rows[2],
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_known_keys_and_redact_texts):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["found", "my ssn is 123-45-6789"], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["found", "my ssn is [SSN]"]
+
+    @pytest.mark.asyncio
+    async def test_a_row_rewrite_echoes_the_other_rows_back_as_their_original_rows(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        assistant_row = {
+            "role": "assistant",
+            "content": "Looking it up.",
+            "annotations": [{"type": "url_citation", "url_citation": {"url": "https://example.com"}}],
+        }
+        original_rows = [assistant_row, {"role": "user", "content": "my ssn is 123-45-6789"}]
+        redacted_row = {"role": "user", "content": "my ssn is [SSN]"}
+
+        def redact_one_row(url, json, headers, **_kwargs):
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "structured_messages": [{"role": "assistant", "content": "Looking it up."}, redacted_row],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=redact_one_row):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == [assistant_row, redacted_row]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned_row",
+        [
+            {"role": "assistant", "content": None},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+                "annotations": [],
+                "refusal": "blocked",
+            },
+        ],
+        ids=["drops_a_declared_key", "changes_a_value"],
+    )
+    async def test_a_row_that_loses_a_declared_key_or_changes_a_value_is_a_rewrite(
+        self, generic_guardrail, mock_request_data_input, returned_row
+    ):
+        original_row = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            "annotations": [],
+            "refusal": None,
+        }
+        answer = MagicMock()
+        answer.json.return_value = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [returned_row]}
+        answer.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=answer):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": [], "structured_messages": [original_row]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == [returned_row]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "structured_messages",
         [[], [{"content": "a row with no role"}], "not a list"],

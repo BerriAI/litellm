@@ -623,6 +623,11 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+_RESEND_ON_CONNECT_ERROR: Final[tuple[type[httpx.TransportError], ...]] = (httpx.ConnectError,)
+_RESEND_ON_DISCONNECT: Final[tuple[type[httpx.TransportError], ...]] = (httpx.ConnectError, httpx.RemoteProtocolError)
+_RESEND_IDEMPOTENT_ON: Final[tuple[type[httpx.TransportError], ...]] = (httpx.NetworkError, httpx.RemoteProtocolError)
+
+
 class _ClosesClientWithStream(httpx.AsyncByteStream):
     """The body of a streamed resend reads through the client that sent it, so that client closes with the body."""
 
@@ -866,17 +871,9 @@ class AsyncHTTPHandler:
             content=request_content,
         )
         try:
-            response: Final = await self.client.send(req, stream=stream)
-            if stream:
-                _anchor_handler_to(response, self)
-            response.raise_for_status()
-            return response
-        except httpx.ConnectError:
-            return await self._resend_on_fresh_client(req, stream=stream)
-        except httpx.RemoteProtocolError:
-            if not idempotent:
-                raise
-            return await self._resend_on_fresh_client(req, stream=stream)
+            return await self._send_resending_once_on(
+                req, _RESEND_IDEMPOTENT_ON if idempotent else _RESEND_ON_CONNECT_ERROR, stream=stream
+            )
         except httpx.TimeoutException as e:
             end_time: Final = time.time()
             time_delta: Final = round(end_time - start_time, 3)
@@ -927,11 +924,9 @@ class AsyncHTTPHandler:
             content=request_content,
         )
         try:
-            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
-            response.raise_for_status()
-            return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            return await self._resend_on_fresh_client(req, stream=stream, follow_redirects=_follow_redirects)
+            return await self._send_resending_once_on(
+                req, _RESEND_ON_DISCONNECT, stream=stream, follow_redirects=_follow_redirects
+            )
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -978,11 +973,7 @@ class AsyncHTTPHandler:
             content=request_content,
         )
         try:
-            response: Final = await self.client.send(req)
-            response.raise_for_status()
-            return response
-        except httpx.ConnectError:
-            return await self._resend_on_fresh_client(req, stream=stream)
+            return await self._send_resending_once_on(req, _RESEND_ON_CONNECT_ERROR, stream=stream)
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -1029,17 +1020,28 @@ class AsyncHTTPHandler:
             content=request_content,
         )
         try:
-            response: Final = await self.client.send(req, stream=stream)
-            if stream:
-                _anchor_handler_to(response, self)
-            response.raise_for_status()
-            return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            return await self._resend_on_fresh_client(req, stream=stream)
+            return await self._send_resending_once_on(req, _RESEND_ON_DISCONNECT, stream=stream)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
+
+    async def _send_resending_once_on(
+        self,
+        request: httpx.Request,
+        resend_on: tuple[type[httpx.TransportError], ...],
+        *,
+        stream: bool,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+    ) -> httpx.Response:
+        try:
+            response: Final = await self.client.send(request, stream=stream, follow_redirects=follow_redirects)
+        except resend_on:
+            return await self._resend_on_fresh_client(request, stream=stream, follow_redirects=follow_redirects)
+        if stream:
+            _anchor_handler_to(response, self)
+        response.raise_for_status()
+        return response
 
     async def _resend_on_fresh_client(
         self,
@@ -1050,8 +1052,7 @@ class AsyncHTTPHandler:
     ) -> httpx.Response:
         """Resend a request whose pooled connection broke, on a client with a pool of its own.
 
-        A streamed response holds that client open until the response is closed, and a status
-        error is masked the same way the first attempt's is.
+        A streamed response holds that client open until the response is closed.
         """
         client: Final = self.create_client(
             timeout=self.timeout, event_hooks=self.event_hooks, ssl_verify=self.ssl_verify
@@ -1065,10 +1066,7 @@ class AsyncHTTPHandler:
             response.stream = _ClosesClientWithStream(response.stream, client)
         else:
             await client.aclose()
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            await _raise_masked_async_error(e, stream)
+        response.raise_for_status()
         return response
 
     async def single_connection_request(

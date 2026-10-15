@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -38,6 +40,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "generic_guardrail_api"
+_CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
+_SENT_ROW: Final = TypeAdapter(Mapping[str, object])
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -150,18 +155,51 @@ def _extract_inbound_headers(
     return None
 
 
+def _is_contained_in(part: JsonValue, whole: JsonValue) -> bool:
+    match part, whole:
+        case dict(), dict():
+            return all(key in whole and _is_contained_in(value, whole[key]) for key, value in part.items())
+        case list(), list():
+            return len(part) == len(whole) and all(map(_is_contained_in, part, whole))
+        case _:
+            return part == whole
+
+
+def _is_echo(original: AllMessageValues, returned: AllMessageValues) -> bool:
+    """A server that parses rows with its own message types and echoes them back drops the
+    keys those types do not declare. That is still an echo as long as nothing changed and
+    every key the chat completion types declare is kept."""
+    if returned == original:
+        return True
+    try:
+        sent: Final = _JSON.validate_json(_SENT_ROW.dump_json(original))
+        declared: Final = _JSON.validate_json(
+            _CHAT_ROW.dump_json(_CHAT_ROW.validate_python(original), warnings="error")
+        )
+        echoed: Final = _JSON.validate_python(returned)
+    except (ValidationError, PydanticSerializationError):
+        return False
+    return _is_contained_in(echoed, sent) and _is_contained_in(declared, echoed)
+
+
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...] | None:
-    """A server that echoes every row back unchanged has not rewritten anything
-    per row, so its answer is read from texts, as it was before rows could be
-    returned at all."""
+    """A row the server echoes back is restored to the original row object. A server
+    that echoes every row back has not rewritten anything per row, so its answer is
+    read from texts, as it was before rows could be returned at all."""
     if original_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == original for original, returned in zip(original_rows, returned_rows)):
+    echoed: Final = tuple(
+        _is_echo(original, returned) for original, returned in zip(original_rows, returned_rows, strict=True)
+    )
+    if all(echoed):
         return None
-    return tuple(returned_rows)
+    return tuple(
+        original if is_echo else returned
+        for original, returned, is_echo in zip(original_rows, returned_rows, echoed, strict=True)
+    )
 
 
 class GenericGuardrailAPI(CustomGuardrail):

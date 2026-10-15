@@ -56,7 +56,7 @@ AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     aiohttp.ClientOSError: httpx.ReadError,
     aiohttp.ClientPayloadError: httpx.ReadError,
     # Connection disconnection exceptions
-    aiohttp.ServerDisconnectedError: httpx.RemoteProtocolError,
+    aiohttp.ServerDisconnectedError: httpx.ReadError,
     # Response related exceptions
     aiohttp.ClientConnectionError: httpx.NetworkError,
     aiohttp.ClientPayloadError: httpx.ReadError,
@@ -123,7 +123,7 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             if "Connection closed" not in str(e):
                 raise
             raise httpx.ReadError(str(e)) from e
-        except (aiohttp.http_exceptions.TransferEncodingError, aiohttp.ServerDisconnectedError) as e:
+        except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
         except Exception:
             # For other exceptions, use the normal mapping
