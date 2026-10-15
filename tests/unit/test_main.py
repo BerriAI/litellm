@@ -8787,6 +8787,32 @@ def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
     assert "thinking" not in sent
 
 
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_an_explicit_reasoning_effort_replaces_a_thinking_budget_the_provider_cannot_read(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, model, "medium", _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == "high"
+    assert "thinking" not in sent
+
+
+def test_an_explicit_reasoning_effort_keeps_the_thinking_a_claude_deployment_reads(
+    respx_mock: respx.MockRouter,
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    declared: Final = _anthropic_chat_body_sent(
+        respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, reasoning_effort="medium", thinking=budget
+    )
+    undeclared: Final = _anthropic_chat_body_sent(respx_mock, None, reasoning_effort="medium", thinking=budget)
+
+    assert "thinking" in undeclared
+    assert declared["thinking"] == undeclared["thinking"]
+
+
 @pytest.mark.parametrize("declared", [["none"], []])
 def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_not_declare(
     respx_mock: respx.MockRouter, declared: list[str]

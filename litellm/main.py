@@ -135,6 +135,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     adaptive_thinking_beside_effort,
     deployment_rounds_thinking_budget,
     model_group_from_metadata,
+    provider_reads_thinking,
     reasoning_effort_needs_allowing,
     resolve_deployment_reasoning_effort,
     thinking_budget_effort,
@@ -5516,14 +5517,20 @@ def completion(
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
+        thinking_rounds_onto_levels: Final = thinking is not None and deployment_rounds_thinking_budget(
+            routing_kwargs.get("model_info"), custom_llm_provider
+        )
         thinking_effort: Final = (
             thinking_budget_effort(
                 thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_unsupported_reasoning
             )
-            if reasoning_effort is None
-            and thinking is not None
-            and deployment_rounds_thinking_budget(routing_kwargs.get("model_info"), custom_llm_provider)
+            if reasoning_effort is None and thinking_rounds_onto_levels
             else None
+        )
+        explicit_effort_replaces_thinking: Final = (
+            reasoning_effort is not None
+            and thinking_rounds_onto_levels
+            and not provider_reads_thinking(thinking, model=model, custom_llm_provider=custom_llm_provider)
         )
         deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
             reasoning_effort if reasoning_effort is not None else thinking_effort,
@@ -5697,7 +5704,9 @@ def completion(
             "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
             "thinking": (
-                thinking
+                None
+                if explicit_effort_replaces_thinking
+                else thinking
                 if thinking_effort is None
                 else adaptive_thinking_beside_effort(
                     thinking, resolved_reasoning_effort, model=model, custom_llm_provider=custom_llm_provider

@@ -201,6 +201,16 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
     return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
 
 
+def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str) -> bool:
+    if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
+        return False
+    if "output_config" in with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+    ):
+        return True
+    return "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ())
+
+
 def adaptive_thinking_beside_effort(
     thinking: AnthropicThinkingParam | None, effort: object, *, model: str, custom_llm_provider: str
 ) -> AnthropicThinkingParam | None:
