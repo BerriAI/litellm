@@ -20,6 +20,7 @@ from integration.routing._reasoning_effort_levels_support import (
     CLAUDE_LEVELS,
     KIMI_LEVELS,
     answer,
+    body_of,
     chat_request,
     deployment,
     marker_of,
@@ -331,3 +332,33 @@ def test_yaml_global_rounding_yields_to_a_deployment_override_and_logs_each_rema
         "reasoning_effort medium sent as high (rounding up)" in line and "kimi-override" in line for line in remaps
     ), remaps
     assert not any(line.lstrip().startswith("reasoning_effort high sent as forged") for line in remaps), remaps
+
+
+def test_yaml_global_drop_params_drops_a_malformed_budget_on_messages_to_every_non_claude_bridge(
+    tmp_path: Path,
+) -> None:
+    targets: Final = MappingProxyType(
+        {"fireworks_ai": "kimi-fireworks", "openai": "gpt-responses", "azure_ai": "kimi-azure"}
+    )
+    markers: Final = MappingProxyType({name: new_marker() for name in targets.values()})
+    with wire_server(provider_reply) as wire:
+        model_list: Final = tuple(yaml_deployment(name, kind, wire.url, {}) for kind, name in targets.items())
+        with _owned_proxy(tmp_path, model_list, {"drop_params": True}) as owned:
+            responses: Final = MappingProxyType(
+                {
+                    name: owned.gateway.request(
+                        "POST",
+                        "/v1/messages",
+                        messages_request(name, markers[name], thinking={"type": "enabled", "budget_tokens": "2048"}),
+                    )
+                    for name in targets.values()
+                }
+            )
+        received: Final = MappingProxyType({marker_of(request): body_of(request) for request in wire.drain()})
+    assert {name: response.status_code for name, response in responses.items()} == dict.fromkeys(
+        targets.values(), 200
+    ), {name: response.text for name, response in responses.items()}
+    assert sorted(received) == sorted(markers.values())
+    assert [
+        sorted(set(received[marker]) & {"thinking", "reasoning_effort", "reasoning"}) for marker in markers.values()
+    ] == [[], [], []], received

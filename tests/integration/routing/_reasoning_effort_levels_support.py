@@ -193,6 +193,11 @@ def backend(kind: str, wire_url: str) -> Backend:
             return Backend(f"mistral/{GLM}", MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY}))
         case "openai":
             return Backend(f"openai/{GPT}", MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY}))
+        case "openai_drop_params":
+            return Backend(
+                f"openai/{GPT}",
+                MappingProxyType({"api_base": f"{wire_url}/v1", "api_key": SYNTHETIC_KEY, "drop_params": True}),
+            )
         case "azure":
             return Backend(
                 f"azure/{GPT}",

@@ -327,6 +327,49 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
         "chat-azure_ai-int-effort-400": Cell(
             CHAT, "azure_ai", _KIMI_INFO, {"reasoning_effort": 5}, None, _AZURE_AI_CHAT, status=400, error=_UNSUPPORTED
         ),
+        "chat-azure_ai-explicit-effort-wins-over-budget-thinking": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"reasoning_effort": "xhigh", "thinking": _BUDGET},
+            _openai_compatible("max"),
+            _AZURE_AI_CHAT,
+        ),
+        "chat-azure_ai-explicit-effort-wins-over-string-budget-thinking": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"reasoning_effort": "xhigh", "thinking": _STRING_BUDGET},
+            _openai_compatible("max"),
+            _AZURE_AI_CHAT,
+        ),
+        "chat-azure_ai-explicit-effort-wins-over-adaptive-thinking": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"reasoning_effort": "xhigh", "thinking": _ADAPTIVE},
+            _openai_compatible("max"),
+            _AZURE_AI_CHAT,
+        ),
+        "chat-azure_ai-stream-explicit-effort-wins-over-budget-thinking": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"reasoning_effort": "xhigh", "thinking": _BUDGET, "stream": True},
+            _openai_compatible("max", stream=True),
+            _AZURE_AI_CHAT,
+            stream=True,
+        ),
+        "chat-azure_ai-undeclared-explicit-effort-beside-budget-400": Cell(
+            CHAT,
+            "azure_ai",
+            _UNDECLARED,
+            {"reasoning_effort": "xhigh", "thinking": _BUDGET},
+            None,
+            _AZURE_AI_CHAT,
+            status=400,
+            error=_UNSUPPORTED,
+        ),
         "chat-vllm-medium-to-high": Cell(
             CHAT, "hosted_vllm", _KIMI_INFO, {"reasoning_effort": "medium"}, _openai_compatible("high"), _VLLM_CHAT
         ),
@@ -1311,6 +1354,17 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             "openai",
             _UNDECLARED,
             {"thinking": _STRING_BUDGET, "drop_params": True},
+            _responses_bridged_messages_without_effort(),
+            _OPENAI_RESPONSES,
+        ),
+        "messages-openai-bool-budget-400": Cell(
+            MESSAGES, "openai", _UNDECLARED, {"thinking": _BOOL_BUDGET}, None, _OPENAI_RESPONSES, 400, "thinking"
+        ),
+        "messages-openai-string-budget-deployment-drop-params": Cell(
+            MESSAGES,
+            "openai_drop_params",
+            _UNDECLARED,
+            {"thinking": _STRING_BUDGET},
             _responses_bridged_messages_without_effort(),
             _OPENAI_RESPONSES,
         ),
