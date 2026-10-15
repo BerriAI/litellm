@@ -186,6 +186,37 @@ async def test_fetch_signs_eddsa_client_assertion_for_ed25519_key():
 
 
 @pytest.mark.asyncio
+async def test_fetch_signs_hs256_client_assertion_for_stored_shared_secret():
+    """Read-side grace for symmetric HS*: a pre-allowlist row with an HMAC secret in
+    client_private_key keeps producing a valid client_secret_jwt-style assertion."""
+    secret = "integration-hs256-client-secret-0123456789abcdef"
+    client = _client(_resp())
+    with patch(_PATCH_TARGET, return_value=client):
+        await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            PrivateKeyJwtAuth(
+                private_key=SecretStr(secret),
+                key_id="sym-kid",
+                signing_alg="HS256",
+            ),
+        )
+
+    data = _posted_data(client)
+    assert data["client_assertion_type"] == CLIENT_ASSERTION_TYPE
+    assert jwt.get_unverified_header(data["client_assertion"])["alg"] == "HS256"
+    decoded = jwt.decode(
+        data["client_assertion"],
+        secret,
+        algorithms=["HS256"],
+        audience=_ENDPOINT,
+    )
+    assert decoded["iss"] == _CLIENT_ID
+    assert decoded["sub"] == _CLIENT_ID
+
+
+@pytest.mark.asyncio
 async def test_fetch_http_error_maps_to_upstream_unavailable_with_status():
     error_resp = MagicMock()
     error_resp.status_code = 403

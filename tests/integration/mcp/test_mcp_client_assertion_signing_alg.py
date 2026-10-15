@@ -95,7 +95,8 @@ def test_approved_client_assertion_signing_alg_round_trips(gateway: Gateway) -> 
 
 def test_server_row_with_stale_client_assertion_signing_alg_still_loads(gateway: Gateway) -> None:
     """A row persisted before the allowlist (credentials.client_assertion_signing_alg = "HS256")
-    must keep loading with the RS256 fallback instead of disappearing on upgrade."""
+    must keep loading on upgrade instead of disappearing; outside FIPS mode its stored value is
+    honoured under read-side grace (write-side requests still refuse HS*)."""
     identity: Final = "stalealg" + uuid.uuid4().hex[:8]
     with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
         connection.execute(

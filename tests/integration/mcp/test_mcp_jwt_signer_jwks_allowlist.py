@@ -116,10 +116,15 @@ def _call_with_bearer(
     )
 
 
-@pytest.mark.parametrize("key_and_token", (_hs256_key_and_token, _eddsa_key_and_token), ids=("oct-HS256", "OKP-EdDSA"))
+@pytest.mark.parametrize("key_and_token", (_hs256_key_and_token,), ids=("oct-HS256",))
 def test_jwks_key_with_non_approved_alg_cannot_verify_the_incoming_token(
     signer_gateway: Gateway, key_and_token: Callable[[], tuple[dict[str, object], str]]
 ) -> None:
+    """HS256 is never allowed: the JWKS filter drops oct keys in every mode, so the call 401s.
+
+    (EdDSA is the legacy exception — accepted outside FIPS mode; see the test below. The
+    FIPS-on refusal is pinned at the unit level, where LITELLM_FIPS_MODE can be flipped
+    without the boot-time FIPS runtime checks refusing a non-FIPS OpenSSL.)"""
     jwks_key, token = key_and_token()
     with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
         with mcp_peer() as peer, signer_gateway.scenario() as scenario:
@@ -132,6 +137,23 @@ def test_jwks_key_with_non_approved_alg_cannot_verify_the_incoming_token(
             assert response.status_code == 401, response.text
             assert "incoming token verification failed" in response.text, response.text
             assert tool_calls(peer.drain()) == (), "rejected call reached the peer"
+
+
+def test_jwks_eddsa_key_verifies_the_incoming_token_outside_fips_mode(signer_gateway: Gateway) -> None:
+    """Legacy read-side grace mirroring handle_jwt: the integration proxy runs with
+    LITELLM_FIPS_MODE unset, so an OKP/Ed25519-only IdP still verifies instead of 401ing."""
+    jwks_key, token = _eddsa_key_and_token()
+    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
+        with mcp_peer() as peer, signer_gateway.scenario() as scenario:
+            alias: Final = "jwksed" + uuid.uuid4().hex[:8]
+            identity: Final = register_mcp(scenario, peer, alias)
+            key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+            name: Final = tool_names(signer_gateway, key, identity)["add"]
+            peer.drain()
+            response: Final = _call_with_bearer(signer_gateway, key, identity, name, {"a": 4, "b": 5}, token)
+            assert response.status_code == 200, response.text
+            assert response.json()["content"][0]["text"] == "9", response.text
+            assert len(tool_calls(peer.drain())) == 1, "accepted call never reached the peer"
 
 
 def test_jwks_rs256_key_still_verifies_the_incoming_token(signer_gateway: Gateway) -> None:

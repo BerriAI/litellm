@@ -229,6 +229,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
 from litellm.types.proxy.auth.jwt_algorithms import (
     APPROVED_JWT_ALGORITHMS,
     LEGACY_JWT_ALGORITHMS,
+    SYMMETRIC_JWT_ALGORITHMS,
     StoredJwtAlgorithm,
 )
 from litellm.types.utils import CallTypes
@@ -1630,6 +1631,30 @@ def _stored_client_assertion_signing_alg(value: object, server_name: str) -> Sto
             "MCP server %s: client_assertion_signing_alg %r is legacy and not approved for signing; the "
             "stored client_private_key cannot sign the RS256 fallback, so token exchange will fail until "
             "the key is rotated to RSA or EC (see APPROVED_JWT_ALGORITHMS)",
+            server_name,
+            value,
+        )
+        return "RS256"
+    if isinstance(value, str) and value in SYMMETRIC_JWT_ALGORITHMS:
+        # Symmetric HS*: pre-allowlist a stored HS* with a shared secret in client_private_key
+        # produced a working client_secret_jwt-style assertion, so this is a working legacy
+        # config, not a typo. The same FIPS-gated grace applies — honoured outside FIPS so the
+        # secret keeps signing, refused inside FIPS where the RS256 fallback (which an HMAC
+        # secret cannot sign) fails the exchange loudly until the server is reconfigured.
+        if not is_fips_mode():
+            verbose_logger.warning(
+                "MCP server %s: client_assertion_signing_alg %r is symmetric and not FIPS 140-3 approved; "
+                "accepted outside FIPS mode, so the stored shared secret keeps signing; rotate to an approved "
+                "RSA/EC key (see APPROVED_JWT_ALGORITHMS) — non-approved algorithm support ends in the next "
+                "major release",
+                server_name,
+                value,
+            )
+            return value
+        verbose_logger.warning(
+            "MCP server %s: client_assertion_signing_alg %r is not approved for signing; the stored shared "
+            "secret cannot sign the RS256 fallback, so token exchange will fail until the server is "
+            "reconfigured with an approved RSA/EC key (see APPROVED_JWT_ALGORITHMS)",
             server_name,
             value,
         )

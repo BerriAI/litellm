@@ -20,6 +20,12 @@ LegacyJwtAlgorithm: TypeAlias = Literal["EdDSA"]
 
 LEGACY_JWT_ALGORITHMS: Final[tuple[LegacyJwtAlgorithm, ...]] = ("EdDSA",)
 
-StoredJwtAlgorithm: TypeAlias = ApprovedJwtAlgorithm | LegacyJwtAlgorithm
-"""A value read back from stored/declared config: approved, or legacy EdDSA carried under
-read-side grace outside FIPS mode (write-side validation stays approved-only)."""
+SymmetricJwtAlgorithm: TypeAlias = Literal["HS256", "HS384", "HS512"]
+
+SYMMETRIC_JWT_ALGORITHMS: Final[tuple[SymmetricJwtAlgorithm, ...]] = ("HS256", "HS384", "HS512")
+
+StoredJwtAlgorithm: TypeAlias = ApprovedJwtAlgorithm | LegacyJwtAlgorithm | SymmetricJwtAlgorithm
+"""A value read back from stored/declared config: approved, or a not-approved value (legacy
+EdDSA, symmetric HS*) carried under FIPS-gated read-side grace so a pre-allowlist row keeps
+signing outside FIPS mode. Write-side validation and the verification-side allowlists stay
+approved-only (plus EdDSA outside FIPS); nothing here widens them."""

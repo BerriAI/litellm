@@ -17819,14 +17819,36 @@ class TestSharedIdentifierPrefixWarning:
         assert "'shared'" in shared_warnings[0]
 
 
-def test_stored_client_assertion_signing_alg_falls_back_to_rs256_for_non_approved(caplog):
+def test_stored_client_assertion_signing_alg_falls_back_to_rs256_for_non_approved(monkeypatch, caplog):
+    """FIPS on (and for unrecognized garbage in any mode): the RS256 fallback with a warning —
+    a value nothing can sign stays refused rather than silently running."""
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _stored_client_assertion_signing_alg,
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         assert _stored_client_assertion_signing_alg("HS256", "srv") == "RS256"
+        assert _stored_client_assertion_signing_alg("bogus", "srv") == "RS256"
     assert "client_assertion_signing_alg" in caplog.text and "HS256" in caplog.text and "srv" in caplog.text
+
+
+def test_stored_client_assertion_signing_alg_keeps_hs256_outside_fips_mode(monkeypatch, caplog):
+    """FIPS off: a stored symmetric HS* value passes through verbatim. Pre-allowlist a stored
+    HS256 with a shared secret in client_private_key produced a working client_secret_jwt-style
+    assertion; coercing it to RS256 guarantees failure since an HMAC secret cannot sign RSA, so
+    read-side grace keeps it signing outside FIPS (write-side still refuses HS*)."""
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _stored_client_assertion_signing_alg,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert _stored_client_assertion_signing_alg("HS256", "srv") == "HS256"
+    assert "HS256" in caplog.text and "srv" in caplog.text
+    assert "rotate" in caplog.text.lower()
+    # Unrecognized garbage never gains grace in either mode.
+    assert _stored_client_assertion_signing_alg("bogus", "srv") == "RS256"
 
 
 def test_stored_client_assertion_signing_alg_warns_eddsa_key_cannot_sign_fallback(monkeypatch, caplog):
@@ -17873,9 +17895,10 @@ def test_stored_client_assertion_signing_alg_passes_through_approved(caplog):
 
 
 def test_mcp_server_model_rejects_non_approved_client_assertion_signing_alg():
-    """The runtime (read-side) model still refuses non-legacy garbage; the legacy EdDSA value is
-    admitted read-side (widened via LEGACY_JWT_ALGORITHMS) while the write-side request
-    validators in litellm.proxy._types stay strict and 422 it (see test__types.py)."""
+    """The runtime (read-side) model still refuses unrecognized garbage; the legacy EdDSA and
+    symmetric HS* values are admitted read-side (widened via StoredJwtAlgorithm, FIPS-gated in
+    mcp_server_manager._stored_client_assertion_signing_alg) while the write-side request
+    validators in litellm.proxy._types stay strict and 422 them (see test__types.py)."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc:
@@ -17883,17 +17906,18 @@ def test_mcp_server_model_rejects_non_approved_client_assertion_signing_alg():
             server_id="srv",
             name="srv",
             transport="http",
-            client_assertion_signing_alg="HS256",
+            client_assertion_signing_alg="bogus",
         )
     assert "client_assertion_signing_alg" in str(exc.value)
 
-    server = MCPServer(
-        server_id="srv",
-        name="srv",
-        transport="http",
-        client_assertion_signing_alg="EdDSA",
-    )
-    assert server.client_assertion_signing_alg == "EdDSA"
+    for stored in ("EdDSA", "HS256"):
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport="http",
+            client_assertion_signing_alg=stored,
+        )
+        assert server.client_assertion_signing_alg == stored
 
 
 @pytest.mark.asyncio

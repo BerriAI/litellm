@@ -495,10 +495,6 @@ class MCPJWTSigner(CustomGuardrail):
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
         # it infers from the key type (RSAPublicKey → RS256).
         alg: Final = getattr(signing_jwk, "algorithm_name", None) or "RS256"
-        if alg == "EdDSA":
-            # Only reachable outside FIPS mode (inside it the filter above drops EdDSA keys);
-            # same once-per-process deprecation notice the main JWT entrance emits.
-            _log_eddsa_deprecation()
 
         decode_options: Final[Options] = {"verify_exp": True}
         decode_kwargs: Final[_JWTDecodeKwargs] = {
@@ -514,6 +510,11 @@ class MCPJWTSigner(CustomGuardrail):
             decode_kwargs["issuer"] = self.verify_issuer
 
         payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
+        if alg == "EdDSA":
+            # Only reachable outside FIPS mode (inside it the filter above drops EdDSA keys) and
+            # only after the signature verified — same once-per-process deprecation notice the
+            # main JWT entrance emits after its own successful decode.
+            _log_eddsa_deprecation()
         return payload
 
     async def _introspect_opaque_token(self, token: str) -> dict[str, object]:
