@@ -369,6 +369,7 @@ USER_RESOLVER = EntityScopeResolver(
             "aggregated": "get_user_daily_activity_aggregated",
             "search": "get_user_daily_activity_aggregated_search",
             "key_page": "get_user_daily_activity_aggregated_keys",
+            "user_page": "get_user_daily_activity_aggregated_users",
             "model_top_keys": "get_user_daily_activity_model_top_keys",
             "export": "get_user_daily_activity_export",
             "cache_leakage_keys": "get_user_daily_activity_cache_leakage_keys",

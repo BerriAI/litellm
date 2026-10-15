@@ -22,6 +22,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     cache_scope,
     count_cache_plan,
     count_prompt_tokens,
+    lookup,
     parse_cache_plan,
     parse_observed_cache,
     parse_prompt,
@@ -32,7 +33,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.credentials import CredentialItem
 from litellm.proxy import proxy_server
-from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver, lookup
+from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver
 from litellm.proxy.management_endpoints.prompt_cache_prediction import predict_arm
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo

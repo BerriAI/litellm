@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -37,8 +38,10 @@ from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -114,7 +117,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -140,6 +146,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
+    check_require_trace_id_caller_permission,
     member_budget_patch,
     set_object_metadata_field,
     team_member_has_permission,
@@ -157,10 +164,16 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_MEMBER_DEFAULT_FIELDS,
+    TeamMemberDefaults,
     resolve_team_admin_editable_fields,
+    stored_team_member_budget_id,
     team_admin_edit_verdict,
+    team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
+    team_member_defaults,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
@@ -226,7 +239,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamUserSpendRow,
     UpdateTeamMemberPermissionsRequest,
 )
-from litellm.types.utils import BudgetConfig
+from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -365,8 +378,9 @@ class _TeamIdWhere(TypedDict):
     team_id: ReadOnly[str]
 
 
-class _TeamIdAndBudgetWhere(_TeamIdWhere):
+class _TeamBudgetGuardWhere(_TeamIdWhere):
     max_budget: ReadOnly[float | None]
+    organization_id: ReadOnly[str | None]
 
 
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
@@ -469,7 +483,7 @@ async def refresh_cached_team(
     proxy_logging_obj: ProxyLogging,
 ) -> None:
     """
-    Refresh the in-memory cached team object after a DB write.
+    Refresh the cached team object after a DB write and broadcast invalidations to other instances.
 
     Every endpoint that mutates `litellm_teamtable` must call this so the
     cached `LiteLLM_TeamTableCachedObj` used by `common_checks` stays in
@@ -482,12 +496,19 @@ async def refresh_cached_team(
     via `model_dump()` to match the cache shape `_cache_team_object`
     expects.
     """
+    team_table: Final = LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump())
     await cache_team_object(
         team_id=team_row.team_id,
-        team_table=LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump()),
+        team_table=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    batches: Final = active_request_redis_batches()
+    if batches is not None:
+        await batches.flush_all()
+    await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
+    if team_table.team_alias is not None:
+        await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -513,7 +534,13 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             )
             if not permitted:
                 return TeamEditAsTeamAdminDisabled()
-            return TeamEditAsTeamAdmin(editable_fields=tuple(sorted(permitted)))
+            return TeamEditAsTeamAdmin(
+                editable_fields=tuple(sorted(permitted)),
+                may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+                proxy_controlled_metadata_keys=(
+                    tuple(sorted(PROXY_CONTROLLED_TEAM_METADATA_KEYS)) if "metadata" in permitted else ()
+                ),
+            )
         case None:
             return TeamEditNone()
         case _:
@@ -541,6 +568,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_max_budget: GenericBudgetConfigType | None = None,
     ) -> bool:
         """Check if any team member limits are provided"""
         return any(
@@ -549,8 +577,21 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
                 team_member_budget_duration is not None,
+                team_member_model_max_budget is not None,
             ]
         )
+
+    @staticmethod
+    @with_service_target("team_member_budgets")
+    async def _evict_default_budget_cache(
+        budget_id: str,
+        user_api_key_cache: UserApiKeyCache | None,
+    ) -> None:
+        if user_api_key_cache is not None:
+            try:
+                await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_id}")
+            except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
+                verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
 
     @staticmethod
     async def create_team_member_budget_table(
@@ -561,6 +602,8 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_max_budget: GenericBudgetConfigType | None = None,
+        user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
         """Create team member budget table with provided limits.
@@ -596,10 +639,16 @@ class TeamMemberBudgetHandler:
             budget_request.tpm_limit = team_member_tpm_limit
         if team_member_budget_duration is not None:
             budget_request.budget_duration = team_member_budget_duration
+        if team_member_model_max_budget is not None:
+            budget_request.model_max_budget = team_member_model_max_budget
 
         team_member_budget_table: Final = await _as_budget_write(new_budget)(
             budget_obj=budget_request,
             user_api_key_dict=user_api_key_dict,
+        )
+        await TeamMemberBudgetHandler._evict_default_budget_cache(
+            budget_id=team_member_budget_table.budget_id,
+            user_api_key_cache=user_api_key_cache,
         )
 
         # Add team_member_budget_id as metadata field to team table
@@ -621,6 +670,8 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_max_budget: GenericBudgetConfigType | None = None,
+        user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
         """Upsert team member budget table with provided limits.
@@ -651,10 +702,18 @@ class TeamMemberBudgetHandler:
                 budget_request.budget_duration = team_member_budget_duration
                 if team_member_budget_duration is None:
                     budget_request.budget_reset_at = None
+            if team_member_model_max_budget is not None or "team_member_model_max_budget" in explicitly_set_fields:
+                budget_request.model_max_budget = (
+                    {} if team_member_model_max_budget is None else team_member_model_max_budget
+                )
 
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
+            )
+            await TeamMemberBudgetHandler._evict_default_budget_cache(
+                budget_id=team_member_budget_id,
+                user_api_key_cache=user_api_key_cache,
             )
             verbose_proxy_logger.info(
                 "Updated team member budget table: %s, with team_member_budget=%s, team_member_rpm_limit=%s, team_member_tpm_limit=%s",
@@ -676,6 +735,8 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                team_member_model_max_budget=team_member_model_max_budget,
+                user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=explicitly_set_fields,
             )
 
@@ -690,6 +751,9 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
+        data_dict.pop(  # pyright: ignore[reportUnknownMemberType]  # legacy raw dict lacks key typing
+            "team_member_model_max_budget", None
+        )
 
     _clean_team_member_fields = clean_team_member_fields
 
@@ -699,6 +763,7 @@ class TeamMemberBudgetHandler:
         user_api_key_dict: "UserAPIKeyAuth",
         updated_kv: dict,
         explicitly_set_fields: set,
+        user_api_key_cache: UserApiKeyCache | None = None,
     ) -> dict:
         """Clear explicitly-nulled fields on the team member budget row."""
         from litellm.proxy._types import BudgetNewRequest
@@ -721,9 +786,15 @@ class TeamMemberBudgetHandler:
                 budget_request.rpm_limit = None
             if "team_member_tpm_limit" in explicitly_set_fields:
                 budget_request.tpm_limit = None
+            if "team_member_model_max_budget" in explicitly_set_fields:
+                budget_request.model_max_budget = {}
             await update_budget(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
+            )
+            await TeamMemberBudgetHandler._evict_default_budget_cache(
+                budget_id=team_member_budget_id,
+                user_api_key_cache=user_api_key_cache,
             )
 
         TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
@@ -1197,34 +1268,44 @@ async def _check_user_team_limits(
 
 @dataclass(frozen=True, slots=True)
 class _MaxBudgetGuard:
-    """The team write only lands while the stored max_budget still equals `expected`."""
+    """The team write only lands while the stored max_budget and organization_id still match what the check read."""
 
-    expected: float | None
+    max_budget: float | None
+    organization_id: str | None
 
 
 def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_team_max_budget: float | None,
+    existing_team_organization_id: str | None,
+    may_raise: bool,
 ) -> _MaxBudgetGuard | None:
     """
     Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin may keep or lower the team budget, but only a proxy admin may
-    grow it - by raising max_budget above the team's current value or by
-    removing the cap (setting it to None). Setting a finite budget on a team
-    that has no cap is a restriction and is allowed. Org admins editing
+    A team admin may keep or lower the team budget. Raising max_budget above the
+    team's current value also needs `may_raise`, which a proxy admin grants via
+    the `raise_max_budget` entry of team_admin_editable_team_fields; the org cap
+    _check_org_team_limits() enforces before this still applies. Removing the cap
+    (setting it to None) stays with the proxy admin. Setting a finite budget on a
+    team that has no cap is a restriction and is allowed. Org admins editing
     org-scoped teams are governed by _check_org_team_limits() instead.
 
-    The verdict holds only for the budget it was checked against, so a restricted
-    caller's budget write gets a guard; without it, a concurrent budget cut could
-    be overwritten with a higher value.
+    The verdict holds only for the budget and organization it was checked against,
+    so a restricted caller's budget write gets a guard; without it, a concurrent
+    budget cut could be overwritten with a higher value, and a concurrent move into
+    a budgeted organization could let the write exceed that organization's cap.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return None
 
     budget_explicitly_set: Final = "max_budget" in (getattr(data, "model_fields_set", None) or set())
-    guard: Final = _MaxBudgetGuard(expected=existing_team_max_budget) if budget_explicitly_set else None
+    guard: Final = (
+        _MaxBudgetGuard(max_budget=existing_team_max_budget, organization_id=existing_team_organization_id)
+        if budget_explicitly_set
+        else None
+    )
     if existing_team_max_budget is None:
         return guard
 
@@ -1236,7 +1317,7 @@ def _check_team_budget_update_authority(
             },
         )
 
-    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
+    if data.max_budget is not None and data.max_budget > existing_team_max_budget and not may_raise:
         raise HTTPException(
             status_code=403,
             detail={
@@ -1266,11 +1347,15 @@ async def _write_team_update(
     by_id: Final[_TeamIdWhere] = {"team_id": team_id}
     if max_budget_guard is None:
         return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
-    by_id_and_budget: Final[_TeamIdAndBudgetWhere] = {"team_id": team_id, "max_budget": max_budget_guard.expected}
-    written: Final = await _team_db(prisma_client).update_many(where=by_id_and_budget, data=team_update_data)
+    as_checked: Final[_TeamBudgetGuardWhere] = {
+        "team_id": team_id,
+        "max_budget": max_budget_guard.max_budget,
+        "organization_id": max_budget_guard.organization_id,
+    }
+    written: Final = await _team_db(prisma_client).update_many(where=as_checked, data=team_update_data)
     if written == 0:
         conflict: Final[_ErrorDetail] = {
-            "error": "The team's max_budget changed during this update. Reload the team and try again."
+            "error": "The team's organization or max_budget changed during this update. Reload the team and try again."
         }
         raise HTTPException(status_code=409, detail=conflict)
     return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
@@ -1396,9 +1481,11 @@ async def new_team(
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+    - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -1487,6 +1574,10 @@ async def new_team(
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
+        validate_team_model_max_budget(
+            model_max_budget=data.team_member_model_max_budget,
+            premium_user=premium_user,
+        )
 
         if data.soft_budget is not None:
             if data.max_budget is not None:
@@ -1624,6 +1715,12 @@ async def new_team(
             user_api_key_dict,
             entity="team",
         )
+        check_require_trace_id_caller_permission(
+            data.require_trace_id,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            metadata_sent="metadata" in data.model_fields_set,
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -1675,6 +1772,7 @@ async def new_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_model_max_budget=data.team_member_model_max_budget,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
@@ -1684,6 +1782,8 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_model_max_budget=data.team_member_model_max_budget,
+                user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=data.model_fields_set,
             )
 
@@ -2159,9 +2259,11 @@ async def update_team(
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+    - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -2248,6 +2350,10 @@ async def update_team(
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
+        validate_team_model_max_budget(
+            model_max_budget=data.team_member_model_max_budget,
+            premium_user=premium_user,
+        )
 
         existing_team_row = await _raw_team_db(TeamRepository(prisma_client)).find_unique(
             where={"team_id": data.team_id}
@@ -2268,13 +2374,22 @@ async def update_team(
         if access_role is None:
             team_access_denied()
         if access_role == "team_admin":
+            permitted: Final = resolve_team_admin_editable_fields(
+                _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+            )
+            reads_member_defaults: Final = bool(permitted) and bool(data.model_fields_set & TEAM_MEMBER_DEFAULT_FIELDS)
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
                     data=data,
                     existing=existing_team,
-                    permitted=resolve_team_admin_editable_fields(
-                        _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                    permitted=permitted,
+                    member_defaults=(
+                        await _stored_team_member_defaults(prisma_client, existing_team)
+                        if reads_member_defaults
+                        else None
                     ),
+                    proxy_controlled_metadata_keys=PROXY_CONTROLLED_TEAM_METADATA_KEYS,
+                    declared_metadata_keys=frozenset(field.key for field in TEAM_METADATA_SCHEMA_REGISTRY.get()),
                 )
             )
 
@@ -2310,6 +2425,13 @@ async def update_team(
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             user_api_key_dict,
             entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
+        check_require_trace_id_caller_permission(
+            data.require_trace_id,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
         )
 
@@ -2401,13 +2523,15 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # A team admin never grows its own team's spend ceiling. Org admins grow org-scoped teams
-        # within the org limits _check_org_team_limits() enforced above.
+        # A team admin grows its own team's spend ceiling only when granted raise_max_budget, and then
+        # within the org limits _check_org_team_limits() enforced above. Org admins are governed by those alone.
         max_budget_guard: Final = (
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
+                existing_team_organization_id=existing_team_row.organization_id,
+                may_raise=access_role == "team_admin" and team_admin_may_raise_max_budget(_general_settings()),
             )
             if org_id_to_check is None or access_role == "team_admin"
             else None
@@ -2419,6 +2543,8 @@ async def update_team(
         )
 
         updated_kv = data.json(exclude_unset=True)
+        if updated_kv.get("require_trace_id") is None:
+            updated_kv.pop("require_trace_id", None)
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
             updated_kv["model_max_budget"] = {}
 
@@ -2456,6 +2582,7 @@ async def update_team(
                 "team_member_rpm_limit",
                 "team_member_tpm_limit",
                 "team_member_budget_duration",
+                "team_member_model_max_budget",
             ]
             if field in updated_kv
         }
@@ -2485,6 +2612,7 @@ async def update_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_model_max_budget=data.team_member_model_max_budget,
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
                 team_table=existing_team_row,
@@ -2494,6 +2622,8 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_model_max_budget=data.team_member_model_max_budget,
+                user_api_key_cache=user_api_key_cache,
                 explicitly_set_fields=_team_member_fields_in_request,
             )
             # Backfill team_memberships for members who joined before the
@@ -2517,6 +2647,7 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 updated_kv=updated_kv,
                 explicitly_set_fields=_team_member_fields_in_request,
+                user_api_key_cache=user_api_key_cache,
             )
         else:
             TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
@@ -3827,6 +3958,7 @@ async def team_member_update(
         )
 
     validate_budget_duration(data.budget_duration)
+    validate_team_model_max_budget(data.model_max_budget, premium_user=premium_user)
 
     _existing_team_row: Final = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
 
@@ -3943,6 +4075,7 @@ async def team_member_update(
         allowed_models=data.allowed_models,
         temp_budget_increase=data.temp_budget_increase,
         temp_budget_expiry=data.temp_budget_expiry,
+        model_max_budget=data.model_max_budget,
     )
 
 
@@ -4784,6 +4917,15 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
     )
 
 
+async def _stored_team_member_defaults(
+    prisma_client: PrismaClient, team: LiteLLM_TeamTable
+) -> TeamMemberDefaults | None:
+    budget_id: Final = stored_team_member_budget_id(team)
+    if budget_id is None:
+        return None
+    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id))
+
+
 async def _add_team_member_budget_table(
     team_member_budget_id: str,
     prisma_client: PrismaClient,
@@ -4837,6 +4979,16 @@ def _parent_organization_models(team_row: BaseModel) -> list[str] | None:
     return organization.models if organization is not None else None
 
 
+def _effective_access_group_skill_names(
+    resolved_groups: "Sequence[prisma_models.LiteLLM_AccessGroupTable]", unresolved_ids: Sequence[str]
+) -> tuple[str, ...]:
+    """Skill names the team's keys can actually use: none while a listed group has no row,
+    because the skill check then clamps the team to public plugins (see skill_visibility)."""
+    if unresolved_ids:
+        return ()
+    return tuple(frozenset(chain.from_iterable(group.access_skill_names or () for group in resolved_groups)))
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4848,6 +5000,9 @@ async def _resolve_team_access_group_resources(
     resolved_groups: Final = tuple(
         ag_lookup[ag_id] for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id in ag_lookup
     )
+    unresolved_ids: Final = tuple(
+        ag_id for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id not in ag_lookup
+    )
     return _team_info.model_copy(
         update={
             "access_group_models": list({m for group in resolved_groups for m in (group.access_model_names or [])}),
@@ -4855,6 +5010,8 @@ async def _resolve_team_access_group_resources(
                 {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
+            "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
                     access_group_id=group.access_group_id,
@@ -4862,6 +5019,7 @@ async def _resolve_team_access_group_resources(
                     models=tuple(group.access_model_names or ()),
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
+                    skill_names=tuple(group.access_skill_names or ()),
                 )
                 for group in resolved_groups
             ),
@@ -5514,6 +5672,7 @@ def _convert_teams_to_response_models(
                     **team_dict,
                     members_count=members_count,
                     keys_count=keys_count,
+                    access_group_skill_names=None,
                 )
             )
     return team_list
@@ -5800,6 +5959,9 @@ async def list_team_v2(
                 )
                 team_item.access_group_agent_ids = list(
                     {a for group in team_groups for a in (group.access_agent_ids or [])}
+                )
+                team_item.access_group_skill_names = _effective_access_group_skill_names(
+                    team_groups, tuple(ag_id for ag_id in (team_item.access_group_ids or []) if ag_id not in ag_lookup)
                 )
 
     return {
@@ -6729,8 +6891,6 @@ def aggregated_date_range_error(start_date: str | None, end_date: str | None) ->
     date_range: Final = parse_canonical_date_range(start_date, end_date)
     if isinstance(date_range, InvalidDateRange):
         return date_range.reason
-    if date_range.end < date_range.start:
-        return "end_date must be on or after start_date"
     if (date_range.end - date_range.start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None

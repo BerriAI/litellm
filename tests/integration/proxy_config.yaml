@@ -4,6 +4,11 @@ model_list:
       model: anthropic/claude-haiku-4-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-haiku-5-5
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
   - model_name: anthropic/claude-sonnet-5
     litellm_params:
       model: anthropic/claude-sonnet-5
@@ -49,6 +54,11 @@ model_list:
       model: azure_ai/claude-haiku-4-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-haiku-5-5
+    litellm_params:
+      model: azure_ai/claude-haiku-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
   - model_name: azure_ai/claude-sonnet-4-6
     litellm_params:
       model: azure_ai/claude-sonnet-4-6
@@ -80,6 +90,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-haiku-5-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-haiku-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
   - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-6
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-sonnet-4-6
@@ -107,6 +123,18 @@ model_list:
   - model_name: bedrock/converse/us.anthropic.claude-opus-5-5
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/global.xai.grok-4.7
+    litellm_params:
+      model: bedrock/global.xai.grok-4.7
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/global.openai.gpt-6.1-sol
+    litellm_params:
+      model: bedrock/global.openai.gpt-6.1-sol
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
@@ -178,6 +206,12 @@ model_list:
   - model_name: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
       model: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-haiku-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-haiku-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
@@ -337,6 +371,21 @@ model_list:
       model: openrouter/typesafe/jev-1.13
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openrouter-key
+  - model_name: fireworks_ai/accounts/fireworks/routers/rune
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/routers/rune
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-fireworks-key
+  - model_name: openrouter/anthropic/claude-sonnet-4
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
+  - model_name: openrouter/google/gemini-3.1-flash-image
+    litellm_params:
+      model: openrouter/google/gemini-3.1-flash-image
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
   - model_name: cloudflare/@cf/cloudflare/clef
     litellm_params:
       model: cloudflare/@cf/cloudflare/clef
@@ -346,6 +395,17 @@ model_list:
     litellm_params:
       model: strands_decider/strands-decider-2B-hobson-v19
       api_base: http://127.0.0.1:8191
+  - model_name: hosted_vllm/Qwen/Qwen3-0.6B
+    litellm_params:
+      model: hosted_vllm/Qwen/Qwen3-0.6B
+      api_base: http://127.0.0.1:8191
+  - model_name: azure_ai/decision-1
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL

@@ -23,7 +23,9 @@ import weakref
 from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
+    AsyncIterable,
     AsyncIterator,
+    Awaitable,
     Callable,
     Generator,
     Iterable,
@@ -210,12 +212,14 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
+    is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    attempted_fallback_targets_from,
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
     carry_over_routed_deployment,
@@ -227,6 +231,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
+    is_bad_request_without_fallback,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -627,7 +632,7 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
-def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
+def _stream_raised_error_status(error: Exception) -> int | None:
     raw_status: Final = getattr(error, "status_code", None)
     if isinstance(raw_status, int):
         return raw_status
@@ -637,27 +642,29 @@ def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
     return response_status if isinstance(response_status, int) else None
 
 
-def _anthropic_stream_fallback_error_for_raised(
-    error: Exception, model: str, has_generated_content: bool
+def _stream_fallback_error_for_raised(
+    error: Exception, model: str, has_generated_content: bool, llm_provider: str = "anthropic"
 ) -> "MidStreamFallbackError | None":
     """The pre-stream retry rule (408, 409, 429, 5xx); None means the raise propagates unchanged."""
     if has_generated_content:
         return None
-    status_code: Final = _anthropic_stream_raised_error_status(error)
+    status_code: Final = _stream_raised_error_status(error)
     if status_code is None:
-        return _anthropic_stream_pre_content_error(error, model)
+        return _stream_pre_content_error(error, model, llm_provider)
     retriable: Final = litellm.should_retry(status_code)
-    return _anthropic_stream_pre_content_error(error, model) if retriable else None
+    return _stream_pre_content_error(error, model, llm_provider) if retriable else None
 
 
-def _anthropic_stream_pre_content_error(error: Exception, model: str) -> "MidStreamFallbackError":
+def _stream_pre_content_error(
+    error: Exception, model: str, llm_provider: str = "anthropic"
+) -> "MidStreamFallbackError":
     """The envelope the fallback chain judges a failure by when the client has received no content yet."""
     from litellm.exceptions import MidStreamFallbackError
 
     return MidStreamFallbackError(
         message=str(error),
         model=model,
-        llm_provider="anthropic",
+        llm_provider=llm_provider,
         original_exception=error,
         is_pre_first_chunk=True,
     )
@@ -687,7 +694,68 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
-def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+@dataclass(frozen=True, slots=True)
+class _FirstChunk:
+    """The chunk Router._acompletion / _completion already read off a stream; None means the provider closed it empty."""
+
+    chunk: ModelResponseStream | None
+
+
+async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+    """
+    Read the first chunk while Router._acompletion still holds the request, so a
+    stream that fails before any token raises there, inside async_function_with_retries
+    and the fallback chain, instead of surfacing to the caller mid-iteration.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    try:
+        return _FirstChunk(chunk=await stream.__anext__())
+    except StopAsyncIteration:
+        return _FirstChunk(chunk=None)
+    except MidStreamFallbackError as e:
+        raise _mid_stream_retry_trigger(e) from e
+
+
+def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+    """Sync twin of _aread_first_chunk for Router._completion."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    try:
+        return _FirstChunk(chunk=next(stream))
+    except StopIteration:
+        return _FirstChunk(chunk=None)
+    except MidStreamFallbackError as e:
+        raise _mid_stream_retry_trigger(e) from e
+
+
+def _chunks_with_first(model_response: Iterable[object], taken: _FirstChunk | None) -> Iterator[object]:
+    """The stream with the chunk _read_first_chunk already read put back in front (None: the stream as is)."""
+    if taken is None:
+        yield from model_response
+        return
+    if taken.chunk is None:
+        return
+    yield taken.chunk
+    yield from model_response
+
+
+async def _achunks_with_first(
+    model_response: AsyncIterable[object], taken: _FirstChunk | None
+) -> AsyncIterator[object]:
+    """Async twin of _chunks_with_first."""
+    if taken is None:
+        async for item in model_response:
+            yield item
+        return
+    if taken.chunk is None:
+        return
+    yield taken.chunk
+    async for item in model_response:
+        yield item
+
+
+def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
     commit to the primary Anthropic stream (real content arrived, or the
@@ -704,18 +772,18 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
 
 
 @dataclass(frozen=True, slots=True)
-class _AnthropicStreamRetryOpened:
+class _StreamRetryOpened:
     response: object
     attempted_retries: int
     max_retries: int
 
 
 @dataclass(frozen=True, slots=True)
-class _AnthropicStreamRetriesExhausted:
+class _StreamRetriesExhausted:
     error: "MidStreamFallbackError"
 
 
-_AnthropicStreamRetryOutcome: TypeAlias = _AnthropicStreamRetryOpened | _AnthropicStreamRetriesExhausted
+_StreamRetryOutcome: TypeAlias = _StreamRetryOpened | _StreamRetriesExhausted
 
 
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
@@ -900,7 +968,7 @@ class Router:
     def _routing_groups(self, value: dict[str, RoutingGroup]) -> None:
         self.routing_groups = value
 
-    model_names: set = set()
+    model_names: set[str] = set()
     cache_responses: bool | None = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -956,6 +1024,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
+        fallback_on_unsupported_params: bool = True,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -1198,6 +1267,7 @@ class Router:
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
+        self.fallback_on_unsupported_params = fallback_on_unsupported_params
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
@@ -2232,6 +2302,11 @@ class Router:
         self.adecisions = self.factory_function(adecisions, call_type="adecisions")
         self.decisions = self.factory_function(decisions, call_type="decisions")
 
+        from litellm.systemone import asystemone, systemone
+
+        self.asystemone = self.factory_function(asystemone, call_type="asystemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+        self.systemone = self.factory_function(systemone, call_type="systemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+
     def _initialize_video_endpoints(self):
         """Initialize video endpoints."""
         from litellm.videos import (
@@ -2782,6 +2857,7 @@ class Router:
                     model_response=response,
                     messages=messages,
                     initial_kwargs=input_kwargs_for_streaming_fallback,
+                    first_chunk=_read_first_chunk(response),
                 )
 
             return response
@@ -3041,6 +3117,7 @@ class Router:
         messages: list[dict[str, str]],
         initial_kwargs: dict,
         deployment_slot: contextlib.AsyncExitStack | None = None,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
@@ -3049,6 +3126,8 @@ class Router:
 
         `deployment_slot` holds the deployment's max_parallel_requests semaphore; it is
         released when the stream is exhausted, closed, or falls back to another deployment
+
+        `first_chunk` carries the chunk _acompletion already read (None: iterate from the start)
         """
         from litellm.exceptions import MidStreamFallbackError
 
@@ -3093,7 +3172,7 @@ class Router:
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
             try:
-                async for item in model_response:
+                async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 with anyio.CancelScope(shield=True):
@@ -3195,7 +3274,7 @@ class Router:
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
         # weak, so the generator closing over it does not keep the wrapper out of
         # refcount teardown and delay the `finally` that releases the deployment slot
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     @staticmethod
@@ -3378,7 +3457,7 @@ class Router:
     async def _aresponses_streaming_iterator(
         self,
         response: "BaseResponsesAPIStreamingIterator",
-        initial_kwargs: dict[str, Any],
+        initial_kwargs: dict[str, object],
     ) -> "BaseResponsesAPIStreamingIterator":
         """
         Wrap a Responses-API streaming iterator so MidStreamFallbackError
@@ -3668,6 +3747,7 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
         initial_kwargs: dict,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Sync equivalent of _acompletion_streaming_iterator.
@@ -3703,7 +3783,7 @@ class Router:
         def stream_with_fallbacks():
             fallback_response = None
             try:
-                for item in model_response:
+                for item in _chunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 if fallbacks_disabled_for_request(initial_kwargs) or (
@@ -3799,7 +3879,7 @@ class Router:
 
         wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
         # weak, for the same reason as the async twin
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
@@ -3950,6 +4030,9 @@ class Router:
                     and response.make_call is not None
                 ):
                     await response.fetch_stream()
+                first_chunk: Final = (
+                    await _aread_first_chunk(response) if isinstance(response, CustomStreamWrapper) else None
+                )
 
                 self.success_calls[model_name] += 1
                 verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -3966,6 +4049,7 @@ class Router:
                         messages=messages,
                         initial_kwargs=input_kwargs_for_streaming_fallback,
                         deployment_slot=deployment_slot.pop_all(),
+                        first_chunk=first_chunk,
                     )
 
                 return response
@@ -4223,6 +4307,29 @@ class Router:
             if credential_tag not in existing_tags:
                 existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
+
+        from litellm.llms.github_copilot.per_user_auth import (
+            github_copilot_per_user_credential_name,
+        )
+
+        configured_per_user_name: Final = github_copilot_per_user_credential_name(
+            cast(  # cast-ok: deployment litellm_params is a str-keyed dict
+                "Mapping[str, object]", deployment.get("litellm_params")
+            )
+        )
+        caller_credential_name: Final[object] = cast(  # cast-ok: kwargs is the untyped request dict
+            "object", kwargs.get("litellm_credential_name")
+        )
+        if (
+            configured_per_user_name is not None
+            and isinstance(caller_credential_name, str)
+            and caller_credential_name != configured_per_user_name
+        ):
+            raise litellm.BadRequestError(
+                message="litellm_credential_name cannot be overridden on a deployment that uses per-user GitHub OAuth",
+                model=deployment_model_name,
+                llm_provider="",
+            )
 
         kwargs["model_info"] = model_info
 
@@ -5567,7 +5674,7 @@ class Router:
     async def _aanthropic_messages_streaming_iterator(
         self,
         response: AsyncIterator[bytes],
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        initial_kwargs: dict[str, object],  # mutable-ok: mutated in-place before re-entering the fallback chain
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -5659,7 +5766,7 @@ class Router:
                     if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                         yield chunk
                         continue
-                    if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
+                    if _stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
                         has_generated_content = True
                     # A transport can split one SSE data line across byte chunks, so pre-content
                     # detection parses the accumulated buffer plus the current chunk, never the
@@ -5748,16 +5855,20 @@ class Router:
         fallback_error: Final = (
             stream_error
             if isinstance(stream_error, MidStreamFallbackError)
-            else _anthropic_stream_fallback_error_for_raised(stream_error, model, has_generated_content)
+            else _stream_fallback_error_for_raised(stream_error, model, has_generated_content)
         )
         if fallback_error is None:
             raise stream_error
-        outcome: Final = await self._aanthropic_messages_retry_same_group(fallback_error, initial_kwargs)
+        outcome: Final = await self._astream_retry_same_group(
+            fallback_error,
+            initial_kwargs,
+            attempt_function=self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt,
+        )
         match outcome:
-            case _AnthropicStreamRetryOpened(response=retried, attempted_retries=attempted, max_retries=budget):
+            case _StreamRetryOpened(response=retried, attempted_retries=attempted, max_retries=budget):
                 async for item in self._aanthropic_messages_yield_recovered(retried, wrapper, (attempted, budget)):
                     yield item
-            case _AnthropicStreamRetriesExhausted(error=last_error):
+            case _StreamRetriesExhausted(error=last_error):
                 async for item in self._aanthropic_messages_fallback_attempt(last_error, initial_kwargs, wrapper):
                     yield item
             case _:
@@ -5811,7 +5922,7 @@ class Router:
             return None
         return _get_num_retries_from_retry_policy(exception=trigger, retry_policy=policy)
 
-    def _anthropic_messages_retry_budget(self, trigger: Exception, kwargs: Mapping[str, object]) -> tuple[int, bool]:
+    def _stream_retry_budget(self, trigger: Exception, kwargs: Mapping[str, object]) -> tuple[int, bool]:
         """
         The budget an earlier retry of this request committed to, else the retry policy's grant when one
         names this error, else the plain budget, with whether a policy governs the retry: a committed budget
@@ -5861,14 +5972,14 @@ class Router:
         if not _is_retriable_anthropic_status(status_code) or _anthropic_stream_error_is_gateway_verdict(chunk):
             return None
         frame_error: Final = anthropic_error_frame_exception(error_type, message, status_code, model_group)
-        budget, _ = self._anthropic_messages_retry_budget(frame_error, kwargs)
+        budget, _ = self._stream_retry_budget(frame_error, kwargs)
         if budget > attempted_retries_for_request(kwargs):
             return frame_error
         if self._anthropic_messages_stream_can_fall_back(model_group, kwargs):
             return frame_error
         return None
 
-    def _anthropic_messages_should_retry(
+    def _stream_should_retry(
         self,
         trigger: Exception,
         healthy_deployments: list[dict],  # mutable-ok: should_retry_this_error's own parameter type
@@ -5900,29 +6011,34 @@ class Router:
             return False
         return True
 
-    async def _aanthropic_messages_retry_same_group(
-        self, e: "MidStreamFallbackError", initial_kwargs: Mapping[str, object]
-    ) -> _AnthropicStreamRetryOutcome:
+    async def _astream_retry_same_group(
+        self,
+        e: "MidStreamFallbackError",
+        initial_kwargs: Mapping[str, object],
+        attempt_function: "Callable[..., Awaitable[object]]",
+    ) -> _StreamRetryOutcome:
         """
         Re-runs the attempt within the request's own model group, the way async_function_with_retries
         would have for a failure raised before the stream opened, until a retry opens a stream or the
         budget runs out. Each retry's stream carries its own wrapper with the remaining budget, so a
         retry that drops before content again continues the same count instead of starting over.
+        `attempt_function` is the request's own attempt (the /v1/messages attempt, or a chat completions one).
         """
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
             model=model_group, parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs)
         )
-        budget, policy_applies = self._anthropic_messages_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
+        budget, policy_applies = self._stream_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
-            if not policy_applies and not self._anthropic_messages_should_retry(
+            if not policy_applies and not self._stream_should_retry(
                 trigger, healthy_deployments, all_deployments, initial_kwargs
             ):
-                return _AnthropicStreamRetriesExhausted(last_error)
-            self.log_retry(kwargs=retry_kwargs, e=trigger)
+                return _StreamRetriesExhausted(last_error)
+            if get_metadata_variable_name_from_kwargs(retry_kwargs) in retry_kwargs:
+                self.log_retry(kwargs=retry_kwargs, e=trigger)
             await asyncio.sleep(
                 self._time_to_sleep_before_retry(
                     e=trigger,
@@ -5934,20 +6050,18 @@ class Router:
             )
             record_retry_attempt(retry_kwargs, attempted_retries=attempt + 1, max_retries=budget)
             verbose_router_logger.debug(
-                "Retrying anthropic_messages stream dropped before content, attempt %s of %s", attempt + 1, budget
+                "Retrying stream that failed before content, attempt %s of %s", attempt + 1, budget
             )
             try:
-                response = await self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(**retry_kwargs)
-            except Exception as retry_error:  # noqa: BLE001  # every failure of a retry before its stream opens is the fallback chain's to judge
-                wrapped = _anthropic_stream_fallback_error_for_raised(retry_error, model_group, False)
+                response = await attempt_function(**retry_kwargs)
+            except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
+                wrapped = _stream_fallback_error_for_raised(retry_error, model_group, False, e.llm_provider)
                 if wrapped is None:
-                    return _AnthropicStreamRetriesExhausted(
-                        _anthropic_stream_pre_content_error(retry_error, model_group)
-                    )
+                    return _StreamRetriesExhausted(_stream_pre_content_error(retry_error, model_group, e.llm_provider))
                 last_error = wrapped
                 continue
-            return _AnthropicStreamRetryOpened(response, attempted_retries=attempt + 1, max_retries=budget)
-        return _AnthropicStreamRetriesExhausted(last_error)
+            return _StreamRetryOpened(response, attempted_retries=attempt + 1, max_retries=budget)
+        return _StreamRetriesExhausted(last_error)
 
     async def _aanthropic_messages_yield_recovered(
         self,
@@ -6071,7 +6185,7 @@ class Router:
     async def _ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
         self,
         model: str,
-        original_generic_function: Callable,
+        original_generic_function: Callable[..., Awaitable[object]],
         **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-attempt helper, shape varies per call site
     ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
         """
@@ -6972,6 +7086,8 @@ class Router:
             "search",
             "adecisions",
             "decisions",
+            "asystemone",
+            "systemone",
             "aadapter_generate_content",
             "avideo_generation",
             "video_generation",
@@ -7046,6 +7162,7 @@ class Router:
             "ocr",
             "search",
             "decisions",
+            "systemone",
             "video_generation",
             "video_list",
             "video_status",
@@ -7214,6 +7331,7 @@ class Router:
                 "aocr",
                 "ocr",
                 "adecisions",
+                "asystemone",
                 "avideo_generation",
                 "avideo_list",
                 "avideo_status",
@@ -7606,6 +7724,7 @@ class Router:
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")
+        fallback_walk: Final = attempted_fallback_targets_from(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # keep legacy kwargs untyped
         # A pre-routing hook (complexity / auto / adaptive / quality routers) picks a tier
         # behind the router name, and fallbacks are configured per tier, not per router.
         lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
@@ -7614,13 +7733,22 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
+        unsupported_params_without_fallback: Final = is_bad_request_without_fallback(
+            e, self.fallback_on_unsupported_params
+        )
+        if (
+            disable_fallbacks is True
+            or original_model_group is None
+            or is_guardrail_intervention(e)
+            or unsupported_params_without_fallback
+        ):
             raise e
 
         input_kwargs: Final = {
             "litellm_router": self,
             "original_exception": original_exception,
             **kwargs,
+            "attempted_targets": fallback_walk,
         }
 
         if "max_fallbacks" not in input_kwargs:
@@ -7850,7 +7978,10 @@ class Router:
             and not nested_fallback_hop
         ):
             original_exception.message += format_fallback_outcome_message(
-                model_group, attempted_fallback_group, fallback_failure_exception_str
+                model_group,
+                attempted_fallback_group,
+                fallback_failure_exception_str,
+                skipped=fallback_walk.skipped,
             )
 
         raise original_exception
@@ -8603,6 +8734,24 @@ class Router:
                 )
                 return False
 
+            caller_failure_model_info: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(_model_info) if isinstance(_model_info, dict) else None
+            )
+            caller_failure_model_id: Final = (
+                caller_failure_model_info.get("id") if caller_failure_model_info is not None else None
+            )
+            caller_failure_deployment: Final = (
+                self.get_deployment(model_id=caller_failure_model_id)
+                if isinstance(caller_failure_model_id, str)
+                else None
+            )
+            if is_caller_scoped_auth_failure(caller_failure_deployment, exception_status):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Caller-scoped OAuth authentication failed, not the deployment."
+                )
+                return False
+
             exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
             )
@@ -8644,7 +8793,13 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
+                    requested_model_group=(
+                        get_litellm_metadata_from_kwargs(
+                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                        )
+                        or {}
+                    ).get("model_group"),
+                    request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -9986,6 +10141,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
                 api_base=deployment.litellm_params.api_base,
+                litellm_params=deployment.litellm_params,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -10097,10 +10253,21 @@ class Router:
         credential_values: Final = (
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         )
-        vertex_project: Final = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
-        vertex_location: Final = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
+        from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+
+        vertex_project: Final = (
+            cast("str | None", credential_values.get("vertex_project"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_project
+        )
+        vertex_location: Final = (
+            cast("str | None", credential_values.get("vertex_location"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_location
+        )
         vertex_credentials: Final = (
-            credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
+            cast(  # cast-ok: vertex_credentials holds the typed credential union
+                "VERTEX_CREDENTIALS_TYPES | None", credential_values.get("vertex_credentials")
+            )
+            or deployment.litellm_params.vertex_credentials
         )
 
         if vertex_project is None or vertex_location is None:
@@ -10451,6 +10618,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
+                custom_llm_provider=custom_llm_provider,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
@@ -11326,6 +11494,10 @@ class Router:
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list_of_routed_group(model_group)
+        model_group_description: Final[str | None] = next(
+            (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -11395,6 +11567,7 @@ class Router:
                 litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
                     model=litellm_params.model,
                     custom_llm_provider=litellm_params.custom_llm_provider,
+                    litellm_params=litellm_params,
                 )
             except litellm.exceptions.BadRequestError as e:
                 verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
@@ -11430,6 +11603,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
@@ -11925,7 +12099,9 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None:
+    def resolve_model_name_from_model_id(
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Resolve model_name from model_id.
 
@@ -11935,11 +12111,14 @@ class Router:
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
-        3. Return the model_name if found, None otherwise
+        3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard
+           whose deployment serves `custom_llm_provider`)
+        4. Return the model_name if found, None otherwise
 
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
+            custom_llm_provider: The provider extracted from the same id
 
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
@@ -11979,8 +12158,21 @@ class Router:
                 if model_name:
                     return model_name
 
-        # No match found
+        if self.is_recognized_model(model_id):
+            return model_id
+        if custom_llm_provider is not None and self.pattern_router.routes_to_provider(model_id, custom_llm_provider):
+            return model_id
         return None
+
+    def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
+        """
+        `served_model` when `model_name` routes to it (the alias target, the routing group member, or the name
+        itself), so a request can return to the group that served an earlier one, else `model_name`.
+        """
+        target: Final = self.get_model_from_alias(model_name) or model_name
+        routing_group: Final = self.get_routing_group(target)
+        members: Final = routing_group.models if routing_group is not None else ()
+        return served_model if served_model == target or served_model in members else model_name
 
     def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
         """
@@ -12370,6 +12562,7 @@ class Router:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=deployment_params.get("model") or group,
                 custom_llm_provider=deployment_params.get("custom_llm_provider"),
+                litellm_params=LiteLLM_Params.model_validate(deployment_params),
             )
             supported: Final = litellm.get_supported_openai_params(
                 model=model,
@@ -12626,6 +12819,7 @@ class Router:
             "enable_weighted_failover",
             "enable_tag_filtering",
             "tag_routing_prefix",
+            "fallback_on_unsupported_params",
         ]
 
         for var in vars_to_include:
