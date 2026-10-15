@@ -10919,3 +10919,59 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+class TestResponseCostFromLoggingObjForBridgedMessages:
+    """A /v1/messages request answered through the chat bridge arrives here as an Anthropic body whose
+    usage has no reasoning field, while the cost it recomputes must still price the reasoning tokens
+    the provider reported (LIT-9666)."""
+
+    @staticmethod
+    def _logging_obj(model):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="lit-9666",
+            function_id="lit-9666",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
+        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
+        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+        model = "dashscope/qwen-turbo"
+        pricing = litellm.model_cost[model]
+        assert pricing["output_cost_per_reasoning_token"] != pricing["output_cost_per_token"]
+        chat_completion = ModelResponse(
+            id="chatcmpl-upstream",
+            model="qwen-turbo",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+            usage=Usage(
+                prompt_tokens=1240,
+                completion_tokens=4040,
+                total_tokens=5280,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+            ),
+        )
+        served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+        assert served is not None and "reasoning" not in json.dumps(served["usage"])
+        logging_obj = self._logging_obj(model)
+        logging_obj.record_bridged_model_response(chat_completion)
+
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(served), logging_obj=logging_obj
+        )
+
+        expected_reasoning = 3480 * pricing["output_cost_per_reasoning_token"]
+        expected_output = expected_reasoning + (4040 - 3480) * pricing["output_cost_per_token"]
+        assert cost == pytest.approx(1240 * pricing["input_cost_per_token"] + expected_output)
+        assert logging_obj.cost_breakdown is not None
+        assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
+        assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)

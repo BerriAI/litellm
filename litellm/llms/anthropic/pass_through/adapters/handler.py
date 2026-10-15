@@ -368,6 +368,12 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
 
 
+def _record_bridged_model_response(kwargs: Mapping[str, object], completion_response: object) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+    if logging_obj is not None and isinstance(completion_response, ModelResponse):
+        logging_obj.record_bridged_model_response(completion_response)
+
+
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
@@ -741,6 +747,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(kwargs, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
@@ -879,6 +886,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(kwargs, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
