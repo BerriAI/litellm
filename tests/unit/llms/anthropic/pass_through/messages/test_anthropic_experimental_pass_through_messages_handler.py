@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import uuid
@@ -25,6 +26,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
+from litellm.utils import _invalidate_model_cost_lowercase_map
 import unittest.mock
 
 
@@ -1072,6 +1074,48 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
         )
 
     assert captured["body"]["model"] == expected_wire_model
+    assert captured["url"] == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, expected_url",
+    [
+        (None, "https://api.perplexity.ai/v1/responses"),
+        ({"id": "pinned-id", "mode": "chat"}, "https://api.perplexity.ai/chat/completions"),
+    ],
+)
+async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, str] | None, expected_url: str
+) -> None:
+    """A deployment id whose stripped form is a chat row is kept on the Responses API, unless the
+    deployment pins ``mode: chat``, which has to decide the route before the prefix is stripped."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["perplexity/perplexity/pin-test-model"] = {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    }
+    litellm.model_cost["perplexity/pin-test-model"] = {"litellm_provider": "perplexity", "mode": "chat"}
+    _invalidate_model_cost_lowercase_map()
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["url"] = str(request.url)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "ping"}],
+            model="perplexity/perplexity/pin-test-model",
+            api_key="test-api-key",
+            model_info=model_info,
+        )
+
     assert captured["url"] == expected_url
 
 

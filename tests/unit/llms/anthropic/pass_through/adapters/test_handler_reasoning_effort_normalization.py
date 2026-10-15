@@ -45,9 +45,12 @@ def _reasoning_effort_sent_for_thinking(
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
+    model_info: dict[str, str] | None = None,
 ) -> object:
     extra_kwargs: Final = {
-        key: value for key, value in (("custom_llm_provider", provider), ("api_base", api_base)) if value is not None
+        key: value
+        for key, value in (("custom_llm_provider", provider), ("api_base", api_base), ("model_info", model_info))
+        if value is not None
     }
     completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
         max_tokens=1024,
@@ -103,6 +106,22 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         sent = _reasoning_effort_sent_for_thinking("databricks/databricks-qwen35-122b-a10b", "databricks", PLAIN_THINKING)
 
         assert sent == "high"
+
+    def test_a_chat_pinned_deployment_gets_the_plain_tier_on_a_responses_row(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``mode: chat`` pin sends that deployment to chat completions even though its shared row
+        says ``responses``, so the adapter has to read the pin too or chat gets the Responses-only dict."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        model: Final = "bedrock_mantle/openai.gpt-5.4"
+
+        unpinned = _reasoning_effort_sent_for_thinking(model, "bedrock_mantle", PLAIN_THINKING)
+        pinned = _reasoning_effort_sent_for_thinking(
+            model, "bedrock_mantle", PLAIN_THINKING, model_info={"id": "pinned-id", "mode": "chat"}
+        )
+
+        assert isinstance(unpinned, dict)
+        assert pinned == "high"
 
     @pytest.mark.parametrize(
         "model, provider",

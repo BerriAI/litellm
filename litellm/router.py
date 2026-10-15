@@ -10532,11 +10532,7 @@ class Router:
     @staticmethod
     def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
         """The ``litellm.model_cost`` keys a deployment's shared backend info is registered under."""
-        backend_key: Final = (
-            model
-            if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/")
-            else f"{custom_llm_provider}/{model}"
-        )
+        backend_key: Final = model if custom_llm_provider is None else f"{custom_llm_provider}/{model}"
         if "responses/" in backend_key:
             return (backend_key, backend_key.replace("responses/", ""))
         return (backend_key,)
@@ -10628,7 +10624,6 @@ class Router:
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
-        backend_key: Final = backend_keys[0]
 
         # For the shared backend key, keep only cost-map schema fields
         # (minus custom pricing) so that one deployment's pricing overrides
@@ -10637,41 +10632,31 @@ class Router:
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
+        litellm.register_model(
+            model_cost={_key: Router._keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
+            persist_across_reloads=False,
+        )
+
+    @staticmethod
+    def _keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, object]) -> Mapping[str, object]:
+        """A deployment's ``mode`` routes only that deployment, so it never replaces the mode already
+        registered for its shared backend row, which the SDK and every sibling deployment route by."""
         registration_key: Final = model_cost_registration_key(
             backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
         )
-        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(registration_key, {})) or {}).get(
-            "mode"
-        )
+        registered_row: Final = cast(Mapping[str, object] | None, litellm.model_cost.get(registration_key)) or {}
+        registered_mode: Final = registered_row.get("mode")
         deployment_mode: Final = shared_model_info.get("mode")
-        # Keep the built-in bridge mode stable for shared backend keys.
-        # Multiple aliases can point at the same provider/model backend,
-        # but their deployment-level overrides should not downgrade the
-        # backend from responses -> chat via last-write-wins registration.
-        # Only preserve in that specific direction so legitimate upgrades
-        # (e.g. chat -> responses) and unrelated mode changes still apply,
-        # and so a missing deployment mode does not silently clear the
-        # existing shared backend mode.
-        is_responses_to_chat_downgrade: Final = existing_shared_mode == "responses" and deployment_mode == "chat"
-        would_clear_existing_mode: Final = existing_shared_mode is not None and deployment_mode is None
-        if is_responses_to_chat_downgrade or would_clear_existing_mode:
-            if deployment_mode is not None:
-                verbose_router_logger.warning(
-                    "Router: preserving existing mode=%s for shared backend "
-                    "key %s instead of the deployment-specified mode=%s "
-                    "(prevents alias registration from downgrading the "
-                    "shared backend mode).",
-                    existing_shared_mode,
-                    registration_key,
-                    deployment_mode,
-                )
-            shared_model_info["mode"] = existing_shared_mode
-
-        # Always register the (possibly mode-preserved) shared backend info.
-        litellm.register_model(
-            model_cost={_key: shared_model_info for _key in backend_keys},
-            persist_across_reloads=False,
-        )
+        if registered_mode is None or registered_mode == deployment_mode:
+            return shared_model_info
+        if deployment_mode is not None:
+            verbose_router_logger.warning(
+                "Router: keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
+                registered_mode,
+                registration_key,
+                deployment_mode,
+            )
+        return {**shared_model_info, "mode": registered_mode}
 
     def replay_model_cost_registrations(self) -> None:
         """Re-assert this router's deployments onto a freshly fetched catalog.

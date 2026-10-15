@@ -461,7 +461,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.responses.bridge_check import responses_api_bridge_check
+        from litellm.responses.bridge_check import bridge_deployment_info, responses_api_bridge_check
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
@@ -474,6 +474,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
+            deployment_model_info=bridge_deployment_info(completion_kwargs.get("model_info")),
         )
         return None if model_info.get("mode") == "responses" else effort
 

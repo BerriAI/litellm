@@ -14,8 +14,6 @@ from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.utils import get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
-# Backends whose chat completions route is dead for responses-mode models (ChatGPT answers 403), so a
-# deployment-level mode must not pull them off the Responses API.
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
 _ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
@@ -100,11 +98,6 @@ def responses_api_bridge_check(
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
 
-    # An explicit ``responses/`` prefix (``azure/responses/<deployment-name>``) always means the Responses
-    # API, even when the router registered a ``mode: chat`` row under that prefixed name, and outranks a
-    # deployment's own mode. That mode replaces only the shared-row mode, and only where the backend serves
-    # the endpoint, and the capability rules below still run, so a pin cannot move a request Chat
-    # Completions rejects (gpt-5.4+ function tools with reasoning, xAI web search) off the Responses API.
     explicit_responses_prefix: Final = model.startswith("responses/")
     pinned_mode: Final = (
         None if explicit_responses_prefix else deployment_routing_mode(deployment_model_info, custom_llm_provider)

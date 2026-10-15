@@ -55,15 +55,19 @@ _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
-def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
-    from litellm.responses.bridge_check import responses_api_bridge_check
+def _bridges_to_responses_api(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
+    from litellm.responses.bridge_check import bridge_deployment_info, responses_api_bridge_check
 
-    model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider=custom_llm_provider)
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=bridge_deployment_info(deployment_model_info),
+    )
     return model_info.get("mode") == "responses"
 
 
 def _responses_mode_is_lost_by_prefix_strip(
-    requested_model: str, resolved_model: str, custom_llm_provider: str
+    requested_model: str, resolved_model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> bool:
     """Whether a Responses-only deployment stops looking like one once its provider prefix is stripped.
 
@@ -73,15 +77,16 @@ def _responses_mode_is_lost_by_prefix_strip(
     """
     if requested_model == resolved_model:
         return False
-    return _bridges_to_responses_api(requested_model, custom_llm_provider) and not _bridges_to_responses_api(
-        resolved_model, custom_llm_provider
-    )
+    return _bridges_to_responses_api(
+        requested_model, custom_llm_provider, deployment_model_info
+    ) and not _bridges_to_responses_api(resolved_model, custom_llm_provider, deployment_model_info)
 
 
 def _should_route_to_responses_api(
     custom_llm_provider: str | None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
+    deployment_model_info: object = None,
 ) -> bool:
     """Return True when the request should use the Responses API path.
 
@@ -94,7 +99,9 @@ def _should_route_to_responses_api(
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
-    return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
+    return _responses_mode_is_lost_by_prefix_strip(
+        requested_model, resolved_model, custom_llm_provider, deployment_model_info
+    )
 
 
 async def _with_native_safeguard_results(
@@ -606,7 +613,7 @@ def anthropic_messages_handler(
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
-            custom_llm_provider, original_model, model
+            custom_llm_provider, original_model, model, kwargs.get("model_info")
         ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
