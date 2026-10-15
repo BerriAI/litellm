@@ -599,7 +599,13 @@ XAI_GROK_5_PROVIDER_REPORTED_COST: Final = CostTrackingTestCase(
             "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "cost": 0.0421},
         },
     ),
-    expected=ExactExpected(spend=0.0421, input_cost=0.0, output_cost=0.0421, prompt_tokens=1840, completion_tokens=412),
+    expected=ExactExpected(
+        spend=0.0421,
+        input_cost=0.029078078,
+        output_cost=0.013021922,
+        prompt_tokens=1840,
+        completion_tokens=412,
+    ),
 )
 
 

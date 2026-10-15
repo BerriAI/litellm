@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -200,7 +201,9 @@ from litellm.router_utils.common_utils import (
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
+    warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    without_model_capability_flags,
     without_router_only_kwargs,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
@@ -502,6 +505,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -694,42 +698,57 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
+_RestT: Final = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
+
+
 @dataclass(frozen=True, slots=True)
-class _FirstChunk:
-    """The chunk Router._acompletion / _completion already read off a stream; None means the provider closed it empty."""
+class _FirstChunk(Generic[_RestT]):
+    """
+    The chunk Router._acompletion / _completion already read off a stream (None: the
+    provider closed it empty) and the iterator it was read from, which carries on after it.
+    """
 
     chunk: ModelResponseStream | None
+    rest: _RestT
 
 
-async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk[AsyncIterator[object]]:
     """
     Read the first chunk while Router._acompletion still holds the request, so a
     stream that fails before any token raises there, inside async_function_with_retries
     and the fallback chain, instead of surfacing to the caller mid-iteration.
+
+    Iterates the way `async for` does, one __aiter__ call and then __anext__ on what it
+    returned: a CustomStreamWrapper subclass may hand iteration to another object and
+    leave completion_stream None (the MCP gateway's MCPStreamWrapper).
     """
     from litellm.exceptions import MidStreamFallbackError
 
+    rest: Final = stream.__aiter__()
     try:
-        return _FirstChunk(chunk=await stream.__anext__())
+        return _FirstChunk(chunk=await rest.__anext__(), rest=rest)
     except StopAsyncIteration:
-        return _FirstChunk(chunk=None)
+        return _FirstChunk(chunk=None, rest=rest)
     except MidStreamFallbackError as e:
         raise _mid_stream_retry_trigger(e) from e
 
 
-def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk[Iterator[object]]:
     """Sync twin of _aread_first_chunk for Router._completion."""
     from litellm.exceptions import MidStreamFallbackError
 
+    rest: Final = iter(stream)
     try:
-        return _FirstChunk(chunk=next(stream))
+        return _FirstChunk(chunk=next(rest), rest=rest)
     except StopIteration:
-        return _FirstChunk(chunk=None)
+        return _FirstChunk(chunk=None, rest=rest)
     except MidStreamFallbackError as e:
         raise _mid_stream_retry_trigger(e) from e
 
 
-def _chunks_with_first(model_response: Iterable[object], taken: _FirstChunk | None) -> Iterator[object]:
+def _chunks_with_first(
+    model_response: Iterable[object], taken: _FirstChunk[Iterator[object]] | None
+) -> Iterator[object]:
     """The stream with the chunk _read_first_chunk already read put back in front (None: the stream as is)."""
     if taken is None:
         yield from model_response
@@ -737,11 +756,11 @@ def _chunks_with_first(model_response: Iterable[object], taken: _FirstChunk | No
     if taken.chunk is None:
         return
     yield taken.chunk
-    yield from model_response
+    yield from taken.rest
 
 
 async def _achunks_with_first(
-    model_response: AsyncIterable[object], taken: _FirstChunk | None
+    model_response: AsyncIterable[object], taken: _FirstChunk[AsyncIterator[object]] | None
 ) -> AsyncIterator[object]:
     """Async twin of _chunks_with_first."""
     if taken is None:
@@ -751,7 +770,7 @@ async def _achunks_with_first(
     if taken.chunk is None:
         return
     yield taken.chunk
-    async for item in model_response:
+    async for item in taken.rest:
         yield item
 
 
@@ -1189,6 +1208,10 @@ class Router:
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
         )
+        self.prompt_caching_pin_cache: DualCache = DualCache(
+            redis_cache=redis_cache,
+            in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
+        )
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
@@ -1518,6 +1541,7 @@ class Router:
         """
         self.cache.attach_redis_cache(cache)
         self._claude_code_session_router_cache.attach_redis_cache(cache)
+        self.prompt_caching_pin_cache.attach_redis_cache(cache)
 
     _update_redis_cache = update_redis_cache
 
@@ -2598,7 +2622,7 @@ class Router:
                 continue
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(
-                    cache=self.cache, is_priority_group=self._is_priority_routing_group
+                    cache=self.prompt_caching_pin_cache, is_priority_group=self._is_priority_routing_group
                 )
             elif pre_call_check == "router_budget_limiting":
                 if self.get_router_deployment_budget_limiter() is not None:
@@ -3117,7 +3141,7 @@ class Router:
         messages: list[dict[str, str]],
         initial_kwargs: dict,
         deployment_slot: contextlib.AsyncExitStack | None = None,
-        first_chunk: _FirstChunk | None = None,
+        first_chunk: _FirstChunk[AsyncIterator[object]] | None = None,
     ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
@@ -3747,7 +3771,7 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
         initial_kwargs: dict,
-        first_chunk: _FirstChunk | None = None,
+        first_chunk: _FirstChunk[Iterator[object]] | None = None,
     ) -> CustomStreamWrapper:
         """
         Sync equivalent of _acompletion_streaming_iterator.
@@ -6510,6 +6534,7 @@ class Router:
                     file = replace_model_in_jsonl(
                         file_content=file,
                         new_model_name=stripped_model,
+                        keep_line_numbers=custom_llm_provider == LlmProviders.VERTEX_AI.value,
                     )
 
                     kwargs_copy["file"] = file
@@ -9469,12 +9494,16 @@ class Router:
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
-            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
-            deployment = Deployment(
-                **deployment_info,
-                model_name=_model_name,
-                litellm_params=litellm_params,
-                model_info=_model_info,
+            declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
+            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
+            warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
+            deployment = without_model_capability_flags(
+                Deployment(
+                    **deployment_info,
+                    model_name=_model_name,
+                    litellm_params=litellm_params,
+                    model_info=_model_info,
+                )
             )
             for field in CustomPricingLiteLLMParams.model_fields:
                 if deployment.litellm_params.get(field) is not None:
@@ -10295,23 +10324,23 @@ class Router:
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
 
-        warn_on_provider_credential_mismatch(
-            model_name=deployment.model_name,
-            litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
-        )
+        declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
+        warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
+        warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
+        served: Final = without_model_capability_flags(deployment)
 
         # add to model list
-        _deployment: Final = deployment.to_json(exclude_none=True)
+        _deployment: Final = served.to_json(exclude_none=True)
         # initialize client
-        self._add_deployment(deployment=deployment)
+        self._add_deployment(deployment=served)
 
-        Router._register_deployment_pricing(deployment=deployment)
+        Router._register_deployment_pricing(deployment=served)
 
         # add to model names
-        self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
-        self.model_names.add(deployment.model_name)
-        self._sync_deployment_budget_config(deployment=deployment)
-        return deployment
+        self._add_model_to_list_and_index_map(model=_deployment, model_id=served.model_info.id)
+        self.model_names.add(served.model_name)
+        self._sync_deployment_budget_config(deployment=served)
+        return served
 
     def _update_deployment_indices_after_removal(self, model_id: str, removal_idx: int) -> None:
         """
@@ -10441,12 +10470,13 @@ class Router:
         """
         _deployment_model_id: Final = deployment.model_info.id or ""
         _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
+        served: Final = without_model_capability_flags(deployment)
         try:
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
                 if (
                     deployment.model_name == _deployment_on_router.model_name
-                    and deployment.litellm_params == _deployment_on_router.litellm_params
+                    and served.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
                 ):
                     # No need to update
@@ -15445,6 +15475,7 @@ class Router:
         session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
         if session_in_memory_cache is not None:
             session_in_memory_cache.flush_cache()
+        self.prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
     def reset(self):
         ## clean up on close
