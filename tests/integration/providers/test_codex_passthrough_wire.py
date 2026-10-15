@@ -14,13 +14,14 @@ import pytest
 import yaml
 import zstandard
 from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.forward_proxy import ForwardProxy, tunnelling_forward_proxy
 from integration._support.process import owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 _MODEL: Final = "litellm-test-native-unpriced"
+_FALLBACK_MODEL: Final = "litellm-test-native-fallback"
 _CATALOG: Final = {"models": [{"slug": _MODEL, "supported_reasoning_levels": ["medium"], "native_field": True}]}
 
 
@@ -51,7 +52,7 @@ def _reply(request: Request, cancellation: Event) -> Reply:
         "id": f"resp_{marker}",
         "object": "response",
         "created_at": 1786374786,
-        "model": _MODEL,
+        "model": body["model"],
         "status": "completed",
         "output": [
             {
@@ -110,9 +111,10 @@ def codex_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory
                         },
                         "model_list": [
                             {
-                                "model_name": _MODEL,
-                                "litellm_params": {"model": f"openai/{_MODEL}", "api_key": "synthetic-unused"},
+                                "model_name": model,
+                                "litellm_params": {"model": f"openai/{model}", "api_key": "synthetic-unused"},
                             }
+                            for model in (_MODEL, _FALLBACK_MODEL)
                         ],
                     }
                 )
@@ -140,6 +142,56 @@ def _headers(key: str, subscription: str) -> dict[str, str]:
         "authorization": f"Bearer {subscription}",
         "chatgpt-account-id": f"account-{sha256(subscription.encode()).hexdigest()}",
     }
+
+
+@pytest.mark.parametrize("encoding", ["identity", "zstd"])
+def test_form_media_type_cannot_authorize_a_different_json_model(codex_rig: CodexRig, encoding: str) -> None:
+    candidate: Final = codex_rig.gateway
+    marker: Final = uuid4().hex
+    payload: Final = json.dumps({"model": _FALLBACK_MODEL, "input": f"&model={_MODEL}&"}).encode()
+    with candidate.scenario() as scenario:
+        key: Final = scenario.key(models=[_MODEL])
+        response: Final = candidate.client.post(
+            "/backend-api/codex/responses",
+            content=zstandard.ZstdCompressor().compress(payload) if encoding == "zstd" else payload,
+            headers={
+                **_headers(key, f"synthetic-{marker}"),
+                "content-type": "application/x-www-form-urlencoded",
+                "content-encoding": encoding,
+            },
+        )
+        assert response.status_code in (400, 403, 415), response.text
+        assert not tuple(
+            request for request in codex_rig.provider.drain() if marker in request.headers.get("authorization", "")
+        )
+
+
+def test_authorized_budget_fallback_is_the_model_forwarded_upstream(codex_rig: CodexRig) -> None:
+    candidate: Final = codex_rig.gateway
+    marker: Final = uuid4().hex
+    with candidate.scenario() as scenario:
+        key: Final = scenario.key(models=[_MODEL, _FALLBACK_MODEL])
+        write_rows(
+            'UPDATE "LiteLLM_VerificationToken" SET model_max_budget = %s::jsonb, budget_fallbacks = %s::jsonb WHERE token = %s',
+            (
+                json.dumps({_MODEL: {"max_budget": 0.0, "budget_duration": "1h"}}),
+                json.dumps({_MODEL: [_FALLBACK_MODEL]}),
+                sha256(key.encode()).hexdigest(),
+            ),
+        )
+        candidate.post("/key/update", {"key": key, "key_alias": f"fallback-{marker}"})
+        response: Final = candidate.client.post(
+            "/backend-api/codex/responses",
+            json={"model": _MODEL, "input": marker},
+            headers=_headers(key, f"synthetic-{marker}"),
+        )
+        assert response.status_code == 200, response.text
+        observed: Final = tuple(
+            request for request in codex_rig.provider.drain() if marker in request.headers.get("authorization", "")
+        )
+        assert len(observed) == 1
+        assert json.loads(observed[0].body)["model"] == _FALLBACK_MODEL
+        assert response.json()["model"] == _FALLBACK_MODEL
 
 
 def test_concurrent_callers_rotate_tokens_without_crossing_accounts(codex_rig: CodexRig) -> None:

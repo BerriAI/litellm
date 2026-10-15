@@ -76,6 +76,38 @@ async def test_empty_decoded_body_is_delivered_once_then_disconnect_is_preserved
     assert observed.get_nowait() == {"type": "http.disconnect"}
 
 
+@pytest.mark.asyncio
+async def test_disconnect_during_compressed_upload_never_reaches_downstream() -> None:
+    incoming: Final = iter(
+        (
+            {"type": "http.request", "body": b"incomplete-compressed-body", "more_body": True},
+            {"type": "http.disconnect"},
+        )
+    )
+    sent: Final[SimpleQueue[Message]] = SimpleQueue()
+
+    async def receive() -> Message:
+        return next(incoming)
+
+    async def send(message: Message) -> None:
+        sent.put(message)
+
+    async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse({"forwarded": True})(scope, receive, send)
+
+    await CodexRequestDecompressionMiddleware(downstream)(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/backend-api/codex/responses",
+            "headers": [(b"content-encoding", b"zstd")],
+        },
+        receive,
+        send,
+    )
+    assert sent.empty()
+
+
 @pytest.mark.parametrize("root_path", ["", "/gateway"])
 def test_decodes_before_body_consumers_and_clears_stale_headers(root_path: str) -> None:
     encoded: Final = zstandard.ZstdCompressor().compress(_BODY)

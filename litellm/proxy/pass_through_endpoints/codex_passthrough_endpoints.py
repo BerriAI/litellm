@@ -4,11 +4,11 @@ from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import TypeAdapter, ValidationError
-from starlette.responses import JSONResponse
 
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body, safe_set_request_parsed_body
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import caller_headers_without_litellm_secrets
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
 
@@ -19,7 +19,7 @@ _NEVER_FORWARDED: Final = frozenset(
 _BODY: Final = TypeAdapter(dict[str, object])
 
 
-def require_codex_credentials(request: Request) -> None:
+async def validate_codex_request(request: Request) -> None:
     from litellm.proxy.proxy_server import general_settings_view
 
     custom_header: Final = general_settings_view().get("litellm_key_header_name")
@@ -31,11 +31,17 @@ def require_codex_credentials(request: Request) -> None:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         raise HTTPException(status_code=401, detail="A ChatGPT subscription bearer token is required")
+    raw: Final = await request.body()
+    try:
+        parsed: Final = _BODY.validate_json(raw) if raw else {}
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="A JSON object is required") from None
+    safe_set_request_parsed_body(request=request, parsed_body=parsed)
 
 
 async def codex_gateway_auth(
     request: Request,
-    _: Annotated[None, Depends(require_codex_credentials)],
+    _: Annotated[None, Depends(validate_codex_request)],
     user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> UserAPIKeyAuth:
     return user
@@ -52,11 +58,7 @@ async def _relay_codex(
     headers: Final = caller_headers_without_litellm_secrets(request, user, _NEVER_FORWARDED)
     if "authorization" not in headers:
         raise HTTPException(status_code=401, detail="The ChatGPT credential must differ from the gateway credential")
-    raw: Final = await request.body()
-    try:
-        body: Final = _BODY.validate_json(raw) if raw else {}
-    except ValidationError:
-        return JSONResponse({"error": "A JSON object is required"}, status_code=400)
+    body: Final = _BODY.validate_python(await read_request_body(request))
     return await pass_through_request(
         request=request,
         target=f"{CHATGPT_API_BASE}/{endpoint}",
