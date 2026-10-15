@@ -1545,6 +1545,7 @@ class TestNativeWebSocketDeploymentDefaults:
         mock_logging = MagicMock()
         mock_logging.pre_call = MagicMock()
         mock_logging.dispatch_success_handlers = AsyncMock()
+        mock_logging.copy_for_new_call.return_value = mock_logging
 
         client_ws = MagicMock()
         client_ws.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
@@ -1721,6 +1722,7 @@ class TestNativeWebSocketGuardrails:
         client_ws.send_text = AsyncMock()
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         delta_event = json.dumps(
             {"type": "response.output_text.delta", "delta": "alice@example.com"}
@@ -1795,6 +1797,7 @@ class TestNativeWebSocketGuardrails:
         client_ws.send_text = AsyncMock()
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         done_events = [
             json.dumps(
@@ -2494,6 +2497,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         handler = _make_streaming(
             websocket=websocket,
@@ -2550,6 +2554,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         handler = _make_streaming(
             websocket=websocket,
@@ -2613,6 +2618,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         handler = _make_streaming(
             websocket=websocket,
@@ -2676,6 +2682,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
 
         handler = _make_streaming(
             websocket=websocket,
@@ -3226,6 +3233,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3272,6 +3280,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3345,6 +3354,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         logging_obj.dispatch_failure_handlers = AsyncMock()
         logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
         handler = _make_streaming(
@@ -3366,17 +3376,54 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert expected_message in str(exception)
 
     @pytest.mark.asyncio
-    async def test_backend_to_client_bills_completed_turns_before_a_failure(self):
+    async def test_backend_to_client_logs_each_turn_as_its_own_call(self, monkeypatch):
         import asyncio
+        import time
         from unittest.mock import AsyncMock
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.utils import CallTypes
+
+        pre_calls: list[tuple[str, object]] = []
+        successes: list[tuple[str, list[object]]] = []
+        failures: list[tuple[str, Exception]] = []
+        partial_usage: list[tuple[str, int, float]] = []
+
+        def record_pre_call(self, input, api_key, model=None, additional_args=None):
+            pre_calls.append((self.litellm_call_id, self.model_call_details["messages"]))
+
+        async def record_success(self, result, **kwargs):
+            successes.append((self.litellm_call_id, [event["type"] for event in result]))
+
+        async def record_failure(self, exception, traceback_exception, **kwargs):
+            failures.append((self.litellm_call_id, exception))
+
+        def record_partial(self, usage, response_cost):
+            partial_usage.append((self.litellm_call_id, usage.total_tokens, response_cost))
+
+        monkeypatch.setattr(Logging, "pre_call", record_pre_call)
+        monkeypatch.setattr(Logging, "dispatch_success_handlers", record_success)
+        monkeypatch.setattr(Logging, "dispatch_failure_handlers", record_failure)
+        monkeypatch.setattr(Logging, "record_partial_usage_for_failure", record_partial)
+        monkeypatch.setattr(Logging, "response_cost_calculator", lambda self, result: 0.01)
+        connection_logging = Logging(
+            model="gpt-5.4",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=time.time(),
+            litellm_call_id="connection-call",
+            function_id="connection-call",
+        )
 
         websocket = MagicMock()
         websocket.send_text = AsyncMock()
         backend_ws = MagicMock()
         backend_ws.recv = AsyncMock(
             side_effect=[
+                json.dumps({"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}),
                 json.dumps(
                     {
                         "type": "response.completed",
@@ -3392,21 +3439,25 @@ class TestNativeWebSocketEncryptedContentAffinity:
                 Exception("stop"),
             ]
         )
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj.response_cost_calculator = MagicMock(return_value=0.01)
-        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, logging_obj=logging_obj, request_data={})
+        handler = _make_streaming(
+            websocket=websocket, backend_ws=backend_ws, logging_obj=connection_logging, request_data={}
+        )
+        handler._record_client_frame(json.dumps({"type": "response.create", "input": "first question"}))
+        handler._record_client_frame(json.dumps({"type": "response.create", "input": "second question"}))
 
         await handler.backend_to_client()
         await asyncio.sleep(0)
 
-        logging_obj.record_partial_usage_for_failure.assert_called_once()
-        usage, response_cost = logging_obj.record_partial_usage_for_failure.call_args[0]
-        assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
-        assert response_cost == 0.01
-        logging_obj.dispatch_success_handlers.assert_not_awaited()
-        logging_obj.dispatch_failure_handlers.assert_awaited_once()
+        (first_turn, first_messages), (second_turn, second_messages) = pre_calls
+        assert len({first_turn, second_turn, "connection-call"}) == 3
+        assert first_messages == [{"role": "user", "content": "first question"}]
+        assert second_messages == [{"role": "user", "content": "second question"}]
+        assert successes == [(first_turn, ["response.created", "response.completed"])]
+        ((failed_turn, exception),) = failures
+        assert failed_turn == second_turn
+        assert "bad turn" in str(exception)
+        assert partial_usage == [(second_turn, 0, 0.01)]
+        assert connection_logging.litellm_call_id == "connection-call"
 
     @pytest.mark.asyncio
     async def test_bidirectional_forward_returns_the_provider_failure(self):
@@ -3450,6 +3501,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         backend_ws.close = AsyncMock()
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         logging_obj.dispatch_failure_handlers = AsyncMock()
         logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
         handler = _make_streaming(
@@ -3508,6 +3560,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         backend_ws.close = AsyncMock()
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         logging_obj.dispatch_failure_handlers = AsyncMock()
         handler = _make_streaming(
             websocket=websocket,

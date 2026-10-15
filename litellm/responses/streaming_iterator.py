@@ -7,8 +7,10 @@ import time
 import traceback
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast, overload, runtime_checkable
 
@@ -1903,6 +1905,76 @@ RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
 
+_RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
+
+
+def _json_object_or_none(message: object) -> dict[str, object] | None:
+    if _is_json_object(message):
+        return message
+    if not isinstance(message, (str, bytes)):
+        return None
+    try:
+        parsed: Final = _load_json_value(message)
+    except json.JSONDecodeError:
+        return None
+    return parsed if _is_json_object(parsed) else None
+
+
+def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
+    if not _is_json_object(item) or item.get("type") != "message" or item.get("role") != "user":
+        return ()
+    content: Final = item.get("content", [])
+    if isinstance(content, str):
+        return (content,)
+    return tuple(
+        text
+        for block in _json_array_or_empty(content)
+        if _is_json_object(block)
+        and block.get("type") == "input_text"
+        and isinstance(text := block.get("text"), str)
+        and text
+    )
+
+
+def _logged_user_messages(client_frame: object) -> tuple[dict[str, object], ...]:
+    frame: Final = _json_object_or_none(client_frame)
+    if frame is None or frame.get("type") != "response.create":
+        return ()
+    input_items: Final = frame.get("input", [])
+    if isinstance(input_items, str):
+        return ({"role": "user", "content": input_items},)
+    texts: Final = chain.from_iterable(_user_texts_in_input_item(item) for item in _json_array_or_empty(input_items))
+    return tuple({"role": "user", "content": text} for text in texts)
+
+
+def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
+    from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+
+    logging_result: Final = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
+    response_cost: Final = turn_logging_obj.response_cost_calculator(result=logging_result) or 0.0
+    turn_logging_obj.record_partial_usage_for_failure(logging_result.usage, response_cost)
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponsesWsTurn:
+    """One ``response.create`` on a native Responses socket, logged and billed as its own call once a terminal
+    event (``response.completed``, ``response.incomplete``, ``response.failed`` or ``error``) closes it."""
+
+    logging_obj: LiteLLMLoggingObj
+    events: tuple[dict[str, object], ...] = ()
+
+    def with_event(self, event: dict[str, object]) -> _ResponsesWsTurn:
+        return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
+
+    def failure(self, model: str, custom_llm_provider: str) -> Exception | None:
+        failed_event: Final = next(
+            (event for event in self.events if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
+        )
+        if failed_event is None:
+            return None
+        return _map_stream_error_to_exception(_ws_event_error(failed_event), model, custom_llm_provider)
+
+
 _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 
 
@@ -1997,8 +2069,8 @@ class ResponsesWebSocketStreaming:
         litellm_metadata: Final = self.request_data.get("litellm_metadata")
         self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
         self.custom_llm_provider: str | None = custom_llm_provider
-        self.messages: list[_MutableJsonObject] = []
-        self.input_messages: list[dict[str, object]] = []
+        self._open_turns: tuple[_ResponsesWsTurn, ...] = ()
+        self._failure: Exception | None = None
         self.first_message = first_message
         self.guardrail_callbacks: Sequence[PresidioGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
@@ -2008,104 +2080,52 @@ class ResponsesWebSocketStreaming:
         self.authorized_model: str | None = authorized_model
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
-    def _should_store_event(self, event_obj: _MutableJsonObject) -> bool:
-        return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
-
-    def _store_event(self, event: str | bytes | dict[str, object]) -> None:
-        if isinstance(event, bytes):
-            event = event.decode("utf-8")
-        if isinstance(event, str):
-            try:
-                event_obj = _load_json_object(event)
-            except (json.JSONDecodeError, TypeError):
-                return
-        else:
-            event_obj = event
-
-        if self._should_store_event(event_obj):
-            self.messages.append(event_obj)
-
-    def _collect_input_from_client_event(self, message: object) -> None:
-        """Extract user input content from response.create for logging."""
-        try:
-            if isinstance(message, str):
-                msg_obj = _load_json_object(message)
-            elif _is_json_object(message):
-                msg_obj = message
-            else:
-                return
-
-            if msg_obj.get("type") != "response.create":
-                return
-
-            input_items: Final = msg_obj.get("input", [])
-            if isinstance(input_items, str):
-                self.input_messages.append({"role": "user", "content": input_items})
-                return
-
-            if _is_json_array(input_items):
-                for item in input_items:
-                    if not _is_json_object(item):
-                        continue
-                    if item.get("type") == "message" and item.get("role") == "user":
-                        content = item.get("content", [])
-                        if isinstance(content, str):
-                            self.input_messages.append({"role": "user", "content": content})
-                        elif _is_json_array(content):
-                            for c in content:
-                                if _is_json_object(c) and c.get("type") == "input_text":
-                                    text = c.get("text", "")
-                                    if text:
-                                        self.input_messages.append({"role": "user", "content": text})
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            pass
-
-    def _store_input(self, message: object) -> None:
-        self._collect_input_from_client_event(message)
-        if self.logging_obj:
-            self.logging_obj.pre_call(input=message, api_key="")
-
-    def _failure_exception(self) -> Exception | None:
-        failed_event: Final = next(
-            (event for event in self.messages if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
+    def _start_turn(self, client_frame: str | None) -> None:
+        turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
+            litellm_call_id=str(uuid.uuid4()), start_time=datetime.now()
         )
-        if failed_event is None:
-            return None
-        return _map_stream_error_to_exception(
-            _ws_event_error(failed_event), self.authorized_model or "", self.custom_llm_provider or ""
-        )
+        turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
+        turn_logging_obj.pre_call(input=client_frame, api_key="")
+        self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
-    async def _log_messages(self) -> None:
-        if not self.logging_obj:
+    def _record_client_frame(self, client_frame: str) -> None:
+        frame: Final = _json_object_or_none(client_frame)
+        if frame is not None and frame.get("type") == "response.create":
+            self._start_turn(client_frame)
+
+    def _record_backend_event(self, event: str) -> None:
+        event_obj: Final = _json_object_or_none(event)
+        if event_obj is None or event_obj.get("type") not in RESPONSES_WS_LOGGED_EVENT_TYPES:
             return
-        if self.input_messages:
-            self.logging_obj.model_call_details["messages"] = self.input_messages
-        if not self.messages:
+        if not self._open_turns:
+            self._start_turn(None)
+        turn: Final = self._open_turns[0].with_event(event_obj)
+        if event_obj.get("type") in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
+            self._open_turns = self._open_turns[1:]
+            self._log_turn(turn)
             return
-        exception: Final = self._failure_exception()
+        self._open_turns = (turn, *self._open_turns[1:])
+
+    def _log_open_turns(self) -> None:
+        open_turns: Final = self._open_turns
+        self._open_turns = ()
+        for turn in open_turns:
+            if turn.events:
+                self._log_turn(turn)
+
+    def _log_turn(self, turn: _ResponsesWsTurn) -> None:
+        events: Final = list(turn.events)
+        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "")
         if exception is None:
-            asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
+            asyncio.create_task(turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True))
             return
-        self._record_usage_for_failure()
+        if self._failure is None:
+            self._failure = exception
+        _record_usage_for_failure(turn.logging_obj, events)
         traceback_exception: Final = "".join(traceback.format_exception(exception))
         asyncio.create_task(
-            self.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
+            turn.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
         )
-
-    def _record_usage_for_failure(self) -> None:
-        from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
-        from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject
-
-        usage: Final = ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
-            self.messages
-        )
-        tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(self.messages)
-        service_tier: Final = next(iter(tier_partition)) if len(tier_partition) == 1 else None
-        logging_result: Final = LiteLLMRealtimeStreamLoggingObject(
-            usage=usage, results=self.messages, service_tier=service_tier
-        )
-        response_cost: Final = self.logging_obj.response_cost_calculator(result=logging_result) or 0.0
-        self.logging_obj.record_partial_usage_for_failure(usage, response_cost)
 
     def _wrap_response_event(self, response_str: str) -> str:
         try:
@@ -2164,7 +2184,7 @@ class ResponsesWebSocketStreaming:
 
                 # Log the output-masked form so PII redacted by apply_to_output
                 # guardrails does not appear in success logs.
-                self._store_event(wrapped_str)
+                self._record_backend_event(wrapped_str)
 
                 await self.websocket.send_text(wrapped_str)
 
@@ -2173,7 +2193,7 @@ class ResponsesWebSocketStreaming:
         except Exception as e:
             verbose_logger.exception("Error in responses WS backend_to_client: %s", e)
         finally:
-            await self._log_messages()
+            self._log_open_turns()
 
     def _enforce_authorized_model(self, msg_obj: _MutableJsonObject) -> bool:
         """
@@ -2518,8 +2538,7 @@ class ResponsesWebSocketStreaming:
         try:
             if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
-                self._store_input(masked_first)
-                self._store_event(masked_first)
+                self._record_client_frame(masked_first)
                 await self.backend_ws.send(masked_first)
 
             while True:
@@ -2527,8 +2546,7 @@ class ResponsesWebSocketStreaming:
                 if not await self._enforce_or_reject_frame(message):
                     continue
                 masked = await self._mask_response_create(message)
-                self._store_input(masked)
-                self._store_event(masked)
+                self._record_client_frame(masked)
                 await self.backend_ws.send(masked)
 
         except Exception as e:
@@ -2551,7 +2569,7 @@ class ResponsesWebSocketStreaming:
                 await self.backend_ws.close()
             except Exception:
                 pass
-        return self._failure_exception()
+        return self._failure
 
 
 # ---------------------------------------------------------------------------
