@@ -1,8 +1,8 @@
 import base64
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, NoReturn, TypeAlias
+from typing import Final, NoReturn, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.secret_redaction import redact_string
 @dataclass(frozen=True, slots=True)
 class VertexCredentialsJson:
     value: Mapping[str, object]
+    path: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +24,7 @@ class VertexCredentialsFileUnreadable:
 
 
 @dataclass(frozen=True, slots=True)
-class VertexCredentialsFileNotJson:
+class VertexCredentialsFileInvalid:
     path: str
     problem: str
 
@@ -51,15 +52,16 @@ class _JsonNotAnObject:
 
 VertexCredentialsFailure: TypeAlias = (
     VertexCredentialsFileUnreadable
-    | VertexCredentialsFileNotJson
+    | VertexCredentialsFileInvalid
     | VertexCredentialsInlineNotJson
     | VertexCredentialsUnusable
 )
 VertexCredentialsSource: TypeAlias = VertexCredentialsJson | VertexCredentialsFailure
 _VertexCredentialsFile: TypeAlias = (
-    VertexCredentialsJson | VertexCredentialsFileUnreadable | VertexCredentialsFileNotJson
+    VertexCredentialsJson | VertexCredentialsFileUnreadable | VertexCredentialsFileInvalid
 )
 _ParsedJson: TypeAlias = Mapping[str, object] | _InvalidJson | _JsonNotAnObject
+_Credentials = TypeVar("_Credentials")
 
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -92,18 +94,18 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
     except OSError as e:
         return VertexCredentialsFileUnreadable(path, f"{e.strerror or 'OS error'} ({type(e).__name__})")
     except UnicodeDecodeError:
-        return VertexCredentialsFileNotJson(path, "is not UTF-8 text")
+        return VertexCredentialsFileInvalid(path, "is not UTF-8 text")
     except ValueError as e:
         return VertexCredentialsFileUnreadable(path, f"{e} ({type(e).__name__})")
 
     parsed: Final = _parse_json_object(contents)
     match parsed:
         case _InvalidJson(detail=detail):
-            return VertexCredentialsFileNotJson(path, f"is not valid JSON: {detail}. {_PRIVATE_KEY_HINT}")
+            return VertexCredentialsFileInvalid(path, f"is not valid JSON: {detail}. {_PRIVATE_KEY_HINT}")
         case _JsonNotAnObject():
-            return VertexCredentialsFileNotJson(path, _NOT_A_JSON_OBJECT)
+            return VertexCredentialsFileInvalid(path, _NOT_A_JSON_OBJECT)
         case _:
-            return VertexCredentialsJson(parsed)
+            return VertexCredentialsJson(parsed, path)
 
 
 def _is_inline_credentials_json(credentials: str) -> bool:
@@ -123,7 +125,7 @@ def _is_base64_encoded_json(credentials: str) -> bool:
 def _load_inline_credentials(credentials: str) -> VertexCredentialsSource:
     inline: Final = _parse_json_object(credentials)
     if isinstance(inline, Mapping):
-        return VertexCredentialsJson(inline)
+        return VertexCredentialsJson(inline, None)
 
     from_file_named_like_json: Final = _read_json_file(credentials)
     if not isinstance(from_file_named_like_json, VertexCredentialsFileUnreadable):
@@ -155,6 +157,18 @@ def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
     return _read_json_file(credentials)
 
 
+def build_vertex_credentials(
+    source: VertexCredentialsJson, build: Callable[[Mapping[str, object]], _Credentials]
+) -> _Credentials:
+    if source.path is None:
+        return build(source.value)
+    try:
+        return build(source.value)
+    except ValueError as e:
+        rejected: Final = VertexCredentialsFileInvalid(source.path, f"holds credentials Google auth rejects: {e}")
+    raise_vertex_credentials_failure(rejected)
+
+
 def _path_for_log(path: str) -> str:
     if len(path) > _MAX_LOGGED_PATH_LENGTH:
         return f"<a {len(path)}-character value>"
@@ -168,7 +182,7 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
                 "Vertex: cannot read the credentials file at %s: %s", _path_for_log(failure.path), failure.reason
             )
             raise ValueError(_FILE_FAILURE_MESSAGE)
-        case VertexCredentialsFileNotJson():
+        case VertexCredentialsFileInvalid():
             verbose_logger.error("Vertex: the credentials file at %s %s", _path_for_log(failure.path), failure.problem)
             raise ValueError(_FILE_FAILURE_MESSAGE)
         case VertexCredentialsInlineNotJson():

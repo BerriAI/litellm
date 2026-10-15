@@ -470,7 +470,7 @@ def test_vertex_error_message_no_credential_leak():
     credential loader raises today must survive redaction unchanged, which it only can
     if it never carried credential material in the first place."""
     from litellm.llms.vertex_ai.credentials_source import (
-        VertexCredentialsFileNotJson,
+        VertexCredentialsFileInvalid,
         VertexCredentialsFileUnreadable,
         VertexCredentialsInlineNotJson,
         raise_vertex_credentials_failure,
@@ -478,8 +478,10 @@ def test_vertex_error_message_no_credential_leak():
     path = "/etc/litellm/vertexai.json"
     failures = (
         VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),
-        VertexCredentialsFileNotJson(path, "Invalid control character at: line 1 column 55"),
-        VertexCredentialsInlineNotJson("Expecting value: line 1 column 1 (char 0)"),
+        VertexCredentialsFileInvalid(path, "Invalid control character at: line 1 column 55"),
+        VertexCredentialsInlineNotJson(
+            "Expecting value: line 1 column 1 (char 0)", "Check for unescaped newlines in private_key."
+        ),
     )
 
     for failure in failures:

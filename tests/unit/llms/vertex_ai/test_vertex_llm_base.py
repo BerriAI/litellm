@@ -3,6 +3,8 @@ import base64
 import json
 import logging
 import pathlib
+import re
+import traceback
 from typing import Final
 from unittest.mock import MagicMock, call, patch
 
@@ -2264,7 +2266,13 @@ class TestVertexCredentialsSource:
         malformed.write_text("{not json")
         not_an_object = tmp_path / "list.json"
         not_an_object.write_text("[1, 2]")
-        paths = (tmp_path / "missing.json", directory, malformed, not_an_object)
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text('{"hello": "world"}')
+        bad_private_key = tmp_path / "bad-key.json"
+        bad_private_key.write_text(
+            '{"type": "service_account", "private_key": "x", "client_email": "a@b.c", "token_uri": "https://t"}'
+        )
+        paths = (tmp_path / "missing.json", directory, malformed, not_an_object, not_a_key, bad_private_key)
 
         def message_for(path: pathlib.Path) -> str:
             with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
@@ -2275,6 +2283,34 @@ class TestVertexCredentialsSource:
             "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason. "
             "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
         }
+
+    NOT_A_KEY: Final = '{"hello": "world"}'
+
+    def _google_auth_rejection(self) -> str:
+        with pytest.raises(google.auth.exceptions.GoogleAuthError) as exc_info:
+            VertexBase()._credentials_from_service_account(json.loads(self.NOT_A_KEY), scopes=None)
+        return str(exc_info.value)
+
+    def test_google_auth_rejecting_a_credentials_file_is_named_only_in_the_log(self, tmp_path, caplog):
+        not_a_key = tmp_path / "settings.json"
+        not_a_key.write_text(self.NOT_A_KEY)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE) as exc_info:
+                VertexBase().load_auth(credentials=str(not_a_key), project_id="p")
+
+        rejection = self._google_auth_rejection()
+        assert rejection not in "".join(traceback.format_exception(exc_info.value))
+        assert repr(str(not_a_key)) in caplog.text
+        assert rejection in caplog.text
+
+    def test_google_auth_rejecting_inline_credentials_still_tells_the_caller_why(self):
+        rejection = self._google_auth_rejection()
+
+        with pytest.raises(ValueError, match=re.escape(rejection)) as exc_info:
+            VertexBase().load_auth(credentials=self.NOT_A_KEY, project_id="p")
+
+        assert self.FILE_FAILURE not in str(exc_info.value)
 
     def test_a_credentials_file_holding_json_that_is_not_an_object_says_so_in_the_log(self, tmp_path, caplog):
         double_encoded = tmp_path / "vertexai.json"
