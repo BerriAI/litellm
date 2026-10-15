@@ -58,6 +58,29 @@ after unpause
   head (200, 4.1, '{"metrics": {"latencyMs": 745}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
   merge (200, 3.4, '{"metrics": {"latencyMs": 411}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
 
+== postgres pause recovery, three orders
+== order base,head,merge
+paused base 503 503
+paused head 503 503
+paused merge 503 503
+recovered base 5.1 s, statuses before 200: []
+recovered head 9.2 s, statuses before 200: []
+recovered merge 10.5 s, statuses before 200: []
+== order head,merge,base
+paused head 200 503
+paused merge 200 503
+paused base 200 503
+recovered head 1.7 s, statuses before 200: []
+recovered merge 3.6 s, statuses before 200: []
+recovered base 4.7 s, statuses before 200: []
+== order merge,base,head
+paused merge 200 200
+paused base 503 200
+paused head 200 200
+recovered merge 1.1 s, statuses before 200: []
+recovered head 5.9 s, statuses before 200: []
+recovered base 8.5 s, statuses before 200: [503]
+
 == headroom paused
 headroom paused base 200 3.1 {"metrics":{"latencyMs":651},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_turn"
 headroom paused head 200 1.4 {"metrics":{"latencyMs":756},"output":{"message":{"content":[{"text":"Items with id 13 and id 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"e
