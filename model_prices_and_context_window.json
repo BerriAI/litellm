@@ -74983,14 +74983,14 @@
         "supports_vision": true
     },
     "vertex_ai/deepseek-ai/deepseek-v4.1-flash-maas": {
-        "cache_read_input_token_cost": 3e-08,
-        "input_cost_per_token": 3e-07,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 0.0,
         "litellm_provider": "vertex_ai-deepseek_models",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 0.0,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
