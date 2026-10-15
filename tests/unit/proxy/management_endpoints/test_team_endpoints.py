@@ -44,6 +44,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
@@ -108,6 +109,10 @@ def _team_admin_may_edit(*fields: str):
         patch(  # test-quality-ok: the registry is a module constant update_team reads directly; no seam to inject
             "litellm.proxy.management_endpoints.team_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
             frozenset(fields) - (SUPPORTED_TEAM_ADMIN_PERMISSIONS - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS),
+        ),
+        patch(  # test-quality-ok: the block list is a module constant update_team reads directly; no seam to inject
+            "litellm.proxy.management_endpoints.team_endpoints.PROXY_CONTROLLED_TEAM_METADATA_KEYS",
+            PROXY_CONTROLLED_TEAM_METADATA_KEYS - frozenset(fields),
         ),
         patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": list(fields)}),  # test-quality-ok: update_team reads general_settings as a proxy_server module global
     ):
@@ -15072,7 +15077,7 @@ async def test_update_team_batch_enqueued_token_limit_raised_rejected_for_team_a
 
     with contextlib.ExitStack() as stack:
         _wire_update_team(stack, {_TEAM_BATCH_LIMIT: 100000})
-        stack.enter_context(_team_admin_may_edit("metadata"))
+        stack.enter_context(_team_admin_may_edit("metadata", _TEAM_BATCH_LIMIT))
         with pytest.raises(ProxyException) as exc:
             await update_team(
                 data=UpdateTeamRequest(team_id="test_team_id", metadata={_TEAM_BATCH_LIMIT: 10**12}),
@@ -16983,6 +16988,82 @@ async def test_update_team_team_admin_echoing_unpermitted_fields_unchanged_is_al
 
 
 @pytest.mark.asyncio
+async def test_update_team_team_admin_cannot_clear_a_declared_metadata_key():
+    import contextlib
+
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(parse_team_metadata_schema([{"key": "cost_center", "label": "Cost Center"}]))
+    try:
+        with contextlib.ExitStack() as stack:
+            prisma = _wire_update_team(stack, {"cost_center": "eng", "region": "eu"})
+            stack.enter_context(_team_admin_may_edit("metadata"))
+            with pytest.raises(ProxyException) as exc:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"region": "us"}),
+                    http_request=_update_request_stub(),
+                    user_api_key_dict=_TEAM_ADMIN_CALLER,
+                )
+    finally:
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert str(exc.value.code) == "403"
+    assert "'cost_center'" in str(exc.value.message)
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_key():
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"priority": "high", "region": "eu"})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={"priority": "low", "region": "eu"}),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "'priority'" in str(exc.value.message)
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
+    import contextlib
+
+    recorded: Final[list[object]] = []
+    TEAM_METADATA_VALIDATOR_REGISTRY.set(
+        _recording_validator(recorded, valid=False, error_message="cost center rejected, contact FinOps")
+    )
+    try:
+        with contextlib.ExitStack() as stack:
+            prisma = _wire_update_team(stack, {"cost_center": "eng"})
+            prisma.db.litellm_teamtable.find_unique.return_value.team_alias = "test_team"
+            stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+            stack.enter_context(_team_admin_may_edit("metadata"))
+            with pytest.raises(ProxyException) as exc:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"cost_center": "BAD"}),
+                    http_request=_update_request_stub(),
+                    user_api_key_dict=_TEAM_ADMIN_CALLER,
+                )
+    finally:
+        TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
+
+    assert str(exc.value.code) == "400"
+    assert "cost center rejected" in str(exc.value.message)
+    assert len(recorded) == 1
+    assert not prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_resending_stored_member_defaults_is_not_an_edit(
     disable_audit_logging_for_mocked_team,
 ):
@@ -17495,28 +17576,48 @@ _MEMBER_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_i
             _ROSTER_ADMIN_CALLER,
             False,
             ("tpm_limit",),
-            {"kind": "team_admin", "editable_fields": ["tpm_limit"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["tpm_limit"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-field-enabled",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("max_budget",),
-            {"kind": "team_admin", "editable_fields": ["max_budget"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["max_budget"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-keep-or-lower-budget",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("max_budget", "raise_max_budget"),
-            {"kind": "team_admin", "editable_fields": ["max_budget"], "may_raise_max_budget": True},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["max_budget"],
+                "may_raise_max_budget": True,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-may-raise-budget",
         ),
         pytest.param(
             _ROSTER_ADMIN_CALLER,
             False,
             ("tpm_limit", "raise_max_budget"),
-            {"kind": "team_admin", "editable_fields": ["tpm_limit"], "may_raise_max_budget": False},
+            {
+                "kind": "team_admin",
+                "editable_fields": ["tpm_limit"],
+                "may_raise_max_budget": False,
+                "proxy_controlled_metadata_keys": [],
+            },
             id="team-admin-raise-without-max-budget-is-inert",
         ),
         pytest.param(_MEMBER_CALLER, False, ("tpm_limit",), {"kind": "none"}, id="plain-member"),
@@ -17553,6 +17654,40 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         )
 
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
+
+
+@pytest.mark.parametrize("enabled_fields,expect_keys", [(("metadata",), True), (("tpm_limit",), False)])
+@pytest.mark.asyncio
+async def test_team_info_lists_proxy_controlled_metadata_keys_only_when_metadata_is_editable(
+    enabled_fields, expect_keys
+):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(team_id="team-1", members_with_roles=[Member(user_id="admin-1", role="admin")])
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(  # test-quality-ok: no seam on team_info
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+        _not_org_admin(),
+        _team_admin_may_edit(*enabled_fields),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request), team_id="team-1", user_api_key_dict=_ROSTER_ADMIN_CALLER
+        )
+
+    access: Final = response["team_info"].caller_edit_access
+    assert access.kind == "team_admin"
+    listed: Final = set(access.proxy_controlled_metadata_keys)
+    assert ({"priority", "guardrails", "callback_settings"} <= listed) is expect_keys
+    assert bool(access.proxy_controlled_metadata_keys) is expect_keys
 
 
 def test_member_budget_patch_maps_temp_budget_fields() -> None:

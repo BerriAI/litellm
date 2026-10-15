@@ -16,6 +16,7 @@ import pytest
 from _pytest.mark.structures import ParameterSet
 from anthropic.types.beta import BetaToolUnionParam
 from integration._support import claude_code as cc
+from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, MODEL, Event, aws_chunks, sse_chunks
 from integration._support.client import Gateway, Scenario, eventually, object_value
@@ -1265,3 +1266,61 @@ def test_messages_endpoint_keeps_forwarding_the_regex_tool_and_defer_loading(gat
         stream_request, stream_sent = _only_request(wire)
         _assert_anthropic_wire(stream_request, stream_sent, ("get_weather",))
         assert stream_sent.get("stream") is True, stream_sent
+
+
+_DEFER_PARAMETERS: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_PLAIN_TOOL_SEARCH: Final[dict[str, JsonValue]] = {"type": "tool_search"}
+
+
+def _defer_function(name: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {"name": name, "description": f"Look up {name}", "parameters": _DEFER_PARAMETERS, **extra}
+
+
+def _defer_wire_function(name: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "function", "strict": None, **_defer_function(name), **extra}
+
+
+@pytest.mark.parametrize(
+    "deferred_tool",
+    [
+        {"type": "function", "function": _defer_function("get_weather"), "defer_loading": True},
+        {"type": "function", "function": _defer_function("get_weather", defer_loading=True)},
+    ],
+    ids=["tool-level", "function-level"],
+)
+def test_chat_bridge_forwards_defer_loading_so_tool_search_has_a_deferred_tool(
+    gateway: Gateway, deferred_tool: dict[str, JsonValue]
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(pcb.respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=f"{wire.url}/v1")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": pcb.prompt(marker)}],
+                "tools": [
+                    _PLAIN_TOOL_SEARCH,
+                    deferred_tool,
+                    {"type": "function", "function": _defer_function("get_time")},
+                    {"type": "function", "function": _defer_function("get_news", defer_loading=False)},
+                ],
+                **pcb.NO_CACHE,
+            },
+        )
+        assert response.status_code == 200, response.text
+        message: Final = rv.JSON_OBJECT.validate_python(
+            rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(response.text)["choices"])[0]["message"]
+        )
+        assert message["content"] == rv.answer(marker), response.text
+        assert pcb.body_of(pcb.posted(wire, marker))["tools"] == [
+            _PLAIN_TOOL_SEARCH,
+            _defer_wire_function("get_weather", defer_loading=True),
+            _defer_wire_function("get_time"),
+            _defer_wire_function("get_news", defer_loading=False),
+        ]

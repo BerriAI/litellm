@@ -24280,7 +24280,7 @@
         }
     },
     "agentcore/search": {
-        "input_cost_per_query": 0.0,
+        "input_cost_per_query": 0.007,
         "litellm_provider": "agentcore",
         "mode": "search",
         "metadata": {

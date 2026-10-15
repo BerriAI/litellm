@@ -12,9 +12,9 @@ pub(crate) mod traces;
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{
-    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
-use litellm_host_python::{missing_state, present};
+use litellm_host_python::{Error as HostError, present};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -64,7 +64,9 @@ impl RequestView {
     }
 
     fn dicts(&self) -> PyResult<&RequestDicts> {
-        self.0.as_ref().ok_or_else(missing_state)
+        self.0
+            .as_ref()
+            .ok_or_else(|| HostError::MissingState.into())
     }
 
     pub(crate) fn resolve(
@@ -72,7 +74,7 @@ impl RequestView {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
-        let dicts = self.0.as_mut().ok_or_else(missing_state)?;
+        let dicts = self.0.as_mut().ok_or(HostError::MissingState)?;
         dicts.request = effective_py_args(dicts.base.bind(py), arguments)?.unbind();
         Ok(())
     }
@@ -127,6 +129,10 @@ fn call_hooks(
     ))
 }
 
+fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import("litellm.rust_bridge.execution")
+}
+
 fn run_public_call<H, M>(
     py: Python<'_>,
     arguments: Py<PyDict>,
@@ -157,7 +163,7 @@ where
             .with(hooks)
             .with(crate::preflight::SdkPolicy),
         arguments,
-        crate::lifecycle::call_options(asynchronous),
+        CallOptions::new(asynchronous, execution_steps),
     )
 }
 

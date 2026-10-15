@@ -14,6 +14,7 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -532,7 +533,7 @@ class AWSEventStreamDecoder:
             _thinking_block["thinking"] = ""  # consistent with anthropic response
         elif "redactedContent" in thinking_block:
             _thinking_block = ChatCompletionRedactedThinkingBlock(
-                type="redacted_thinking", data=thinking_block["redactedContent"]
+                type="redacted_thinking", data=native_redacted_thinking_data(thinking_block["redactedContent"])
             )
         if _thinking_block is not None:
             thinking_blocks_list.append(_thinking_block)
