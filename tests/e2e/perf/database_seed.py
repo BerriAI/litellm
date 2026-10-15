@@ -113,6 +113,9 @@ def measure(connection: psycopg.Connection[tuple[object, ...]], rows: int) -> Se
 
 
 def initialize(connection: psycopg.Connection[tuple[object, ...]], spec: SeedSpec) -> None:
+    assert scalar(connection, b"SELECT relkind FROM pg_class WHERE oid = '\"LiteLLM_SpendLogs\"'::regclass") == "r", (
+        "This seed profile requires unpartitioned spend logs"
+    )
     with connection.transaction():
         connection.execute("CREATE SCHEMA IF NOT EXISTS litellm_perf_seed")
         connection.execute(
@@ -158,6 +161,10 @@ def initialize(connection: psycopg.Connection[tuple[object, ...]], spec: SeedSpe
             "FROM generate_series(0, 999) AS g"
         )
         connection.execute(
+            'INSERT INTO "LiteLLM_EndUserTable" (user_id, models, blocked) '
+            "SELECT 'perf-end-user-' || g, '{}', true FROM generate_series(0, 99999) AS g"
+        )
+        connection.execute(
             'INSERT INTO "LiteLLM_VerificationToken" (token, key_alias, user_id, team_id, models, blocked) '
             "SELECT md5('perf-key:' || g) || md5('perf-key-tail:' || g), 'perf-key-' || g, "
             "'perf-user-' || g / 10, 'perf-team-' || g / 100, '{}', true FROM generate_series(0, 9999) AS g"
@@ -178,6 +185,7 @@ def seed_batch(connection: psycopg.Connection[tuple[object, ...]], spec: SeedSpe
         for table, entity in (
             ("LiteLLM_DailyUserSpend", "user_id"),
             ("LiteLLM_DailyTeamSpend", "team_id"),
+            ("LiteLLM_DailyEndUserSpend", "end_user_id"),
             ("LiteLLM_DailyGlobalSpend", ""),
             ("LiteLLM_DailyTagSpend", "tag"),
         ):
@@ -216,7 +224,7 @@ def aggregate_batch(connection: psycopg.Connection[tuple[object, ...]], table: s
         for field in fields
     )
     source: Final = sql.SQL(
-        'SELECT *, "user" AS user_id, to_char("startTime", \'YYYY-MM-DD\') AS date, '
+        'SELECT *, "user" AS user_id, end_user AS end_user_id, to_char("startTime", \'YYYY-MM-DD\') AS date, '
         "'/v1/chat/completions'::text AS endpoint FROM perf_seed_batch"
     )
     connection.execute(
@@ -274,6 +282,7 @@ def seed(
         for table in (
             "LiteLLM_DailyUserSpend",
             "LiteLLM_DailyTeamSpend",
+            "LiteLLM_DailyEndUserSpend",
             "LiteLLM_DailyGlobalSpend",
             "LiteLLM_DailyTagSpend",
         ):
