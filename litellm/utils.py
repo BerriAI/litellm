@@ -4810,8 +4810,10 @@ def get_optional_params(
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
+            from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=model,
+                model=bedrock_capability_model(model, base_model),
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
