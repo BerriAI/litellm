@@ -14350,6 +14350,54 @@ class TestContextWindowEscalation:
         assert "context_escalation" in result.routing_decision["signals"]
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    async def test_a_window_declared_only_through_base_model_escalates_too(self):
+        """A Bedrock application inference profile ARN has no cost-map row; its window exists
+        only through `model_info.base_model`. The gate used to resolve that deployment to no
+        window at all (base_model was read for azure only), treat it as infinite, and leave an
+        oversized SIMPLE prompt on it to 400 at the provider."""
+        base_model: Final = "meta.llama3-8b-instruct-v1:0"
+        base_window: Final = litellm.get_model_info(model=f"bedrock/{base_model}")["max_input_tokens"]
+        assert base_window is not None
+        litellm_router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "small-model",
+                    "litellm_params": {
+                        "model": "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz",
+                        "mock_response": "ok",
+                    },
+                    "model_info": {"base_model": base_model},
+                },
+                {
+                    "model_name": "big-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "ok"},
+                    "model_info": {"max_input_tokens": base_window * 8},
+                },
+            ]
+        )
+        router: Final = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=litellm_router,
+            complexity_router_config=_tier_config(),
+        )
+        filler_repeats: Final = (base_window * 4) // len(_CONTEXT_FILLER) + 2
+        oversized_turns: Final = [
+            {"role": "user", "content": "Here is everything discussed so far. " + _CONTEXT_FILLER * filler_repeats},
+            {"role": "assistant", "content": "Noted, I have read all of it."},
+            {"role": "user", "content": "ok continue"},
+        ]
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=oversized_turns
+        )
+
+        assert result is not None
+        assert result.model == "big-model"
+        assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
+        assert "context_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
     async def test_a_prompt_that_fits_routes_exactly_as_before(self):
         """The gate must be invisible for normal traffic: same model, no escalation facts."""
         router = ComplexityRouter(
