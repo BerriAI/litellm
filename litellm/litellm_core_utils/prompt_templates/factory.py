@@ -2479,7 +2479,22 @@ def sanitize_messages_for_tool_calling(
 def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [_with_native_redacted_data(block) for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+    return [
+        _without_stream_index(_with_native_redacted_data(block))
+        for block in thinking_blocks
+        if not is_unsignable_thinking_block(block)
+    ]
+
+
+def _without_stream_index(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if "index" not in block:
+        return block
+    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
+        ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        {key: value for key, value in block.items() if key != "index"},
+    )
 
 
 def _with_native_redacted_data(
