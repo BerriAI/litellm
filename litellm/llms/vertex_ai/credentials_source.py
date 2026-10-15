@@ -68,12 +68,12 @@ _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _INLINE_JSON_LEADING_NOISE: Final = " \t\r\n﻿\"'"
 _BASE64_PREFIX: Final = "base64:"
 _MAX_LOGGED_PATH_LENGTH: Final = 260
+_MAX_CREDENTIALS_FILE_CHARACTERS: Final = 1 << 20
 _NOT_A_JSON_OBJECT: Final = "is JSON but not a JSON object, it may be quoted or encoded twice"
 _PRIVATE_KEY_HINT: Final = "Check for unescaped newlines in private_key."
 _LEADING_NOISE_HINT: Final = "Remove the quotes or byte-order mark before the opening `{`."
 _FILE_FAILURE_MESSAGE: Final = (
-    "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason. "
-    "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
+    "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
 )
 
 
@@ -90,7 +90,7 @@ def _parse_json_object(raw: str | bytes) -> _ParsedJson:
 def _read_json_file(path: str) -> _VertexCredentialsFile:
     try:
         with open(path, encoding="utf-8") as f:
-            contents: Final = f.read()
+            contents: Final = f.read(_MAX_CREDENTIALS_FILE_CHARACTERS + 1)
     except OSError as e:
         return VertexCredentialsFileUnreadable(path, f"{e.strerror or 'OS error'} ({type(e).__name__})")
     except UnicodeDecodeError:
@@ -98,6 +98,10 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
     except ValueError as e:
         return VertexCredentialsFileUnreadable(path, f"{e} ({type(e).__name__})")
 
+    if len(contents) > _MAX_CREDENTIALS_FILE_CHARACTERS:
+        return VertexCredentialsFileInvalid(
+            path, f"is over {_MAX_CREDENTIALS_FILE_CHARACTERS} characters, larger than any credentials file"
+        )
     parsed: Final = _parse_json_object(contents)
     match parsed:
         case _InvalidJson(detail=detail):
@@ -126,10 +130,8 @@ def _load_inline_credentials(credentials: str) -> VertexCredentialsSource:
     inline: Final = _parse_json_object(credentials)
     if isinstance(inline, Mapping):
         return VertexCredentialsJson(inline, None)
-
-    from_file_named_like_json: Final = _read_json_file(credentials)
-    if not isinstance(from_file_named_like_json, VertexCredentialsFileUnreadable):
-        return from_file_named_like_json
+    if os.path.isfile(credentials):
+        return _read_json_file(credentials)
 
     match inline:
         case _JsonNotAnObject():
@@ -165,7 +167,7 @@ def build_vertex_credentials(
     try:
         return build(source.value)
     except ValueError as e:
-        rejected: Final = VertexCredentialsFileInvalid(source.path, f"holds credentials Google auth rejects: {e}")
+        rejected: Final = VertexCredentialsFileInvalid(source.path, f"holds credentials that cannot be used: {e}")
     raise_vertex_credentials_failure(rejected)
 
 

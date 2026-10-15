@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import pathlib
 import re
 import traceback
@@ -2280,8 +2281,7 @@ class TestVertexCredentialsSource:
             return str(exc_info.value)
 
         assert {message_for(path) for path in paths} == {
-            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason. "
-            "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
+            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
         }
 
     NOT_A_KEY: Final = '{"hello": "world"}'
@@ -2311,6 +2311,35 @@ class TestVertexCredentialsSource:
             VertexBase().load_auth(credentials=self.NOT_A_KEY, project_id="p")
 
         assert self.FILE_FAILURE not in str(exc_info.value)
+
+    def test_litellm_rejecting_a_credentials_file_is_not_blamed_on_google_auth(self, tmp_path, caplog):
+        wif_without_region = tmp_path / "wif.json"
+        wif_without_region.write_text(
+            json.dumps(
+                {
+                    "type": "external_account",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+                }
+            )
+        )
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(wif_without_region), project_id="p")
+
+        assert "holds credentials that cannot be used: aws_region_name is required" in caplog.text
+        assert "Google auth" not in caplog.text
+
+    def test_a_credentials_file_too_large_to_be_a_key_is_not_read_whole(self, tmp_path, caplog):
+        oversized = tmp_path / "vertexai.json"
+        oversized.write_text("{" + " " * (1 << 20) + "}")
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials=str(oversized), project_id="p")
+
+        assert "larger than any credentials file" in caplog.text
 
     def test_a_credentials_file_holding_json_that_is_not_an_object_says_so_in_the_log(self, tmp_path, caplog):
         double_encoded = tmp_path / "vertexai.json"
@@ -2504,6 +2533,19 @@ class TestVertexCredentialsSource:
                 VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
 
         assert "'{vertex}.json' is not valid JSON" in caplog.text
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_an_unreadable_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch, caplog):
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account"}))
+        braced.chmod(0)
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match=self.FILE_FAILURE):
+                VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
+
+        assert "cannot read the credentials file at '{vertex}.json': Permission denied" in caplog.text
 
     def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path, caplog):
         not_text = tmp_path / "vertexai.json"
