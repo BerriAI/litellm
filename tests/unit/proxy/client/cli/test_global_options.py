@@ -242,7 +242,7 @@ def test_bare_lite_says_why_it_stays_on_localhost_when_the_keychain_is_locked(
     result = cli_runner.invoke(cli, [], obj={"secret_vault": secret_vault_factory(available=False)}, input="quit\n")
 
     assert "Connected to LiteLLM server: http://localhost:4000" in result.output
-    assert "could not be read" in result.output
+    assert f"could not be read. Unlock it, or run 'lite --base-url {LOGIN_SERVER} login'" in result.output
 
 
 def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(cli_runner, isolated_home, secret_vault_factory):

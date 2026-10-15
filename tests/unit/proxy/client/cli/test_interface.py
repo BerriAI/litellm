@@ -123,6 +123,13 @@ def test_lite_with_its_own_options_inside_the_shell_runs_against_the_server_it_n
     assert credentials_endpoint.call_count == 0
 
 
+def test_a_lite_line_that_names_only_a_key_stays_on_the_shell_server(credentials_endpoint):
+    result: Final = _shell("lite --api-key sk-typed credentials list")
+
+    assert "shared-openai" in result.output
+    assert credentials_endpoint.last_request.headers["Authorization"] == "Bearer sk-typed"
+
+
 def test_a_group_that_runs_on_its_own_does_not_become_the_scope(capsys):
     @click.group()
     def root() -> None:

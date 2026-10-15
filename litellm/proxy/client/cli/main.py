@@ -91,7 +91,7 @@ class HideConfiguredCommandsGroup(click.Group):
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
     default=None,
-    show_default="base_url from `lite config`, else http://localhost:4000, or the `lite login` server for a bare `lite`",
+    show_default="base_url from `lite config`, else the `lite login` server for a bare `lite` with no key, else http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -115,7 +115,13 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     )
     login_base_url: Final = login.base_url if login is not None and login.key else None
     if login is not None and login.base_url and not login.key:
-        click.secho(keychain_unreadable_notice(context_secret_vault(ctx)), fg="yellow", err=True)
+        click.secho(
+            keychain_unreadable_notice(
+                context_secret_vault(ctx), login_command=f"lite --base-url {login.base_url} login"
+            ),
+            fg="yellow",
+            err=True,
+        )
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
