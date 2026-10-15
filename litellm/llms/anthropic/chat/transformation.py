@@ -48,6 +48,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -104,10 +105,12 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    REFUSAL_STOP_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
+    refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
@@ -144,6 +147,86 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
+_DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+_TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+
+
+def _tool_type(tool: object) -> str | None:
+    match tool:
+        case {"type": str() as tool_type}:
+            return tool_type
+        case _:
+            return None
+
+
+def _is_openai_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) == "tool_search"
+
+
+def _is_anthropic_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def _without_defer_loading(fields: object) -> object:
+    match fields:
+        case Mapping():
+            return {
+                key: value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(fields).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return fields
+
+
+def _member_without_deferral(member: object) -> object:
+    match member:
+        case Mapping():
+            return {
+                key: _without_defer_loading(value) if key == "function" else value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(member).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return member
+
+
+def _namespace_members_without_deferral(members: object) -> object:
+    match members:
+        case list():
+            return [_member_without_deferral(member) for member in _TOOLS_ADAPTER.validate_python(members)]
+        case _:
+            return members
+
+
+def _field_without_deferral(key: str, value: object) -> object:
+    match key:
+        case "function":
+            return _without_defer_loading(value)
+        case "tools":
+            return _namespace_members_without_deferral(value)
+        case _:
+            return value
+
+
+def _without_deferral(tool: object) -> object:
+    match tool:
+        case Mapping():
+            return {
+                key: _field_without_deferral(key, value)
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(tool).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return tool
+
+
+def _validated_defer_loading(value: object) -> bool:
+    try:
+        return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
+    except ValidationError as exc:
+        raise ValueError("defer_loading must be a boolean") from exc
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -310,6 +393,36 @@ MESSAGES_SERVICE_TIER_PROVIDERS: Final = SERVICE_TIER_PROVIDERS | {"bedrock_mant
 DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
     "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."
 )
+
+DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
+    "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
+    "(drop_params=True) because this route cannot run that tool search."
+)
+
+
+TOOL_SEARCH_MODEL_INFO_REMEDY: Final = (
+    " If this model does run tool search, set `supports_tool_search: true` in its `model_info`, or for the SDK "
+    "with `litellm.register_model`."
+)
+
+
+def tools_without_unsupported_tool_search(
+    tools: Sequence[object], model: str, route: str, drop_params: bool, remedy: str
+) -> Sequence[object]:
+    if not any(_is_openai_tool_search_tool(tool) for tool in tools):
+        return tools
+    if not (litellm.drop_params or drop_params):
+        raise litellm.utils.UnsupportedParamsError(
+            message=(
+                f"{model} on {route} cannot run the OpenAI `tool_search` tool as sent. Only a server-executed "
+                f"`tool_search` on a route that supports tool search becomes Anthropic's tool search.{remedy} "
+                "To drop it and the `defer_loading` of the other tools, set `litellm.drop_params=True` or for "
+                "proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            status_code=400,
+        )
+    litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
+    return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -978,9 +1091,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "computer_20250124",
             ):
                 if _defer_loading is not None:
-                    if not isinstance(_defer_loading, bool):
-                        raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading
+                    returned_tool["defer_loading"] = _validated_defer_loading(_defer_loading)
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
@@ -1059,6 +1170,53 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if authorization_token is not None:
             initial_tool["authorization_token"] = authorization_token
         return initial_tool
+
+    def _tools_with_openai_tool_search_mapped(
+        self, tools: Sequence[object], model: str, drop_params: bool
+    ) -> Sequence[object]:
+        from litellm.responses.litellm_completion_transformation.tool_search import (
+            anthropic_tool_search_chat_tool,
+            runs_tool_search_on_the_server,
+        )
+
+        first_search_tool_index: Final = next(
+            (index for index, tool in enumerate(tools) if _is_openai_tool_search_tool(tool)), None
+        )
+        if first_search_tool_index is None:
+            return tools
+        if any(_is_anthropic_tool_search_tool(tool) for tool in tools):
+            return [tool for tool in tools if not _is_openai_tool_search_tool(tool)]
+        model_runs_tool_search: Final = litellm.supports_tool_search(model, self._resolved_provider)
+        search_runs_on_the_server: Final = all(
+            runs_tool_search_on_the_server(tool) for tool in tools if _is_openai_tool_search_tool(tool)
+        )
+        if not (model_runs_tool_search and search_runs_on_the_server):
+            return tools_without_unsupported_tool_search(
+                tools=tools,
+                model=model,
+                route=self._resolved_provider,
+                drop_params=drop_params,
+                remedy="" if model_runs_tool_search else TOOL_SEARCH_MODEL_INFO_REMEDY,
+            )
+        return [
+            *tools[:first_search_tool_index],
+            anthropic_tool_search_chat_tool(),
+            *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
+        ]
+
+    def _tools_param_with_openai_tool_search_mapped(
+        self, non_default_params: Mapping[str, object], model: str, drop_params: bool
+    ) -> Mapping[str, object]:
+        tools: Final = non_default_params.get("tools")
+        if not isinstance(tools, list):
+            return {}
+        return {
+            "tools": list(
+                self._tools_with_openai_tool_search_mapped(
+                    tools=_TOOLS_ADAPTER.validate_python(tools), model=model, drop_params=drop_params
+                )
+            )
+        }
 
     def _map_tools(
         self,
@@ -1628,7 +1786,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(
+                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
@@ -2336,9 +2496,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             ## TOOL RESULTS - handle all tool result types (code execution, etc.)
             elif content["type"].endswith("_tool_result"):
-                # Skip tool_search_tool_result as it's internal metadata
-                if content["type"] == "tool_search_tool_result":
-                    continue
                 # Handle web_search_tool_result separately for backwards compatibility
                 if content["type"] == "web_search_tool_result" or content["type"] == "web_fetch_tool_result":
                     if web_search_results is None:
@@ -2707,6 +2864,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
+
+        if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             container_id: Final = (
                 completion_response.get("container", {}).get("id")
                 if isinstance(completion_response.get("container"), dict)
@@ -2723,7 +2882,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        return provider_specific_fields
+        refusal_fields: Final = refusal_provider_specific_fields(
+            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        )
+        return {**provider_specific_fields, **refusal_fields}
 
     def transform_parsed_response(
         self,
@@ -2808,7 +2970,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
+            refusal_fields: Final = refusal_provider_specific_fields(
+                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            )
             completion_response["stop_reason"] = "stop"
+            if refusal_fields:
+                json_mode_message.provider_specific_fields = dict(refusal_fields)
             _message = json_mode_message
 
         model_response.choices[0].message = _message

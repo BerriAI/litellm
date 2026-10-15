@@ -108,6 +108,10 @@ def responses_api_bridge_check(
         )
         for tool in (tools or ())
     )
+    carries_tool_search: Final = any(
+        (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
+        for tool in (tools or ())
+    )
     if isinstance(reasoning_effort, dict):
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
     else:
@@ -142,7 +146,11 @@ def responses_api_bridge_check(
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or chat_rejects_function_tools
+            or (carries_tool_search and on_constraint_enforcing_endpoint)
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")

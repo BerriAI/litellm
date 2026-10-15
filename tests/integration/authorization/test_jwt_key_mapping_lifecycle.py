@@ -18,16 +18,20 @@ from redis import Redis
 
 from tests.integration._support.client import (
     Gateway,
+    Scenario,
     delete_key_if_present,
     eventually,
     gateway_from_environment,
+    object_value,
+    string_value,
 )
-from tests.integration._support.database import read_rows
+from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _AUDIENCE: Final = "litellm-integration"
 _CLIENT_CLAIM: Final = "client_id"
+_END_USER_CLAIM: Final = "eu"
 _KEY_ID: Final = "integration-signing-key"
 _UPSTREAM_KEY: Final = "synthetic-openai-key"
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
@@ -118,6 +122,11 @@ class _ErrorResponse(BaseModel):
     error: _ProxyError
 
 
+_UNKNOWN_KEY_ERROR: Final = _ProxyError(
+    message="Authentication Error, Invalid API key provided.", type="token_not_found_in_db", param="key", code="401"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _JWTLifecycleRuntime:
     first: Gateway
@@ -206,15 +215,23 @@ def _jwks_respond(private_key: rsa.RSAPrivateKey) -> Callable[[Request], Reply]:
     return respond
 
 
-def _signed_jwt(private_key: rsa.RSAPrivateKey, client_id: str, issuer: str | None = None) -> str:
+def _signed_jwt(
+    private_key: rsa.RSAPrivateKey,
+    client_id: str,
+    issuer: str | None = None,
+    *,
+    subject: str | None = None,
+    end_user: str | None = None,
+) -> str:
     now: Final = int(time.time())
     claims: Final[dict[str, JsonValue]] = {
-        "sub": "integration-user-" + uuid.uuid4().hex,
+        "sub": subject if subject is not None else "integration-user-" + uuid.uuid4().hex,
         "client_id": client_id,
         "aud": _AUDIENCE,
         "iat": now,
         "exp": now + 300,
         **({"iss": issuer} if issuer is not None else {}),
+        **({_END_USER_CLAIM: end_user} if end_user is not None else {}),
     }
     return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": _KEY_ID})
 
@@ -729,6 +746,49 @@ def test_deleting_a_jwt_mapped_key_stops_its_mapping_on_both_workers(
         _assert_upstream_requests(upstream, tuple(_expected_chat_request(backend, prompt) for prompt in prompts[:2]))
 
 
+def test_a_cached_mapping_to_a_key_row_that_is_gone_answers_the_generic_401_on_both_workers(
+    jwt_lifecycle: _JWTLifecycleRuntime,
+) -> None:
+    first: Final = jwt_lifecycle.first
+    second: Final = jwt_lifecycle.second
+    upstream: Final = jwt_lifecycle.upstream
+    model: Final = jwt_lifecycle.model
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    prompts: Final = (
+        "stale mapping warm primary " + uuid.uuid4().hex,
+        "stale mapping warm peer " + uuid.uuid4().hex,
+        "stale mapping primary " + uuid.uuid4().hex,
+        "stale mapping peer " + uuid.uuid4().hex,
+    )
+    token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
+    upstream.drain()
+    with first.scenario() as scenario:
+        key: Final = _create_key(first, model)
+        scenario.cleanups.callback(delete_key_if_present, first, key)
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        mapping: Final = _create_mapping(first, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, first, mapping.id)
+        _assert_chat(first, model, token, prompts[0], key_hash)
+        _assert_chat(second, model, token, prompts[1], key_hash)
+
+        update: Final = first.request("POST", "/key/update", {"key": key, "metadata": {"rotated": "out-of-band"}})
+        assert update.status_code == 200, update.text
+        write_rows('DELETE FROM "LiteLLM_VerificationToken" WHERE token=%s', (key_hash,))
+        assert read_rows('SELECT id FROM "LiteLLM_JWTKeyMapping" WHERE id=%s', (mapping.id,)) == []
+
+        second_refusal: Final = eventually(
+            lambda: _chat(second, model, token, prompts[3]),
+            lambda response: response.status_code == 401,
+            seconds=3,
+        )
+        first_refusal: Final = _chat(first, model, token, prompts[2])
+        for refusal in (first_refusal, second_refusal):
+            assert refusal.status_code == 401, refusal.text
+            assert _ErrorResponse.model_validate_json(refusal.content).error == _UNKNOWN_KEY_ERROR, refusal.text
+            assert key_hash not in refusal.text
+        _assert_upstream_requests(upstream, tuple(_expected_chat_request(model, prompt) for prompt in prompts[:2]))
+
+
 def test_issuer_scoped_mappings_with_the_same_claim_resolve_per_issuer(
     jwt_lifecycle: _JWTLifecycleRuntime,
 ) -> None:
@@ -861,3 +921,287 @@ def test_repointing_a_warmed_mapping_to_a_new_issuer_moves_it_on_both_workers(
             upstream,
             tuple(_expected_chat_request(model, prompt) for prompt in prompts),
         )
+
+
+class _EndUserSpendRow(BaseModel):
+    api_key: str
+    end_user: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EndUserClaimRuntime:
+    gateway: Gateway
+    model: str
+    private_key: rsa.RSAPrivateKey
+
+
+@dataclass(frozen=True, slots=True)
+class _MappedClient:
+    client_id: str
+    key: str
+    key_hash: str
+
+
+def _end_user_claim_config(directory: Path, model: str, upstream_url: str) -> Path:
+    config: Final = directory / "jwt_end_user_claim_config.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": (
+                    {
+                        "model_name": model,
+                        "litellm_params": {
+                            "model": "openai/gpt-4o-mini",
+                            "api_base": f"{upstream_url}/v1",
+                            "api_key": "integration-provider-key",
+                            "input_cost_per_token": 0.001,
+                            "output_cost_per_token": 0.002,
+                        },
+                    },
+                ),
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                    "disable_model_info_refresh": True,
+                    "proxy_batch_write_at": 1,
+                    "proxy_batch_polling_interval": 1,
+                    "enable_jwt_auth": True,
+                    "litellm_jwtauth": {
+                        "user_id_jwt_field": "sub",
+                        "user_id_upsert": True,
+                        "virtual_key_claim_field": _CLIENT_CLAIM,
+                        "unregistered_jwt_client_behavior": "auto_register",
+                        "end_user_id_jwt_field": _END_USER_CLAIM,
+                    },
+                },
+            }
+        )
+    )
+    return config
+
+
+@pytest.fixture(scope="module")
+def end_user_claims(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_EndUserClaimRuntime]:
+    directory: Final = tmp_path_factory.mktemp("jwt-end-user-claim")
+    model: Final = "jwt-end-user-claim-" + uuid.uuid4().hex
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with gateway_from_environment() as base, wire_server(_jwks_respond(private_key)) as jwks:
+        config: Final = _end_user_claim_config(directory, model, base.upstream_url)
+        overrides: Final = {"JWT_PUBLIC_KEY_URL": f"{jwks.url}/jwks", "JWT_AUDIENCE": _AUDIENCE}
+        with owned_proxy(base, directory / "proxy", overrides, config=config) as candidate:
+            eventually(lambda: _model_is_available(candidate, model), bool, seconds=30)
+            yield _EndUserClaimRuntime(gateway=candidate, model=model, private_key=private_key)
+
+
+def _mapped_client(runtime: _EndUserClaimRuntime, scenario: Scenario) -> _MappedClient:
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    key: Final = _create_key(runtime.gateway, runtime.model)
+    scenario.cleanups.callback(delete_key_if_present, runtime.gateway, key)
+    mapping: Final = _create_mapping(runtime.gateway, key, client_id)
+    scenario.cleanups.callback(_delete_mapping_if_present, runtime.gateway, mapping.id)
+    return _MappedClient(client_id=client_id, key=key, key_hash=sha256(key.encode()).hexdigest())
+
+
+def _end_user_chat(
+    runtime: _EndUserClaimRuntime, token: str, *, body_user: str | None = None, header_user: str | None = None
+) -> httpx.Response:
+    return runtime.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            **_chat_body(runtime.model, "end user claim " + uuid.uuid4().hex),
+            **({"user": body_user} if body_user is not None else {}),
+        },
+        key=token,
+        headers={"x-litellm-end-user-id": header_user} if header_user is not None else None,
+    )
+
+
+def _billed_end_user(response: httpx.Response) -> _EndUserSpendRow:
+    assert response.status_code == 200, response.text
+    identity: Final = _ChatResponse.model_validate_json(response.content).id
+    rows: Final = TypeAdapter(tuple[_EndUserSpendRow, ...]).validate_python(
+        eventually(
+            lambda: read_rows('SELECT api_key, end_user FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+    )
+    return rows[0]
+
+
+def _customer_ids(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT user_id FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_id,))
+
+
+def _delete_customer_if_present(gateway: Gateway, user_id: str) -> None:
+    if not _customer_ids(user_id):
+        return
+    response: Final = gateway.request("POST", "/customer/delete", {"user_ids": [user_id]})
+    assert response.status_code == 200, response.text
+
+
+def _forget_auto_registered_client(client_id: str, subject: str) -> None:
+    write_rows(
+        'DELETE FROM "LiteLLM_VerificationToken" WHERE token IN '
+        '(SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value = %s)',
+        (client_id,),
+    )
+    write_rows('DELETE FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_value = %s', (client_id,))
+    write_rows('DELETE FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
+
+
+def test_a_mapped_jwt_bills_and_registers_its_end_user_claim(end_user_claims: _EndUserClaimRuntime) -> None:
+    gateway: Final = end_user_claims.gateway
+    end_user: Final = "integration-end-user-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, end_user)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id, end_user=end_user)
+
+        billed: Final = _billed_end_user(_end_user_chat(end_user_claims, token))
+
+        assert billed == _EndUserSpendRow(api_key=client.key_hash, end_user=end_user)
+        customers: Final = eventually(lambda: _customer_ids(end_user), lambda rows: len(rows) == 1, seconds=70)
+        assert customers == [{"user_id": end_user}]
+
+
+@pytest.mark.parametrize("spelling", ("body", "header"))
+def test_a_mapped_jwt_end_user_claim_wins_over_the_caller_supplied_end_user(
+    end_user_claims: _EndUserClaimRuntime, spelling: str
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    end_user: Final = "integration-end-user-" + uuid.uuid4().hex
+    supplied: Final = "integration-supplied-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, end_user)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, supplied)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id, end_user=end_user)
+
+        response: Final = _end_user_chat(
+            end_user_claims,
+            token,
+            body_user=supplied if spelling == "body" else None,
+            header_user=supplied if spelling == "header" else None,
+        )
+
+        assert _billed_end_user(response) == _EndUserSpendRow(api_key=client.key_hash, end_user=end_user)
+
+
+@pytest.mark.parametrize("claim", ("", None), ids=("empty", "missing"))
+@pytest.mark.parametrize("spelling", ("body", "header"))
+def test_a_mapped_jwt_without_an_end_user_claim_falls_back_to_the_caller_supplied_end_user(
+    end_user_claims: _EndUserClaimRuntime, spelling: str, claim: str | None
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    supplied: Final = "integration-supplied-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, supplied)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id, end_user=claim)
+
+        response: Final = _end_user_chat(
+            end_user_claims,
+            token,
+            body_user=supplied if spelling == "body" else None,
+            header_user=supplied if spelling == "header" else None,
+        )
+
+        assert _billed_end_user(response) == _EndUserSpendRow(api_key=client.key_hash, end_user=supplied)
+
+
+def test_an_auto_registered_client_keeps_its_end_user_claim_after_the_first_request(
+    end_user_claims: _EndUserClaimRuntime,
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    subject: Final = "integration-user-" + uuid.uuid4().hex
+    end_user: Final = "integration-end-user-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        scenario.cleanups.callback(_forget_auto_registered_client, client_id, subject)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, end_user)
+        token: Final = _signed_jwt(end_user_claims.private_key, client_id, subject=subject, end_user=end_user)
+
+        registering: Final = _billed_end_user(_end_user_chat(end_user_claims, token))
+        mapped: Final = _billed_end_user(_end_user_chat(end_user_claims, token))
+
+        mappings: Final = read_rows(
+            'SELECT token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_name=%s AND jwt_claim_value=%s',
+            (_CLIENT_CLAIM, client_id),
+        )
+        assert len(mappings) == 1, mappings
+        expected: Final = _EndUserSpendRow(api_key=string_value(mappings[0]["token"]), end_user=end_user)
+        assert (registering, mapped) == (expected, expected)
+
+
+def test_a_mapped_jwt_end_user_claim_naming_an_over_budget_customer_is_refused_like_a_body_user(
+    end_user_claims: _EndUserClaimRuntime,
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    end_user: Final = "integration-end-user-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        created: Final = gateway.request(
+            "POST", "/customer/new", {"user_id": end_user, "max_budget": 0.05, "spend": 1.0}
+        )
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, end_user)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id, end_user=end_user)
+
+        by_body: Final = _end_user_chat(end_user_claims, client.key, body_user=end_user)
+        by_claim: Final = _end_user_chat(end_user_claims, token)
+
+        assert by_body.status_code == 422, by_body.text
+        assert object_value(object_value(by_body.json())["error"])["type"] == "budget_exceeded", by_body.text
+        assert (by_claim.status_code, by_claim.json()) == (by_body.status_code, by_body.json())
+
+
+def test_a_mapped_jwt_end_user_claim_is_budget_checked_instead_of_an_over_budget_body_user(
+    end_user_claims: _EndUserClaimRuntime,
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    end_user: Final = "integration-end-user-" + uuid.uuid4().hex
+    over_budget: Final = "integration-over-budget-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        created: Final = gateway.request(
+            "POST", "/customer/new", {"user_id": over_budget, "max_budget": 0.05, "spend": 1.0}
+        )
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, over_budget)
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, end_user)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id, end_user=end_user)
+
+        refused: Final = _end_user_chat(end_user_claims, client.key, body_user=over_budget)
+        served: Final = _end_user_chat(end_user_claims, token, body_user=over_budget)
+
+        assert refused.status_code == 422, refused.text
+        assert _billed_end_user(served) == _EndUserSpendRow(api_key=client.key_hash, end_user=end_user)
+
+
+@pytest.mark.parametrize("spelling", ("body", "header"))
+def test_a_mapped_jwt_without_an_end_user_claim_budget_checks_the_caller_supplied_end_user(
+    end_user_claims: _EndUserClaimRuntime, spelling: str
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    over_budget: Final = "integration-over-budget-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        created: Final = gateway.request(
+            "POST", "/customer/new", {"user_id": over_budget, "max_budget": 0.05, "spend": 1.0}
+        )
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, over_budget)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id)
+
+        refused: Final = _end_user_chat(
+            end_user_claims,
+            token,
+            body_user=over_budget if spelling == "body" else None,
+            header_user=over_budget if spelling == "header" else None,
+        )
+
+        assert refused.status_code == 422, refused.text
+        assert object_value(object_value(refused.json())["error"])["type"] == "budget_exceeded", refused.text

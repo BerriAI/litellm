@@ -28,7 +28,7 @@ from litellm import APIConnectionError, Router
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisCache, RedisClusterCache
 from litellm.caching.caching import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -69,9 +69,10 @@ from litellm.router_utils.fallback_event_handlers import (
     DISABLE_FALLBACKS_METADATA_KEY,
     MID_STREAM_FALLBACK_CONTROLS_KEY,
 )
+from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
-from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -575,6 +576,30 @@ async def test_async_router_acreate_file_with_jsonl():
 
         # Verify the non-JSONL content was not modified
         assert first_call_content == non_jsonl_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_params, uploaded_rows",
+    [
+        ({"model": "gpt-5.5"}, ["a", "c"]),
+        ({"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "p"}, [None, "a", None, "c"]),
+    ],
+    ids=["openai", "vertex_ai"],
+)
+async def test_async_router_acreate_file_keeps_blank_lines_only_for_vertex(litellm_params, uploaded_rows):
+    import json
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    content = b'\n{"custom_id": "a", "body": {"model": "batch-model"}}\n\n{"custom_id": "c", "body": {"model": "batch-model"}}\n'
+    router = litellm.Router(model_list=[{"model_name": "batch-model", "litellm_params": litellm_params}])
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(model="batch-model", purpose="batch", file=BytesIO(content))
+
+    lines = mock_acreate_file.call_args.kwargs["file"].read().decode("utf-8").split("\n")
+    assert [json.loads(line)["custom_id"] if line else None for line in lines] == uploaded_rows
 
 
 @pytest.mark.asyncio
@@ -8108,7 +8133,6 @@ async def test_anthropic_messages_call_type_is_cached():
     from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
         PromptCachingDeploymentCheck,
     )
-    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
     from litellm.types.utils import (
         CallTypes,
         StandardLoggingHiddenParams,
@@ -8135,6 +8159,7 @@ async def test_anthropic_messages_call_type_is_cached():
                 model_map_key="gpt-3.5-turbo", model_map_value=None
             ),
             model="gpt-3.5-turbo",
+            custom_llm_provider="anthropic",
             model_id="model-123",
             model_group="openai-gpt",
             api_base="https://api.openai.com",
@@ -10385,14 +10410,16 @@ class TestBackgroundResponseCostPollCooldown:
         )
         assert "dep-1" in self._cooled_down_ids(router)
 
-    def test_cost_poll_not_found_does_not_cool_down_deployment(self):
+    @pytest.mark.parametrize("poll_origin", ["background_response_cost_poll", "background_response_status_poll"])
+    def test_background_response_poll_not_found_does_not_cool_down_deployment(self, poll_origin: str):
+        """A client can delete its background response before the poll reads it, so a 404 on either
+        poll read says nothing about the deployment's health."""
         from datetime import datetime
 
         from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
         from litellm.router_utils.router_callbacks.track_deployment_metrics import (
             get_deployment_failures_for_current_minute,
         )
-        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
         router = self._router()
         now = datetime.now()
@@ -10402,9 +10429,7 @@ class TestBackgroundResponseCostPollCooldown:
                     "exception": self._not_found(),
                     "litellm_params": {
                         "model_info": {"id": "dep-1"},
-                        "litellm_metadata": {
-                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-                        },
+                        "litellm_metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: poll_origin},
                     },
                 },
                 None,
@@ -17801,6 +17826,48 @@ def _router_with_failing_primary(fallback_access_check) -> Router:
     )
 
 
+class _DenyFallbackBudgetCheck:
+    async def __call__(
+        self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router
+    ) -> bool:
+        return False
+
+
+def _router_with_failing_fallback_chain(
+    fallback_targets: tuple[str, ...],
+    *,
+    fallback_access_check: _AllowlistFallbackAccessCheck | None = None,
+    fallback_budget_check: _DenyFallbackBudgetCheck | None = None,
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "k",
+                    "mock_response": Exception("primary is down"),
+                },
+            },
+            *(
+                {
+                    "model_name": target,
+                    "litellm_params": {
+                        "model": f"openai/{target}",
+                        "api_key": "k",
+                        "mock_response": Exception(f"{target} is down"),
+                    },
+                }
+                for target in fallback_targets
+            ),
+        ],
+        fallbacks=[{"primary": list(fallback_targets)}],
+        num_retries=0,
+        fallback_access_check=fallback_access_check,
+        fallback_budget_check=fallback_budget_check,
+    )
+
+
 @pytest.mark.asyncio
 async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_use():
     access_check = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
@@ -17810,6 +17877,59 @@ async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_us
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert access_check.checked_models == ["secret-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_reports_denied_fallback_as_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
+    router: Final = _router_with_failing_primary(access_check)
+    primary_only_router: Final = Router(model_list=router.model_list, fallbacks=[], num_retries=0)
+
+    with pytest.raises(litellm.InternalServerError) as primary_exception:
+        await primary_only_router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(litellm.InternalServerError) as fallback_exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(fallback_exception.value)
+    assert type(fallback_exception.value) is type(primary_exception.value)
+    assert fallback_exception.value.status_code == primary_exception.value.status_code
+    assert message.count("primary is down") == 1
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_separates_denied_and_failed_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset({"allowed-fallback"}))
+    router: Final = _router_with_failing_fallback_chain(
+        ("secret-fallback", "allowed-fallback"),
+        fallback_access_check=access_check,
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to allowed-fallback also failed:" in message
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized" in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_budget_check_reports_skipped_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router: Final = _router_with_failing_fallback_chain(
+        ("paid-fallback",),
+        fallback_budget_check=_DenyFallbackBudgetCheck(),
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to paid-fallback was skipped because the caller is over budget for it." in message
+    assert "also failed" not in message
 
 
 @pytest.mark.asyncio
@@ -26135,6 +26255,124 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+@pytest.mark.asyncio
+async def test_prompt_caching_pins_do_not_evict_router_state():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    router.cache.set_cache("deployment:dep-a:cooldown", True, ttl=5)
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        await pins.async_add_model_id(
+            model_id="dep-a",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": f"policy {index}", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                    ],
+                },
+                {"role": "user", "content": "ok"},
+            ],
+            tools=None,
+        )
+
+    assert router.cache.get_cache("deployment:dep-a:cooldown") is True
+
+
+@pytest.mark.asyncio
+async def test_one_hour_pins_past_the_routers_default_cache_size_keep_fresh_five_minute_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+
+    def policy(index: int, ttl: str) -> list[AllMessageValues]:
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"policy {ttl} {index}",
+                        "cache_control": {"type": "ephemeral", "ttl": ttl},
+                    }
+                ],
+            },
+            {"role": "user", "content": "ok"},
+        ]
+
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        await pins.async_add_model_id(
+            model_id="dep-a", messages=policy(index, "1h"), tools=None, honors_one_hour_ttl=True
+        )
+    for index in range(3):
+        await pins.async_add_model_id(
+            model_id="dep-b", messages=policy(index, "5m"), tools=None, honors_one_hour_ttl=True
+        )
+
+    assert [await pins.async_get_model_id(messages=policy(index, "5m"), tools=None) for index in range(3)] == [
+        {"model_id": "dep-b"}
+    ] * 3
+
+
+@pytest.mark.asyncio
+async def test_flush_cache_drops_prompt_caching_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+    await pins.async_add_model_id(model_id="dep-a", messages=messages, tools=None)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-a"}
+
+    router.flush_cache()
+
+    assert await pins.async_get_model_id(messages=messages, tools=None) is None
+
+
 class _FirstPullStream:
     """A stream whose first pull yields `first`, raises it, or ends (first=None)."""
 
@@ -26148,8 +26386,14 @@ class _FirstPullStream:
             raise self._first
         return self._first
 
+    def __iter__(self) -> "_FirstPullStream":
+        return self
+
     def __next__(self) -> object:
         return self._pull(StopIteration)
+
+    def __aiter__(self) -> "_FirstPullStream":
+        return self
 
     async def __anext__(self) -> object:
         return self._pull(StopAsyncIteration)
@@ -26157,7 +26401,6 @@ class _FirstPullStream:
 
 def _first_chunk_cases():
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import _FirstChunk
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
     chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="hi"))])
@@ -26170,8 +26413,8 @@ def _first_chunk_cases():
         is_pre_first_chunk=True,
     )
     return [
-        pytest.param(chunk, _FirstChunk(chunk=chunk), None, id="first-chunk"),
-        pytest.param(None, _FirstChunk(chunk=None), None, id="empty-stream"),
+        pytest.param(chunk, chunk, None, id="first-chunk"),
+        pytest.param(None, None, None, id="empty-stream"),
         pytest.param(wrapped, None, provider_error, id="pre-content-failure"),
     ]
 
@@ -26180,11 +26423,13 @@ def _first_chunk_cases():
 def test_read_first_chunk_direct_call(first, expected, raised):
     from litellm.router import _read_first_chunk
 
+    stream = _FirstPullStream(first)
     if raised is None:
-        assert _read_first_chunk(_FirstPullStream(first)) == expected
+        taken = _read_first_chunk(stream)
+        assert (taken.chunk, taken.rest) == (expected, stream)
         return
     with pytest.raises(type(raised)) as caught:
-        _read_first_chunk(_FirstPullStream(first))
+        _read_first_chunk(stream)
     assert caught.value is raised
 
 
@@ -26193,38 +26438,84 @@ def test_read_first_chunk_direct_call(first, expected, raised):
 async def test_aread_first_chunk_direct_call(first, expected, raised):
     from litellm.router import _aread_first_chunk
 
+    stream = _FirstPullStream(first)
     if raised is None:
-        assert await _aread_first_chunk(_FirstPullStream(first)) == expected
+        taken = await _aread_first_chunk(stream)
+        assert (taken.chunk, taken.rest) == (expected, stream)
         return
     with pytest.raises(type(raised)) as caught:
-        await _aread_first_chunk(_FirstPullStream(first))
+        await _aread_first_chunk(stream)
     assert caught.value is raised
 
 
 def _chunks_with_first_cases():
-    from litellm.router import _FirstChunk
-
     return [
         pytest.param(None, ["a", "b"], ["a", "b"], id="nothing-read-stream-as-is"),
-        pytest.param(_FirstChunk(chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
-        pytest.param(_FirstChunk(chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
+        pytest.param((None, ["a", "b"]), ["a", "b"], [], id="empty-stream-not-touched"),
+        pytest.param(("first", ["a", "b"]), ["never-iterated"], ["first", "a", "b"], id="first-chunk-put-back"),
     ]
 
 
-@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
-def test_chunks_with_first_direct_call(taken, rest, expected):
-    from litellm.router import _chunks_with_first
+@pytest.mark.parametrize("taken, stream, expected", _chunks_with_first_cases())
+def test_chunks_with_first_direct_call(taken, stream, expected):
+    from litellm.router import _chunks_with_first, _FirstChunk
 
-    assert list(_chunks_with_first(iter(rest), taken)) == expected
+    first = None if taken is None else _FirstChunk(chunk=taken[0], rest=iter(taken[1]))
+    assert list(_chunks_with_first(iter(stream), first)) == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("taken, rest, expected", _chunks_with_first_cases())
-async def test_achunks_with_first_direct_call(taken, rest, expected):
-    from litellm.router import _achunks_with_first
+@pytest.mark.parametrize("taken, stream, expected", _chunks_with_first_cases())
+async def test_achunks_with_first_direct_call(taken, stream, expected):
+    from litellm.router import _achunks_with_first, _FirstChunk
 
-    async def stream():
-        for item in rest:
-            yield item
+    first = None if taken is None else _FirstChunk(chunk=taken[0], rest=_AsyncList(taken[1]))
+    assert [item async for item in _achunks_with_first(_AsyncList(stream), first)] == expected
 
-    assert [item async for item in _achunks_with_first(stream(), taken)] == expected
+
+class _IterationHandedOffStream(CustomStreamWrapper):
+    """A CustomStreamWrapper that, like the MCP gateway's MCPStreamWrapper, has no completion_stream of its
+    own and hands iteration to another object from __aiter__ / __iter__, a fresh one per call so a second
+    __aiter__ would replay the first chunk."""
+
+    def __init__(self, chunks: list[litellm.ModelResponseStream]) -> None:
+        super().__init__(completion_stream=None, model="gpt-5.4", custom_llm_provider="openai", logging_obj=MagicMock())
+        self._chunks: Final = chunks
+
+    def __aiter__(self):
+        return _AsyncList(self._chunks)
+
+    def __iter__(self):
+        return iter(self._chunks)
+
+
+def _handed_off_chunks() -> list[litellm.ModelResponseStream]:
+    return [
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": text}}]) for text in ("tool ", "answer")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_a_wrapper_that_hands_iteration_to_another_iterator():
+    """The eager first-chunk read goes through __aiter__ like `async for` does, so a wrapper with
+    completion_stream=None (MCPStreamWrapper) streams instead of failing with a NoneType iterator."""
+    router = _mid_stream_opt_out_router()
+    chunks = _handed_off_chunks()
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=_IterationHandedOffStream(chunks))):
+        response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True)
+        streamed = [chunk async for chunk in response]
+
+    assert streamed == chunks
+
+
+def test_completion_streams_a_wrapper_that_hands_iteration_to_another_iterator():
+    """Sync twin: Router._completion's first-chunk read goes through __iter__ like a for loop does."""
+    router = _mid_stream_opt_out_router()
+    chunks = _handed_off_chunks()
+
+    with patch("litellm.completion", return_value=_IterationHandedOffStream(chunks)):
+        response = router.completion(model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True)
+        streamed = list(response)
+
+    assert streamed == chunks
