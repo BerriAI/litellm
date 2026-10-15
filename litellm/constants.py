@@ -1654,6 +1654,7 @@ DEFAULT_SOFT_BUDGET: Final = get_env_float(
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
 # Prefix of the 401 raised when a submitted virtual key is not shaped like one.
 INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key provided."
 # Attribute stamped on that 401 at its raise site so log routing recognises it by
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
