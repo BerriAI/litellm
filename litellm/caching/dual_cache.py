@@ -15,7 +15,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -75,9 +75,6 @@ def _log_deferred_increment_failure(future: asyncio.Future[float]) -> None:
     failure: Final = future.exception()
     if failure is not None:
         log_redis_failure(verbose_logger, logging.WARNING, "post-call Redis increment failed", failure)
-
-
-TtlRefresh: TypeAlias = Literal["refreshed", "absent", "unavailable"]
 
 
 class DualCache(BaseCache):
@@ -299,11 +296,11 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
             )
 
-    async def async_get_cache_redis_first(self, key: str, ttl: int | None = None) -> object:
+    async def async_get_cache_redis_first(self, key: str, ttl: int) -> object:
         if self.redis_cache is None:
-            return await self.in_memory_cache.async_get_cache(key)
+            return await self._local_copy_with_refreshed_ttl(key, ttl)
         try:
-            redis_result: Final = await self.redis_cache.async_get_cache_or_raise(key)
+            redis_result: Final = await self.redis_cache.async_get_and_refresh_ttl_or_raise(key, ttl)
         except Exception as e:  # noqa: BLE001  # any Redis fault falls back to the local pin instead of failing the request
             log_redis_failure(
                 verbose_logger,
@@ -312,14 +309,16 @@ class DualCache(BaseCache):
                 e,
                 with_traceback=True,
             )
-            return await self.in_memory_cache.async_get_cache(key)
+            return await self._local_copy_with_refreshed_ttl(key, ttl)
         if redis_result is None:
             self.in_memory_cache.delete_cache(key)
             return None
-        await self.in_memory_cache.async_set_cache(
-            key, redis_result, **self._backfill_kwargs({} if ttl is None else {"ttl": ttl})
-        )
+        await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs({"ttl": ttl}))
         return redis_result
+
+    async def _local_copy_with_refreshed_ttl(self, key: str, ttl: int) -> object:
+        self.in_memory_cache.refresh_ttl(key, ttl)
+        return await self.in_memory_cache.async_get_cache(key)
 
     def _reserve_redis_batch_keys(
         self,
@@ -762,16 +761,3 @@ class DualCache(BaseCache):
         if ttl is None and self.redis_cache is not None:
             ttl = await self.redis_cache.async_get_ttl(key)
         return ttl
-
-    async def async_refresh_ttl(self, key: str, ttl: int) -> TtlRefresh:
-        memory_refreshed: Final = self.in_memory_cache.refresh_ttl(key, ttl)
-        if self.redis_cache is None:
-            return "refreshed" if memory_refreshed else "absent"
-        try:
-            redis_refreshed: Final = await self.redis_cache.async_refresh_ttl(key, ttl)
-        except Exception as e:  # noqa: BLE001  # any Redis fault reports unavailable instead of failing the request
-            log_redis_failure(
-                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_refresh_ttl", e, with_traceback=True
-            )
-            return "unavailable"
-        return "refreshed" if redis_refreshed else "absent"

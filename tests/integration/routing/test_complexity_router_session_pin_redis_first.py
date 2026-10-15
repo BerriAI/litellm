@@ -699,30 +699,23 @@ def test_a_newer_pin_written_between_the_read_and_the_refresh_wins(rig: Rig, rec
     _record(record_property, step2, step3)
 
 
-def test_a_pin_deleted_after_the_read_is_restored_only_while_no_newer_pin_exists(
-    rig: Rig, record_property: Recorder
-) -> None:
+def test_a_pin_deleted_between_the_read_and_its_refresh_stays_deleted(rig: Rig, record_property: Recorder) -> None:
     session: Final = _session()
     key: Final = rig.pin_prefix + session
     first, _ = _workers(rig.owned)
     script: Final[Script] = (("complex", _token()), ("continue", _token()))
     _step(rig, "chat", _chat_httpx, session, script[:1], first)
-    newer: Final = json.dumps(_pinned(SIMPLE_MODEL, "SIMPLE"))
     rig.relay.intercept(
         Interception(key, frozenset({"EXPIRE", "SET"}), lambda: _delete_pin(rig.cache, key), "deleted-after-read")
-    )
-    rig.relay.intercept(
-        Interception(key, frozenset({"SET"}), lambda: _write_raw_pin(rig.cache, key, newer), "newer-before-restore")
     )
     try:
         step2: Final = _step(rig, "chat", _chat_httpx, session, script[:2], first)
         fired: Final = rig.relay.drain_fired()
-        pending: Final = rig.relay.pending()
     finally:
         rig.relay.clear()
     assert (step2.tier, step2.judge_posts) == ("complex", 0), step2
-    assert fired == ("deleted-after-read:EXPIRE", "newer-before-restore:SET") and pending == (), (fired, pending)
-    assert _pin(rig.cache, key) == _pinned(SIMPLE_MODEL, "SIMPLE")
+    assert fired == ("deleted-after-read:EXPIRE",), fired
+    assert _pin(rig.cache, key) is None
     _record(record_property, step2)
 
 
