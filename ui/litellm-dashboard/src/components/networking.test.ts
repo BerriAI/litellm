@@ -1038,6 +1038,29 @@ describe("getUiConfig runtime backend discovery", () => {
     return { networking, mockFetch };
   };
 
+  it("loads static runtime configuration from the UI prefix independently of the selected worker", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ backend_url: "https://backend.example.com" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ...discoveryConfig(), server_root_path: "/services/llm" }),
+      } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+    const { setServerRootPath } = await import("@/lib/serverRootPath");
+    setServerRootPath("/services/llm");
+    networking.switchToWorkerUrl("https://worker.example.com/worker-mount");
+
+    await networking.getUiConfig();
+
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/services/llm/ui/litellm-runtime-config.json", { cache: "no-store" });
+    expect(mockFetch.mock.calls[1][0]).toBe("https://backend.example.com/litellm/.well-known/litellm-ui-config");
+  });
+
   it("uses a normalized runtime backend URL for discovery and the management fallback", async () => {
     const mockFetch = vi
       .fn()

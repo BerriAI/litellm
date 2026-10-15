@@ -566,7 +566,10 @@ export const getUiConfig = async () => {
     : await (async (): Promise<string | null> => {
         try {
           // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
-          const response = await fetch("/ui/litellm-runtime-config.json", { cache: "no-store" });
+          const response = await fetch(
+            `${serverRootPath === "/" ? "" : serverRootPath}/ui/litellm-runtime-config.json`,
+            { cache: "no-store" },
+          );
           if (!response.ok) return null;
           const runtimeConfig: unknown = await response.json();
           if (
