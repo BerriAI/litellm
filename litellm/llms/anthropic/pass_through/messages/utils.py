@@ -175,7 +175,7 @@ def anthropic_messages_optional_param_keys() -> frozenset[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: dict[str, Any],
+        params: Mapping[str, object],
         *,
         model: str | None = None,
         drop_params: bool = False,
