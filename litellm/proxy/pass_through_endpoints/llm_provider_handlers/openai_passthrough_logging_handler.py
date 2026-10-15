@@ -78,7 +78,7 @@ def _is_openai_compatible_host(hostname: str | None) -> bool:
     return _hostname_matches(hostname, _OPENAI_HOSTNAMES) or _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES)
 
 
-def _is_openai_compatible_url(url_route: str | None) -> bool:
+def is_openai_compatible_url(url_route: str | None) -> bool:
     """True if the URL targets an OpenAI-compatible API surface.
 
     For the shared Azure Cognitive Services domains we additionally require an
@@ -97,6 +97,9 @@ def _is_openai_compatible_url(url_route: str | None) -> bool:
     if _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES):
         return any(marker in parsed_url.path for marker in _AZURE_OPENAI_PATH_MARKERS)
     return False
+
+
+_is_openai_compatible_url: Final = is_openai_compatible_url
 
 
 def _is_remote_high_detail_image(part: object) -> bool:
@@ -608,7 +611,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return None
 
     @staticmethod
-    def _handle_logging_openai_collected_chunks(
+    def handle_logging_openai_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -725,3 +728,5 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 "result": None,
                 "kwargs": {},
             }
+
+    _handle_logging_openai_collected_chunks = handle_logging_openai_collected_chunks

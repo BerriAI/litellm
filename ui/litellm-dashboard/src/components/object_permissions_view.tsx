@@ -3,12 +3,14 @@ import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
 import type { ObjectPermission } from "./object_permission_types";
-import type { InheritedGrant } from "./permissions/inheritedGrants";
+import { inheritedGrantTooltip, type InheritedGrant } from "./permissions/inheritedGrants";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
   inheritedMcpServers?: InheritedGrant[];
   inheritedAgents?: InheritedGrant[];
+  inheritedSkills?: InheritedGrant[];
+  unresolvedAccessGroupIds?: string[] | null;
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
@@ -18,6 +20,8 @@ export function ObjectPermissionsView({
   objectPermission,
   inheritedMcpServers = [],
   inheritedAgents = [],
+  inheritedSkills,
+  unresolvedAccessGroupIds,
   variant = "card",
   className = "",
   accessToken,
@@ -31,6 +35,41 @@ export function ObjectPermissionsView({
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
   const skills = objectPermission?.skills || [];
+  const showsInheritedSkills = inheritedSkills !== undefined;
+  const missingAccessGroupIds = unresolvedAccessGroupIds ?? [];
+  const inheritedOnlySkills = (inheritedSkills ?? []).filter((grant) => !skills.includes(grant.id));
+
+  const skillsContent = (() => {
+    if (missingAccessGroupIds.length > 0) {
+      return (
+        <p className="mt-1 block text-xs break-words text-destructive">
+          Private plugin access is suspended: access group {missingAccessGroupIds.join(", ")} not found. Only enabled
+          (public) Claude Code plugins are visible until the id is removed or the group recreated.
+        </p>
+      );
+    }
+    if (skills.length === 0 && inheritedOnlySkills.length === 0) {
+      return (
+        <p className="mt-1 block text-xs text-muted-foreground">
+          {showsInheritedSkills
+            ? "No private skills granted. Only enabled (public) Claude Code plugins are visible."
+            : "No private skills granted directly here. Grants from access groups are not listed on this page; only enabled (public) Claude Code plugins are visible by default."}
+        </p>
+      );
+    }
+    return (
+      <p className="mt-1 block text-xs break-words text-foreground">
+        {skills.join(", ")}
+        {skills.length > 0 && inheritedOnlySkills.length > 0 ? ", " : ""}
+        {inheritedOnlySkills.map((grant, index) => (
+          <span key={grant.id} title={inheritedGrantTooltip(grant)} className="text-muted-foreground">
+            {index > 0 ? ", " : ""}
+            {grant.id} (access group)
+          </span>
+        ))}
+      </p>
+    );
+  })();
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
@@ -61,13 +100,7 @@ export function ObjectPermissionsView({
       </div>
       <div className="min-w-0 rounded-md border border-border p-4">
         <p className="text-sm font-medium text-foreground">Skills</p>
-        {skills.length === 0 ? (
-          <p className="mt-1 block text-xs text-muted-foreground">
-            No private skills granted. Only enabled (public) Claude Code plugins are visible.
-          </p>
-        ) : (
-          <p className="mt-1 block text-xs break-words text-foreground">{skills.join(", ")}</p>
-        )}
+        {skillsContent}
       </div>
     </div>
   );

@@ -378,13 +378,9 @@ curl -fsS "${HEALTH_URL}" >/dev/null \
 # ---------------------------------------------------------------------------
 
 RESULTS_JSON="${WORKDIR}/compat-results.json"
-# The `_*_unit_tests` ignore is defensive: those harness-only trees are
-# markerless (they run without a proxy) and don't feed matrix cells, so
-# the cron skips them if/when they land in the suite.
 PYTEST_ARGS=(
   tests/e2e/claude_code/
   --confcutdir=tests/e2e/claude_code
-  "--ignore-glob=*_unit_tests*"
 )
 if [[ -n "${PYTEST_K}" ]]; then
   log "PYTEST_K set; narrowing to: ${PYTEST_K}"

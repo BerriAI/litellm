@@ -1,10 +1,10 @@
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
@@ -21,7 +21,6 @@ def test_ui_discovery_endpoints_with_defaults():
         patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -44,7 +43,6 @@ def test_ui_discovery_endpoints_with_custom_server_root_path():
         patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -69,7 +67,6 @@ def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
         patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/litellm/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -78,6 +75,41 @@ def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
         assert data["proxy_base_url"] == "https://proxy.example.com"
         assert data["auto_redirect_to_sso"] is False
         assert data["sso_configured"] is False
+
+
+@pytest.mark.parametrize(
+    ("gateway_url", "expected_gateway_url"),
+    [
+        ("https://gw.example.com/", "https://gw.example.com"),
+        ("  ", None),
+        (None, None),
+    ],
+)
+def test_ui_discovery_endpoints_normalizes_gateway_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_url: str | None,
+    expected_gateway_url: str | None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+
+    if gateway_url is None:
+        monkeypatch.delenv("LITELLM_GATEWAY_URL", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_GATEWAY_URL", gateway_url)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+    ):
+        response: Final = client.get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["proxy_base_url"] == "https://proxy.example.com"
+    assert response.json()["gateway_base_url"] == expected_gateway_url
 
 
 def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
@@ -98,7 +130,6 @@ def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -155,7 +186,6 @@ def test_ui_discovery_endpoints_with_sso_configured_but_auto_redirect_disabled()
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -181,7 +211,6 @@ def test_ui_discovery_endpoints_with_sso_not_configured_but_auto_redirect_enable
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -210,7 +239,6 @@ def test_ui_discovery_endpoints_both_routes_return_same_data():
             clear=False,
         ),
     ):
-
         response1 = client.get("/.well-known/litellm-ui-config")
         response2 = client.get("/litellm/.well-known/litellm-ui-config")
 
@@ -265,7 +293,6 @@ def test_ui_discovery_endpoints_with_auto_redirect_env_var_overrides_general_set
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -284,7 +311,6 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -303,9 +329,7 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
 
     mock_config = MagicMock()
     mock_config.worker_registry = [
-        WorkerRegistryEntry(
-            worker_id="team-a", name="Team A", url="https://worker-1:4001"
-        ),
+        WorkerRegistryEntry(worker_id="team-a", name="Team A", url="https://worker-1:4001"),
     ]
 
     with (
@@ -315,7 +339,6 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
         patch("litellm.proxy.proxy_server.proxy_config", mock_config),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -405,7 +428,6 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_via_env_var():
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -453,7 +475,6 @@ def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
         patch("litellm.proxy.proxy_server.proxy_config", mock_config),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200

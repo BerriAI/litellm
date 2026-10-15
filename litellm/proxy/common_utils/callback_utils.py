@@ -181,7 +181,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(callback)
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-                    _OPTIONAL_PresidioPIIMasking,
+                    OPTIONAL_PresidioPIIMasking,
                 )
 
                 presidio_logging_only: bool | None = litellm_settings.get("presidio_logging_only", None)
@@ -196,7 +196,7 @@ def initialize_callbacks_on_proxy(
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:
@@ -324,7 +324,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(banned_keywords_obj)
             elif isinstance(callback, str) and callback == "detect_prompt_injection":
                 from litellm.proxy.hooks.prompt_injection_detection import (
-                    _OPTIONAL_PromptInjectionDetection,
+                    OPTIONAL_PromptInjectionDetection,
                 )
 
                 prompt_injection_params = None
@@ -332,20 +332,20 @@ def initialize_callbacks_on_proxy(
                     prompt_injection_params_in_config = litellm_settings["prompt_injection_params"]
                     prompt_injection_params = LiteLLMPromptInjectionParams(**prompt_injection_params_in_config)
 
-                prompt_injection_detection_obj = _OPTIONAL_PromptInjectionDetection(
+                prompt_injection_detection_obj = OPTIONAL_PromptInjectionDetection(
                     prompt_injection_params=prompt_injection_params,
                 )
                 imported_list.append(prompt_injection_detection_obj)
             elif isinstance(callback, str) and callback == "batch_redis_requests":
                 from litellm.proxy.hooks.batch_redis_get import (
-                    _PROXY_BatchRedisRequests,
+                    PROXY_BatchRedisRequests,
                 )
 
-                batch_redis_obj = _PROXY_BatchRedisRequests()
+                batch_redis_obj = PROXY_BatchRedisRequests()
                 imported_list.append(batch_redis_obj)
             elif isinstance(callback, str) and callback == "azure_content_safety":
                 from litellm.proxy.hooks.azure_content_safety import (
-                    _PROXY_AzureContentSafety,
+                    PROXY_AzureContentSafety,
                 )
 
                 azure_content_safety_params = litellm_settings["azure_content_safety_params"]
@@ -353,7 +353,7 @@ def initialize_callbacks_on_proxy(
                     if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
                         azure_content_safety_params[k] = get_secret(v)
 
-                azure_content_safety_obj = _PROXY_AzureContentSafety(
+                azure_content_safety_obj = PROXY_AzureContentSafety(
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)

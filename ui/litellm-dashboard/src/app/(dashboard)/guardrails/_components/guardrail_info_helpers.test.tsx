@@ -15,8 +15,14 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  formatGuardrailStreamScope,
+  streamScopeByModeFromConfig,
+  streamScopeForMode,
+  streamScopeForUpdate,
+  streamScopePayload,
   loggingOnlyScopeToChoice,
   choiceToLoggingOnlyScope,
+  loggingOnlyContinueFromParams,
   getLoggingOnlyScopeUpdate,
   getLoggingOnlyScopeOptions,
   formatLoggingOnlyScope,
@@ -252,7 +258,6 @@ describe("guardrail_info_helpers", () => {
     it("normalizes directional choices only when the provider does not support them", () => {
       expect(normalizeLoggingOnlyScopeChoice("input", false)).toBe("default");
       expect(normalizeLoggingOnlyScopeChoice("output", false)).toBe("default");
-      expect(normalizeLoggingOnlyScopeChoice("both", false)).toBe("both");
       expect(normalizeLoggingOnlyScopeChoice("default", false)).toBe("default");
       expect(normalizeLoggingOnlyScopeChoice("input", true)).toBe("input");
       expect(normalizeLoggingOnlyScopeChoice("output", true)).toBe("output");
@@ -261,7 +266,6 @@ describe("guardrail_info_helpers", () => {
     it("maps API scope values to choices and back", () => {
       expect(loggingOnlyScopeToChoice("input")).toBe("input");
       expect(loggingOnlyScopeToChoice("output")).toBe("output");
-      expect(loggingOnlyScopeToChoice("both")).toBe("both");
       expect(loggingOnlyScopeToChoice(undefined)).toBe("default");
       expect(loggingOnlyScopeToChoice(null)).toBe("default");
       expect(loggingOnlyScopeToChoice("invalid")).toBe("default");
@@ -270,21 +274,48 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToLoggingOnlyScope(undefined)).toBeNull();
       expect(choiceToLoggingOnlyScope("input")).toBe("input");
       expect(choiceToLoggingOnlyScope("output")).toBe("output");
-      expect(choiceToLoggingOnlyScope("both")).toBe("both");
 
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "input")).toEqual({});
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "output")).toEqual({
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "input", false)).toEqual({});
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "output", false)).toEqual({
         logging_only_scope: "output",
+        logging_only_continue_on_input_failure: false,
       });
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "default")).toEqual({
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "default", false)).toEqual({
         logging_only_scope: null,
+        logging_only_continue_on_input_failure: false,
       });
+      expect(getLoggingOnlyScopeUpdate(undefined, "default", true)).toEqual({
+        logging_only_scope: null,
+        logging_only_continue_on_input_failure: true,
+      });
+      expect(
+        getLoggingOnlyScopeUpdate(
+          { logging_only_scope: "input", logging_only_continue_on_input_failure: true },
+          "input",
+          false,
+        ),
+      ).toEqual({});
+      expect(getLoggingOnlyScopeUpdate({ logging_only_continue_on_input_failure: true }, "default", true)).toEqual({});
+      expect(getLoggingOnlyScopeUpdate({ logging_only_continue_on_input_failure: true }, "default", false)).toEqual({
+        logging_only_scope: null,
+        logging_only_continue_on_input_failure: false,
+      });
+    });
+
+    it("reads the continue toggle from the stored flag", () => {
+      expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: true })).toBe(true);
+      expect(loggingOnlyContinueFromParams({ logging_only_scope: "input" })).toBe(false);
+      expect(
+        loggingOnlyContinueFromParams({ logging_only_scope: "input", logging_only_continue_on_input_failure: true }),
+      ).toBe(false);
+      expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: false })).toBe(false);
+      expect(loggingOnlyContinueFromParams(undefined)).toBe(false);
+      expect(loggingOnlyContinueFromParams(null)).toBe(false);
     });
 
     it("formats every scope and falls back to default for missing or unknown values", () => {
       expect(formatLoggingOnlyScope("input")).toBe("Input only (request)");
       expect(formatLoggingOnlyScope("output")).toBe("Output only (response)");
-      expect(formatLoggingOnlyScope("both")).toBe("Both (request and response)");
       expect(formatLoggingOnlyScope(undefined)).toBe("Default (request and response)");
       expect(formatLoggingOnlyScope(null)).toBe("Default (request and response)");
       expect(formatLoggingOnlyScope("invalid")).toBe("Default (request and response)");
@@ -303,13 +334,8 @@ describe("guardrail_info_helpers", () => {
     });
 
     it("filters directional options for unsupported providers and keeps all options otherwise", () => {
-      expect(getLoggingOnlyScopeOptions(false).map((option) => option.value)).toEqual(["default", "both"]);
-      expect(getLoggingOnlyScopeOptions(true).map((option) => option.value)).toEqual([
-        "default",
-        "input",
-        "output",
-        "both",
-      ]);
+      expect(getLoggingOnlyScopeOptions(false).map((option) => option.value)).toEqual(["default"]);
+      expect(getLoggingOnlyScopeOptions(true).map((option) => option.value)).toEqual(["default", "input", "output"]);
 
       expect(
         supportsDirectionalLoggingOnlyScope(
@@ -367,6 +393,58 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipToolForCreate("yes")).toBe(true);
       expect(choiceToSkipToolForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("stream_scope helpers", () => {
+    it("treats omitted config as both for every mode", () => {
+      expect(streamScopeForMode(undefined, "pre_call")).toBe("both");
+      expect(streamScopeByModeFromConfig(undefined, ["pre_call", "post_call"])).toEqual({
+        pre_call: "both",
+        post_call: "both",
+      });
+    });
+
+    it("applies a scalar to every selected mode and omits both-only payloads", () => {
+      expect(streamScopeForMode("streaming", "post_call")).toBe("streaming");
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "both" })).toBeUndefined();
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "streaming", post_call: "streaming" })).toBe(
+        "streaming",
+      );
+    });
+
+    it("keeps a mixed map instead of collapsing it to a scalar", () => {
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "streaming" })).toEqual({
+        post_call: "streaming",
+      });
+    });
+
+    it("formats scalar and per-mode stream scopes for display", () => {
+      expect(formatGuardrailStreamScope(undefined)).toBe("");
+      expect(formatGuardrailStreamScope("both")).toBe("Streaming and non-streaming");
+      expect(formatGuardrailStreamScope("non_streaming")).toBe("Non-streaming only");
+      expect(formatGuardrailStreamScope({ post_call: "streaming", pre_call: "both" })).toBe(
+        "post_call: Streaming only, pre_call: Streaming and non-streaming",
+      );
+    });
+
+    it("emits both on update only when a prior restriction is cleared", () => {
+      expect(streamScopeForUpdate(["post_call"], { post_call: "streaming" }, undefined)).toBe("streaming");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, "streaming")).toBe("both");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, undefined)).toBeUndefined();
+    });
+
+    it("keeps stored restrictions for modes outside the current selection", () => {
+      expect(
+        streamScopeForUpdate(
+          ["pre_call"],
+          { pre_call: "streaming" },
+          { pre_call: "streaming", post_call: "non_streaming" },
+        ),
+      ).toBeUndefined();
+      expect(
+        streamScopeForUpdate(["pre_call"], { pre_call: "both" }, { pre_call: "streaming", post_call: "non_streaming" }),
+      ).toEqual({ post_call: "non_streaming" });
     });
   });
 });

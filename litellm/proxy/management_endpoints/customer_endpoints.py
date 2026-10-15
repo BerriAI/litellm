@@ -37,9 +37,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    set_object_permission,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
@@ -469,7 +470,7 @@ async def new_end_user(
 
         ## Handle Object Permission - MCP Servers, Vector Stores etc.
         new_end_user_obj = _STR_OBJECT_DICT.validate_python(
-            await _set_object_permission(
+            await set_object_permission(
                 data_json=new_end_user_obj,
                 prisma_client=prisma_client,
             )

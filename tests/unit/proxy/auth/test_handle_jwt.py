@@ -8252,3 +8252,54 @@ async def test_check_admin_access_names_the_route_and_the_expanded_allow_list_wh
         "Admin not allowed to access this route. Route=/key/generate, "
         f"Allowed Routes={[*LiteLLMRoutes.info_routes.value, '/custom/admin/route']}"
     )
+
+
+@pytest.mark.parametrize(
+    "team_allowed_routes, team_metadata",
+    [
+        ((), {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]}),
+        (("/model-host/*",), {"denied_passthrough_routes": ["/model-host/v1/*"]}),
+    ],
+    ids=["team-metadata-allow", "jwt-team-allowed-routes-grant"],
+)
+def test_team_has_passthrough_route_access_denied_route_wins(
+    team_allowed_routes: tuple[str, ...],
+    team_metadata: dict[str, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    team: Final = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+        _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+    ):
+        assert not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=team,
+            route="/model-host/v1/extractor/predict",
+            request_method="POST",
+            team_allowed_routes=team_allowed_routes,
+        )
+
+
+@pytest.mark.parametrize(
+    "team_metadata, expected_detail",
+    [
+        (
+            {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]},
+            "Matched `/model-host/v1` in `denied_passthrough_routes`",
+        ),
+        ({}, "Team not allowed to access passthrough route"),
+    ],
+    ids=["team-deny-names-the-entry", "no-grant-keeps-generic-message"],
+)
+def test_team_passthrough_route_denial_names_the_matched_deny_entry(
+    team_metadata: dict[str, list[str]], expected_detail: str
+) -> None:
+    team: Final = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager._raise_team_passthrough_route_denial(route="/model-host/v1/predict", team_object=team)
+
+    assert exc_info.value.status_code == 403
+    assert expected_detail in str(exc_info.value.detail)

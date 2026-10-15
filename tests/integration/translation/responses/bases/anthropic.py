@@ -2,6 +2,13 @@ from typing import Final
 from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
+from integration.translation.responses.templates import (
+    CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0,
+    CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1,
+    RESPONSES_REQUEST,
+    RESPONSES_RESPONSE,
+)
+from integration.translation.templates.anthropic import ANTHROPIC_MESSAGES_REQUEST, ANTHROPIC_MESSAGES_RESPONSE
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -485,13 +492,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
 CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/responses",
-    litellm_request={
-        "model": "anthropic/claude-sonnet-5-5",
-        "max_output_tokens": 64,
-        "instructions": "You are a terse assistant.",
-        "input": "Say hello.",
-        "cache": {"no-cache": True},
-    },
+    litellm_request={**RESPONSES_REQUEST, "model": "anthropic/claude-sonnet-5-5"},
     expected_provider_endpoint="/v1/messages",
     expected_provider_headers={
         "x-api-key": "synthetic-anthropic-key",
@@ -499,83 +500,67 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
+        **ANTHROPIC_MESSAGES_REQUEST,
         "model": "claude-sonnet-5-5",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
-        "max_tokens": 64,
-        "system": [{"type": "text", "text": "You are a terse assistant."}],
+        "system": [
+            {
+                "type": "text",
+                "text": "You help maintain a synthetic Python project. Read the relevant files before "
+                "suggesting a fix. Explain which file you need next, then call a read-only tool. "
+                "Never change files. Use the responses client for this project review. Consider "
+                "zero, negative and non-integer quantities before choosing the next file to "
+                "inspect.",
+            }
+        ],
     },
     mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-sonnet-5-5",
-        "id": "msg_011CfgDzd9tYt5h3TSZTehYZ",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Hello."}],
-        "container": None,
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "stop_details": None,
+        "id": "msg_011Cg32qrmyWNAPnHJhxBL3M",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "The user wants the validation file read first, but since the test reads are "
+                "independent, I can just include both in the same batch since it's "
+                "effectively still prioritizing validation.\n"
+                "\n",
+                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": "I'll check `shop/validation.py` to see how `validate_quantity` handles "
+                "zero, negative, and non-integer values, and read `tests/test_validation.py` "
+                "alongside it to confirm the expected behavior.\n"
+                "\n",
+                "signature": CLAUDE_SONNET_5_5_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01GYseiK8hh9QxfWJ6HbiAt3",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01U3TuUTifkSBLVzyTFnbMN1",
+                "name": "read_file",
+                "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 40},
+                "caller": {"type": "direct"},
+            },
+        ],
         "usage": {
-            "input_tokens": 23,
-            "cache_creation_input_tokens": 0,
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
-            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 6,
-            "output_tokens_details": {"thinking_tokens": 0},
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 509,
+            "output_tokens_details": {"thinking_tokens": 313},
             "service_tier": "standard",
             "inference_geo": "global",
         },
-        "diagnostics": None,
     },
-    expected_litellm_response={
-        "id": ANY,
-        "created_at": ANY,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": "You are a terse assistant.",
-        "metadata": {},
-        "model": "anthropic/claude-sonnet-5-5",
-        "object": "response",
-        "output": [
-            {
-                "type": "message",
-                "id": ANY,
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
-                "phase": None,
-            }
-        ],
-        "parallel_tool_calls": False,
-        "temperature": None,
-        "tool_choice": "auto",
-        "tools": [],
-        "top_p": None,
-        "max_output_tokens": 64,
-        "previous_response_id": None,
-        "reasoning": None,
-        "status": "completed",
-        "text": {},
-        "truncation": None,
-        "usage": {
-            "input_tokens": 23,
-            "input_tokens_details": {
-                "audio_tokens": None,
-                "cached_tokens": 0,
-                "cached_tokens_details": None,
-                "image_tokens": None,
-                "text_tokens": 23,
-                "video_tokens": None,
-                "cache_write_tokens": 0,
-            },
-            "output_tokens": 6,
-            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 0, "text_tokens": 6},
-            "total_tokens": 29,
-            "cost": None,
-        },
-        "user": None,
-        "store": None,
-        "provider_specific_fields": {"citations": None, "thinking_blocks": None},
-    },
+    expected_litellm_response={**RESPONSES_RESPONSE, "model": "anthropic/claude-sonnet-5-5"},
 )
 
 CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(

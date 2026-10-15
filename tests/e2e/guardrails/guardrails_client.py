@@ -607,6 +607,7 @@ def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
 
 
+@step("Retry the call until the guardrail {guardrail_name} is applied")
 def poll_until_guardrail_applied(
     call: Callable[[], StreamingResponse],
     guardrail_name: str,
@@ -630,6 +631,7 @@ def poll_until_guardrail_applied(
     return result
 
 
+@step("Retry the call until a guardrail blocks it")
 def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]:
     """Retry a call that a guardrail should reject until it is, returning the last result.
 
@@ -657,6 +659,7 @@ def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]
 _TRANSIENT_STREAM_STATUSES = frozenset({-1, 401, 429})
 
 
+@step("Retry the streamed call until a guardrail blocks it")
 def poll_until_blocked_stream(call: Callable[[], StreamingResponse]) -> StreamingResponse:
     """poll_until_blocked for raw/streamed sends, which return a StreamingResponse
     instead of a Result: retry while the call still succeeds (the data-plane worker

@@ -10,7 +10,10 @@ Covers:
 - call_tool_rest_api intercepts mcp_tool_call calls
 """
 
+import asyncio
 import json
+import os
+import sys
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, Final
@@ -34,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     coerce_top_k,
     get_virtual_tool_definitions,
     handle_mcp_tool_search,
+    rank_mcp_tools,
     search_mcp_tools,
     search_tools,
 )
@@ -190,6 +194,19 @@ class RecordingEmbedder:
         return tuple(FAKE_VECTORS[text] for text in texts)
 
 
+class OversizedRecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple((1.0, 0.0) if "weather" in text.lower() else (0.0, 1.0) for text in texts)
+
+
 def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
     return SemanticToolRanker(embed=embedder or RecordingEmbedder(), embedding_model="emb", index=SemanticTextIndex())
 
@@ -200,6 +217,26 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
 
 
 class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
+        tools: Final = _make_tools(
+            [
+                ("get_weather", "Get the current weather forecast for a city"),
+                ("send_email", "Send an email to a recipient"),
+                ("list_files", "List files in a directory"),
+                ("huge_tool", "OVERSIZED description"),
+            ]
+        )
+        embedder = OversizedRecordingEmbedder()
+        ranker = SemanticToolRanker(embed=embedder, embedding_model="emb", index=SemanticTextIndex())
+
+        hits: Final = await rank_mcp_tools("weather", tools, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+
+        assert not isinstance(hits, EmbeddingFailed)
+        names: Final = [hit.tool.name for hit in hits]
+        assert names[0] == "get_weather"
+        assert "huge_tool" not in names
+
     @pytest.mark.asyncio
     async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
         keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
@@ -1373,7 +1410,7 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
     with (
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
         patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
     ):
         try:
@@ -1386,3 +1423,28 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
     assert result.is_error is False
     assert [hit["name"] for hit in json.loads(result.content[0].text)] == ["search-slot-echo"]
     assert listed == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    schema: Final = {
+        "type": "object",
+        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
+        "properties": {"amount": {"$ref": "#/$defs/amount"}},
+    }
+    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    try:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, {min(original_affinity)})
+        for _ in range(2):
+            results: Final = await asyncio.gather(
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=90.0) for _ in range(8))
+            )
+            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+    finally:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, original_affinity)
+
+
