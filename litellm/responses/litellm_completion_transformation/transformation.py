@@ -825,6 +825,10 @@ class LiteLLMCompletionResponsesConfig:
         already carries, because Anthropic and Bedrock verify signatures against
         the original block order.
 
+        A reasoning item replayed *after* the tool calls of its own turn rides
+        on that assistant message instead of becoming a standalone one, so the
+        tool results keep following the assistant that requested them.
+
         If the reasoning item is not followed by an assistant message (e.g. a
         stateless chain replays ``reasoning`` + ``user``), the standalone
         reasoning message is preserved so the reasoning is still passed back.
@@ -911,7 +915,10 @@ class LiteLLMCompletionResponsesConfig:
                 pending.append((_reasoning_text(msg), _thinking_blocks(msg)))
                 continue
 
-            if pending and _role(msg) == "assistant":
+            if pending and merged and _role(merged[-1]) == "assistant" and _tool_calls(merged[-1]):
+                _apply_pending(merged[-1], pending)
+                pending = []
+            elif pending and _role(msg) == "assistant":
                 _apply_pending(msg, pending)
                 pending = []
             elif pending:
