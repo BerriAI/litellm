@@ -20,16 +20,11 @@ from pydantic import BaseModel
 class MockRequestSeen(BaseModel):
     provider: Provider
     marker: str | None
-    model: str
     route: str
     stream: bool
     shape: str
-    attempt: int
     failed: bool
-    status: int
     delay_s: float
-    prompt_text: str
-    received_at: float
 
 
 class MockRequestsSeen(BaseModel):
@@ -40,12 +35,6 @@ class GuardrailCallSeen(BaseModel):
     marker: str | None
     input_type: str
     action: str
-    model: str | None
-    team_id: str | None
-    key_alias: str | None
-    user_id: str | None
-    litellm_call_id: str | None
-    received_at: float
 
 
 class GuardrailCallsSeen(BaseModel):
