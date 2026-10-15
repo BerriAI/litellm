@@ -323,7 +323,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     assert captured == [(args, kwargs)]
 
 
-def test_anthropic_create_routes_through_dispatch() -> None:
+def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
@@ -334,10 +334,10 @@ def test_anthropic_create_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_MESSAGES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_create: Final = cast(Callable[..., AnthropicMessagesResponse], litellm.anthropic.create)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = public_create(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
+        result: Final = public_create(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
     finally:
         NATIVE_MESSAGES.reset()
     assert result is expected
@@ -345,7 +345,7 @@ def test_anthropic_create_routes_through_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_anthropic_acreate_routes_through_dispatch() -> None:
+async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
@@ -356,10 +356,10 @@ async def test_anthropic_acreate_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_AMESSAGES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_acreate: Final = cast(Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic.acreate)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = await public_acreate(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
+        result: Final = await public_acreate(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
     finally:
         NATIVE_AMESSAGES.reset()
     assert result is expected

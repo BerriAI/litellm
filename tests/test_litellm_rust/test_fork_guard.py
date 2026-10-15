@@ -158,61 +158,59 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
 from litellm.utils import claude_json_str
 
-with catalog.scoped_rules(
-    (
-        RouteRule(Route.TOKENIZER, Rollout.RUST_REQUIRED),
-        RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_REQUIRED),
-        *catalog.RULES,
-    )
+catalog.RULES = (
+    RouteRule(Route.TOKENIZER, Rollout.RUST_REQUIRED),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_REQUIRED),
+    *catalog.RULES,
+)
+litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
+_native.reserve_process_for_forking()
+for create in (
+    lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
+    lambda: _native.Tokenizer.from_json(claude_json_str),
+    lambda: litellm.token_counter(model="tokenizer-fork-fixture", text="hello"),
 ):
-    litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
-    _native.reserve_process_for_forking()
-    for create in (
-        lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
-        lambda: _native.Tokenizer.from_json(claude_json_str),
-        lambda: litellm.token_counter(model="tokenizer-fork-fixture", text="hello"),
-    ):
-        try:
-            create()
-        except _native.ProcessReservedForForking:
-            pass
-        else:
-            raise AssertionError("reserved parent ran a native tokenizer")
-    assert not _native.process_state_started()
+    try:
+        create()
+    except _native.ProcessReservedForForking:
+        pass
+    else:
+        raise AssertionError("reserved parent ran a native tokenizer")
+assert not _native.process_state_started()
 
-    pid = os.fork()
-    if pid == 0:
-        tokenizer = HuggingFaceTokenizer.from_str(claude_json_str)
-        encoding = _native.Tokenizer.from_tiktoken("cl100k_base")
-        if os.environ["WARM_FAST_COUNTER"] == "True":
-            _native.TokenCounter.from_tokenizer(encoding, fast=True)
-        expected = [item.ids for item in tokenizer.encode_batch(["hello", "world"])]
-        assert _native.process_state_started()
-        grandchild = os.fork()
-        if grandchild == 0:
-            for call in (
-                lambda: tokenizer.encode_batch(["hello", "world"]),
-                lambda: tokenizer.encode("hello"),
-                lambda: encoding.count("hello"),
-                lambda: encoding.count("hello", fast=True),
-                lambda: _native.TokenCounter.from_tokenizer(encoding),
-                lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
-                lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
-                lambda: asyncio.run(
-                    count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))
-                ),
-            ):
-                try:
-                    call()
-                except _native.ForkedAfterNativeRuntimeStarted:
-                    pass
-                else:
-                    os._exit(1)
-            os._exit(0)
-        assert os.waitpid(grandchild, 0)[1] == 0
-        assert [item.ids for item in tokenizer.encode_batch(["hello", "world"])] == expected
+pid = os.fork()
+if pid == 0:
+    tokenizer = HuggingFaceTokenizer.from_str(claude_json_str)
+    encoding = _native.Tokenizer.from_tiktoken("cl100k_base")
+    if os.environ["WARM_FAST_COUNTER"] == "True":
+        _native.TokenCounter.from_tokenizer(encoding, fast=True)
+    expected = [item.ids for item in tokenizer.encode_batch(["hello", "world"])]
+    assert _native.process_state_started()
+    grandchild = os.fork()
+    if grandchild == 0:
+        for call in (
+            lambda: tokenizer.encode_batch(["hello", "world"]),
+            lambda: tokenizer.encode("hello"),
+            lambda: encoding.count("hello"),
+            lambda: encoding.count("hello", fast=True),
+            lambda: _native.TokenCounter.from_tokenizer(encoding),
+            lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
+            lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
+            lambda: asyncio.run(
+                count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))
+            ),
+        ):
+            try:
+                call()
+            except _native.ForkedAfterNativeRuntimeStarted:
+                pass
+            else:
+                os._exit(1)
         os._exit(0)
-    assert os.waitpid(pid, 0)[1] == 0
+    assert os.waitpid(grandchild, 0)[1] == 0
+    assert [item.ids for item in tokenizer.encode_batch(["hello", "world"])] == expected
+    os._exit(0)
+assert os.waitpid(pid, 0)[1] == 0
 """
     result: Final = run_child_interpreter(
         script,

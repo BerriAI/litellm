@@ -202,7 +202,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     assert captured == [(args, kwargs)]
 
 
-def test_public_completion_routes_through_dispatch() -> None:
+def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = ModelResponse()
 
@@ -211,10 +211,10 @@ def test_public_completion_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_COMPLETION.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_completion: Final = cast(Callable[..., ModelResponse], litellm.completion)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = public_completion(model="gpt-4o", messages=MESSAGES)
+        result: Final = public_completion(model="gpt-4o", messages=MESSAGES)
     finally:
         NATIVE_COMPLETION.reset()
     assert result is expected
@@ -222,7 +222,7 @@ def test_public_completion_routes_through_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_acompletion_routes_through_dispatch() -> None:
+async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = ModelResponse()
 
@@ -231,10 +231,10 @@ async def test_public_acompletion_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_ACOMPLETION.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_acompletion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.acompletion)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = await public_acompletion(model="gpt-4o", messages=MESSAGES)
+        result: Final = await public_acompletion(model="gpt-4o", messages=MESSAGES)
     finally:
         NATIVE_ACOMPLETION.reset()
     assert result is expected

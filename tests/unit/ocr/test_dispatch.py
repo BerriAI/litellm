@@ -249,7 +249,7 @@ async def test_aocr_parser_errors_before_native(
         )
 
 
-def test_public_ocr_routes_through_dispatch() -> None:
+def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     document: Final[Mapping[str, object]] = {
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
@@ -264,10 +264,10 @@ def test_public_ocr_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_OCR.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_ocr: Final = cast(Callable[..., OCRResponse], litellm.ocr)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = public_ocr(model="mistral/mistral-ocr-latest", document=document)
+        result: Final = public_ocr(model="mistral/mistral-ocr-latest", document=document)
     finally:
         NATIVE_OCR.reset()
     assert result is expected
@@ -275,7 +275,7 @@ def test_public_ocr_routes_through_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_aocr_routes_through_dispatch() -> None:
+async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     document: Final[Mapping[str, object]] = {
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
@@ -290,10 +290,10 @@ async def test_public_aocr_routes_through_dispatch() -> None:
         return expected
 
     NATIVE_AOCR.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_aocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.aocr)
     try:
-        with catalog.scoped_rules(RUST_RULES):
-            result: Final = await public_aocr(model="mistral/mistral-ocr-latest", document=document)
+        result: Final = await public_aocr(model="mistral/mistral-ocr-latest", document=document)
     finally:
         NATIVE_AOCR.reset()
     assert result is expected

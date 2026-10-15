@@ -7,22 +7,22 @@ from typing import Final
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.served import assert_served_natively
 
-__all__ = ["CALL_ID", "assert_served_natively", "call_natively", "native_route"]
+__all__ = ["CALL_ID", "assert_served_natively", "call_public", "native_route"]
 
 CALL_ID: Final = "callback-contract"
 
 
 @contextmanager
 def native_route(*routes: Route) -> Generator[None]:
-    with catalog.scoped_rules((*(RouteRule(route, Rollout.RUST_REQUIRED) for route in routes), *catalog.RULES)):
+    with rebound(catalog, "RULES", (*(RouteRule(route, Rollout.RUST_REQUIRED) for route in routes), *catalog.RULES)):
         yield
 
 
-async def call_natively(
-    route: Route,
+async def call_public(
     create: Callable[..., object],
     acreate: Callable[..., Awaitable[object]],
     request: Mapping[str, object],
@@ -38,8 +38,6 @@ async def call_natively(
         "litellm_call_id": CALL_ID,
         **kwargs,
     }
-    with native_route(route):
-        if asynchronous:
-            return await acreate(**arguments)
-        return await asyncio.to_thread(create, **arguments)
-
+    if asynchronous:
+        return await acreate(**arguments)
+    return await asyncio.to_thread(create, **arguments)
