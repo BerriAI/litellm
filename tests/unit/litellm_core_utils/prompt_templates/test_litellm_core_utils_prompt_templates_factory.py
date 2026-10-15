@@ -7851,9 +7851,9 @@ def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
 )
 def test_roles_that_are_not_a_mapping_render_unwrapped_with_a_warning(template, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        rendered = _render_ollama(template, monkeypatch)
+        rendered = _render_ollama({**template, "final_prompt_value": TEMPLATE_FINAL}, monkeypatch)
 
-    assert rendered == TEMPLATE_BARE_MESSAGES
+    assert rendered == TEMPLATE_BARE_MESSAGES + TEMPLATE_FINAL
     assert "not a mapping" in caplog.text
 
 
@@ -7874,7 +7874,7 @@ def test_null_role_entry_renders_that_role_unwrapped_without_a_warning(monkeypat
     ],
 )
 def test_wrong_type_template_field_fails_as_a_server_error_naming_it(template, field):
-    with pytest.raises(litellm.InternalServerError) as excinfo:
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
         litellm.completion(
             model=f"ollama/{TEMPLATE_MODEL}",
             messages=TEMPLATE_MESSAGES,
@@ -7886,27 +7886,43 @@ def test_wrong_type_template_field_fails_as_a_server_error_naming_it(template, f
     assert f"{field}: Input should be a valid string" in excinfo.value.message
 
 
-def test_deployment_with_a_wrong_type_template_fails_over_to_a_healthy_deployment():
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param({"bos_token": "<s>"}, id="bos-token-only"),
+        pytest.param({"eos_token": "</s>"}, id="eos-token-only"),
+        pytest.param({"roles": '{"user": {"pre_message": "[INST]"}}'}, id="json-string-roles-only"),
+    ],
+)
+def test_template_that_sets_nothing_the_prompt_uses_fails_as_a_server_error(template):
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        litellm.completion(
+            model=f"ollama/{TEMPLATE_MODEL}",
+            messages=TEMPLATE_MESSAGES,
+            api_base="http://ollama.invalid",
+            **template,
+        )
+
+    assert excinfo.value.status_code == 500
+    assert "is invalid: it sets none of roles, initial_prompt_value, or final_prompt_value" in excinfo.value.message
+
+
+def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotation():
     router = litellm.Router(
         model_list=[
             {
                 "model_name": "template-group",
-                "litellm_params": {
-                    "model": f"ollama/{TEMPLATE_MODEL}",
-                    "api_base": "http://ollama.invalid",
-                    "initial_prompt_value": 5,
-                    "weight": 1,
-                },
-            },
-            {
-                "model_name": "template-group",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "Blue", "weight": 0},
-            },
+                "litellm_params": {"model": f"ollama/{TEMPLATE_MODEL}", "api_base": "http://ollama.invalid"},
+            }
+            for _ in range(2)
         ],
-        num_retries=1,
+        num_retries=0,
         allowed_fails=0,
     )
 
-    response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES)
+    for _ in range(2):
+        with pytest.raises(litellm.APIConnectionError):
+            router.completion(model="template-group", messages=TEMPLATE_MESSAGES, initial_prompt_value=5)
+    response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"

@@ -12,7 +12,8 @@ from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, ValidationError, model_validator
+from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
 import litellm.types
@@ -5539,6 +5540,15 @@ class CustomPromptTemplate(BaseModel):
     initial_prompt_value: str | None = None
     final_prompt_value: str | None = None
 
+    @model_validator(mode="after")
+    def _sets_a_rendered_field(self) -> "CustomPromptTemplate":
+        if self.roles is None and self.initial_prompt_value is None and self.final_prompt_value is None:
+            raise PydanticCustomError(
+                "empty_custom_prompt_template",
+                "it sets none of roles, initial_prompt_value, or final_prompt_value",
+            )
+        return self
+
 
 def render_custom_prompt_template(
     template: Mapping[str, object],
@@ -5549,7 +5559,7 @@ def render_custom_prompt_template(
     try:
         return _render_custom_prompt_template(template=template, messages=messages)
     except ValidationError as error:
-        raise litellm.InternalServerError(
+        raise litellm.APIConnectionError(
             message=f"The custom prompt template for {model} is invalid: {_describe_template_errors(error)}",
             model=model,
             llm_provider=llm_provider,
@@ -5558,9 +5568,13 @@ def render_custom_prompt_template(
 
 def _describe_template_errors(error: ValidationError) -> str:
     return "; ".join(
-        f"{'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}"
-        for detail in error.errors(include_url=False, include_input=False)
+        _describe_template_error(detail) for detail in error.errors(include_url=False, include_input=False)
     )
+
+
+def _describe_template_error(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
 
 
 def _render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
