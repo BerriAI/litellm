@@ -16,6 +16,7 @@ from ....litellm_core_utils.realtime_errors import close_after_upstream_handshak
 from ....litellm_core_utils.realtime_streaming import (
     RealtimeEventNormalizer,
     RealTimeStreaming,
+    RealtimeUsageMeter,
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
@@ -45,7 +46,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: str,
         *,
         openai_beta_realtime: bool = False,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Headers for the upstream OpenAI Realtime WebSocket.
 
@@ -54,7 +55,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         so the legacy beta API is used. GA clients omit that header on the client
         connection and must send GA-shaped ``session.update`` payloads.
         """
-        headers: Final[dict] = {"Authorization": f"Bearer {api_key}"}
+        headers: Final[dict[str, str]] = {"Authorization": f"Bearer {api_key}"}
         if openai_beta_realtime:
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
@@ -121,6 +122,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
         Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
         normalizer instance.
         """
+        return None
+
+    def _make_usage_meter(self) -> RealtimeUsageMeter | None:
+        """Return a per-session usage meter, or None when billing needs no metering."""
         return None
 
     async def async_realtime(
@@ -190,6 +195,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    usage_meter=self._make_usage_meter(),
                 )
                 await realtime_streaming.bidirectional_forward()
 

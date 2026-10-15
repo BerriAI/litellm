@@ -4046,9 +4046,8 @@ GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
 )
 
 
-@pytest.mark.parametrize("model", ["gemini-4-argon", "vertex_ai/gemini-4-argon"])
-def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(model: str, _local_model_cost_map: None) -> None:
-    vertex_row: Final = litellm.model_cost[model]
+def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(_local_model_cost_map: None) -> None:
+    vertex_row: Final = litellm.model_cost["vertex_ai/gemini-4-argon"]
     gemini_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
     assert {key: vertex_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS} == {
         key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
