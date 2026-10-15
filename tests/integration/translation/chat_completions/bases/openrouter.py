@@ -54,14 +54,12 @@ CLAUDE_SONNET_4_TEST_CASE: Final = TranslationTestCase(
                     "role": "assistant",
                     "content": CLAUDE_SONNET_4_MESSAGE["content"],
                     "reasoning_content": CLAUDE_SONNET_4_MESSAGE["reasoning"],
-                    "refusal": CLAUDE_SONNET_4_MESSAGE["refusal"],
                     "provider_specific_fields": {
                         "reasoning": CLAUDE_SONNET_4_MESSAGE["reasoning"],
                         "reasoning_details": CLAUDE_SONNET_4_MESSAGE["reasoning_details"],
                     },
                     "refusal": CLAUDE_SONNET_4_MESSAGE["refusal"],
                 },
-                "logprobs": CLAUDE_SONNET_4_CHOICE["logprobs"],
                 "finish_reason": "stop",
                 "logprobs": CLAUDE_SONNET_4_CHOICE["logprobs"],
                 "provider_specific_fields": {
@@ -133,14 +131,12 @@ GEMINI_3_1_FLASH_IMAGE_TEST_CASE: Final = TranslationTestCase(
                             "type": GEMINI_3_1_FLASH_IMAGE_MESSAGE["images"][0]["type"],
                         }
                     ],
-                    "refusal": GEMINI_3_1_FLASH_IMAGE_MESSAGE["refusal"],
                     "provider_specific_fields": {
                         "reasoning": GEMINI_3_1_FLASH_IMAGE_MESSAGE["reasoning"],
                         "reasoning_details": GEMINI_3_1_FLASH_IMAGE_MESSAGE["reasoning_details"],
                     },
                     "refusal": GEMINI_3_1_FLASH_IMAGE_MESSAGE["refusal"],
                 },
-                "logprobs": GEMINI_3_1_FLASH_IMAGE_CHOICE["logprobs"],
                 "finish_reason": "stop",
                 "logprobs": GEMINI_3_1_FLASH_IMAGE_CHOICE["logprobs"],
                 "provider_specific_fields": {
@@ -158,6 +154,5 @@ GEMINI_3_1_FLASH_IMAGE_TEST_CASE: Final = TranslationTestCase(
         "provider": GEMINI_3_1_FLASH_IMAGE_RESPONSE["provider"],
         "system_fingerprint": GEMINI_3_1_FLASH_IMAGE_RESPONSE["system_fingerprint"],
         "service_tier": GEMINI_3_1_FLASH_IMAGE_RESPONSE["service_tier"],
-        "system_fingerprint": GEMINI_3_1_FLASH_IMAGE_RESPONSE["system_fingerprint"],
     },
 )
