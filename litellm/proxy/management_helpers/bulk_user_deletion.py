@@ -492,12 +492,15 @@ async def _delete_users_tx(
     missed, so the teams are read again under the row locks and an unlocked one returns them for a retry."""
     user_ids: Final = frozenset(u.user_id for u in users)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
-        team_rows: Final = await _team_tx_db(tx).find_many(where=_in_filter("team_id", _all_teams(teams_of)))
-        team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
-        alias_of: Final = MappingProxyType({t.team_id: t.team_alias for t in team_rows})
-        for team_id in team_ids:
+        existing_team_ids: Final = frozenset(
+            t.team_id for t in await _team_tx_db(tx).find_many(where=_in_filter("team_id", _all_teams(teams_of)))
+        )
+        for team_id in sorted(existing_team_ids):
             _ = await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         _ = await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(user_ids))
+        team_rows: Final = await _team_tx_db(tx).find_many(where=_in_filter("team_id", existing_team_ids))
+        team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
+        alias_of: Final = MappingProxyType({t.team_id: t.team_alias for t in team_rows})
         current_teams_of: Final = _teams_of(
             await _user_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),
             await _membership_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),

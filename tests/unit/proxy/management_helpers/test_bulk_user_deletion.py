@@ -409,6 +409,20 @@ async def test_bulk_delete_reads_roster_under_lock_so_a_concurrent_add_survives(
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_still_deletes_a_user_whose_team_was_deleted_while_it_waited_on_the_team_lock():
+    def team_delete_commits_first(team_id: str) -> None:
+        del prisma.db.litellm_teamtable.rows[team_id]
+        prisma.db.litellm_usertable.rows["u1"] = prisma.db.litellm_usertable.rows["u1"].model_copy(update={"teams": []})
+
+    prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[_team("t1", "u1")], on_lock=team_delete_commits_first)
+
+    results = await _delete(prisma, ["u1"])
+
+    assert results[0].success is True
+    assert "u1" not in prisma.db.litellm_usertable.rows
+
+
+@pytest.mark.asyncio
 async def test_bulk_delete_takes_every_team_lock_before_writing_a_user_row():
     teams_when_locked: dict[str, list[str]] = {}
 
