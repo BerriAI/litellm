@@ -59,6 +59,7 @@ from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -102,6 +103,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
+    OutputToolSearchCall,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -116,18 +118,37 @@ from litellm.types.utils import (
 from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
+    function_chat_tool,
     is_custom_tool_call,
     openai_shaped_tool_call_item_id,
     serialize_tool_call_arguments,
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
+    validated_defer_loading,
+    validated_tool_search_execution,
+    without_malformed_tool_flags,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .tool_search import (
+    CompletionRoute,
+    answers_tool_search,
+    anthropic_tool_search_chat_tool,
+    build_tool_search_call,
+    has_server_tool_search,
+    holds_tool_search_use,
+    is_anthropic_tool_search_chat_tool,
+    is_anthropic_tool_search_use,
+    is_server_tool_search_tool,
+    provider_builds_anthropic_request,
+    tool_search_call_ids,
+    without_tool_search_calls,
+    without_tool_search_uses,
+)
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
-ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
+ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
@@ -249,6 +270,35 @@ def _attribute_fields(value: object) -> dict[str, object]:
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+SessionMessage: TypeAlias = (
+    AllMessageValues
+    | GenericChatCompletionMessage
+    | ChatCompletionMessageToolCall
+    | ChatCompletionResponseMessage
+    | Message
+)
+
+
+def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
+    kept_calls: Final = without_tool_search_calls(message)
+    if not kept_calls and not message.get("content"):
+        return None
+    without_calls: Final = {key: value for key, value in message.items() if key != "tool_calls"}
+    return cast(  # cast-ok: the replayed assistant message minus its search calls keeps every other field as stored
+        SessionMessage, {**without_calls, "tool_calls": list(kept_calls)} if kept_calls else without_calls
+    )
+
+
+def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+    if isinstance(message, Message):
+        return without_tool_search_uses(message)
+    if answers_tool_search(message, search_call_ids):
+        return None
+    if isinstance(message, Mapping) and holds_tool_search_use(message):
+        return _replayed_assistant_without_tool_search_uses(message)
+    return message
 
 
 def _input_item_cache_control(input_item: Mapping[str, object]) -> ChatCompletionCachedContent | None:
@@ -504,13 +554,7 @@ def _replayed_messages_for_cache_points(
 
 
 class ChatCompletionSession(TypedDict, total=False):
-    messages: list[
-        AllMessageValues
-        | GenericChatCompletionMessage
-        | ChatCompletionMessageToolCall
-        | ChatCompletionResponseMessage
-        | Message
-    ]
+    messages: list[SessionMessage]
     litellm_session_id: str | None
     instructions: ReadOnly[str | None]
 
@@ -644,10 +688,59 @@ class LiteLLMCompletionResponsesConfig:
         return supported_params is not None and "web_search_options" not in supported_params
 
     @staticmethod
+    def _without_malformed_tool_flags_when_dropping_params(tools: ResponseTools, drop_params: object) -> ResponseTools:
+        if litellm.drop_params is not True and normalize_drop_params(drop_params) is not True:
+            return tools
+        return [without_malformed_tool_flags(tool) for tool in tools or ()]
+
+    @staticmethod
+    def _without_unsupported_tool_search(
+        tools: ResponseTools, model: str, custom_llm_provider: str | None
+    ) -> ResponseTools:
+        from litellm.utils import supports_tool_search
+
+        if not has_server_tool_search(tools):
+            return tools
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()):
+            return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
+        route_runs_tool_search: Final = supports_tool_search(
+            model=model, custom_llm_provider=custom_llm_provider
+        ) and provider_builds_anthropic_request(model, custom_llm_provider)
+        if route_runs_tool_search:
+            return tools
+        verbose_logger.warning(
+            "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
+            "on this route, so the target provider would reject or ignore it.",
+            model,
+            custom_llm_provider,
+        )
+        return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
+
+    @staticmethod
+    def _deferral_the_route_honors(
+        tools: Sequence[ChatToolParam], callers_tools: ResponseTools, model: str, custom_llm_provider: str | None
+    ) -> Sequence[ChatToolParam]:
+        if not any("defer_loading" in tool for tool in tools):
+            return tools
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+            return tools
+        if not has_server_tool_search(callers_tools) and provider_builds_anthropic_request(model, custom_llm_provider):
+            return tools
+        return [LiteLLMCompletionResponsesConfig._without_deferral(tool) for tool in tools]
+
+    @staticmethod
+    def _without_deferral(tool: ChatToolParam) -> ChatToolParam:
+        if "defer_loading" not in tool:
+            return tool
+        return cast(  # cast-ok: a TypedDict minus one key has no typed construction, and only its deferral changes
+            ChatToolParam, {key: value for key, value in tool.items() if key != "defer_loading"}
+        )
+
+    @staticmethod
     def _completion_bridges_back_to_responses_api(
         model: str,
         custom_llm_provider: str | None,
-        tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None,
+        tools: Sequence[ChatToolParam] | None,
         web_search_options: OpenAIWebSearchOptions | None,
         reasoning_effort: str | None,
         reasoning_summary: str | None,
@@ -681,7 +774,7 @@ class LiteLLMCompletionResponsesConfig:
         reasoning_param: Reasoning | str | None,
         model: str,
         custom_llm_provider: str | None,
-        tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None = None,
+        tools: Sequence[ChatToolParam] | None = None,
         web_search_options: OpenAIWebSearchOptions | None = None,
         api_base: str | None = None,
     ) -> ResponsesReasoningChatForm:
@@ -724,16 +817,25 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: str | None = None,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
+        drop_params: object = None,
         **kwargs,
     ) -> dict:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        request_tools: Final = LiteLLMCompletionResponsesConfig._without_unsupported_tool_search(
+            LiteLLMCompletionResponsesConfig._without_malformed_tool_flags_when_dropping_params(
+                responses_api_request.get("tools") or [], drop_params
+            ),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
         (
-            tools,
+            converted_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(request_tools)
+        tools: Final = LiteLLMCompletionResponsesConfig._deferral_the_route_honors(
+            converted_tools, responses_api_request.get("tools"), model=model, custom_llm_provider=custom_llm_provider
         )
 
         if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(
@@ -755,7 +857,7 @@ class LiteLLMCompletionResponsesConfig:
             api_base=kwargs.get("api_base"),
         )
 
-        request_kwargs: Final = _STR_KEY_DICT_ADAPTER.validate_python(kwargs)
+        request_kwargs: Final = _STR_KEY_DICT_ADAPTER.validate_python({**kwargs, "drop_params": drop_params})
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
@@ -871,6 +973,19 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
+    def _without_tool_search_uses_off_anthropic(
+        messages: Sequence[SessionMessage], route: CompletionRoute
+    ) -> tuple[SessionMessage, ...]:
+        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
+            return tuple(messages)
+        search_call_ids: Final = tool_search_call_ids(messages)
+        return tuple(
+            kept
+            for message in messages
+            if (kept := _without_stored_tool_search_uses(message, search_call_ids)) is not None
+        )
+
+    @staticmethod
     async def async_responses_api_session_handler(
         previous_response_id: str,
         litellm_completion_request: dict,
@@ -898,7 +1013,14 @@ class LiteLLMCompletionResponsesConfig:
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
         _messages: Final = litellm_completion_request.get("messages") or []
-        replayed_messages: Final = chat_completion_session.get("messages") or []
+        stored_messages: Final = chat_completion_session.get("messages") or []
+        replayed_messages: Final = (
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
+                stored_messages, CompletionRoute.model_validate(litellm_completion_request)
+            )
+            if any(holds_tool_search_use(message) for message in stored_messages)
+            else stored_messages
+        )
         session_messages: Final = (
             _replayed_messages_for_cache_points(
                 replayed_messages,
@@ -2286,10 +2408,11 @@ class LiteLLMCompletionResponsesConfig:
             parameters=dict(normalized_parameters),
             strict=bool(namespace_tool.get("strict", False)),
         )
-        allowed_callers: Final = validated_allowed_callers(namespace_tool.get("allowed_callers"))
-        if allowed_callers is None:
-            return ChatCompletionToolParam(type="function", function=function)
-        return ChatCompletionToolParam(type="function", function=function, allowed_callers=allowed_callers)
+        return function_chat_tool(
+            function,
+            validated_allowed_callers(namespace_tool.get("allowed_callers")),
+            validated_defer_loading(namespace_tool.get("defer_loading")),
+        )
 
     @staticmethod
     def _namespace_chat_tools(tool: NamespaceTool) -> tuple[ChatCompletionToolParam, ...]:
@@ -2372,10 +2495,11 @@ class LiteLLMCompletionResponsesConfig:
             }
             if tool.get("cache_control"):
                 chat_completion_tool["cache_control"] = tool.get("cache_control")
-            if tool.get("defer_loading"):
-                chat_completion_tool["defer_loading"] = tool.get("defer_loading")
-            if tool.get("allowed_callers"):
-                chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
+            if validated_defer_loading(tool.get("defer_loading")):
+                chat_completion_tool["defer_loading"] = True
+            function_allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
+            if function_allowed_callers:
+                chat_completion_tool["allowed_callers"] = function_allowed_callers
             if tool.get("input_examples"):
                 chat_completion_tool["input_examples"] = tool.get("input_examples")
             if tool.get("eager_input_streaming") is not None:
@@ -2390,6 +2514,8 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
+        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) != "client":
+            return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
         if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
@@ -2408,7 +2534,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: ResponseTools,
     ) -> tuple[
-        list[ChatCompletionToolParam | OpenAIMcpServerTool],
+        list[ChatToolParam],
         OpenAIWebSearchOptions | None,
     ]:
         """
@@ -2506,13 +2632,15 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]:
+    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
         For custom tools (e.g. apply_patch), returns CustomToolCallOutputItem
         with ``type="custom_tool_call"``. For regular function tools, returns
-        ``ResponseFunctionToolCall`` with ``type="function_call"``.
+        ``ResponseFunctionToolCall`` with ``type="function_call"``. A provider-side
+        tool search call made for a request's ``tool_search`` tool returns
+        ``OutputToolSearchCall`` with ``type="tool_search_call"``.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
@@ -2528,12 +2656,13 @@ class LiteLLMCompletionResponsesConfig:
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
+        tool_search_requested: Final = has_server_tool_search(request_tools)
 
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
         )
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]
+            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]
         ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -2542,9 +2671,12 @@ class LiteLLMCompletionResponsesConfig:
                 tool_id = tool.id or ""
                 tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
-                web_search_call = web_search_calls.get(tool_id)
-                if web_search_call is not None:
-                    responses_tools.append(web_search_call)
+                if (
+                    server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
+                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search_requested
+                    )
+                ) is not None:
+                    responses_tools.append(server_tool_call)
                 elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)
@@ -2599,6 +2731,21 @@ class LiteLLMCompletionResponsesConfig:
 
                     responses_tools.append(output_tool_call)
         return responses_tools
+
+    @staticmethod
+    def _server_tool_call_item(
+        tool_id: str,
+        tool_name: str,
+        tool_arguments: str,
+        web_search_calls: Mapping[str, ResponseFunctionWebSearch],
+        tool_search_requested: bool,
+    ) -> ResponseFunctionWebSearch | OutputToolSearchCall | None:
+        web_search_call: Final = web_search_calls.get(tool_id)
+        if web_search_call is not None:
+            return web_search_call
+        if tool_search_requested and is_anthropic_tool_search_use(tool_id, tool_name):
+            return build_tool_search_call(tool_id, tool_arguments, "completed")
+        return None
 
     @staticmethod
     def _web_search_calls_by_call_id(
@@ -2867,6 +3014,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionToolCall
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
+        | OutputToolSearchCall
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -2876,6 +3024,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | OutputToolSearchCall
         ] = []
 
         responses_output.extend(

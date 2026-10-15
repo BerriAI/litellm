@@ -1717,7 +1717,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     litellm_version=version,
                     settings=telemetry_settings,
                     db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
-                        getattr(prisma_client.db, "writer", prisma_client.db) if prisma_client is not None else None
+                        prisma_client.writer_db if prisma_client is not None else None
                     ),
                     register=litellm.logging_callback_manager.add_litellm_callback,
                 )
