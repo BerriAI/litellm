@@ -5,6 +5,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.constants import TYPESAFE_DANGER_ZONE_HEADER_PREFIX
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, image_media_type
 from litellm.types.decisions import (
     DecisionsAsset,
@@ -17,6 +18,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
 )
 
+_IMAGES_HEADER: Final = f"{TYPESAFE_DANGER_ZONE_HEADER_PREFIX}images"
 _ASSET_FORMATS: Final[Mapping[str, Literal["png", "jpg"]]] = MappingProxyType(
     {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg"}
 )
@@ -71,16 +73,21 @@ def _with_images_as_assets(request: DecisionsIRRequest) -> DecisionsIRRequest:
 class TypeSafeDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("TYPESAFE_API_KEY",)
     api_base_env = ("TYPESAFE_API_BASE",)
-    supports_assets = True
-    supports_box_questions = True
     image_media_types = frozenset(_ASSET_FORMATS)
     inlines_remote_images = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.typesafe.ai"
 
-    def supports_images_in(self, decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
-        return isinstance(decision_input, DecisionsIRMessages)
+    def supports_images_in(
+        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+    ) -> bool:
+        return isinstance(decision_input, DecisionsIRMessages) and self.supports_assets(headers)
+
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return any(
+            name.lower() == _IMAGES_HEADER and value.strip().lower() == "true" for name, value in headers.items()
+        )
 
     def transform_decisions_request(
         self,

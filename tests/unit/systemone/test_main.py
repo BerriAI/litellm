@@ -170,6 +170,7 @@ _BOX_RESPONSE: Final[Mapping[str, object]] = {
     "usage": {"input_tokens": 299, "output_tokens": 37},
 }
 _MUG_BOX: Final[Mapping[str, float]] = MappingProxyType({"top": 0.1, "bottom": 0.5, "left": 0.2, "right": 0.6})
+_IMAGES_HEADER: Final[Mapping[str, str]] = MappingProxyType({"TypeSafe-Danger-Zone-Images": "true"})
 
 
 @pytest.mark.asyncio
@@ -186,6 +187,7 @@ async def test_systemone_sends_assets_and_box_questions_to_typesafe(respx_mock: 
         assets={"photo-1": {"type": "image", "format": "png", "data_base64": "AA=="}},
         questions=questions,
         api_key="caller-key",
+        extra_headers=_IMAGES_HEADER,
     )
 
     assert json.loads(route.calls.last.request.content) == {
@@ -220,6 +222,7 @@ async def test_decisions_input_images_reach_typesafe_as_assets_referenced_in_the
             {"type": "box", "name": "mug", "instructions": "the mug on the desk"},
         ],
         api_key="caller-key",
+        extra_headers=_IMAGES_HEADER,
     )
 
     sent: Final = json.loads(route.calls.last.request.content)
@@ -245,6 +248,7 @@ async def test_decisions_remote_images_reach_typesafe_inlined_as_assets(
         input=[{"role": "user", "content": [{"type": "input_image", "image_url": "https://images.example/desk.png"}]}],
         questions=[{"type": "predicate", "name": "has_mug", "instructions": "Is there a mug on the desk?"}],
         api_key="caller-key",
+        extra_headers=_IMAGES_HEADER,
     )
 
     sent: Final = json.loads(route.calls.last.request.content)
@@ -280,3 +284,133 @@ async def test_provider_specific_headers_reach_typesafe_only_when_scoped_to_it(
     assert {
         name: value for name, value in sent_headers.items() if name.startswith("typesafe-danger-zone-")
     } == expected_headers
+
+
+_DESK_PHOTO_INPUT: Final[tuple[Mapping[str, object], ...]] = (
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Desk photo:"},
+            {"type": "input_image", "image_url": _PNG_DATA_URL},
+        ],
+    },
+)
+_HAS_MUG_QUESTION: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "has_mug", "instructions": "Is there a mug on the desk?"},
+)
+_WITHOUT_IMAGES_HEADER: Final[tuple[Mapping[str, str], ...]] = ({}, {"TypeSafe-Danger-Zone-Images": "false"})
+
+
+@pytest.mark.parametrize("extra_headers", _WITHOUT_IMAGES_HEADER, ids=("no_header", "header_false"))
+def test_typesafe_refuses_images_and_assets_before_http_without_the_images_header(
+    extra_headers: Mapping[str, str], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_BOX_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['input_image'\]") as image_refusal:
+        litellm.decisions(
+            model="typesafe/jev-1.14.0",
+            input=_DESK_PHOTO_INPUT,
+            questions=_HAS_MUG_QUESTION,
+            api_key="caller-key",
+            extra_headers=extra_headers,
+        )
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['assets'\]") as asset_refusal:
+        litellm.systemone(
+            model="typesafe/jev-1.14.0",
+            state="review photo-1",
+            assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+            questions=_SYSTEMONE_QUESTIONS,
+            api_key="caller-key",
+            extra_headers=extra_headers,
+        )
+
+    assert (image_refusal.value.status_code, asset_refusal.value.status_code) == (400, 400)
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_typesafe_drops_images_and_assets_without_the_images_header_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_BOX_RESPONSE)
+
+    await litellm.adecisions(
+        model="typesafe/jev-1.14.0",
+        input=_DESK_PHOTO_INPUT,
+        questions=_HAS_MUG_QUESTION,
+        api_key="caller-key",
+        drop_params=True,
+    )
+    decisions_body: Final = json.loads(route.calls.last.request.content)
+    await litellm.asystemone(
+        model="typesafe/jev-1.14.0",
+        state="review photo-1",
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        questions=_SYSTEMONE_QUESTIONS,
+        api_key="caller-key",
+        drop_params=True,
+    )
+    systemone_body: Final = json.loads(route.calls.last.request.content)
+
+    assert (decisions_body["state"], "assets" in decisions_body) == ("Desk photo:", False)
+    assert "assets" not in systemone_body
+
+
+def test_typesafe_models_without_box_support_refuse_box_questions_before_http(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]") as caught:
+        litellm.systemone(
+            model="typesafe/jev-1.13.0",
+            state="a mug on a desk",
+            questions={"mug": {"type": "box", "instructions": "the mug"}, **_SYSTEMONE_QUESTIONS},
+            api_key="caller-key",
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_typesafe_models_without_box_support_answer_box_questions_as_refusals_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.13.0",
+        input="Customer asked for a refund",
+        questions=(*_OPENAI_QUESTIONS, {"type": "box", "name": "mug", "instructions": "the mug"}),
+        api_key="caller-key",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == {
+        "is_refund": {"type": "noul", "instructions": "Is this a refund request?"}
+    }
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_refund", "probability": 0.93},
+        {"type": "refusal", "name": "mug"},
+    ]
+
+
+def test_a_malformed_provider_specific_header_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request") as caught:
+        litellm.systemone(
+            model="typesafe/jev-1.14.0",
+            state=_STATE,
+            questions=_SYSTEMONE_QUESTIONS,
+            api_key="caller-key",
+            provider_specific_header={"custom_llm_provider": "typesafe", "extra_headers": "not a header map"},
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called

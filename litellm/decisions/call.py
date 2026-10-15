@@ -253,17 +253,21 @@ class _MalformedImages:
 
 
 def _unsupported_params(
-    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str
+    ir_request: DecisionsIRRequest,
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    headers: Mapping[str, str],
 ) -> tuple[str, ...]:
     refuses_safety_identifier: Final = (
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
     )
     refused_image_param: Final = (
-        None if provider_config.supports_images_in(ir_request.input) else image_param(ir_request.input)
+        None if provider_config.supports_images_in(ir_request.input, headers) else image_param(ir_request.input)
     )
-    refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets
+    refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not (
-        provider_config.supports_box_questions
+        provider_config.supports_box_questions(model, custom_llm_provider)
     )
     refuses_audio: Final = bool(ir_request.audio) and not provider_config.supports_audio_input(
         model, custom_llm_provider
@@ -290,20 +294,24 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
 
 
 def _without_unsupported_params(
-    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+    ir_request: DecisionsIRRequest,
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    headers: Mapping[str, str],
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
         input=(
             ir_request.input
-            if provider_config.supports_images_in(ir_request.input)
+            if provider_config.supports_images_in(ir_request.input, headers)
             else with_images_where(ir_request.input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
-        assets=ir_request.assets if provider_config.supports_assets else MappingProxyType({}),
+        assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions
-            if provider_config.supports_box_questions
+            if provider_config.supports_box_questions(model, custom_llm_provider)
             else tuple(filter(_is_not_box_question, ir_request.questions))
         ),
     )
@@ -331,14 +339,15 @@ def _provider_ir_request(
     provider_config: BaseDecisionsConfig,
     model: str,
     custom_llm_provider: str,
+    headers: Mapping[str, str],
     kwargs: Mapping[str, object],
 ) -> DecisionsIRRequest | _UnsupportedParams | _NothingLeftAfterDrop:
-    unsupported: Final = _unsupported_params(ir_request, provider_config, model, custom_llm_provider)
+    unsupported: Final = _unsupported_params(ir_request, provider_config, model, custom_llm_provider, headers)
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
-    supported: Final = _without_unsupported_params(ir_request, provider_config)
+    supported: Final = _without_unsupported_params(ir_request, provider_config, model, custom_llm_provider, headers)
     if _leaves_no_input(supported.input):
         return _NothingLeftAfterDrop(names=unsupported, missing="input to decide on")
     if not supported.questions:
@@ -388,6 +397,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
+        headers: Final = _outbound_headers(extra_headers, provider, kwargs)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(
             fields, provider_config, canonical_model, provider, kwargs
@@ -435,6 +445,7 @@ def prepare_call(
         provider_config=provider_config,
         model=canonical_model,
         custom_llm_provider=provider,
+        headers=headers,
         kwargs=kwargs,
     )
     if isinstance(ir_request, _UnsupportedParams):
@@ -477,7 +488,7 @@ def prepare_call(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
-        headers=_outbound_headers(extra_headers, provider, kwargs),
+        headers=headers,
         timeout=timeout,
         litellm_params=kwargs,
         caller_questions=caller_ir_request.questions,

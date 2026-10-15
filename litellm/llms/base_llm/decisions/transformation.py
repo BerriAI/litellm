@@ -468,8 +468,6 @@ class BaseDecisionsConfig(ABC):
     api_key_required: bool = True
     supports_safety_identifier: bool = False
     supports_images: bool = False
-    supports_assets: bool = False
-    supports_box_questions: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
@@ -531,8 +529,18 @@ class BaseDecisionsConfig(ABC):
     ) -> tuple[Mapping[str, str], bytes | None]:
         return headers, None
 
-    def supports_images_in(self, decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    def supports_images_in(
+        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+    ) -> bool:
         return self.supports_images
+
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return False
+
+    def supports_box_questions(self, model: str, custom_llm_provider: str) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_box_questions(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(

@@ -196,6 +196,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_video_input: ReadOnly[bool | None]
+    supports_box_questions: ReadOnly[bool | None]
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
