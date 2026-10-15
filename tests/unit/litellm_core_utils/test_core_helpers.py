@@ -1,6 +1,7 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
+from typing import Final
 
 import httpx
 import pytest
@@ -12,10 +13,12 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
+    process_response_headers,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
@@ -23,6 +26,32 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ImageResponse, TranscriptionResponse
+
+
+def test_parent_otel_span_reads_dict_like_metadata_by_index():
+    from typing import cast
+
+    span = object()
+
+    class Metadata:
+        def __contains__(self, key: object) -> bool:
+            return key == "litellm_parent_otel_span"
+
+        def __getitem__(self, key: str) -> object:
+            assert key == "litellm_parent_otel_span"
+            return span
+
+    result = get_parent_otel_span_from_kwargs({"metadata": cast(object, Metadata())})
+
+    assert result is span
+
+
+@pytest.mark.parametrize("header", ("request-id", "x-request-id", "llm_provider-request-id"))
+def test_native_request_id_survives_stream_header_processing(header: str) -> None:
+    processed: Final = process_response_headers(httpx.Headers({header: "req_native"}))
+
+    assert processed["request-id"] == "req_native"
+    assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
 
 
 class TestBudgetReservationBinding:

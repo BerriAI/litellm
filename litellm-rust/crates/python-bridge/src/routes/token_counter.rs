@@ -1,4 +1,4 @@
-use crate::logger::run_async;
+use crate::execution::run_async;
 use std::sync::Arc;
 use std::{num::NonZero, thread::available_parallelism};
 

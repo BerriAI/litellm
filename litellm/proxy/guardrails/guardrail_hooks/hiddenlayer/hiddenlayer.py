@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Protocol
@@ -177,7 +178,7 @@ def _scannable_text(content: object) -> str:
         return str(content or "")
 
     parts: Final[Sequence[object]] = content
-    text_parts: Final = [item for item in parts if not _is_image_part(item)]  # mutable-ok: sent as a list repr
+    text_parts: Final = [item for item in parts if not _is_image_part(item)]
     return str(text_parts or "")
 
 
@@ -243,15 +244,19 @@ class HiddenlayerGuardrail(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
             self.refresh_jwt_func = lambda: _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -382,6 +387,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 f"{self.api_base}/detection/v1/interactions",
                 json=data,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: _HiddenlayerResponse = _interaction_body(response)
@@ -397,12 +403,13 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
-                self.jwt_token = self.refresh_jwt_func()
+                self.jwt_token = await asyncio.to_thread(self.refresh_jwt_func)
                 headers["Authorization"] = f"Bearer {self.jwt_token}"
                 response = await self._http_client.post(
                     f"{self.api_base}/detection/v1/interactions",
                     json=data,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e
@@ -447,15 +454,19 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
             self.refresh_jwt_func = lambda: _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -584,6 +595,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 f"{self.api_base}/{path}",
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
 
@@ -598,12 +610,13 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
-                self.jwt_token = self.refresh_jwt_func()
+                self.jwt_token = await asyncio.to_thread(self.refresh_jwt_func)
                 headers["Authorization"] = f"Bearer {self.jwt_token}"
                 response = await self._http_client.post(
                     f"{self.api_base}/{path}",
                     json=payload,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e

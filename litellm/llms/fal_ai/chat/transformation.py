@@ -10,11 +10,12 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Message, ModelResponse, Usage
 
@@ -30,14 +31,14 @@ REASONING_DISABLED_EFFORTS: Final[frozenset[str]] = frozenset(("none", "minimal"
 REASONING_ENABLED_EFFORTS: Final[frozenset[str]] = frozenset(("low", "medium", "high"))
 
 
-class _FalUsage(BaseModel):
+class _FalUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     input_tokens: int
     output_tokens: int
 
 
-class _FalChatResponse(BaseModel):
+class _FalChatResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     output: str
@@ -112,7 +113,7 @@ class FalAIChatConfig(BaseConfig):
         return (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract returns a list
-        return list(("reasoning_effort", "temperature", "top_p"))  # mutable-ok: inherited contract returns a list
+        return list(("reasoning_effort", "temperature", "top_p"))
 
     def _map_reasoning_effort(self, value: object, model: str, drop_params: bool) -> bool | None:
         if isinstance(value, str) and value in REASONING_DISABLED_EFFORTS:
@@ -138,12 +139,12 @@ class FalAIChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: inherited contract returns a dict
-        mapped: Final = {  # mutable-ok: intermediate translation map, folded into the returned dict
+        mapped: Final = {
             translated[0]: translated[1]
             for param, value in non_default_params.items()
             if (translated := self._translate_param(param, value, model, drop_params)) is not None
         }
-        return {**optional_params, **mapped}  # mutable-ok: inherited contract returns a dict
+        return {**optional_params, **mapped}
 
     def validate_environment(
         self,
@@ -158,9 +159,9 @@ class FalAIChatConfig(BaseConfig):
         final_api_key: Final = self.get_api_key(api_key)
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
-        return {  # mutable-ok: inherited contract returns a dict
+        return {
             "content-type": "application/json",
-            **(headers or {}),  # mutable-ok: empty default for the inherited contract's headers
+            **(headers or {}),
             "Authorization": f"Key {final_api_key}",
         }
 
@@ -186,12 +187,10 @@ class FalAIChatConfig(BaseConfig):
         if optional_params.get("stream"):
             raise FalAIError(status_code=400, message="fal_ai chat completions do not support streaming")
         prompt, image_url = _prompt_and_image(messages)
-        return {  # mutable-ok: JSON request body
+        return {
             "prompt": prompt,
             "image_url": image_url,
-            **{  # mutable-ok: JSON request body
-                key: value for key, value in optional_params.items() if key in PASSTHROUGH_PARAMS and value is not None
-            },
+            **{key: value for key, value in optional_params.items() if key in PASSTHROUGH_PARAMS and value is not None},
         }
 
     def transform_response(

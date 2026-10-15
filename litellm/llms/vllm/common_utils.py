@@ -7,7 +7,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 
 class VLLMError(BaseLLMException):
@@ -69,7 +69,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
                 "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
             )
 
-        url: Final = _add_path_to_api_base(api_base, endpoint)
+        url: Final = add_path_to_api_base(api_base, endpoint)
         response: Final = litellm.module_level_client.get(
             url=url,
         )

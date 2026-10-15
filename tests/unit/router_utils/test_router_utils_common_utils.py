@@ -1,23 +1,30 @@
 import logging
-from typing import Dict, List, Optional, Union
+from itertools import chain
+from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
+    resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
+from litellm.types.router import Deployment, FallbackSkipReason, LiteLLM_Params, ModelInfo, SkippedFallbackTarget
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class TestFilterTeamBasedModels:
@@ -402,7 +409,7 @@ def test_filter_deployments_by_model_access_groups_access_group_only_key():
 
     filtered = router._filter_deployments_by_model_access_groups(
         model="gpt-5",
-        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        healthy_deployments=router.get_all_deployments(model_name="gpt-5"),
         request_kwargs={
             "metadata": {
                 "user_api_key_team_id": "team-2",
@@ -561,9 +568,28 @@ class TestResolveModelGroupAlias:
             model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
         )
 
-        assert router._get_model_from_alias("group-a") == "group-b"
-        assert router._get_model_from_alias("group-item") == "group-b"
-        assert router._get_model_from_alias("group-b") is None
+        assert router.get_model_from_alias("group-a") == "group-b"
+        assert router.get_model_from_alias("group-item") == "group-b"
+        assert router.get_model_from_alias("group-b") is None
+
+
+@pytest.mark.parametrize(
+    "model, model_alias_map, key_aliases, model_group_alias, expected",
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-key-router-order"),
+        pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {}, {}, {}, "a", id="no-alias"),
+    ],
+)
+def test_resolves_served_model_aliases_in_order(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+    expected: str,
+) -> None:
+    assert resolve_served_model(model, model_alias_map, key_aliases, model_group_alias) == expected
 
 
 class TestTruncateFallbackErrorDetail:
@@ -588,6 +614,56 @@ class TestTruncateFallbackErrorDetail:
         to stay small enough that a walk over many model groups cannot compound it into an
         output volume that starves the process."""
         assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
+
+
+def test_format_fallback_outcome_reports_unauthorized_skips_without_failure_detail() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model",),
+        "",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+
+    assert "Fallback to restricted-model was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+def test_format_fallback_outcome_separates_attempted_failures_from_skipped_targets() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model", "dead-allowed"),
+        "boom",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+    failed_sentence: Final = message.split("Fallback to dead-allowed also failed:", 1)[1].split(
+        " Fallback to restricted-model was skipped", 1
+    )[0]
+
+    assert "Fallback to dead-allowed also failed: boom" in message
+    assert "Fallback to restricted-model was skipped because the caller is not authorized" in message
+    assert "restricted-model" not in failed_sentence
+
+
+def test_format_fallback_outcome_uses_plural_for_multiple_over_budget_skips() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("paid-one", "paid-two"),
+        "",
+        skipped=(
+            SkippedFallbackTarget("paid-one", FallbackSkipReason.OVER_BUDGET),
+            SkippedFallbackTarget("paid-two", FallbackSkipReason.OVER_BUDGET),
+        ),
+    )
+
+    assert "Fallback to paid-one, paid-two was skipped because the caller is over budget for them." in message
+
+
+def test_format_fallback_outcome_preserves_attempted_failure_wording_without_skips() -> None:
+    assert (
+        format_fallback_outcome_message("primary", ("fallback",), "detail")
+        == "\n\nLiteLLM: model group 'primary' failed with the error above. "
+        "Fallback to fallback also failed: detail"
+    )
 
 
 class TestWarnOnProviderCredentialMismatch:
@@ -774,3 +850,97 @@ class TestWarnOnProviderCredentialMismatch:
 def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
     assert provider_for_generic_call(litellm_params) == expected
+
+
+def test_router_warns_only_for_a_capability_flag_set_under_litellm_params(caplog):
+    bedrock_model: Final = "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "flag-in-litellm-params",
+                    "litellm_params": {"model": bedrock_model, "supports_max_reasoning_effort": False},
+                },
+                {
+                    "model_name": "flag-in-model-info",
+                    "litellm_params": {"model": bedrock_model},
+                    "model_info": {"supports_max_reasoning_effort": False},
+                },
+                {
+                    "model_name": "declared-litellm-param",
+                    "litellm_params": {"model": bedrock_model, "supports_system_message": False},
+                },
+            ]
+        )
+
+    capability_warnings: Final = [r.getMessage() for r in caplog.records if "model_info" in r.getMessage()]
+    assert len(capability_warnings) == 1, capability_warnings
+    assert "flag-in-litellm-params" in capability_warnings[0]
+    assert "supports_max_reasoning_effort" in capability_warnings[0]
+
+
+def test_router_serves_deployments_without_model_capability_flags():
+    capability_flags: Final = frozenset(ProviderSpecificModelInfo.__annotations__) | frozenset(
+        key for key in chain.from_iterable(GetModelCostMap.loaded_model_cost_map().values()) if key.startswith("supports_")
+    )
+    declared_params: Final = {"supports_system_message": False, "supports_system_prompt": True}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "every-flag",
+                "litellm_params": {
+                    "model": "replicate/meta/meta-llama-3-8b-instruct",
+                    **dict.fromkeys(capability_flags - declared_params.keys(), True),
+                    **declared_params,
+                },
+            }
+        ]
+    )
+
+    served_params: Final = router.get_model_list()[0]["litellm_params"]
+    assert sorted(capability_flags & served_params.keys() - declared_params.keys()) == []
+    assert {key: served_params.get(key) for key in declared_params} == declared_params
+
+
+def test_router_keeps_a_provider_param_that_another_deployments_model_info_names():
+    Router(
+        model_list=[
+            {
+                "model_name": "registers-the-name",
+                "litellm_params": {"model": "openai/litellm-qa-registered-capability"},
+                "model_info": {"supports_system_prompt": True},
+            }
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "replicate-system-prompt",
+                "litellm_params": {"model": "replicate/meta/meta-llama-3-8b-instruct", "supports_system_prompt": True},
+            }
+        ]
+    )
+
+    assert router.get_model_list()[0]["litellm_params"].get("supports_system_prompt") is True
+
+
+def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_db(caplog):
+    router: Final = Router(model_list=[])
+    db_deployment: Final = Deployment(
+        model_name="db-model",
+        litellm_params=LiteLLM_Params(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            supports_max_reasoning_effort=False,
+        ),
+        model_info=ModelInfo(id="db-model-id"),
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        first_sync: Final = router.upsert_deployment(db_deployment)
+        second_sync: Final = router.upsert_deployment(db_deployment)
+
+    capability_warnings: Final = [r.getMessage() for r in caplog.records if "model_info" in r.getMessage()]
+    assert first_sync is not None
+    assert second_sync is None
+    assert len(capability_warnings) == 1, capability_warnings
+    assert "db-model" in capability_warnings[0]
+    assert "supports_max_reasoning_effort" not in router.get_model_list()[0]["litellm_params"]

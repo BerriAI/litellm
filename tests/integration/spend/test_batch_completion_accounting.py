@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Final
 
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
@@ -62,7 +63,7 @@ def _failed_line(index: int) -> str:
     )
 
 
-def _batch_routes(model: str) -> RoutedResponse:
+def batch_routes(model: str) -> RoutedResponse:
     output_lines: Final = (
         _succeeded_line(1, model, **FIRST_LINE),
         _succeeded_line(2, model, **SECOND_LINE),
@@ -116,7 +117,29 @@ def _batch_routes(model: str) -> RoutedResponse:
     )
 
 
-def _input_file(model: str) -> bytes:
+def _team_day_endpoints(gateway: Gateway, team: str, start_date: str, end_date: str) -> dict[str, object] | None:
+    response: Final = gateway.request(
+        "GET",
+        "/team/daily/activity",
+        params={"team_ids": team, "start_date": start_date, "end_date": end_date},
+    )
+    if response.status_code != 200:
+        return None
+    days: Final = response.json()["results"]
+    if not days:
+        return None
+    return object_value(object_value(object_value(days[0])["breakdown"])["endpoints"])
+
+
+def _batches_total_tokens(endpoints: dict[str, object] | None) -> int | None:
+    if endpoints is None or "/batches" not in endpoints:
+        return None
+    metrics: Final = object_value(object_value(endpoints["/batches"])["metrics"])
+    total_tokens: Final = metrics["total_tokens"]
+    return int(total_tokens) if isinstance(total_tokens, (int, float, str)) else None
+
+
+def batch_input_file(model: str) -> bytes:
     return (
         "\n".join(
             json.dumps(
@@ -143,13 +166,13 @@ def test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failu
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         scenario_id: Final = f"batch-accounting-{uuid.uuid4().hex[:12]}"
-        handle: Final = register_scenario(scenario_id, _batch_routes("gpt-4o-mini"))
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
         scenario.cleanups.callback(delete_scenario, handle)
         model: Final = scenario.model(api_base=handle.api_base())
         file_response: Final = gateway.request_multipart(
             "/v1/files",
             {"purpose": "batch", "model": model},
-            {"file": ("in.jsonl", _input_file(model), "application/jsonl")},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
             key=key,
         )
         assert file_response.status_code == 200, file_response.text
@@ -200,3 +223,79 @@ def test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failu
             "reasoning_tokens": reasoning_tokens,
             "text_tokens": completion_tokens - reasoning_tokens,
         }, json.dumps(metadata)
+
+
+INPUT_COST_PER_TOKEN: Final = 0.001
+OUTPUT_COST_PER_TOKEN: Final = 0.002
+BATCH_PROMPT_TOKENS: Final = FIRST_LINE["prompt_tokens"] + SECOND_LINE["prompt_tokens"]
+BATCH_COMPLETION_TOKENS: Final = FIRST_LINE["completion_tokens"] + SECOND_LINE["completion_tokens"]
+BATCH_SPEND: Final = (BATCH_PROMPT_TOKENS * INPUT_COST_PER_TOKEN + BATCH_COMPLETION_TOKENS * OUTPUT_COST_PER_TOKEN) / 2
+
+
+def test_completed_batch_spend_lands_under_batches_in_team_endpoint_activity(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"batch-endpoint-{uuid.uuid4().hex[:12]}"
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            api_base=handle.api_base(),
+            input_cost_per_token=INPUT_COST_PER_TOKEN,
+            output_cost_per_token=OUTPUT_COST_PER_TOKEN,
+        )
+        team: Final = scenario.team(models=[model])
+        key: Final = scenario.key(team_id=team, models=[model])
+        file_response: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+            key=key,
+        )
+        assert file_response.status_code == 200, file_response.text
+        batch_response: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": string_value(JSON_OBJECT.validate_json(file_response.content)["id"]),
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
+            key=key,
+        )
+        assert batch_response.status_code == 200, batch_response.text
+        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+        retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
+        assert retrieval.status_code == 200, retrieval.text
+        assert retrieval.json()["status"] == "completed", retrieval.text
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, prompt_tokens, completion_tokens, total_tokens FROM "LiteLLM_SpendLogs" '
+                "WHERE api_key=%s AND call_type='aretrieve_batch'",
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        row: Final = rows[0]
+        assert float(row["spend"]) == pytest.approx(BATCH_SPEND), dict(row)
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (
+            BATCH_PROMPT_TOKENS,
+            BATCH_COMPLETION_TOKENS,
+        ), dict(row)
+        today: Final = datetime.now(timezone.utc)
+        endpoints: Final = eventually(
+            lambda: _team_day_endpoints(
+                gateway,
+                team,
+                (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+                (today + timedelta(days=1)).strftime("%Y-%m-%d"),
+            ),
+            lambda value: _batches_total_tokens(value) == BATCH_PROMPT_TOKENS + BATCH_COMPLETION_TOKENS,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert endpoints is not None, "team daily activity returned no endpoint breakdown for the day"
+        assert set(endpoints) == {"/batches"}, endpoints
+        endpoint_metrics: Final = object_value(object_value(endpoints["/batches"])["metrics"])
+        assert float(endpoint_metrics["spend"]) == pytest.approx(BATCH_SPEND), endpoints
+        assert endpoint_metrics["total_tokens"] == BATCH_PROMPT_TOKENS + BATCH_COMPLETION_TOKENS, endpoints

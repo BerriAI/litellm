@@ -205,8 +205,8 @@ def mock_request():
             self.query_params = QueryParams()
             self.method = method
             self.request_body = request_body or {}
-            # Add url attribute that the actual code expects
-            self.url = "http://localhost:8000/test"
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
 
         async def body(self) -> bytes:
             return bytes(json.dumps(self.request_body), "utf-8")
@@ -831,7 +831,7 @@ def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj(
         result.close()
 
     assert captured_litellm_params.get("allm_passthrough_route") is True
-    assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False
+    assert LitellmLogging.is_sync_litellm_request(captured_litellm_params) is False
 
 
 FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"

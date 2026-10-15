@@ -17,8 +17,10 @@ from litellm.constants import (
     MAX_S3_OBJECT_KEY_FILENAME_BYTES,
     S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
     S3_LOG_PROMPTS_ONLY_ENV_VAR,
+    S3_PARTITION_GRANULARITY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.utils import StandardLoggingPayload
 
 _S3_BOOL: Final = TypeAdapter(bool)
@@ -35,6 +37,18 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
     except ValidationError:
         verbose_logger.warning("s3 logging: s3_log_prompts_only=%r is not a boolean, logging prompts only", raw)
         return True
+
+
+def resolve_s3_partition_granularity(
+    configured: object, environ: Mapping[str, str] | None = None
+) -> S3PartitionGranularity:
+    env: Final = os.environ if environ is None else environ
+    raw: Final = env.get(S3_PARTITION_GRANULARITY_ENV_VAR) if configured is None else configured
+    if raw == "hour":
+        return "hour"
+    if raw is not None and raw not in ("", "day"):
+        verbose_logger.warning("s3 logging: s3_partition_granularity=%r is not one of day, hour, using day", raw)
+    return "day"
 
 
 def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
@@ -372,10 +386,11 @@ def get_s3_object_key(
     prefix: str,
     start_time: datetime,
     s3_file_name: str,
+    partition_granularity: S3PartitionGranularity = "day",
 ) -> str:
     sanitized_s3_file_name: Final = s3_file_name.replace("/", "_").replace(":", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
-    date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
+    date_segment: Final = start_time.strftime("%Y-%m-%d/%H/" if partition_granularity == "hour" else "%Y-%m-%d/")
     extension: Final = ".json"
     file_name_budget: Final = MAX_S3_OBJECT_KEY_FILENAME_BYTES - len(extension.encode("utf-8"))
     # we need the s3 key to include the time, so we log cache hits too

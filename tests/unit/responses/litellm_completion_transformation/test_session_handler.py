@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -6,6 +7,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_proxy_server_request_for_spend_logs_payload,
+)
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -718,3 +722,68 @@ async def test_message_history_normalizes_redacted_tool_call_arguments():
     tool_call = assistant_message.tool_calls[0]
     assert tool_call.function.arguments == "{}"
     assert json.loads(tool_call.function.arguments) == {}
+
+
+@pytest.mark.asyncio
+async def test_message_history_replays_real_key_named_tool_payloads() -> None:
+    request_id: Final = "chatcmpl-tool-payload"
+    function_arguments: Final = {"sort_key": "created_at", "access_level": "admin"}
+    function_output: Final = {
+        "status": "active",
+        "token_type": "bearer",
+        "partition_key": "tenant_42",
+    }
+    responses_request_body: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "input": [
+            {"role": "user", "content": "Fetch my account settings."},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_settings",
+                "arguments": function_arguments,
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": function_output,
+            },
+            {"role": "user", "content": "Acknowledge with OK"},
+        ],
+        "aws_secret_access_key": "AKIAEXAMPLESECRET",
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        proxy_server_request: Final = json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(
+                metadata={},
+                litellm_params={"proxy_server_request": {"body": responses_request_body}},
+                kwargs={},
+            )
+        )
+
+    spend_log: Final = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-tool-payload",
+        "proxy_server_request": proxy_server_request,
+        "response": _chat_completion_response(request_id, "OK"),
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = [spend_log]
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    assistant_message: Final = result["messages"][1]
+    tool_message: Final = result["messages"][2]
+    assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
+    assert json.loads(tool_message["content"]) == function_output

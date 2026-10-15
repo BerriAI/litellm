@@ -25,6 +25,6 @@ rcgen = "0.14.10"
 rstest.workspace = true
 tempfile = "3.27.0"
 tokio.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
 serde.workspace = true
 serde_json.workspace = true

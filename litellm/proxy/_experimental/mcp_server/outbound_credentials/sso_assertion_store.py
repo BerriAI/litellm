@@ -23,11 +23,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
 import jwt
-from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, SecretStr, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE, MCP_SSO_ASSERTION_CACHE_TTL_SECONDS
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_SSOIdentityAssertion
@@ -67,7 +68,7 @@ def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
     return prisma_client.db.litellm_mcpservertable
 
 
-class SSOIdentityAssertion(BaseModel):
+class SSOIdentityAssertion(LiteLLMBaseModel):
     """The IdP material an EMA exchange needs: ``id_token`` is the RFC 8693 subject token,
     ``expires_at`` bounds its usefulness, and the refresh token renews it without re-login."""
 
@@ -119,12 +120,12 @@ class SSOAssertionCache:
 _ASSERTION_CACHE: Final = SSOAssertionCache()
 
 
-class _IdTokenClaims(BaseModel):
+class _IdTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
     iss: str | None = None
 
 
-class _StoredAssertionPayload(BaseModel):
+class _StoredAssertionPayload(LiteLLMBaseModel):
     id_token: str
     refresh_token: str | None = None
     issuer: str | None = None
