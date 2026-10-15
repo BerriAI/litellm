@@ -1,4 +1,4 @@
-# Coding-agent response contracts
+# Cross-model response contracts
 
 Every row sends `CODING_AGENT_REQUEST` to `/v1/chat/completions`, changing only `model`. Each response must satisfy the independently defined public contract before its tool-call shape is compared with the OpenAI reference in its tier. OpenAI rows compare with Anthropic instead, so no row compares with itself
 
@@ -32,7 +32,7 @@ Do not generate expectations with LiteLLM translators. Add the model's synthetic
 
 ```bash
 INTEGRATION_WORKERS=2 .venv/bin/python tests/integration/run.py providers \
-  tests/integration/translation/chat_completions/agent/test_agent_contract.py
+  tests/integration/translation/chat_completions/cross_model/test_cross_model_contract.py
 ```
 
 This first request does not cover image input, strict structured output, cache hits, search citations, refusals or truncation. Those require separate recorded scenarios

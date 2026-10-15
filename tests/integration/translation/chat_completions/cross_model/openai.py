@@ -6,24 +6,537 @@ from integration.translation.case import (
     SSEFrame,
     StreamingTranslationTestCase,
 )
-from integration.translation.chat_completions.agent.contracts import followup_request
-from integration.translation.chat_completions.bases.azure import (
+from integration.translation.chat_completions.cross_model.contracts import followup_request
+from integration.translation.chat_completions.bases.openai import (
     GPT_5_4_MINI_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
     GPT_5_6_TERRA_TEST_CASE,
+    GPT_5_MINI_TEST_CASE,
     GPT_6_1_SOL_TEST_CASE,
     GPT_6_ASTRA_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
+    GPT_6_SOL_TEST_CASE,
 )
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
     CODING_AGENT_RESPONSE,
 )
 from integration.translation.templates.openai import (
+    OPENAI_CHAT_AGENT_REQUEST,
+    OPENAI_CHAT_AGENT_RESPONSE,
     OPENAI_RESPONSES_AGENT_REQUEST,
     OPENAI_RESPONSES_AGENT_RESPONSE,
 )
+
+GPT_5_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    GPT_5_MINI_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        GPT_5_MINI_TEST_CASE.litellm_request, GPT_5_MINI_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_endpoint="/chat/completions",
+    expected_provider_request={
+        **OPENAI_CHAT_AGENT_REQUEST,
+        "messages": [
+            *list_value(OPENAI_CHAT_AGENT_REQUEST["messages"]),
+            {
+                "content": "I'll search for callers and run the specific test.",
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "function": {"arguments": '{"query": "retries_remaining("}', "name": "search_code"},
+                        "id": "call_mFie59uQ12eusnoPzdw7qlho",
+                        "type": "function",
+                    },
+                    {
+                        "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                        "id": "call_hEFM0TcGu1J2VeKD4SjqoBg2",
+                        "type": "function",
+                    },
+                ],
+                "annotations": [],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_mFie59uQ12eusnoPzdw7qlho",
+                "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = retries_remaining(3, '
+                'attempts)"}]}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_hEFM0TcGu1J2VeKD4SjqoBg2",
+                "content": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - assert 4 == '
+                '2"}',
+            },
+            {
+                "role": "user",
+                "content": "Stop after these diagnostics. Do not call more tools or change files. Summarize the bug, the "
+                "caller found and the failed test in two short sentences.",
+            },
+        ],
+        "model": "gpt-5-mini",
+    },
+    mock_provider_response={
+        **OPENAI_CHAT_AGENT_RESPONSE,
+        "id": "chatcmpl-EZ6ZnzJxYtvI0dT0Ek5WxIoYCSBuF",
+        "created": 1792035467,
+        "model": "gpt-5-mini-2025-08-07",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The function incorrectly returns limit + attempts (giving 4 for "
+                    "retries_remaining(3, 1)) instead of the number of retries left; it should return "
+                    "max(limit - attempts, 0) so it never goes negative. The caller is src/worker.py "
+                    "(line using retries_remaining(3, attempts)), and the test tests/test_retry.py "
+                    "failed asserting retries_remaining(3, 1) == 2 (actual 4).",
+                    "refusal": None,
+                    "annotations": [],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            **object_value(OPENAI_CHAT_AGENT_RESPONSE["usage"]),
+            "prompt_tokens": 712,
+            "completion_tokens": 160,
+            "total_tokens": 872,
+            "completion_tokens_details": {
+                **object_value(object_value(OPENAI_CHAT_AGENT_RESPONSE["usage"])["completion_tokens_details"]),
+                "reasoning_tokens": 64,
+            },
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "chatcmpl-EZ6ZnzJxYtvI0dT0Ek5WxIoYCSBuF",
+        "model": "openai/gpt-5-mini",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "The function incorrectly returns limit + attempts (giving 4 for "
+                    "retries_remaining(3, 1)) instead of the number of retries left; it should return "
+                    "max(limit - attempts, 0) so it never goes negative. The caller is src/worker.py "
+                    "(line using retries_remaining(3, attempts)), and the test tests/test_retry.py "
+                    "failed asserting retries_remaining(3, 1) == 2 (actual 4).",
+                    "role": "assistant",
+                    "annotations": [],
+                    "refusal": None,
+                },
+                "provider_specific_fields": {},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 160,
+            "prompt_tokens": 712,
+            "total_tokens": 872,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 64,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+        },
+        "service_tier": "default",
+        "system_fingerprint": None,
+    },
+)
+
+
+GPT_5_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=GPT_5_MINI_TEST_CASE.litellm_endpoint,
+    litellm_request={**GPT_5_MINI_TEST_CASE.litellm_request, "stream": True, "stream_options": {"include_usage": True}},
+    expected_provider_headers=GPT_5_MINI_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/chat/completions",
+    expected_provider_request={
+        **OPENAI_CHAT_AGENT_REQUEST,
+        "model": "gpt-5-mini",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": None}, "finish_reason": None}],
+                "obfuscation": "66",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_cfsTFwIpo5Pw1Ycjne6cu6rd",
+                                    "type": "function",
+                                    "function": {"name": "search_code", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "5",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"qu'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "r2XI9kO1",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'ery":'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "Flu2rEC",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": ' "retr'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "xa2B96",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "ies_"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "CcMgkpZ0u",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "remai"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "pWPji9Pa",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'ning("'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "o0ffHn",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "}"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "ZibrP37NuHYx",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 1,
+                                    "id": "call_w0dR7zl3FEWVVOUvxe2qRhw3",
+                                    "type": "function",
+                                    "function": {"name": "run_tests", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "S6L",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": '{"pa'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "MOX33Kx9",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": 'th": '}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "wllLLks",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": '"tests'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "aZmbqx",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "/tes"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "eM2MAKKyu",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "t_ret"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "Jnv7RFXG",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": 'ry.py"'}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "JKkZAU",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "usage": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "}"}}]},
+                        "finish_reason": None,
+                    }
+                ],
+                "obfuscation": "6iPuHABVnS8x",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                "usage": None,
+                "obfuscation": "XBrG5eHvNp1",
+            }
+        ),
+        SSEFrame(
+            data={
+                "id": "chatcmpl-EZ6ZmdVdvBZtqGJXMTyRP3skJs724",
+                "object": "chat.completion.chunk",
+                "created": 1792035466,
+                "model": "gpt-5-mini-2025-08-07",
+                "service_tier": "default",
+                "system_fingerprint": None,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 529,
+                    "completion_tokens": 53,
+                    "total_tokens": 582,
+                    "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "obfuscation": "FKzs",
+            }
+        ),
+        SSEFrame(data="[DONE]"),
+    ),
+)
+
 
 GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_4_MINI_TEST_CASE,
@@ -31,7 +544,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_5_4_MINI_TEST_CASE.litellm_request, GPT_5_4_MINI_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-5.4-mini",
@@ -43,25 +556,26 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                 "content": [
                     {
                         "type": "output_text",
-                        "text": "I’ll search for callers and run the targeted test before patching.",
+                        "text": "I’ll search for other callers and run the retry tests now, then inspect the results "
+                        "before patching.",
                     }
                 ],
             },
             {
                 "type": "function_call",
-                "call_id": "call_d8z67veoQLDjeKe3peLFNYvC",
+                "call_id": "call_KG0GOlKRaaLKw5nHIZoptT4K",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining("}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_yL8qxv5wZi6Eoesr69xs2UBd",
+                "call_id": "call_pMG9sdoFy24PVF4ZP95Mo6ay",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_d8z67veoQLDjeKe3peLFNYvC",
+                "call_id": "call_KG0GOlKRaaLKw5nHIZoptT4K",
                 "output": [
                     {
                         "type": "input_text",
@@ -72,7 +586,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_yL8qxv5wZi6Eoesr69xs2UBd",
+                "call_id": "call_pMG9sdoFy24PVF4ZP95Mo6ay",
                 "output": [
                     {
                         "type": "input_text",
@@ -96,43 +610,16 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_06ec32a505685f87006ad04ad0730881908ab0c1abc319010a",
-        "created_at": 1792035536,
+        "id": "resp_09416b73f1fe04c2006ad04a8d112c87d0867e37246b001702",
+        "created_at": 1792035469,
         "status": "completed",
-        "completed_at": 1792035537,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1544, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 327, "check_offset": 0},
-            },
-        ],
-        "model": "gpt-5.4-mini",
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035470,
+        "model": "gpt-5.4-mini-2026-03-17",
         "output": [
             {
-                "id": "msg_06ec32a505685f87006ad04ad1429481909d8c3580ca80b194",
+                "id": "msg_09416b73f1fe04c2006ad04a8d743487d09dc5ba9d22daca8f",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -140,82 +627,53 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` is implemented as `limit + attempts`, so it returns the wrong "
-                        "value and can exceed the retry limit instead of counting retries left, which should "
-                        "never go below zero. I found one caller in `src/worker.py` (`remaining = "
-                        "retries_remaining(3, attempts)`), and `tests/test_retry.py` failed with `assert 4 == "
-                        "2`.",
+                        "text": "`retries_remaining` in `src/retry.py` is incorrect: it adds `limit + attempts`, so "
+                        "it can grow instead of counting down and can return the wrong value. I found one "
+                        "caller in `src/worker.py` (`remaining = retries_remaining(3, attempts)`), and "
+                        "`tests/test_retry.py` failed with `assert 4 == 2` for `retries_remaining(3, 1)`.",
                     }
                 ],
                 "phase": "final_answer",
                 "role": "assistant",
             }
         ],
-        "prompt_cache_retention": "in_memory",
+        "prompt_cache_retention": "24h",
         "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "current_turn"},
         "service_tier": "default",
         "usage": {
-            "input_tokens": 641,
+            "input_tokens": 648,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 81,
+            "output_tokens": 92,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 722,
+            "total_tokens": 740,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_06ec32a505685f87006ad04ad0730881908ab0c1abc319010a",
-        "model": "azure/gpt-5.4-mini",
+        "id": "resp_09416b73f1fe04c2006ad04a8d112c87d0867e37246b001702",
+        "model": "openai/gpt-5.4-mini",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` is implemented as `limit + attempts`, so it returns the wrong "
-                    "value and can exceed the retry limit instead of counting retries left, which "
-                    "should never go below zero. I found one caller in `src/worker.py` (`remaining = "
-                    "retries_remaining(3, attempts)`), and `tests/test_retry.py` failed with `assert 4 "
-                    "== 2`.",
+                    "content": "`retries_remaining` in `src/retry.py` is incorrect: it adds `limit + attempts`, so "
+                    "it can grow instead of counting down and can return the wrong value. I found one "
+                    "caller in `src/worker.py` (`remaining = retries_remaining(3, attempts)`), and "
+                    "`tests/test_retry.py` failed with `assert 4 == 2` for `retries_remaining(3, 1)`.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 81,
-            "prompt_tokens": 641,
-            "total_tokens": 722,
+            "completion_tokens": 92,
+            "prompt_tokens": 648,
+            "total_tokens": 740,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1544, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 327, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -242,7 +700,7 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_5_4_MINI_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.4-mini", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -250,14 +708,14 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0ea6c1cbfcc73010006ad04acd01d481939812185df9b09745",
-                    "created_at": 1792035533,
+                    "id": "resp_00c4cf409ce163c2006ad04a8c09f487d0b3e9a66eda650928",
+                    "created_at": 1792035468,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
-                    "model": "gpt-5.4-mini",
+                    "model": "gpt-5.4-mini-2026-03-17",
                     "output": [],
-                    "prompt_cache_retention": "in_memory",
+                    "prompt_cache_retention": "24h",
                     "reasoning": {
                         **object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]),
                         "context": "current_turn",
@@ -274,14 +732,14 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0ea6c1cbfcc73010006ad04acd01d481939812185df9b09745",
-                    "created_at": 1792035533,
+                    "id": "resp_00c4cf409ce163c2006ad04a8c09f487d0b3e9a66eda650928",
+                    "created_at": 1792035468,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
-                    "model": "gpt-5.4-mini",
+                    "model": "gpt-5.4-mini-2026-03-17",
                     "output": [],
-                    "prompt_cache_retention": "in_memory",
+                    "prompt_cache_retention": "24h",
                     "reasoning": {
                         **object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]),
                         "context": "current_turn",
@@ -297,7 +755,7 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                    "id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                     "type": "message",
                     "status": "in_progress",
                     "content": [],
@@ -313,7 +771,7 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.content_part.added",
                 "content_index": 0,
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "output_index": 0,
                 "part": {"type": "output_text", "annotations": [], "logprobs": [], "text": ""},
                 "sequence_number": 3,
@@ -325,9 +783,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.output_text.delta",
                 "content_index": 0,
                 "delta": "I",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "pPj5QsU4fqIYwwd",
+                "obfuscation": "eHDRHRFaSgOxgLt",
                 "output_index": 0,
                 "sequence_number": 4,
             },
@@ -338,9 +796,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.output_text.delta",
                 "content_index": 0,
                 "delta": "’ll",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "h6F0Twp72vyNf",
+                "obfuscation": "QBDpQ96r3XDxM",
                 "output_index": 0,
                 "sequence_number": 5,
             },
@@ -351,9 +809,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.output_text.delta",
                 "content_index": 0,
                 "delta": " search",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "dsVhK4t0D",
+                "obfuscation": "g6hcfgivG",
                 "output_index": 0,
                 "sequence_number": 6,
             },
@@ -364,9 +822,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.output_text.delta",
                 "content_index": 0,
                 "delta": " for",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "eSos9BMVKRKg",
+                "obfuscation": "bArHAfwcNjdS",
                 "output_index": 0,
                 "sequence_number": 7,
             },
@@ -376,10 +834,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " other",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " callers",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "iMPuYxpimb",
+                "obfuscation": "HZOXGK6D",
                 "output_index": 0,
                 "sequence_number": 8,
             },
@@ -389,10 +847,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " callers",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " and",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "sR6ai0lK",
+                "obfuscation": "Y3y5ohUx2iuA",
                 "output_index": 0,
                 "sequence_number": 9,
             },
@@ -402,10 +860,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " and",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " run",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "wC38sb0I6W5P",
+                "obfuscation": "gXLZAWReGI4d",
                 "output_index": 0,
                 "sequence_number": 10,
             },
@@ -415,10 +873,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " run",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " the",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "j8HyEZhFj59X",
+                "obfuscation": "rRRzDh3BIfpu",
                 "output_index": 0,
                 "sequence_number": 11,
             },
@@ -428,10 +886,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " the",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " targeted",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "Bg48dNsGNXu9",
+                "obfuscation": "w28urHB",
                 "output_index": 0,
                 "sequence_number": 12,
             },
@@ -441,10 +899,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " targeted",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " test",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "Xdciymf",
+                "obfuscation": "89E2Aos73NW",
                 "output_index": 0,
                 "sequence_number": 13,
             },
@@ -454,10 +912,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " test",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " to",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "k9v1ZTQZZC0",
+                "obfuscation": "WTjRqaN4MSCk4",
                 "output_index": 0,
                 "sequence_number": 14,
             },
@@ -467,10 +925,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " before",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " reproduce",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "vEB8FyB7z",
+                "obfuscation": "0OyNC2",
                 "output_index": 0,
                 "sequence_number": 15,
             },
@@ -480,10 +938,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": " editing",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " the",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "rJnUpEPt",
+                "obfuscation": "euS5RzGukPf6",
                 "output_index": 0,
                 "sequence_number": 16,
             },
@@ -493,10 +951,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_text.delta",
                 "content_index": 0,
-                "delta": ".",
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": " failure",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
-                "obfuscation": "7BEy69GpMxtXCGN",
+                "obfuscation": "RxidlllQ",
                 "output_index": 0,
                 "sequence_number": 17,
             },
@@ -504,13 +962,26 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(
             data={
-                "type": "response.output_text.done",
+                "type": "response.output_text.delta",
                 "content_index": 0,
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "delta": ".",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "logprobs": [],
+                "obfuscation": "hYdq83ygJvfR23D",
                 "output_index": 0,
                 "sequence_number": 18,
-                "text": "I’ll search for other callers and run the targeted test before editing.",
+            },
+            event="response.output_text.delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_text.done",
+                "content_index": 0,
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
+                "logprobs": [],
+                "output_index": 0,
+                "sequence_number": 19,
+                "text": "I’ll search for callers and run the targeted test to reproduce the failure.",
             },
             event="response.output_text.done",
         ),
@@ -518,15 +989,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.content_part.done",
                 "content_index": 0,
-                "item_id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                "item_id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                 "output_index": 0,
                 "part": {
                     "type": "output_text",
                     "annotations": [],
                     "logprobs": [],
-                    "text": "I’ll search for other callers and run the targeted test before editing.",
+                    "text": "I’ll search for callers and run the targeted test to reproduce the failure.",
                 },
-                "sequence_number": 19,
+                "sequence_number": 20,
             },
             event="response.content_part.done",
         ),
@@ -534,7 +1005,7 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                    "id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                     "type": "message",
                     "status": "completed",
                     "content": [
@@ -542,14 +1013,14 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                             "type": "output_text",
                             "annotations": [],
                             "logprobs": [],
-                            "text": "I’ll search for other callers and run the targeted test before editing.",
+                            "text": "I’ll search for callers and run the targeted test to reproduce the failure.",
                         }
                     ],
                     "phase": "commentary",
                     "role": "assistant",
                 },
                 "output_index": 0,
-                "sequence_number": 20,
+                "sequence_number": 21,
             },
             event="response.output_item.done",
         ),
@@ -557,15 +1028,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0ea6c1cbfcc73010006ad04ad01dd881939b6cd34e31efbadd",
+                    "id": "fc_00c4cf409ce163c2006ad04a8cbe2087d094443cec70ed7857",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_fIwA6Y6RbSeLJr9xUjjM4dZG",
+                    "call_id": "call_8ucGVxGVa1SVMbD1mwPwwE3c",
                     "name": "search_code",
                 },
                 "output_index": 1,
-                "sequence_number": 21,
+                "sequence_number": 22,
             },
             event="response.output_item.added",
         ),
@@ -573,10 +1044,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining("}',
-                "item_id": "fc_0ea6c1cbfcc73010006ad04ad01dd881939b6cd34e31efbadd",
-                "obfuscation": "0m",
+                "item_id": "fc_00c4cf409ce163c2006ad04a8cbe2087d094443cec70ed7857",
+                "obfuscation": "Tc",
                 "output_index": 1,
-                "sequence_number": 22,
+                "sequence_number": 23,
             },
             event="response.function_call_arguments.delta",
         ),
@@ -584,9 +1055,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining("}',
-                "item_id": "fc_0ea6c1cbfcc73010006ad04ad01dd881939b6cd34e31efbadd",
+                "item_id": "fc_00c4cf409ce163c2006ad04a8cbe2087d094443cec70ed7857",
                 "output_index": 1,
-                "sequence_number": 23,
+                "sequence_number": 24,
             },
             event="response.function_call_arguments.done",
         ),
@@ -594,15 +1065,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0ea6c1cbfcc73010006ad04ad01dd881939b6cd34e31efbadd",
+                    "id": "fc_00c4cf409ce163c2006ad04a8cbe2087d094443cec70ed7857",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining("}',
-                    "call_id": "call_fIwA6Y6RbSeLJr9xUjjM4dZG",
+                    "call_id": "call_8ucGVxGVa1SVMbD1mwPwwE3c",
                     "name": "search_code",
                 },
                 "output_index": 1,
-                "sequence_number": 24,
+                "sequence_number": 25,
             },
             event="response.output_item.done",
         ),
@@ -610,15 +1081,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0ea6c1cbfcc73010006ad04ad01df881939bd566e3a41578a8",
+                    "id": "fc_00c4cf409ce163c2006ad04a8cbe3487d098ddc0743d835252",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_7E8zG0YBqOXl7kVzO8QtrLMA",
+                    "call_id": "call_NyYyHGphM3cB0Z3KkJRhhIfB",
                     "name": "run_tests",
                 },
                 "output_index": 2,
-                "sequence_number": 25,
+                "sequence_number": 26,
             },
             event="response.output_item.added",
         ),
@@ -626,10 +1097,10 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0ea6c1cbfcc73010006ad04ad01df881939bd566e3a41578a8",
-                "obfuscation": "wa",
+                "item_id": "fc_00c4cf409ce163c2006ad04a8cbe3487d098ddc0743d835252",
+                "obfuscation": "35",
                 "output_index": 2,
-                "sequence_number": 26,
+                "sequence_number": 27,
             },
             event="response.function_call_arguments.delta",
         ),
@@ -637,9 +1108,9 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0ea6c1cbfcc73010006ad04ad01df881939bd566e3a41578a8",
+                "item_id": "fc_00c4cf409ce163c2006ad04a8cbe3487d098ddc0743d835252",
                 "output_index": 2,
-                "sequence_number": 27,
+                "sequence_number": 28,
             },
             event="response.function_call_arguments.done",
         ),
@@ -647,15 +1118,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0ea6c1cbfcc73010006ad04ad01df881939bd566e3a41578a8",
+                    "id": "fc_00c4cf409ce163c2006ad04a8cbe3487d098ddc0743d835252",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_7E8zG0YBqOXl7kVzO8QtrLMA",
+                    "call_id": "call_NyYyHGphM3cB0Z3KkJRhhIfB",
                     "name": "run_tests",
                 },
                 "output_index": 2,
-                "sequence_number": 28,
+                "sequence_number": 29,
             },
             event="response.output_item.done",
         ),
@@ -664,43 +1135,15 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0ea6c1cbfcc73010006ad04acd01d481939812185df9b09745",
-                    "created_at": 1792035533,
+                    "id": "resp_00c4cf409ce163c2006ad04a8c09f487d0b3e9a66eda650928",
+                    "created_at": 1792035468,
                     "status": "completed",
-                    "completed_at": 1792035536,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        },
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 258, "check_offset": 0},
-                        },
-                    ],
-                    "model": "gpt-5.4-mini",
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035468,
+                    "model": "gpt-5.4-mini-2026-03-17",
                     "output": [
                         {
-                            "id": "msg_0ea6c1cbfcc73010006ad04acfeac081939b6cd3f18339bc69",
+                            "id": "msg_00c4cf409ce163c2006ad04a8c5b3887d0ade3c9adfd1c5550",
                             "type": "message",
                             "status": "completed",
                             "content": [
@@ -708,30 +1151,30 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                                     "type": "output_text",
                                     "annotations": [],
                                     "logprobs": [],
-                                    "text": "I’ll search for other callers and run the targeted test before editing.",
+                                    "text": "I’ll search for callers and run the targeted test to reproduce the failure.",
                                 }
                             ],
                             "phase": "commentary",
                             "role": "assistant",
                         },
                         {
-                            "id": "fc_0ea6c1cbfcc73010006ad04ad01dd881939b6cd34e31efbadd",
+                            "id": "fc_00c4cf409ce163c2006ad04a8cbe2087d094443cec70ed7857",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining("}',
-                            "call_id": "call_fIwA6Y6RbSeLJr9xUjjM4dZG",
+                            "call_id": "call_8ucGVxGVa1SVMbD1mwPwwE3c",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0ea6c1cbfcc73010006ad04ad01df881939bd566e3a41578a8",
+                            "id": "fc_00c4cf409ce163c2006ad04a8cbe3487d098ddc0743d835252",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_7E8zG0YBqOXl7kVzO8QtrLMA",
+                            "call_id": "call_NyYyHGphM3cB0Z3KkJRhhIfB",
                             "name": "run_tests",
                         },
                     ],
-                    "prompt_cache_retention": "in_memory",
+                    "prompt_cache_retention": "24h",
                     "reasoning": {
                         **object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]),
                         "context": "current_turn",
@@ -740,12 +1183,12 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                     "usage": {
                         "input_tokens": 448,
                         "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-                        "output_tokens": 75,
+                        "output_tokens": 76,
                         "output_tokens_details": {"reasoning_tokens": 0},
-                        "total_tokens": 523,
+                        "total_tokens": 524,
                     },
                 },
-                "sequence_number": 29,
+                "sequence_number": 30,
             },
             event="response.completed",
         ),
@@ -756,61 +1199,41 @@ GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_5_6_LUNA_AGENT_TEST_CASE: Final = replace(
     GPT_5_6_LUNA_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-5.6-luna"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-5.6-luna"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-luna"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0d8b01a729695f11006ad04aca09c88195846f1bb1afe76a46",
-        "created_at": 1792035530,
+        "id": "resp_0f14003909426a48006ad04a8d23a887d081fe3e6b3590c981",
+        "created_at": 1792035469,
         "status": "completed",
-        "completed_at": 1792035531,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035470,
         "model": "gpt-5.6-luna",
         "output": [
             {
-                "id": "fc_0d8b01a729695f11006ad04acae5a88195a985d9e92905e5c2",
+                "id": "rs_0f14003909426a48006ad04a8de18887d08c1b94c6c89b1874",
+                "type": "reasoning",
+                "content": [],
+                "encrypted_content": "synthetic-signature",
+                "summary": [],
+            },
+            {
+                "id": "fc_0f14003909426a48006ad04a8e515c87d0a5775da42fe4bd46",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_4MLZtLJ85gCWH7mi9P1twZB4",
+                "call_id": "call_3GVFEuVtRLOckfUM9aGO3BWw",
                 "name": "search_code",
             },
             {
-                "id": "fc_0d8b01a729695f11006ad04acae5d08195a3985d7c3c690bea",
+                "id": "fc_0f14003909426a48006ad04a8e517087d0861ab0d982d00589",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_RZ9vuE6JysYX2WnCJdW5uDET",
+                "call_id": "call_ZGwThtiIkm6uppdIfybZZyes",
                 "name": "run_tests",
             },
         ],
@@ -820,15 +1243,15 @@ GPT_5_6_LUNA_AGENT_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 448,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 53,
-            "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 501,
+            "output_tokens": 65,
+            "output_tokens_details": {"reasoning_tokens": 10},
+            "total_tokens": 513,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0d8b01a729695f11006ad04aca09c88195846f1bb1afe76a46",
-        "model": "azure/gpt-5.6-luna",
+        "id": "resp_0f14003909426a48006ad04a8d23a887d081fe3e6b3590c981",
+        "model": "openai/gpt-5.6-luna",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -839,56 +1262,37 @@ GPT_5_6_LUNA_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_4MLZtLJ85gCWH7mi9P1twZB4",
+                            "id": "call_3GVFEuVtRLOckfUM9aGO3BWw",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_RZ9vuE6JysYX2WnCJdW5uDET",
+                            "id": "call_ZGwThtiIkm6uppdIfybZZyes",
                             "type": "function",
                         },
+                    ],
+                    "reasoning_items": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs_0f14003909426a48006ad04a8de18887d08c1b94c6c89b1874",
+                            "encrypted_content": "synthetic-signature",
+                            "summary": [],
+                        }
                     ],
                     "content": None,
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 53,
+            "completion_tokens": 65,
             "prompt_tokens": 448,
-            "total_tokens": 501,
-            "completion_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 513,
+            "completion_tokens_details": {"reasoning_tokens": 10},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -912,27 +1316,33 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_5_6_LUNA_AGENT_TEST_CASE.litellm_request, GPT_5_6_LUNA_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-5.6-luna",
         "input": [
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
+                "id": "rs_0f14003909426a48006ad04a8de18887d08c1b94c6c89b1874",
+                "summary": [],
+                "type": "reasoning",
+                "encrypted_content": "synthetic-signature",
+            },
+            {
                 "type": "function_call",
-                "call_id": "call_4MLZtLJ85gCWH7mi9P1twZB4",
+                "call_id": "call_3GVFEuVtRLOckfUM9aGO3BWw",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_RZ9vuE6JysYX2WnCJdW5uDET",
+                "call_id": "call_ZGwThtiIkm6uppdIfybZZyes",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_4MLZtLJ85gCWH7mi9P1twZB4",
+                "call_id": "call_3GVFEuVtRLOckfUM9aGO3BWw",
                 "output": [
                     {
                         "type": "input_text",
@@ -943,7 +1353,7 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_RZ9vuE6JysYX2WnCJdW5uDET",
+                "call_id": "call_ZGwThtiIkm6uppdIfybZZyes",
                 "output": [
                     {
                         "type": "input_text",
@@ -967,30 +1377,16 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_01e24fa82f710b30006ad04acd0e0c8197a4c00208165b3317",
-        "created_at": 1792035533,
+        "id": "resp_0f14003909426a48006ad04a9045a087d0964813f7654b35a1",
+        "created_at": 1792035472,
         "status": "completed",
-        "completed_at": 1792035535,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 266, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035473,
         "model": "gpt-5.6-luna",
         "output": [
             {
-                "id": "msg_01e24fa82f710b30006ad04acd93248197a159fe6aaff1057f",
+                "id": "msg_0f14003909426a48006ad04a90ca6c87d0be2c6013a3971814",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -998,10 +1394,9 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` incorrectly returns `limit + attempts` instead of the "
-                        "nonnegative number of retries left, causing `retries_remaining(3, 1)` to return 4 "
-                        "rather than 2. It is called by `src/worker.py` line 12, and `tests/test_retry.py` "
-                        "failed with `assert 4 == 2`.",
+                        "text": "`retries_remaining` incorrectly adds `limit` and `attempts`, returning 4 instead of "
+                        "2 and potentially negative values are not clamped. It is called by "
+                        "`src/worker.py:12`, and `tests/test_retry.py::test_retries_remaining` failed.",
                     }
                 ],
                 "phase": "final_answer",
@@ -1012,53 +1407,38 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
         "service_tier": "default",
         "usage": {
-            "input_tokens": 619,
+            "input_tokens": 631,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 77,
+            "output_tokens": 61,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 696,
+            "total_tokens": 692,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_01e24fa82f710b30006ad04acd0e0c8197a4c00208165b3317",
-        "model": "azure/gpt-5.6-luna",
+        "id": "resp_0f14003909426a48006ad04a9045a087d0964813f7654b35a1",
+        "model": "openai/gpt-5.6-luna",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` incorrectly returns `limit + attempts` instead of the "
-                    "nonnegative number of retries left, causing `retries_remaining(3, 1)` to return 4 "
-                    "rather than 2. It is called by `src/worker.py` line 12, and `tests/test_retry.py` "
-                    "failed with `assert 4 == 2`.",
+                    "content": "`retries_remaining` incorrectly adds `limit` and `attempts`, returning 4 instead "
+                    "of 2 and potentially negative values are not clamped. It is called by "
+                    "`src/worker.py:12`, and `tests/test_retry.py::test_retries_remaining` failed.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 77,
-            "prompt_tokens": 619,
-            "total_tokens": 696,
+            "completion_tokens": 61,
+            "prompt_tokens": 631,
+            "total_tokens": 692,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 266, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -1085,7 +1465,7 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_5_6_LUNA_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-luna", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -1093,11 +1473,11 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0313e1970d397ba0006ad04acb68788196846bbf2ed8dbf632",
-                    "created_at": 1792035531,
+                    "id": "resp_02bfb16fa00695cf006ad04a8eedb487d096750f7c7c45a477",
+                    "created_at": 1792035470,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-luna",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -1114,11 +1494,11 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0313e1970d397ba0006ad04acb68788196846bbf2ed8dbf632",
-                    "created_at": 1792035531,
+                    "id": "resp_02bfb16fa00695cf006ad04a8eedb487d096750f7c7c45a477",
+                    "created_at": 1792035470,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-luna",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -1134,12 +1514,11 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0313e1970d397ba0006ad04acc90308196a9d2e07c220113e9",
-                    "type": "function_call",
-                    "status": "in_progress",
-                    "arguments": "",
-                    "call_id": "call_6iIYBzCfGUHOV79jPQDBiCUh",
-                    "name": "search_code",
+                    "id": "rs_02bfb16fa00695cf006ad04a8f621887d0bc262e1d904dd464",
+                    "type": "reasoning",
+                    "content": [],
+                    "encrypted_content": "synthetic-signature",
+                    "summary": [],
                 },
                 "output_index": 0,
                 "sequence_number": 2,
@@ -1148,38 +1527,16 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(
             data={
-                "type": "response.function_call_arguments.delta",
-                "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0313e1970d397ba0006ad04acc90308196a9d2e07c220113e9",
-                "obfuscation": "tDl",
-                "output_index": 0,
-                "sequence_number": 3,
-            },
-            event="response.function_call_arguments.delta",
-        ),
-        SSEFrame(
-            data={
-                "type": "response.function_call_arguments.done",
-                "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0313e1970d397ba0006ad04acc90308196a9d2e07c220113e9",
-                "output_index": 0,
-                "sequence_number": 4,
-            },
-            event="response.function_call_arguments.done",
-        ),
-        SSEFrame(
-            data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0313e1970d397ba0006ad04acc90308196a9d2e07c220113e9",
-                    "type": "function_call",
-                    "status": "completed",
-                    "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_6iIYBzCfGUHOV79jPQDBiCUh",
-                    "name": "search_code",
+                    "id": "rs_02bfb16fa00695cf006ad04a8f621887d0bc262e1d904dd464",
+                    "type": "reasoning",
+                    "content": [],
+                    "encrypted_content": "synthetic-signature",
+                    "summary": [],
                 },
                 "output_index": 0,
-                "sequence_number": 5,
+                "sequence_number": 3,
             },
             event="response.output_item.done",
         ),
@@ -1187,36 +1544,36 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0313e1970d397ba0006ad04acc91148196b0db0164f3187270",
+                    "id": "fc_02bfb16fa00695cf006ad04a8fddc087d0a24f77988613c342",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_lYnjsUXj9gGS81amv8I8TyFx",
-                    "name": "run_tests",
+                    "call_id": "call_caBz8iaQgGxQPczEdr5gE18A",
+                    "name": "search_code",
                 },
                 "output_index": 1,
-                "sequence_number": 6,
+                "sequence_number": 4,
             },
             event="response.output_item.added",
         ),
         SSEFrame(
             data={
                 "type": "response.function_call_arguments.delta",
-                "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0313e1970d397ba0006ad04acc91148196b0db0164f3187270",
-                "obfuscation": "VD",
+                "delta": '{"query":"retries_remaining"}',
+                "item_id": "fc_02bfb16fa00695cf006ad04a8fddc087d0a24f77988613c342",
+                "obfuscation": "QP1",
                 "output_index": 1,
-                "sequence_number": 7,
+                "sequence_number": 5,
             },
             event="response.function_call_arguments.delta",
         ),
         SSEFrame(
             data={
                 "type": "response.function_call_arguments.done",
-                "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0313e1970d397ba0006ad04acc91148196b0db0164f3187270",
+                "arguments": '{"query":"retries_remaining"}',
+                "item_id": "fc_02bfb16fa00695cf006ad04a8fddc087d0a24f77988613c342",
                 "output_index": 1,
-                "sequence_number": 8,
+                "sequence_number": 6,
             },
             event="response.function_call_arguments.done",
         ),
@@ -1224,15 +1581,68 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0313e1970d397ba0006ad04acc91148196b0db0164f3187270",
+                    "id": "fc_02bfb16fa00695cf006ad04a8fddc087d0a24f77988613c342",
+                    "type": "function_call",
+                    "status": "completed",
+                    "arguments": '{"query":"retries_remaining"}',
+                    "call_id": "call_caBz8iaQgGxQPczEdr5gE18A",
+                    "name": "search_code",
+                },
+                "output_index": 1,
+                "sequence_number": 7,
+            },
+            event="response.output_item.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "fc_02bfb16fa00695cf006ad04a8fddd487d08191a0749adf899d",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "arguments": "",
+                    "call_id": "call_Bg8gxxs2CV57YzN0vxup4DvY",
+                    "name": "run_tests",
+                },
+                "output_index": 2,
+                "sequence_number": 8,
+            },
+            event="response.output_item.added",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.delta",
+                "delta": '{"path":"tests/test_retry.py"}',
+                "item_id": "fc_02bfb16fa00695cf006ad04a8fddd487d08191a0749adf899d",
+                "obfuscation": "Y0",
+                "output_index": 2,
+                "sequence_number": 9,
+            },
+            event="response.function_call_arguments.delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.done",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "item_id": "fc_02bfb16fa00695cf006ad04a8fddd487d08191a0749adf899d",
+                "output_index": 2,
+                "sequence_number": 10,
+            },
+            event="response.function_call_arguments.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_02bfb16fa00695cf006ad04a8fddd487d08191a0749adf899d",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_lYnjsUXj9gGS81amv8I8TyFx",
+                    "call_id": "call_Bg8gxxs2CV57YzN0vxup4DvY",
                     "name": "run_tests",
                 },
-                "output_index": 1,
-                "sequence_number": 9,
+                "output_index": 2,
+                "sequence_number": 11,
             },
             event="response.output_item.done",
         ),
@@ -1241,55 +1651,34 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0313e1970d397ba0006ad04acb68788196846bbf2ed8dbf632",
-                    "created_at": 1792035531,
+                    "id": "resp_02bfb16fa00695cf006ad04a8eedb487d096750f7c7c45a477",
+                    "created_at": 1792035470,
                     "status": "completed",
-                    "completed_at": 1792035532,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        },
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-                        },
-                    ],
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035471,
                     "model": "gpt-5.6-luna",
                     "output": [
                         {
-                            "id": "fc_0313e1970d397ba0006ad04acc90308196a9d2e07c220113e9",
+                            "id": "rs_02bfb16fa00695cf006ad04a8f621887d0bc262e1d904dd464",
+                            "type": "reasoning",
+                            "content": [],
+                            "encrypted_content": "synthetic-signature",
+                            "summary": [],
+                        },
+                        {
+                            "id": "fc_02bfb16fa00695cf006ad04a8fddc087d0a24f77988613c342",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_6iIYBzCfGUHOV79jPQDBiCUh",
+                            "call_id": "call_caBz8iaQgGxQPczEdr5gE18A",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0313e1970d397ba0006ad04acc91148196b0db0164f3187270",
+                            "id": "fc_02bfb16fa00695cf006ad04a8fddd487d08191a0749adf899d",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_lYnjsUXj9gGS81amv8I8TyFx",
+                            "call_id": "call_Bg8gxxs2CV57YzN0vxup4DvY",
                             "name": "run_tests",
                         },
                     ],
@@ -1299,12 +1688,12 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                     "usage": {
                         "input_tokens": 448,
                         "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-                        "output_tokens": 53,
-                        "output_tokens_details": {"reasoning_tokens": 0},
-                        "total_tokens": 501,
+                        "output_tokens": 67,
+                        "output_tokens_details": {"reasoning_tokens": 12},
+                        "total_tokens": 515,
                     },
                 },
-                "sequence_number": 10,
+                "sequence_number": 12,
             },
             event="response.completed",
         ),
@@ -1315,48 +1704,34 @@ GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_5_6_SOL_AGENT_TEST_CASE: Final = replace(
     GPT_5_6_SOL_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-5.6-sol"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-5.6-sol"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-sol"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_056246822b3d6bbe006ad04acf85708195985564a55f34ca39",
-        "created_at": 1792035535,
+        "id": "resp_0d5f7a80fc3395a0006ad04a9e6d0887d0ae4fb1f1c2c82d05",
+        "created_at": 1792035486,
         "status": "completed",
-        "completed_at": 1792035537,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035487,
         "model": "gpt-5.6-sol",
         "output": [
             {
-                "id": "fc_056246822b3d6bbe006ad04ad0a7d88195b00b9c397503645d",
+                "id": "fc_0d5f7a80fc3395a0006ad04a9f5fc087d088ad5fac4a144541",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_Axfr9xZFZpF7vnPZpcKc0h7R",
+                "call_id": "call_zImu1qJwA3vjFH9oAm11Hmu9",
                 "name": "search_code",
             },
             {
-                "id": "fc_056246822b3d6bbe006ad04ad0a7f08195825e685f14f00061",
+                "id": "fc_0d5f7a80fc3395a0006ad04a9f5fd487d08863403c471f66a2",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_ETq10m3CDCDbOZnHquM329UY",
+                "call_id": "call_D6WIuRv4nU3S9ROhWYxh3e7U",
                 "name": "run_tests",
             },
         ],
@@ -1373,8 +1748,8 @@ GPT_5_6_SOL_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_056246822b3d6bbe006ad04acf85708195985564a55f34ca39",
-        "model": "azure/gpt-5.6-sol",
+        "id": "resp_0d5f7a80fc3395a0006ad04a9e6d0887d0ae4fb1f1c2c82d05",
+        "model": "openai/gpt-5.6-sol",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -1385,13 +1760,13 @@ GPT_5_6_SOL_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_Axfr9xZFZpF7vnPZpcKc0h7R",
+                            "id": "call_zImu1qJwA3vjFH9oAm11Hmu9",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_ETq10m3CDCDbOZnHquM329UY",
+                            "id": "call_D6WIuRv4nU3S9ROhWYxh3e7U",
                             "type": "function",
                         },
                     ],
@@ -1406,22 +1781,8 @@ GPT_5_6_SOL_AGENT_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -1445,7 +1806,7 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_5_6_SOL_AGENT_TEST_CASE.litellm_request, GPT_5_6_SOL_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-5.6-sol",
@@ -1453,19 +1814,19 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
                 "type": "function_call",
-                "call_id": "call_Axfr9xZFZpF7vnPZpcKc0h7R",
+                "call_id": "call_zImu1qJwA3vjFH9oAm11Hmu9",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_ETq10m3CDCDbOZnHquM329UY",
+                "call_id": "call_D6WIuRv4nU3S9ROhWYxh3e7U",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_Axfr9xZFZpF7vnPZpcKc0h7R",
+                "call_id": "call_zImu1qJwA3vjFH9oAm11Hmu9",
                 "output": [
                     {
                         "type": "input_text",
@@ -1476,7 +1837,7 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_ETq10m3CDCDbOZnHquM329UY",
+                "call_id": "call_D6WIuRv4nU3S9ROhWYxh3e7U",
                 "output": [
                     {
                         "type": "input_text",
@@ -1500,30 +1861,16 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0df3b5195ad659b1006ad04ad41fb88194a4a6dab5489198c8",
-        "created_at": 1792035540,
+        "id": "resp_00b169780b921f8d006ad04aa121b087d0b9ba7a302cc95525",
+        "created_at": 1792035489,
         "status": "completed",
-        "completed_at": 1792035542,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 244, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035491,
         "model": "gpt-5.6-sol",
         "output": [
             {
-                "id": "msg_0df3b5195ad659b1006ad04ad50e90819485ac4767aeb3bb7a",
+                "id": "msg_00b169780b921f8d006ad04aa2b2e887d0a17f0ac4a6c9e0ea",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -1531,8 +1878,8 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` incorrectly adds `limit + attempts`; it should subtract attempts "
-                        "and clamp the result at zero. The caller is `src/worker.py:12`, and "
+                        "text": "`retries_remaining` incorrectly adds `limit + attempts`; it should compute "
+                        "`max(limit - attempts, 0)`. The caller is `src/worker.py:12`, and "
                         "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned `4` instead "
                         "of `2`.",
                     }
@@ -1547,22 +1894,22 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 619,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 66,
+            "output_tokens": 68,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 685,
+            "total_tokens": 687,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0df3b5195ad659b1006ad04ad41fb88194a4a6dab5489198c8",
-        "model": "azure/gpt-5.6-sol",
+        "id": "resp_00b169780b921f8d006ad04aa121b087d0b9ba7a302cc95525",
+        "model": "openai/gpt-5.6-sol",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` incorrectly adds `limit + attempts`; it should subtract "
-                    "attempts and clamp the result at zero. The caller is `src/worker.py:12`, and "
+                    "content": "`retries_remaining` incorrectly adds `limit + attempts`; it should compute "
+                    "`max(limit - attempts, 0)`. The caller is `src/worker.py:12`, and "
                     "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned `4` "
                     "instead of `2`.",
                     "role": "assistant",
@@ -1570,28 +1917,14 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             }
         ],
         "usage": {
-            "completion_tokens": 66,
+            "completion_tokens": 68,
             "prompt_tokens": 619,
-            "total_tokens": 685,
+            "total_tokens": 687,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 244, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -1618,7 +1951,7 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_5_6_SOL_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-sol", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -1626,11 +1959,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0cad649bd12ea37c006ad04ad2064c8190acc63dd66e6e2c6e",
-                    "created_at": 1792035538,
+                    "id": "resp_0ebd0518833b954d006ad04a9fb3b887d099f87343fa94eb4c",
+                    "created_at": 1792035487,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-sol",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -1647,11 +1980,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0cad649bd12ea37c006ad04ad2064c8190acc63dd66e6e2c6e",
-                    "created_at": 1792035538,
+                    "id": "resp_0ebd0518833b954d006ad04a9fb3b887d099f87343fa94eb4c",
+                    "created_at": 1792035487,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-sol",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -1667,11 +2000,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0cad649bd12ea37c006ad04ad34be481909667a3e3c797a56f",
+                    "id": "fc_0ebd0518833b954d006ad04aa0b1bc87d088f28baa27dae3db",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_IAvLgDLvbWIqJpT6QDPScqZ5",
+                    "call_id": "call_RHePNBeoQ4fn5WnJUzavuVVF",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -1683,8 +2016,8 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0cad649bd12ea37c006ad04ad34be481909667a3e3c797a56f",
-                "obfuscation": "nBn",
+                "item_id": "fc_0ebd0518833b954d006ad04aa0b1bc87d088f28baa27dae3db",
+                "obfuscation": "lsF",
                 "output_index": 0,
                 "sequence_number": 3,
             },
@@ -1694,7 +2027,7 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0cad649bd12ea37c006ad04ad34be481909667a3e3c797a56f",
+                "item_id": "fc_0ebd0518833b954d006ad04aa0b1bc87d088f28baa27dae3db",
                 "output_index": 0,
                 "sequence_number": 4,
             },
@@ -1704,11 +2037,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0cad649bd12ea37c006ad04ad34be481909667a3e3c797a56f",
+                    "id": "fc_0ebd0518833b954d006ad04aa0b1bc87d088f28baa27dae3db",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_IAvLgDLvbWIqJpT6QDPScqZ5",
+                    "call_id": "call_RHePNBeoQ4fn5WnJUzavuVVF",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -1720,11 +2053,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0cad649bd12ea37c006ad04ad34c08819099f00ec1103f279f",
+                    "id": "fc_0ebd0518833b954d006ad04aa0b1cc87d0abe535b36be72b7d",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_LZ5lIeqQwip4VqN3Nb456AvB",
+                    "call_id": "call_1h6M2yMno8h8DYlCJsImg3N4",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -1736,8 +2069,8 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0cad649bd12ea37c006ad04ad34c08819099f00ec1103f279f",
-                "obfuscation": "h7",
+                "item_id": "fc_0ebd0518833b954d006ad04aa0b1cc87d0abe535b36be72b7d",
+                "obfuscation": "5m",
                 "output_index": 1,
                 "sequence_number": 7,
             },
@@ -1747,7 +2080,7 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0cad649bd12ea37c006ad04ad34c08819099f00ec1103f279f",
+                "item_id": "fc_0ebd0518833b954d006ad04aa0b1cc87d0abe535b36be72b7d",
                 "output_index": 1,
                 "sequence_number": 8,
             },
@@ -1757,11 +2090,11 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0cad649bd12ea37c006ad04ad34c08819099f00ec1103f279f",
+                    "id": "fc_0ebd0518833b954d006ad04aa0b1cc87d0abe535b36be72b7d",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_LZ5lIeqQwip4VqN3Nb456AvB",
+                    "call_id": "call_1h6M2yMno8h8DYlCJsImg3N4",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -1774,41 +2107,27 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0cad649bd12ea37c006ad04ad2064c8190acc63dd66e6e2c6e",
-                    "created_at": 1792035538,
+                    "id": "resp_0ebd0518833b954d006ad04a9fb3b887d099f87343fa94eb4c",
+                    "created_at": 1792035487,
                     "status": "completed",
-                    "completed_at": 1792035539,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        }
-                    ],
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035488,
                     "model": "gpt-5.6-sol",
                     "output": [
                         {
-                            "id": "fc_0cad649bd12ea37c006ad04ad34be481909667a3e3c797a56f",
+                            "id": "fc_0ebd0518833b954d006ad04aa0b1bc87d088f28baa27dae3db",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_IAvLgDLvbWIqJpT6QDPScqZ5",
+                            "call_id": "call_RHePNBeoQ4fn5WnJUzavuVVF",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0cad649bd12ea37c006ad04ad34c08819099f00ec1103f279f",
+                            "id": "fc_0ebd0518833b954d006ad04aa0b1cc87d0abe535b36be72b7d",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_LZ5lIeqQwip4VqN3Nb456AvB",
+                            "call_id": "call_1h6M2yMno8h8DYlCJsImg3N4",
                             "name": "run_tests",
                         },
                     ],
@@ -1834,61 +2153,34 @@ GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_5_6_TERRA_AGENT_TEST_CASE: Final = replace(
     GPT_5_6_TERRA_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-5.6-terra"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-5.6-terra"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-terra"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_021cbaff805a5105006ad04ad314608196900f4e35d47b7c80",
-        "created_at": 1792035539,
+        "id": "resp_0be594400e6793a9006ad04aa8479487d0a036daf89a003d98",
+        "created_at": 1792035496,
         "status": "completed",
-        "completed_at": 1792035540,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035497,
         "model": "gpt-5.6-terra",
         "output": [
             {
-                "id": "fc_021cbaff805a5105006ad04ad4692081968b2da0357cef3c87",
+                "id": "fc_0be594400e6793a9006ad04aa91fb487d0a879ab47aea4a82f",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_AQnAECWqPckZwylX3qZBzlY5",
+                "call_id": "call_ouugWUOqgTyW3gYHpwTMK8d9",
                 "name": "search_code",
             },
             {
-                "id": "fc_021cbaff805a5105006ad04ad469508196b6eaec87d50240ea",
+                "id": "fc_0be594400e6793a9006ad04aa91fc887d0b9f5335792f10a68",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_msUupLfFYClJSMSOaK3Oq57h",
+                "call_id": "call_8fATNhdv39Db1hljGzU7PHcW",
                 "name": "run_tests",
             },
         ],
@@ -1905,8 +2197,8 @@ GPT_5_6_TERRA_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_021cbaff805a5105006ad04ad314608196900f4e35d47b7c80",
-        "model": "azure/gpt-5.6-terra",
+        "id": "resp_0be594400e6793a9006ad04aa8479487d0a036daf89a003d98",
+        "model": "openai/gpt-5.6-terra",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -1917,13 +2209,13 @@ GPT_5_6_TERRA_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_AQnAECWqPckZwylX3qZBzlY5",
+                            "id": "call_ouugWUOqgTyW3gYHpwTMK8d9",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_msUupLfFYClJSMSOaK3Oq57h",
+                            "id": "call_8fATNhdv39Db1hljGzU7PHcW",
                             "type": "function",
                         },
                     ],
@@ -1938,35 +2230,8 @@ GPT_5_6_TERRA_AGENT_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -1990,7 +2255,7 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_5_6_TERRA_AGENT_TEST_CASE.litellm_request, GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-5.6-terra",
@@ -1998,19 +2263,19 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
                 "type": "function_call",
-                "call_id": "call_AQnAECWqPckZwylX3qZBzlY5",
+                "call_id": "call_ouugWUOqgTyW3gYHpwTMK8d9",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_msUupLfFYClJSMSOaK3Oq57h",
+                "call_id": "call_8fATNhdv39Db1hljGzU7PHcW",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_AQnAECWqPckZwylX3qZBzlY5",
+                "call_id": "call_ouugWUOqgTyW3gYHpwTMK8d9",
                 "output": [
                     {
                         "type": "input_text",
@@ -2021,7 +2286,7 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_msUupLfFYClJSMSOaK3Oq57h",
+                "call_id": "call_8fATNhdv39Db1hljGzU7PHcW",
                 "output": [
                     {
                         "type": "input_text",
@@ -2045,43 +2310,16 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0642d30b87023209006ad04ad7a8648195bc09816464eaf68e",
-        "created_at": 1792035544,
+        "id": "resp_0fe2d1d5d2bfdea9006ad04aaaeaf887d0b804e06e9f2a88bb",
+        "created_at": 1792035498,
         "status": "completed",
-        "completed_at": 1792035546,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 265, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035500,
         "model": "gpt-5.6-terra",
         "output": [
             {
-                "id": "msg_0642d30b87023209006ad04ad9e2c881958fcd9b5846e7e116",
+                "id": "msg_0fe2d1d5d2bfdea9006ad04aab8a0087d0889580abf3a2b2c0",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -2089,10 +2327,10 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` incorrectly adds `limit` and `attempts`; it should subtract "
-                        "attempts from the limit and clamp the result at zero. The only caller found is "
-                        "`src/worker.py`, and `tests/test_retry.py` fails because `retries_remaining(3, 1)` "
-                        "returns 4 instead of 2.",
+                        "text": "`retries_remaining` incorrectly returns `limit + attempts`; it should subtract "
+                        "attempts and clamp the result at zero. The only caller is `src/worker.py`, and "
+                        "`tests/test_retry.py` fails because `retries_remaining(3, 1)` returns `4` instead of "
+                        "`2`.",
                     }
                 ],
                 "phase": "final_answer",
@@ -2105,64 +2343,37 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 619,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 71,
+            "output_tokens": 65,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 690,
+            "total_tokens": 684,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0642d30b87023209006ad04ad7a8648195bc09816464eaf68e",
-        "model": "azure/gpt-5.6-terra",
+        "id": "resp_0fe2d1d5d2bfdea9006ad04aaaeaf887d0b804e06e9f2a88bb",
+        "model": "openai/gpt-5.6-terra",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` incorrectly adds `limit` and `attempts`; it should subtract "
-                    "attempts from the limit and clamp the result at zero. The only caller found is "
-                    "`src/worker.py`, and `tests/test_retry.py` fails because `retries_remaining(3, 1)` "
-                    "returns 4 instead of 2.",
+                    "content": "`retries_remaining` incorrectly returns `limit + attempts`; it should subtract "
+                    "attempts and clamp the result at zero. The only caller is `src/worker.py`, and "
+                    "`tests/test_retry.py` fails because `retries_remaining(3, 1)` returns `4` instead "
+                    "of `2`.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 71,
+            "completion_tokens": 65,
             "prompt_tokens": 619,
-            "total_tokens": 690,
+            "total_tokens": 684,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 265, "check_offset": 0},
-            },
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -2189,7 +2400,7 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_5_6_TERRA_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.6-terra", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -2197,11 +2408,11 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0514fff817a3c850006ad04ad4e2608193b487419ab254ce3b",
-                    "created_at": 1792035540,
+                    "id": "resp_07964387f422fad6006ad04aa9820c87d0b00c0f7e8179e669",
+                    "created_at": 1792035497,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-terra",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -2218,11 +2429,11 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0514fff817a3c850006ad04ad4e2608193b487419ab254ce3b",
-                    "created_at": 1792035540,
+                    "id": "resp_07964387f422fad6006ad04aa9820c87d0b00c0f7e8179e669",
+                    "created_at": 1792035497,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-5.6-terra",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -2238,11 +2449,12 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "rs_0514fff817a3c850006ad04ad600108193a7f0973d7f0edb02",
-                    "type": "reasoning",
-                    "content": [],
-                    "encrypted_content": "synthetic-signature",
-                    "summary": [],
+                    "id": "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "arguments": "",
+                    "call_id": "call_xDdtGVzn464uEE7X8AuVRiHJ",
+                    "name": "search_code",
                 },
                 "output_index": 0,
                 "sequence_number": 2,
@@ -2251,43 +2463,12 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(
             data={
-                "type": "response.output_item.done",
-                "item": {
-                    "id": "rs_0514fff817a3c850006ad04ad600108193a7f0973d7f0edb02",
-                    "type": "reasoning",
-                    "content": [],
-                    "encrypted_content": "synthetic-signature",
-                    "summary": [],
-                },
-                "output_index": 0,
-                "sequence_number": 3,
-            },
-            event="response.output_item.done",
-        ),
-        SSEFrame(
-            data={
-                "type": "response.output_item.added",
-                "item": {
-                    "id": "fc_0514fff817a3c850006ad04ad657a08193a133625fd099c618",
-                    "type": "function_call",
-                    "status": "in_progress",
-                    "arguments": "",
-                    "call_id": "call_yLjqnSPdFaGv8U8E75rQWQLC",
-                    "name": "search_code",
-                },
-                "output_index": 1,
-                "sequence_number": 4,
-            },
-            event="response.output_item.added",
-        ),
-        SSEFrame(
-            data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0514fff817a3c850006ad04ad657a08193a133625fd099c618",
-                "obfuscation": "2jp",
-                "output_index": 1,
-                "sequence_number": 5,
+                "item_id": "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9",
+                "obfuscation": "IFA",
+                "output_index": 0,
+                "sequence_number": 3,
             },
             event="response.function_call_arguments.delta",
         ),
@@ -2295,9 +2476,9 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0514fff817a3c850006ad04ad657a08193a133625fd099c618",
-                "output_index": 1,
-                "sequence_number": 6,
+                "item_id": "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9",
+                "output_index": 0,
+                "sequence_number": 4,
             },
             event="response.function_call_arguments.done",
         ),
@@ -2305,15 +2486,15 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0514fff817a3c850006ad04ad657a08193a133625fd099c618",
+                    "id": "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_yLjqnSPdFaGv8U8E75rQWQLC",
+                    "call_id": "call_xDdtGVzn464uEE7X8AuVRiHJ",
                     "name": "search_code",
                 },
-                "output_index": 1,
-                "sequence_number": 7,
+                "output_index": 0,
+                "sequence_number": 5,
             },
             event="response.output_item.done",
         ),
@@ -2321,15 +2502,15 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0514fff817a3c850006ad04ad657fc8193899c6082c0c899fc",
+                    "id": "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_eSkcn73McIf21NZhszW14NXh",
+                    "call_id": "call_yPhpkZWP5B2zJo4SPhCEAxW4",
                     "name": "run_tests",
                 },
-                "output_index": 2,
-                "sequence_number": 8,
+                "output_index": 1,
+                "sequence_number": 6,
             },
             event="response.output_item.added",
         ),
@@ -2337,10 +2518,10 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0514fff817a3c850006ad04ad657fc8193899c6082c0c899fc",
-                "obfuscation": "9V",
-                "output_index": 2,
-                "sequence_number": 9,
+                "item_id": "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a",
+                "obfuscation": "RH",
+                "output_index": 1,
+                "sequence_number": 7,
             },
             event="response.function_call_arguments.delta",
         ),
@@ -2348,9 +2529,9 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0514fff817a3c850006ad04ad657fc8193899c6082c0c899fc",
-                "output_index": 2,
-                "sequence_number": 10,
+                "item_id": "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a",
+                "output_index": 1,
+                "sequence_number": 8,
             },
             event="response.function_call_arguments.done",
         ),
@@ -2358,15 +2539,15 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0514fff817a3c850006ad04ad657fc8193899c6082c0c899fc",
+                    "id": "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_eSkcn73McIf21NZhszW14NXh",
+                    "call_id": "call_yPhpkZWP5B2zJo4SPhCEAxW4",
                     "name": "run_tests",
                 },
-                "output_index": 2,
-                "sequence_number": 11,
+                "output_index": 1,
+                "sequence_number": 9,
             },
             event="response.output_item.done",
         ),
@@ -2375,49 +2556,27 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0514fff817a3c850006ad04ad4e2608193b487419ab254ce3b",
-                    "created_at": 1792035540,
+                    "id": "resp_07964387f422fad6006ad04aa9820c87d0b00c0f7e8179e669",
+                    "created_at": 1792035497,
                     "status": "completed",
-                    "completed_at": 1792035543,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 201, "check_offset": 0},
-                        }
-                    ],
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035498,
                     "model": "gpt-5.6-terra",
                     "output": [
                         {
-                            "id": "rs_0514fff817a3c850006ad04ad600108193a7f0973d7f0edb02",
-                            "type": "reasoning",
-                            "content": [],
-                            "encrypted_content": "synthetic-signature",
-                            "summary": [],
-                        },
-                        {
-                            "id": "fc_0514fff817a3c850006ad04ad657a08193a133625fd099c618",
+                            "id": "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_yLjqnSPdFaGv8U8E75rQWQLC",
+                            "call_id": "call_xDdtGVzn464uEE7X8AuVRiHJ",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0514fff817a3c850006ad04ad657fc8193899c6082c0c899fc",
+                            "id": "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_eSkcn73McIf21NZhszW14NXh",
+                            "call_id": "call_yPhpkZWP5B2zJo4SPhCEAxW4",
                             "name": "run_tests",
                         },
                     ],
@@ -2427,12 +2586,12 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                     "usage": {
                         "input_tokens": 448,
                         "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-                        "output_tokens": 63,
-                        "output_tokens_details": {"reasoning_tokens": 8},
-                        "total_tokens": 511,
+                        "output_tokens": 53,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                        "total_tokens": 501,
                     },
                 },
-                "sequence_number": 12,
+                "sequence_number": 10,
             },
             event="response.completed",
         ),
@@ -2443,61 +2602,34 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
     GPT_6_ASTRA_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-6-astra"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-6-astra"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-astra"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0e1aa1a45b752917006ad04adab8a08193bf9a431cf996fc8c",
-        "created_at": 1792035546,
+        "id": "resp_0c460ec382f21326006ad04aba1fc887d095a25a4a60b52123",
+        "created_at": 1792035514,
         "status": "completed",
-        "completed_at": 1792035548,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": None,
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035515,
         "model": "gpt-6-astra",
         "output": [
             {
-                "id": "fc_0e1aa1a45b752917006ad04adc75588193998f33b19d72ab67",
+                "id": "fc_0c460ec382f21326006ad04abbb08c87d0afe6415b0f3dc234",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_gqwDRArJmmOo4biwCSHfRKC3",
+                "call_id": "call_zlQhijQRYcsyaid7PMS9OLr8",
                 "name": "search_code",
             },
             {
-                "id": "fc_0e1aa1a45b752917006ad04adc75748193ac66d67791c9f4c3",
+                "id": "fc_0c460ec382f21326006ad04abbb0a487d09860b37cc0b5a25e",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_ATuKGX5x8rBXnJcB1sWNJGGW",
+                "call_id": "call_HhTD5sPm6PxiPB1xX8sGLZid",
                 "name": "run_tests",
             },
         ],
@@ -2514,8 +2646,8 @@ GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0e1aa1a45b752917006ad04adab8a08193bf9a431cf996fc8c",
-        "model": "azure/gpt-6-astra",
+        "id": "resp_0c460ec382f21326006ad04aba1fc887d095a25a4a60b52123",
+        "model": "openai/gpt-6-astra",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -2526,13 +2658,13 @@ GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_gqwDRArJmmOo4biwCSHfRKC3",
+                            "id": "call_zlQhijQRYcsyaid7PMS9OLr8",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_ATuKGX5x8rBXnJcB1sWNJGGW",
+                            "id": "call_HhTD5sPm6PxiPB1xX8sGLZid",
                             "type": "function",
                         },
                     ],
@@ -2547,35 +2679,7 @@ GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -2599,7 +2703,7 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_6_ASTRA_AGENT_TEST_CASE.litellm_request, GPT_6_ASTRA_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-6-astra",
@@ -2607,19 +2711,19 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
                 "type": "function_call",
-                "call_id": "call_gqwDRArJmmOo4biwCSHfRKC3",
+                "call_id": "call_zlQhijQRYcsyaid7PMS9OLr8",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_ATuKGX5x8rBXnJcB1sWNJGGW",
+                "call_id": "call_HhTD5sPm6PxiPB1xX8sGLZid",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_gqwDRArJmmOo4biwCSHfRKC3",
+                "call_id": "call_zlQhijQRYcsyaid7PMS9OLr8",
                 "output": [
                     {
                         "type": "input_text",
@@ -2630,7 +2734,7 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_ATuKGX5x8rBXnJcB1sWNJGGW",
+                "call_id": "call_HhTD5sPm6PxiPB1xX8sGLZid",
                 "output": [
                     {
                         "type": "input_text",
@@ -2654,43 +2758,16 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_06e17202c665e7e6006ad04adf41d48196bae319c820b8d7c9",
-        "created_at": 1792035551,
+        "id": "resp_0eb40bf438f81237006ad04abe048087d097e1ca444166aa82",
+        "created_at": 1792035518,
         "status": "completed",
-        "completed_at": 1792035556,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 207, "check_offset": 0},
-            },
-        ],
+        "access_programs": None,
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035520,
         "model": "gpt-6-astra",
         "output": [
             {
-                "id": "msg_06e17202c665e7e6006ad04ae231188196b719641af24c136d",
+                "id": "msg_0eb40bf438f81237006ad04abf240087d0b599ea1d1e38c6ce",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -2698,9 +2775,10 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` adds attempts to the limit instead of subtracting and clamping "
-                        "at zero; a caller was found at `src/worker.py:12`. `tests/test_retry.py` failed with "
-                        "`assert 4 == 2`; no files were changed.",
+                        "text": "`retries_remaining` incorrectly adds attempts to the limit; it should subtract "
+                        "attempts and clamp the result to zero. A caller was found at `src/worker.py:12`, and "
+                        "`tests/test_retry.py::test_retries_remaining` failed because it returned 4 instead "
+                        "of 2.",
                     }
                 ],
                 "phase": "final_answer",
@@ -2713,63 +2791,36 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 619,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 58,
+            "output_tokens": 63,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 677,
+            "total_tokens": 682,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_06e17202c665e7e6006ad04adf41d48196bae319c820b8d7c9",
-        "model": "azure/gpt-6-astra",
+        "id": "resp_0eb40bf438f81237006ad04abe048087d097e1ca444166aa82",
+        "model": "openai/gpt-6-astra",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` adds attempts to the limit instead of subtracting and clamping "
-                    "at zero; a caller was found at `src/worker.py:12`. `tests/test_retry.py` failed "
-                    "with `assert 4 == 2`; no files were changed.",
+                    "content": "`retries_remaining` incorrectly adds attempts to the limit; it should subtract "
+                    "attempts and clamp the result to zero. A caller was found at `src/worker.py:12`, "
+                    "and `tests/test_retry.py::test_retries_remaining` failed because it returned 4 "
+                    "instead of 2.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 58,
+            "completion_tokens": 63,
             "prompt_tokens": 619,
-            "total_tokens": 677,
+            "total_tokens": 682,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 207, "check_offset": 0},
-            },
-        ],
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -2796,7 +2847,7 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_6_ASTRA_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-astra", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -2804,11 +2855,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0a0b09b257351892006ad04adcf4d08190b69ea01d0aaddae7",
-                    "created_at": 1792035549,
+                    "id": "resp_0e6cd25a5edf0b7f006ad04abc0b8087d08587ae2062f213ba",
+                    "created_at": 1792035516,
                     "status": "in_progress",
+                    "access_programs": None,
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6-astra",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -2825,11 +2876,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0a0b09b257351892006ad04adcf4d08190b69ea01d0aaddae7",
-                    "created_at": 1792035549,
+                    "id": "resp_0e6cd25a5edf0b7f006ad04abc0b8087d08587ae2062f213ba",
+                    "created_at": 1792035516,
                     "status": "in_progress",
+                    "access_programs": None,
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6-astra",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -2845,11 +2896,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0a0b09b257351892006ad04ade8e5c8190800f23a7f173f2aa",
+                    "id": "fc_0e6cd25a5edf0b7f006ad04abdb3cc87d087c65ee2c89879b1",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_KOcCFTjmrhmIPy65glI8Xu9L",
+                    "call_id": "call_rdLoAf1TMckmLuY7a9q3qGV2",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -2861,8 +2912,8 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0a0b09b257351892006ad04ade8e5c8190800f23a7f173f2aa",
-                "obfuscation": "HA4",
+                "item_id": "fc_0e6cd25a5edf0b7f006ad04abdb3cc87d087c65ee2c89879b1",
+                "obfuscation": "szK",
                 "output_index": 0,
                 "sequence_number": 3,
             },
@@ -2872,7 +2923,7 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0a0b09b257351892006ad04ade8e5c8190800f23a7f173f2aa",
+                "item_id": "fc_0e6cd25a5edf0b7f006ad04abdb3cc87d087c65ee2c89879b1",
                 "output_index": 0,
                 "sequence_number": 4,
             },
@@ -2882,11 +2933,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0a0b09b257351892006ad04ade8e5c8190800f23a7f173f2aa",
+                    "id": "fc_0e6cd25a5edf0b7f006ad04abdb3cc87d087c65ee2c89879b1",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_KOcCFTjmrhmIPy65glI8Xu9L",
+                    "call_id": "call_rdLoAf1TMckmLuY7a9q3qGV2",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -2898,11 +2949,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0a0b09b257351892006ad04ade8e7881908e1b26fcb5c22b40",
+                    "id": "fc_0e6cd25a5edf0b7f006ad04abdb3e087d0a1023113b3068644",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_CykEVxHeCcGE0RKZ1ZMjUUrL",
+                    "call_id": "call_BCEXFCGlvI1hhltFXxKMhOQj",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -2914,8 +2965,8 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0a0b09b257351892006ad04ade8e7881908e1b26fcb5c22b40",
-                "obfuscation": "Z9",
+                "item_id": "fc_0e6cd25a5edf0b7f006ad04abdb3e087d0a1023113b3068644",
+                "obfuscation": "T3",
                 "output_index": 1,
                 "sequence_number": 7,
             },
@@ -2925,7 +2976,7 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0a0b09b257351892006ad04ade8e7881908e1b26fcb5c22b40",
+                "item_id": "fc_0e6cd25a5edf0b7f006ad04abdb3e087d0a1023113b3068644",
                 "output_index": 1,
                 "sequence_number": 8,
             },
@@ -2935,11 +2986,11 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0a0b09b257351892006ad04ade8e7881908e1b26fcb5c22b40",
+                    "id": "fc_0e6cd25a5edf0b7f006ad04abdb3e087d0a1023113b3068644",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_CykEVxHeCcGE0RKZ1ZMjUUrL",
+                    "call_id": "call_BCEXFCGlvI1hhltFXxKMhOQj",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -2952,55 +3003,27 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0a0b09b257351892006ad04adcf4d08190b69ea01d0aaddae7",
-                    "created_at": 1792035549,
+                    "id": "resp_0e6cd25a5edf0b7f006ad04abc0b8087d08587ae2062f213ba",
+                    "created_at": 1792035516,
                     "status": "completed",
-                    "completed_at": 1792035550,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        },
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-                        },
-                    ],
+                    "access_programs": None,
+                    "completed_at": 1792035517,
                     "model": "gpt-6-astra",
                     "output": [
                         {
-                            "id": "fc_0a0b09b257351892006ad04ade8e5c8190800f23a7f173f2aa",
+                            "id": "fc_0e6cd25a5edf0b7f006ad04abdb3cc87d087c65ee2c89879b1",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_KOcCFTjmrhmIPy65glI8Xu9L",
+                            "call_id": "call_rdLoAf1TMckmLuY7a9q3qGV2",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0a0b09b257351892006ad04ade8e7881908e1b26fcb5c22b40",
+                            "id": "fc_0e6cd25a5edf0b7f006ad04abdb3e087d0a1023113b3068644",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_CykEVxHeCcGE0RKZ1ZMjUUrL",
+                            "call_id": "call_BCEXFCGlvI1hhltFXxKMhOQj",
                             "name": "run_tests",
                         },
                     ],
@@ -3026,48 +3049,34 @@ GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_6_LUNA_AGENT_TEST_CASE: Final = replace(
     GPT_6_LUNA_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-6-luna"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-6-luna"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-luna"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0c24cb3c910732b2006ad04aca9fbc8194a44eee0786d73cf2",
-        "created_at": 1792035530,
+        "id": "resp_02084d7da75674a2006ad04a8e5ba087d09bcd2d078980b34f",
+        "created_at": 1792035470,
         "status": "completed",
-        "completed_at": 1792035532,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035473,
         "model": "gpt-6-luna",
         "output": [
             {
-                "id": "fc_0c24cb3c910732b2006ad04acbbe448194a853526f61cffa91",
+                "id": "fc_02084d7da75674a2006ad04a91d01087d092d71e6d7c9d6cc5",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_eXvJbbJr4vYTWZVzcZEWWfes",
+                "call_id": "call_UlhZOD1wA0vr4DfyZTAHc8xz",
                 "name": "search_code",
             },
             {
-                "id": "fc_0c24cb3c910732b2006ad04acbbe5c8194bd29577a3a6e5a19",
+                "id": "fc_02084d7da75674a2006ad04a91d04087d084b80063891ba7cf",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_JVDRMpVXHX7CaSEnKsvodfeO",
+                "call_id": "call_iVnLyAFnnvoEcpuai2jPibro",
                 "name": "run_tests",
             },
         ],
@@ -3084,8 +3093,8 @@ GPT_6_LUNA_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0c24cb3c910732b2006ad04aca9fbc8194a44eee0786d73cf2",
-        "model": "azure/gpt-6-luna",
+        "id": "resp_02084d7da75674a2006ad04a8e5ba087d09bcd2d078980b34f",
+        "model": "openai/gpt-6-luna",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -3096,13 +3105,13 @@ GPT_6_LUNA_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_eXvJbbJr4vYTWZVzcZEWWfes",
+                            "id": "call_UlhZOD1wA0vr4DfyZTAHc8xz",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_JVDRMpVXHX7CaSEnKsvodfeO",
+                            "id": "call_iVnLyAFnnvoEcpuai2jPibro",
                             "type": "function",
                         },
                     ],
@@ -3117,22 +3126,8 @@ GPT_6_LUNA_AGENT_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -3156,7 +3151,7 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_6_LUNA_AGENT_TEST_CASE.litellm_request, GPT_6_LUNA_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-6-luna",
@@ -3164,19 +3159,19 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
                 "type": "function_call",
-                "call_id": "call_eXvJbbJr4vYTWZVzcZEWWfes",
+                "call_id": "call_UlhZOD1wA0vr4DfyZTAHc8xz",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_JVDRMpVXHX7CaSEnKsvodfeO",
+                "call_id": "call_iVnLyAFnnvoEcpuai2jPibro",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_eXvJbbJr4vYTWZVzcZEWWfes",
+                "call_id": "call_UlhZOD1wA0vr4DfyZTAHc8xz",
                 "output": [
                     {
                         "type": "input_text",
@@ -3187,7 +3182,7 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_JVDRMpVXHX7CaSEnKsvodfeO",
+                "call_id": "call_iVnLyAFnnvoEcpuai2jPibro",
                 "output": [
                     {
                         "type": "input_text",
@@ -3211,29 +3206,16 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_0f3e2451550b29f5006ad04acf531c8196a57251326e10b7f2",
-        "created_at": 1792035535,
+        "id": "resp_09aa77587dce4423006ad04a966dd087d0887015ed690aa27c",
+        "created_at": 1792035478,
         "status": "completed",
-        "completed_at": 1792035538,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035481,
         "model": "gpt-6-luna",
         "output": [
             {
-                "id": "msg_0f3e2451550b29f5006ad04ad1519881969543782dd26fc553",
+                "id": "msg_09aa77587dce4423006ad04a98665c87d0b324abdcf3b3c685",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -3241,9 +3223,10 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` adds `limit` and `attempts` instead of returning retries left, "
-                        "so it can return negative-relevant incorrect values. The caller is `src/worker.py`; "
-                        "`tests/test_retry.py` failed because it got `4` instead of `2`.",
+                        "text": "`retries_remaining` adds `limit` and `attempts` instead of subtracting attempts from "
+                        "the limit, so it can return a negative value. The caller is `src/worker.py`; "
+                        "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned 4 instead of "
+                        "2.",
                     }
                 ],
                 "phase": "final_answer",
@@ -3256,49 +3239,37 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 619,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 61,
+            "output_tokens": 70,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 680,
+            "total_tokens": 689,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_0f3e2451550b29f5006ad04acf531c8196a57251326e10b7f2",
-        "model": "azure/gpt-6-luna",
+        "id": "resp_09aa77587dce4423006ad04a966dd087d0887015ed690aa27c",
+        "model": "openai/gpt-6-luna",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` adds `limit` and `attempts` instead of returning retries left, "
-                    "so it can return negative-relevant incorrect values. The caller is "
-                    "`src/worker.py`; `tests/test_retry.py` failed because it got `4` instead of `2`.",
+                    "content": "`retries_remaining` adds `limit` and `attempts` instead of subtracting attempts "
+                    "from the limit, so it can return a negative value. The caller is `src/worker.py`; "
+                    "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned 4 instead "
+                    "of 2.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 61,
+            "completion_tokens": 70,
             "prompt_tokens": 619,
-            "total_tokens": 680,
+            "total_tokens": 689,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            }
-        ],
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -3325,7 +3296,7 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_6_LUNA_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-luna", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -3333,11 +3304,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0c2198d02c07d92c006ad04acd13948193b18a9566a5c2da02",
-                    "created_at": 1792035533,
+                    "id": "resp_0dd28c98133095a3006ad04a92a73887d0958056861d8bfcff",
+                    "created_at": 1792035474,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6-luna",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -3354,11 +3325,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0c2198d02c07d92c006ad04acd13948193b18a9566a5c2da02",
-                    "created_at": 1792035533,
+                    "id": "resp_0dd28c98133095a3006ad04a92a73887d0958056861d8bfcff",
+                    "created_at": 1792035474,
                     "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6-luna",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -3374,11 +3345,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0c2198d02c07d92c006ad04aceeb54819397ae8fdbd9fca4e6",
+                    "id": "fc_0dd28c98133095a3006ad04a96253487d090fa557a2e0cf905",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_eMkw1KRyoMPyzl7zjNvCLaIg",
+                    "call_id": "call_BXnB0UfiU2LW63KiDbncliyC",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -3390,8 +3361,8 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0c2198d02c07d92c006ad04aceeb54819397ae8fdbd9fca4e6",
-                "obfuscation": "faN",
+                "item_id": "fc_0dd28c98133095a3006ad04a96253487d090fa557a2e0cf905",
+                "obfuscation": "Ios",
                 "output_index": 0,
                 "sequence_number": 3,
             },
@@ -3401,7 +3372,7 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0c2198d02c07d92c006ad04aceeb54819397ae8fdbd9fca4e6",
+                "item_id": "fc_0dd28c98133095a3006ad04a96253487d090fa557a2e0cf905",
                 "output_index": 0,
                 "sequence_number": 4,
             },
@@ -3411,11 +3382,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0c2198d02c07d92c006ad04aceeb54819397ae8fdbd9fca4e6",
+                    "id": "fc_0dd28c98133095a3006ad04a96253487d090fa557a2e0cf905",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_eMkw1KRyoMPyzl7zjNvCLaIg",
+                    "call_id": "call_BXnB0UfiU2LW63KiDbncliyC",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -3427,11 +3398,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0c2198d02c07d92c006ad04aceeb7081938a08631af84d9fef",
+                    "id": "fc_0dd28c98133095a3006ad04a96254887d0b68dd02014ba2ca8",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_JL9islb4uAm6WuVzOzHtyx6D",
+                    "call_id": "call_rN9W4duhkWVD0ycWn3xo03Dl",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -3443,8 +3414,8 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0c2198d02c07d92c006ad04aceeb7081938a08631af84d9fef",
-                "obfuscation": "Kb",
+                "item_id": "fc_0dd28c98133095a3006ad04a96254887d0b68dd02014ba2ca8",
+                "obfuscation": "m1",
                 "output_index": 1,
                 "sequence_number": 7,
             },
@@ -3454,7 +3425,7 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0c2198d02c07d92c006ad04aceeb7081938a08631af84d9fef",
+                "item_id": "fc_0dd28c98133095a3006ad04a96254887d0b68dd02014ba2ca8",
                 "output_index": 1,
                 "sequence_number": 8,
             },
@@ -3464,11 +3435,11 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0c2198d02c07d92c006ad04aceeb7081938a08631af84d9fef",
+                    "id": "fc_0dd28c98133095a3006ad04a96254887d0b68dd02014ba2ca8",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_JL9islb4uAm6WuVzOzHtyx6D",
+                    "call_id": "call_rN9W4duhkWVD0ycWn3xo03Dl",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -3481,55 +3452,371 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0c2198d02c07d92c006ad04acd13948193b18a9566a5c2da02",
-                    "created_at": 1792035533,
+                    "id": "resp_0dd28c98133095a3006ad04a92a73887d0958056861d8bfcff",
+                    "created_at": 1792035474,
                     "status": "completed",
-                    "completed_at": 1792035535,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        },
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-                        },
-                    ],
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035478,
                     "model": "gpt-6-luna",
                     "output": [
                         {
-                            "id": "fc_0c2198d02c07d92c006ad04aceeb54819397ae8fdbd9fca4e6",
+                            "id": "fc_0dd28c98133095a3006ad04a96253487d090fa557a2e0cf905",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_eMkw1KRyoMPyzl7zjNvCLaIg",
+                            "call_id": "call_BXnB0UfiU2LW63KiDbncliyC",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0c2198d02c07d92c006ad04aceeb7081938a08631af84d9fef",
+                            "id": "fc_0dd28c98133095a3006ad04a96254887d0b68dd02014ba2ca8",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_JL9islb4uAm6WuVzOzHtyx6D",
+                            "call_id": "call_rN9W4duhkWVD0ycWn3xo03Dl",
+                            "name": "run_tests",
+                        },
+                    ],
+                    "prompt_cache_retention": "24h",
+                    "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
+                    "service_tier": "default",
+                    "usage": {
+                        "input_tokens": 448,
+                        "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                        "output_tokens": 53,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                        "total_tokens": 501,
+                    },
+                },
+                "sequence_number": 10,
+            },
+            event="response.completed",
+        ),
+    ),
+)
+
+
+GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    GPT_6_SOL_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        GPT_6_SOL_TEST_CASE.litellm_request, GPT_6_SOL_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_endpoint="/responses",
+    expected_provider_request={
+        **OPENAI_RESPONSES_AGENT_REQUEST,
+        "model": "gpt-6-sol",
+        "input": [
+            *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
+            {
+                "type": "function_call",
+                "call_id": "call_R9OwdkIw3MYvLUzFLkNUgcof",
+                "name": "search_code",
+                "arguments": '{"query":"retries_remaining"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_9jA0N8trabVxGFS04x6FbMQ4",
+                "name": "run_tests",
+                "arguments": '{"path":"tests/test_retry.py"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_R9OwdkIw3MYvLUzFLkNUgcof",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = '
+                        'retries_remaining(3, attempts)"}]}',
+                    }
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_9jA0N8trabVxGFS04x6FbMQ4",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - '
+                        'assert 4 == 2"}',
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences.",
+                    }
+                ],
+            },
+        ],
+    },
+    mock_provider_response={
+        **OPENAI_RESPONSES_AGENT_RESPONSE,
+        "id": "resp_002863be50c3c198006ad04aa69ba487d0a65f207d45bc6d04",
+        "created_at": 1792035494,
+        "status": "completed",
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035495,
+        "model": "gpt-6-sol",
+        "output": [
+            {
+                "id": "msg_002863be50c3c198006ad04aa739c887d0a2e4214f4a5a76ac",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": "`retries_remaining` adds `attempts` to `limit` instead of subtracting it and "
+                        "clamping the result at zero; `src/worker.py` calls it. `tests/test_retry.py` failed "
+                        "because `retries_remaining(3, 1)` returned 4 instead of 2.",
+                    }
+                ],
+                "phase": "final_answer",
+                "role": "assistant",
+            }
+        ],
+        "prompt_cache_retention": "24h",
+        "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
+        "service_tier": "default",
+        "usage": {
+            "input_tokens": 619,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 66,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 685,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "resp_002863be50c3c198006ad04aa69ba487d0a65f207d45bc6d04",
+        "model": "openai/gpt-6-sol",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "`retries_remaining` adds `attempts` to `limit` instead of subtracting it and "
+                    "clamping the result at zero; `src/worker.py` calls it. `tests/test_retry.py` "
+                    "failed because `retries_remaining(3, 1)` returned 4 instead of 2.",
+                    "role": "assistant",
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 66,
+            "prompt_tokens": 619,
+            "total_tokens": 685,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+        },
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+    },
+)
+
+
+GPT_6_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=GPT_6_SOL_TEST_CASE.litellm_endpoint,
+    litellm_request={**GPT_6_SOL_TEST_CASE.litellm_request, "stream": True, "stream_options": {"include_usage": True}},
+    expected_provider_headers=GPT_6_SOL_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/responses",
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-sol", "stream": True},
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "type": "response.created",
+                "response": {
+                    **OPENAI_RESPONSES_AGENT_RESPONSE,
+                    "id": "resp_007fb930e79ce091006ad04aa52aac87d08c4ac9fdaeedc479",
+                    "created_at": 1792035493,
+                    "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": None,
+                    "model": "gpt-6-sol",
+                    "output": [],
+                    "prompt_cache_retention": "24h",
+                    "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
+                    "service_tier": "auto",
+                    "usage": None,
+                },
+                "sequence_number": 0,
+            },
+            event="response.created",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.in_progress",
+                "response": {
+                    **OPENAI_RESPONSES_AGENT_RESPONSE,
+                    "id": "resp_007fb930e79ce091006ad04aa52aac87d08c4ac9fdaeedc479",
+                    "created_at": 1792035493,
+                    "status": "in_progress",
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": None,
+                    "model": "gpt-6-sol",
+                    "output": [],
+                    "prompt_cache_retention": "24h",
+                    "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
+                    "service_tier": "auto",
+                    "usage": None,
+                },
+                "sequence_number": 1,
+            },
+            event="response.in_progress",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "fc_007fb930e79ce091006ad04aa636fc87d0ad9672a977254ff7",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "arguments": "",
+                    "call_id": "call_ISAnqtLEGvg6OfXg9D16OBHr",
+                    "name": "search_code",
+                },
+                "output_index": 0,
+                "sequence_number": 2,
+            },
+            event="response.output_item.added",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.delta",
+                "delta": '{"query":"retries_remaining"}',
+                "item_id": "fc_007fb930e79ce091006ad04aa636fc87d0ad9672a977254ff7",
+                "obfuscation": "qIu",
+                "output_index": 0,
+                "sequence_number": 3,
+            },
+            event="response.function_call_arguments.delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.done",
+                "arguments": '{"query":"retries_remaining"}',
+                "item_id": "fc_007fb930e79ce091006ad04aa636fc87d0ad9672a977254ff7",
+                "output_index": 0,
+                "sequence_number": 4,
+            },
+            event="response.function_call_arguments.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_007fb930e79ce091006ad04aa636fc87d0ad9672a977254ff7",
+                    "type": "function_call",
+                    "status": "completed",
+                    "arguments": '{"query":"retries_remaining"}',
+                    "call_id": "call_ISAnqtLEGvg6OfXg9D16OBHr",
+                    "name": "search_code",
+                },
+                "output_index": 0,
+                "sequence_number": 5,
+            },
+            event="response.output_item.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "fc_007fb930e79ce091006ad04aa6370c87d088a9a43b41d1d60f",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "arguments": "",
+                    "call_id": "call_h6Z6YQpd9m7NsG5iiF05Wue9",
+                    "name": "run_tests",
+                },
+                "output_index": 1,
+                "sequence_number": 6,
+            },
+            event="response.output_item.added",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.delta",
+                "delta": '{"path":"tests/test_retry.py"}',
+                "item_id": "fc_007fb930e79ce091006ad04aa6370c87d088a9a43b41d1d60f",
+                "obfuscation": "ip",
+                "output_index": 1,
+                "sequence_number": 7,
+            },
+            event="response.function_call_arguments.delta",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.function_call_arguments.done",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "item_id": "fc_007fb930e79ce091006ad04aa6370c87d088a9a43b41d1d60f",
+                "output_index": 1,
+                "sequence_number": 8,
+            },
+            event="response.function_call_arguments.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_007fb930e79ce091006ad04aa6370c87d088a9a43b41d1d60f",
+                    "type": "function_call",
+                    "status": "completed",
+                    "arguments": '{"path":"tests/test_retry.py"}',
+                    "call_id": "call_h6Z6YQpd9m7NsG5iiF05Wue9",
+                    "name": "run_tests",
+                },
+                "output_index": 1,
+                "sequence_number": 9,
+            },
+            event="response.output_item.done",
+        ),
+        SSEFrame(
+            data={
+                "type": "response.completed",
+                "response": {
+                    **OPENAI_RESPONSES_AGENT_RESPONSE,
+                    "id": "resp_007fb930e79ce091006ad04aa52aac87d08c4ac9fdaeedc479",
+                    "created_at": 1792035493,
+                    "status": "completed",
+                    "access_programs": {"cyber": "daybreak_blue"},
+                    "completed_at": 1792035494,
+                    "model": "gpt-6-sol",
+                    "output": [
+                        {
+                            "id": "fc_007fb930e79ce091006ad04aa636fc87d0ad9672a977254ff7",
+                            "type": "function_call",
+                            "status": "completed",
+                            "arguments": '{"query":"retries_remaining"}',
+                            "call_id": "call_ISAnqtLEGvg6OfXg9D16OBHr",
+                            "name": "search_code",
+                        },
+                        {
+                            "id": "fc_007fb930e79ce091006ad04aa6370c87d088a9a43b41d1d60f",
+                            "type": "function_call",
+                            "status": "completed",
+                            "arguments": '{"path":"tests/test_retry.py"}',
+                            "call_id": "call_h6Z6YQpd9m7NsG5iiF05Wue9",
                             "name": "run_tests",
                         },
                     ],
@@ -3555,61 +3842,34 @@ GPT_6_LUNA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 GPT_6_1_SOL_AGENT_TEST_CASE: Final = replace(
     GPT_6_1_SOL_TEST_CASE,
     scenario="agent_tools",
-    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-6.1-sol"},
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
-    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-6.1-sol"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6.1-sol"},
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_01a631a5f160dbc9006ad04ad218dc8194974d60c91352ff3d",
-        "created_at": 1792035538,
+        "id": "resp_0bf6d56fb68ed25e006ad04aa4d03c87d0bd8428d6dc163509",
+        "created_at": 1792035492,
         "status": "completed",
-        "completed_at": 1792035540,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "access_programs": None,
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035494,
         "model": "gpt-6.1-sol",
         "output": [
             {
-                "id": "fc_01a631a5f160dbc9006ad04ad423688194a5ac6f3f3b1d2cda",
+                "id": "fc_0bf6d56fb68ed25e006ad04aa6488087d0a469e018c1b152d6",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"query":"retries_remaining"}',
-                "call_id": "call_dqmp0EOXveDO6b806CZWmBpr",
+                "call_id": "call_oG4NqCvca99WyRvP8UbjOvgO",
                 "name": "search_code",
             },
             {
-                "id": "fc_01a631a5f160dbc9006ad04ad4238081948de286ed3888178c",
+                "id": "fc_0bf6d56fb68ed25e006ad04aa6489087d08af67d6330cba787",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "call_id": "call_FFRmRg2YAqlhfkzgSDVzQq6u",
+                "call_id": "call_TCvHHb4Vi9q7QfL6YkWGcKoT",
                 "name": "run_tests",
             },
         ],
@@ -3626,8 +3886,8 @@ GPT_6_1_SOL_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_01a631a5f160dbc9006ad04ad218dc8194974d60c91352ff3d",
-        "model": "azure/gpt-6.1-sol",
+        "id": "resp_0bf6d56fb68ed25e006ad04aa4d03c87d0bd8428d6dc163509",
+        "model": "openai/gpt-6.1-sol",
         "choices": [
             {
                 "finish_reason": "tool_calls",
@@ -3638,13 +3898,13 @@ GPT_6_1_SOL_AGENT_TEST_CASE: Final = replace(
                         {
                             "index": 0,
                             "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
-                            "id": "call_dqmp0EOXveDO6b806CZWmBpr",
+                            "id": "call_oG4NqCvca99WyRvP8UbjOvgO",
                             "type": "function",
                         },
                         {
                             "index": 1,
                             "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
-                            "id": "call_FFRmRg2YAqlhfkzgSDVzQq6u",
+                            "id": "call_TCvHHb4Vi9q7QfL6YkWGcKoT",
                             "type": "function",
                         },
                     ],
@@ -3659,35 +3919,7 @@ GPT_6_1_SOL_AGENT_TEST_CASE: Final = replace(
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-            },
-        ],
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -3711,7 +3943,7 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     litellm_request=followup_request(
         GPT_6_1_SOL_AGENT_TEST_CASE.litellm_request, GPT_6_1_SOL_AGENT_TEST_CASE.expected_litellm_response
     ),
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={
         **OPENAI_RESPONSES_AGENT_REQUEST,
         "model": "gpt-6.1-sol",
@@ -3719,19 +3951,19 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
             {
                 "type": "function_call",
-                "call_id": "call_dqmp0EOXveDO6b806CZWmBpr",
+                "call_id": "call_oG4NqCvca99WyRvP8UbjOvgO",
                 "name": "search_code",
                 "arguments": '{"query":"retries_remaining"}',
             },
             {
                 "type": "function_call",
-                "call_id": "call_FFRmRg2YAqlhfkzgSDVzQq6u",
+                "call_id": "call_TCvHHb4Vi9q7QfL6YkWGcKoT",
                 "name": "run_tests",
                 "arguments": '{"path":"tests/test_retry.py"}',
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_dqmp0EOXveDO6b806CZWmBpr",
+                "call_id": "call_oG4NqCvca99WyRvP8UbjOvgO",
                 "output": [
                     {
                         "type": "input_text",
@@ -3742,7 +3974,7 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_FFRmRg2YAqlhfkzgSDVzQq6u",
+                "call_id": "call_TCvHHb4Vi9q7QfL6YkWGcKoT",
                 "output": [
                     {
                         "type": "input_text",
@@ -3766,43 +3998,16 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     mock_provider_response={
         **OPENAI_RESPONSES_AGENT_RESPONSE,
-        "id": "resp_04571a38ec90e20b006ad04ad7d5808195955c3e687ba442b1",
-        "created_at": 1792035543,
+        "id": "resp_09b6501350a8bfd9006ad04aa944dc87d089844d553ed99ad5",
+        "created_at": 1792035497,
         "status": "completed",
-        "completed_at": 1792035546,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 256, "check_offset": 0},
-            },
-        ],
+        "access_programs": None,
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035499,
         "model": "gpt-6.1-sol",
         "output": [
             {
-                "id": "msg_04571a38ec90e20b006ad04ad90c7c81959445ad517dcae3d0",
+                "id": "msg_09b6501350a8bfd9006ad04aaa2bf087d08631dc13aa2d46dc",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -3810,10 +4015,10 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": "`retries_remaining` incorrectly adds attempts to the limit instead of subtracting "
-                        "and clamping at zero; a caller was found in `src/worker.py:12`. "
-                        "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned 4 instead of "
-                        "2; no files were changed.",
+                        "text": "`retries_remaining` incorrectly adds attempts to the limit; it should subtract "
+                        "attempts and clamp the result to zero, and a caller was found at `src/worker.py:12`. "
+                        "`tests/test_retry.py::test_retries_remaining` failed because it returned 4 instead "
+                        "of 2; no files were changed.",
                     }
                 ],
                 "phase": "final_answer",
@@ -3826,64 +4031,36 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
         "usage": {
             "input_tokens": 619,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 69,
+            "output_tokens": 68,
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": 688,
+            "total_tokens": 687,
         },
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
-        "id": "resp_04571a38ec90e20b006ad04ad7d5808195955c3e687ba442b1",
-        "model": "azure/gpt-6.1-sol",
+        "id": "resp_09b6501350a8bfd9006ad04aa944dc87d089844d553ed99ad5",
+        "model": "openai/gpt-6.1-sol",
         "choices": [
             {
                 "finish_reason": "stop",
                 "index": 0,
                 "message": {
-                    "content": "`retries_remaining` incorrectly adds attempts to the limit instead of subtracting "
-                    "and clamping at zero; a caller was found in `src/worker.py:12`. "
-                    "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned 4 instead "
-                    "of 2; no files were changed.",
+                    "content": "`retries_remaining` incorrectly adds attempts to the limit; it should subtract "
+                    "attempts and clamp the result to zero, and a caller was found at "
+                    "`src/worker.py:12`. `tests/test_retry.py::test_retries_remaining` failed because "
+                    "it returned 4 instead of 2; no files were changed.",
                     "role": "assistant",
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 69,
+            "completion_tokens": 68,
             "prompt_tokens": 619,
-            "total_tokens": 688,
+            "total_tokens": 687,
             "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                    "jailbreak": {"detected": False, "filtered": False},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 1440, "check_offset": 0},
-            },
-            {
-                "blocked": False,
-                "source_type": "completion",
-                "content_filter_raw": [],
-                "content_filter_results": {
-                    "protected_material_text": {"detected": False, "filtered": False},
-                    "protected_material_code": {"detected": False, "filtered": False},
-                    "hate": {"filtered": False, "severity": "safe"},
-                    "sexual": {"filtered": False, "severity": "safe"},
-                    "violence": {"filtered": False, "severity": "safe"},
-                    "self_harm": {"filtered": False, "severity": "safe"},
-                },
-                "content_filter_offsets": {"start_offset": 0, "end_offset": 256, "check_offset": 0},
-            },
-        ],
+        "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
@@ -3910,7 +4087,7 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "stream_options": {"include_usage": True},
     },
     expected_provider_headers=GPT_6_1_SOL_AGENT_TEST_CASE.expected_provider_headers,
-    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_endpoint="/responses",
     expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6.1-sol", "stream": True},
     mock_provider_frames=(
         SSEFrame(
@@ -3918,11 +4095,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.created",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0d2627310f3a7aa6006ad04ad554d48190be01b0c171757b4f",
-                    "created_at": 1792035541,
+                    "id": "resp_034cb270fc22c3d0006ad04aa69ab887d0a5d949bf2af3dd07",
+                    "created_at": 1792035494,
                     "status": "in_progress",
+                    "access_programs": None,
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6.1-sol",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -3939,11 +4116,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.in_progress",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0d2627310f3a7aa6006ad04ad554d48190be01b0c171757b4f",
-                    "created_at": 1792035541,
+                    "id": "resp_034cb270fc22c3d0006ad04aa69ab887d0a5d949bf2af3dd07",
+                    "created_at": 1792035494,
                     "status": "in_progress",
+                    "access_programs": None,
                     "completed_at": None,
-                    "content_filters": None,
                     "model": "gpt-6.1-sol",
                     "output": [],
                     "prompt_cache_retention": "24h",
@@ -3959,11 +4136,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0d2627310f3a7aa6006ad04ad7806c8190bb0bcc797f55cb25",
+                    "id": "fc_034cb270fc22c3d0006ad04aa8c81487d093c417f3350d851e",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_5EftqTN9zDBp87YG60xu9vKB",
+                    "call_id": "call_dRjirW1hJv1g0OIFLZi21Ssq",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -3975,8 +4152,8 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"query":"retries_remaining"}',
-                "item_id": "fc_0d2627310f3a7aa6006ad04ad7806c8190bb0bcc797f55cb25",
-                "obfuscation": "JvY",
+                "item_id": "fc_034cb270fc22c3d0006ad04aa8c81487d093c417f3350d851e",
+                "obfuscation": "2nb",
                 "output_index": 0,
                 "sequence_number": 3,
             },
@@ -3986,7 +4163,7 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"query":"retries_remaining"}',
-                "item_id": "fc_0d2627310f3a7aa6006ad04ad7806c8190bb0bcc797f55cb25",
+                "item_id": "fc_034cb270fc22c3d0006ad04aa8c81487d093c417f3350d851e",
                 "output_index": 0,
                 "sequence_number": 4,
             },
@@ -3996,11 +4173,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0d2627310f3a7aa6006ad04ad7806c8190bb0bcc797f55cb25",
+                    "id": "fc_034cb270fc22c3d0006ad04aa8c81487d093c417f3350d851e",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"query":"retries_remaining"}',
-                    "call_id": "call_5EftqTN9zDBp87YG60xu9vKB",
+                    "call_id": "call_dRjirW1hJv1g0OIFLZi21Ssq",
                     "name": "search_code",
                 },
                 "output_index": 0,
@@ -4012,11 +4189,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.added",
                 "item": {
-                    "id": "fc_0d2627310f3a7aa6006ad04ad780888190ae854fb4c17b7d5c",
+                    "id": "fc_034cb270fc22c3d0006ad04aa8c82487d0a353e420b4fe4315",
                     "type": "function_call",
                     "status": "in_progress",
                     "arguments": "",
-                    "call_id": "call_cmFZIGDGEFRBReyEVlw7hifi",
+                    "call_id": "call_4Rb17RKwt3mIAswOKn3gi8Im",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -4028,8 +4205,8 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.delta",
                 "delta": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0d2627310f3a7aa6006ad04ad780888190ae854fb4c17b7d5c",
-                "obfuscation": "lL",
+                "item_id": "fc_034cb270fc22c3d0006ad04aa8c82487d0a353e420b4fe4315",
+                "obfuscation": "Cc",
                 "output_index": 1,
                 "sequence_number": 7,
             },
@@ -4039,7 +4216,7 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.function_call_arguments.done",
                 "arguments": '{"path":"tests/test_retry.py"}',
-                "item_id": "fc_0d2627310f3a7aa6006ad04ad780888190ae854fb4c17b7d5c",
+                "item_id": "fc_034cb270fc22c3d0006ad04aa8c82487d0a353e420b4fe4315",
                 "output_index": 1,
                 "sequence_number": 8,
             },
@@ -4049,11 +4226,11 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
             data={
                 "type": "response.output_item.done",
                 "item": {
-                    "id": "fc_0d2627310f3a7aa6006ad04ad780888190ae854fb4c17b7d5c",
+                    "id": "fc_034cb270fc22c3d0006ad04aa8c82487d0a353e420b4fe4315",
                     "type": "function_call",
                     "status": "completed",
                     "arguments": '{"path":"tests/test_retry.py"}',
-                    "call_id": "call_cmFZIGDGEFRBReyEVlw7hifi",
+                    "call_id": "call_4Rb17RKwt3mIAswOKn3gi8Im",
                     "name": "run_tests",
                 },
                 "output_index": 1,
@@ -4066,55 +4243,27 @@ GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
                 "type": "response.completed",
                 "response": {
                     **OPENAI_RESPONSES_AGENT_RESPONSE,
-                    "id": "resp_0d2627310f3a7aa6006ad04ad554d48190be01b0c171757b4f",
-                    "created_at": 1792035541,
+                    "id": "resp_034cb270fc22c3d0006ad04aa69ab887d0a5d949bf2af3dd07",
+                    "created_at": 1792035494,
                     "status": "completed",
-                    "completed_at": 1792035543,
-                    "content_filters": [
-                        {
-                            "blocked": False,
-                            "source_type": "prompt",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                                "jailbreak": {"detected": False, "filtered": False},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
-                        },
-                        {
-                            "blocked": False,
-                            "source_type": "completion",
-                            "content_filter_raw": [],
-                            "content_filter_results": {
-                                "protected_material_text": {"detected": False, "filtered": False},
-                                "protected_material_code": {"detected": False, "filtered": False},
-                                "hate": {"filtered": False, "severity": "safe"},
-                                "sexual": {"filtered": False, "severity": "safe"},
-                                "violence": {"filtered": False, "severity": "safe"},
-                                "self_harm": {"filtered": False, "severity": "safe"},
-                            },
-                            "content_filter_offsets": {"start_offset": 0, "end_offset": 186, "check_offset": 0},
-                        },
-                    ],
+                    "access_programs": None,
+                    "completed_at": 1792035496,
                     "model": "gpt-6.1-sol",
                     "output": [
                         {
-                            "id": "fc_0d2627310f3a7aa6006ad04ad7806c8190bb0bcc797f55cb25",
+                            "id": "fc_034cb270fc22c3d0006ad04aa8c81487d093c417f3350d851e",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"query":"retries_remaining"}',
-                            "call_id": "call_5EftqTN9zDBp87YG60xu9vKB",
+                            "call_id": "call_dRjirW1hJv1g0OIFLZi21Ssq",
                             "name": "search_code",
                         },
                         {
-                            "id": "fc_0d2627310f3a7aa6006ad04ad780888190ae854fb4c17b7d5c",
+                            "id": "fc_034cb270fc22c3d0006ad04aa8c82487d0a353e420b4fe4315",
                             "type": "function_call",
                             "status": "completed",
                             "arguments": '{"path":"tests/test_retry.py"}',
-                            "call_id": "call_cmFZIGDGEFRBReyEVlw7hifi",
+                            "call_id": "call_4Rb17RKwt3mIAswOKn3gi8Im",
                             "name": "run_tests",
                         },
                     ],

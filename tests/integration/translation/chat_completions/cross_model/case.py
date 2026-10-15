@@ -4,7 +4,7 @@ from integration.translation.case import (
     StreamingTranslationTestCase,
     TranslationTestCase,
 )
-from integration.translation.chat_completions.agent import (
+from integration.translation.chat_completions.cross_model import (
     anthropic,
     azure,
     azure_ai,

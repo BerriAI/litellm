@@ -10,11 +10,11 @@ from integration.translation.case import (
     StreamingTranslationTestCase,
     TranslationTestCase,
 )
-from integration.translation.chat_completions.agent.case import (
+from integration.translation.chat_completions.cross_model.case import (
     CASES,
     reference_for,
 )
-from integration.translation.chat_completions.agent.contracts import (
+from integration.translation.chat_completions.cross_model.contracts import (
     Usage,
     assembled_tools,
     assert_final_text,

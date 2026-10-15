@@ -6,7 +6,7 @@ from integration.translation.case import (
     EventStreamFrame,
     StreamingTranslationTestCase,
 )
-from integration.translation.chat_completions.agent.contracts import followup_request
+from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.bedrock_converse import (
     CLAUDE_FABLE_5_1_TEST_CASE,
     CLAUDE_FABLE_5_TEST_CASE,
