@@ -19,14 +19,12 @@ _RESPONSE_ID_KEYED_CALL_TYPES: Final = frozenset(
         CallTypes.acreate_batch.value,
         CallTypes.aretrieve_batch.value,
         CallTypes.acreate_file.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.aanthropic_messages.value,
     }
 )
-"""Batch and file rows key off the object's own id so repeated polls of the same
-object collapse into one row instead of billing it once per poll. Every other call
-type keys off the proxy-generated per-call id: request_id is the LiteLLM_SpendLogs
-primary key and the flush inserts with skip_duplicates, so keying off the provider's
-response id silently drops every row after the first whenever a provider (commonly a
-self-hosted OpenAI-compatible server) reuses completion ids."""
+"""Keep batch/file polls idempotent and Messages response-id lookups compatible.
+Other calls use a per-call id so reused provider ids cannot drop spend rows."""
 
 
 def _standard_logging_id(kwargs: Mapping[str, object]) -> str | None:

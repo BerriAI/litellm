@@ -8,16 +8,16 @@
 import json
 import os
 from collections.abc import Mapping
+from itertools import islice
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__; see ruff-strict.toml
     Final,
     Literal,
     Optional,
 )
 
 import httpx
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException, Timeout
@@ -91,6 +91,10 @@ class AliceVerdict(TypedDict):
     replacements: ReadOnly[NotRequired["tuple[AliceReplacement, ...]"]]
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class AliceGuardrailMissingSecrets(Exception):
     """Raised when the Alice API key is not configured."""
 
@@ -143,7 +147,9 @@ class AliceGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        **kwargs: Any,  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+        **kwargs: Unpack[  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+            _CustomGuardrailOptions
+        ],
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
@@ -160,7 +166,7 @@ class AliceGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [  # mutable-ok: CustomGuardrail.__init__ requires a list here
+            kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
@@ -212,15 +218,16 @@ class AliceGuardrail(CustomGuardrail):
     ) -> AliceVerdict:
         response: Final = await self.async_handler.post(
             url=self.api_base,
-            json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
+            json={
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
                 "request_data": _json_safe(request_data, strip_keys=_CREDENTIAL_KEYS_TO_STRIP),
             },
-            headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
+            headers={
                 "Content-Type": "application/json",
                 "af-api-key": self.alice_api_key,
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
         body = response.json()
@@ -269,8 +276,8 @@ class AliceGuardrail(CustomGuardrail):
         rather than being silently skipped, so content Alice meant to replace can never reach the
         model unmasked alongside content that was replaced.
         """
-        texts: Final = inputs.get("texts") or []  # mutable-ok: empty-list fallback, replaced wholesale below
-        replacements: Final = verdict.get("replacements") or []  # mutable-ok: empty-list fallback for iteration only
+        texts: Final = inputs.get("texts") or []
+        replacements: Final = verdict.get("replacements") or []
 
         if not replacements:
             raise self._mask_rejected(verdict)
@@ -280,7 +287,7 @@ class AliceGuardrail(CustomGuardrail):
             text = replacement.get("text")
             if not (isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts)):
                 raise self._mask_rejected(verdict)
-            texts[index] = text  # mutable-ok: item assignment into the local working copy above
+            texts[index] = text
 
         inputs["texts"] = texts
 
@@ -341,20 +348,17 @@ def _json_safe(
     if depth >= _MAX_DEPTH or id(value) in seen:
         return None
 
-    nested: Final = seen | {id(value)}  # mutable-ok: one-shot set literal, unioned into a frozenset immediately
+    nested: Final = seen | frozenset((id(value),))
 
     if isinstance(value, dict):
-        out: dict[str, object] = {}  # mutable-ok: bounded accumulator local to this call, never escapes as-is
-        for key, item in list(value.items())[:_MAX_ITEMS]:  # mutable-ok: list() only to slice an unordered view
-            if isinstance(key, str) and key not in strip_keys:
-                out[key] = _json_safe(item, depth + 1, nested, strip_keys)
-        return out
+        return {
+            key: _json_safe(item, depth + 1, nested, strip_keys)
+            for key, item in islice(value.items(), _MAX_ITEMS)
+            if isinstance(key, str) and key not in strip_keys
+        }
 
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
-            _json_safe(item, depth + 1, nested, strip_keys)
-            for item in list(value)[:_MAX_ITEMS]  # mutable-ok: list() only to slice an unordered view
-        ]
+        return [_json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)]
 
     dump: Final = getattr(value, "model_dump", None)
     if callable(dump):

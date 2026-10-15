@@ -15,7 +15,6 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
 from litellm.litellm_core_utils.spend_log_request_id import get_spend_logs_id
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardLoggingPayload
@@ -29,8 +28,7 @@ else:
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: str | None = None) -> None:
         from litellm.proxy.proxy_server import premium_user
-
-        super().__init__(bucket_name=bucket_name)
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
         self.flush_interval = int(os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS))
@@ -39,6 +37,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         )
         self.flush_lock = asyncio.Lock()
         super().__init__(
+            bucket_name=bucket_name,
             flush_lock=self.flush_lock,
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
@@ -55,6 +54,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.proxy.proxy_server import premium_user
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         if premium_user is not True:
             raise ValueError(

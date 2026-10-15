@@ -2,7 +2,8 @@
 
 Each test sends a NATIVE provider request through the proxy's passthrough route
 and verifies the proxy still logged a costed SpendLogs row
-(call_type="pass_through_endpoint"), correlated by the x-litellm-call-id header.
+(call_type="pass_through_endpoint"), correlated by the id the caller was served:
+the x-litellm-call-id header on gemini, the `msg_...` message id on anthropic.
 
 Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
@@ -11,12 +12,15 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 2xx, a missing or zero-cost SpendLogs row fails too.
 """
 
+from typing import Final
+
 import pytest
 
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import StreamingResponse, require_successful_call, unwrap
+from e2e_http import require_successful_call, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow
+from models import ChatResponse, KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
     GeminiFunctionDeclaration,
@@ -24,27 +28,30 @@ from passthrough_client import (
     JsonSchema,
     JsonSchemaProperty,
     PassthroughClient,
+    anthropic_message_id,
     completed_responses_object,
 )
 
+GEMINI_MODEL: Final = "gemini-2.5-flash"
+ANTHROPIC_PASSTHROUGH_MODEL: Final = "claude-haiku-4-5"
 EMBEDDING_MODEL = "text-embedding-3-small"
 REALTIME_MODEL = "gpt-realtime-2"
 
 pytestmark = pytest.mark.e2e
 
 
-def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) -> SpendLogRow:
+def _fetch_cost_breakdown(client: PassthroughClient, request_id: str | None) -> SpendLogRow:
     """The passthrough call's logged row, polled until it carries a cost.
 
     Asserts (not skips) that a 2xx passthrough call produced a costed row - the
     whole point of passthrough spend tracking.
     """
-    assert result.call_id, "passthrough response had no x-litellm-call-id header"
+    assert request_id, "passthrough response carried no id to correlate its spend row by"
     rows = client.proxy.poll_logs_for_request_id(
-        result.call_id,
+        request_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )
-    assert rows, f"no SpendLogs row for passthrough call_id {result.call_id}"
+    assert rows, f"no SpendLogs row for passthrough request_id {request_id}"
     row = rows[0]
     assert row.call_type == "pass_through_endpoint"
     assert (row.spend or 0) > 0, f"passthrough call was not costed: {row}"
@@ -55,22 +62,40 @@ def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) 
 # ---- Gemini passthrough ------------------------------------------------
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.GEMINI,),
+        models=(GEMINI_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_gemini_passthrough_nonstreaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     tag = f"e2e-passthrough-{unique_marker()}"
     result = client.gemini_generate(
-        scoped_key, "gemini-2.5-flash", "Say hello in one word", tags=[tag, "gemini"]
+        scoped_key, GEMINI_MODEL, "Say hello in one word", tags=[tag, "gemini"]
     )
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
     assert "gemini" in (row.model or "")
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
 
 
 @pytest.mark.skip(reason="stage red: product gap, native passthrough returns no x-litellm-response-cost or x-ratelimit-* headers")
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.GEMINI,),
+        models=(GEMINI_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_route(
     client: PassthroughClient, scoped_key: str
 ) -> None:
@@ -80,7 +105,7 @@ def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_rout
     today, which makes native traffic invisible to the same tooling.
     """
     result = client.gemini_generate(
-        scoped_key, "gemini-2.5-flash", f"Say hello in one word. {unique_marker()}"
+        scoped_key, GEMINI_MODEL, f"Say hello in one word. {unique_marker()}"
     )
     require_successful_call(result)
 
@@ -100,23 +125,42 @@ def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_rout
     )
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.GEMINI,),
+        models=(GEMINI_MODEL,),
+        mode=Mode.STREAM,
+    )
+)
 def test_gemini_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    result = client.gemini_stream(scoped_key, "gemini-2.5-flash", "Count to five")
+    result = client.gemini_stream(scoped_key, GEMINI_MODEL, "Count to five")
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.GEMINI,),
+        models=(GEMINI_MODEL,),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_gemini_passthrough_tool_call_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     result = client.gemini_generate(
         scoped_key,
-        "gemini-2.5-flash",
+        GEMINI_MODEL,
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
             GeminiTool(
@@ -137,43 +181,71 @@ def test_gemini_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "functionCall" in result.body, "gemini did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
 # ---- Anthropic passthrough ---------------------------------------------
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.ANTHROPIC,),
+        models=(ANTHROPIC_PASSTHROUGH_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_anthropic_passthrough_nonstreaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
+    result = client.anthropic_message(scoped_key, ANTHROPIC_PASSTHROUGH_MODEL, "Say hello")
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
     assert "claude" in (row.model or "")
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.ANTHROPIC,),
+        models=(ANTHROPIC_PASSTHROUGH_MODEL,),
+        mode=Mode.STREAM,
+    )
+)
 def test_anthropic_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     result = client.anthropic_message(
-        scoped_key, "claude-haiku-4-5", "Count to five", stream=True
+        scoped_key, ANTHROPIC_PASSTHROUGH_MODEL, "Count to five", stream=True
     )
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.ANTHROPIC,),
+        models=(ANTHROPIC_PASSTHROUGH_MODEL,),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_anthropic_passthrough_tool_call_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     result = client.anthropic_message(
         scoped_key,
-        "claude-haiku-4-5",
+        ANTHROPIC_PASSTHROUGH_MODEL,
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
             AnthropicTool(
@@ -190,7 +262,7 @@ def test_anthropic_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "tool_use" in result.body, "anthropic did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
@@ -203,13 +275,21 @@ class TestPassthroughModelAllowlist:
     """
 
     @pytest.mark.covers("other.auth.passthrough.model_allowlist_enforced")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            route=Route.PASSTHROUGH,
+            providers=(),
+            models=(),
+        )
+    )
     def test_passthrough_denies_model_outside_key_allowlist(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        key = client.proxy.generate_key(KeyGenerateBody(models=["gemini-2.5-flash"]))
+        key = client.proxy.generate_key(KeyGenerateBody(models=[GEMINI_MODEL]))
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        result = client.anthropic_message(key, "claude-haiku-4-5", f"say hi {unique_marker()}")
+        result = client.anthropic_message(key, ANTHROPIC_PASSTHROUGH_MODEL, f"say hi {unique_marker()}")
         assert result.status_code == 403, (
             "a key restricted to gemini-2.5-flash must be denied a claude passthrough call, "
             f"got {result.status_code}: {result.body[:300]}"
@@ -228,6 +308,14 @@ class TestOpenAIPassthroughPrefix:
     """
 
     @pytest.mark.covers("llm.files.openai.passthrough.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(),
+        )
+    )
     def test_passthrough_prefix_uploads_a_file_to_openai(
         self, client: PassthroughClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -250,6 +338,14 @@ class TestOpenAIPassthroughPrefix:
         assert uploaded.bytes == len(content)
 
     @pytest.mark.covers("llm.batches.openai.passthrough.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(),
+        )
+    )
     def test_passthrough_prefix_lists_batches_from_openai(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
@@ -272,6 +368,15 @@ class TestOpenAIPassthroughSpend:
     """
 
     @pytest.mark.covers("llm.responses.openai.passthrough.stream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_streamed_responses_call_logs_its_cost(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
@@ -316,6 +421,15 @@ class TestOpenAIPassthroughSpend:
         )
 
     @pytest.mark.covers("llm.embeddings.openai.passthrough.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(EMBEDDING_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_embeddings_call_logs_its_cost(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
@@ -342,6 +456,53 @@ class TestOpenAIPassthroughSpend:
         )
 
 
+class TestOpenAIProviderPrefixChat:
+    """OpenAI-format chat through the raw `/openai/{endpoint}` passthrough (LIT-4752).
+
+    The body goes to OpenAI untranslated with the proxy's own OPENAI_API_KEY swapped
+    in, so the customer gets OpenAI's real completion back, and the gateway must
+    still write a costed pass_through_endpoint row for it.
+    """
+
+    @pytest.mark.covers("llm.chat_completions.openai.passthrough.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_openai_prefix_chat_returns_completion_and_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        result = client.openai_chat(scoped_key, CHEAP_OPENAI_MODEL, f"Say hi in one word. {unique_marker()}")
+        require_successful_call(result)
+
+        completion = ChatResponse.model_validate_json(result.body)
+        assert completion.id, f"/openai/v1/chat/completions relayed no completion id: {result.body[:300]}"
+        content = (
+            completion.choices[0].message.content
+            if completion.choices and completion.choices[0].message
+            else None
+        )
+        assert content and content.strip(), (
+            f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
+        )
+        assert completion.usage is not None, f"the completion carried no usage to price from: {completion}"
+
+        row = _fetch_cost_breakdown(client, completion.id)
+        assert row.prompt_tokens == completion.usage.prompt_tokens, (
+            f"logged {row.prompt_tokens} prompt tokens, the completion the customer read "
+            f"reported {completion.usage.prompt_tokens}"
+        )
+        assert row.completion_tokens == completion.usage.completion_tokens, (
+            f"logged {row.completion_tokens} completion tokens, the completion the customer read "
+            f"reported {completion.usage.completion_tokens}"
+        )
+
+
 class TestOpenAIPassthroughWebsocket:
     """The OpenAI passthrough prefixes must answer a websocket upgrade, not only a POST.
 
@@ -353,6 +514,15 @@ class TestOpenAIPassthroughWebsocket:
     """
 
     @pytest.mark.covers("llm.realtime.openai.passthrough.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(REALTIME_MODEL,),
+            mode=Mode.WEBSOCKET,
+        )
+    )
     def test_realtime_upgrade_reaches_openai_through_the_passthrough_prefix(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:
@@ -374,6 +544,15 @@ class TestOpenAIPassthroughWebsocket:
         )
 
     @pytest.mark.covers("llm.responses.openai.passthrough_websocket.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.OPENAI,),
+            models=(),
+            mode=Mode.WEBSOCKET,
+        )
+    )
     def test_responses_upgrade_is_accepted_on_the_openai_prefix(
         self, client: PassthroughClient, scoped_key: str
     ) -> None:

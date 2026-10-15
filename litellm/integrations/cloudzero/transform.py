@@ -95,7 +95,7 @@ class CBFTransformer:
         if len(cbf_data) > 0:
             console.print(f"[green]✓ Successfully transformed {len(cbf_data):,} records[/green]")
 
-        return pl.DataFrame(cbf_data)
+        return pl.DataFrame(cbf_data, infer_schema_length=None)
 
     def _create_cbf_record(self, row: dict[str, object]) -> CBFRecord:
         """Create a single CBF record from LiteLLM daily spend row."""

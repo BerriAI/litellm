@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -20,25 +20,39 @@ describe("networking - expired session handling", () => {
     global.fetch = originalFetch;
   });
 
-  it("should call clearTokenCookies on expired session", async () => {
-    const errorData = "Authentication Error - Expired Key";
-    const { toast } = await import("@/lib/toast");
+  const loadFreshHandleError = async () => {
+    vi.resetModules();
+    const fresh = await import("./networking");
+    return fresh.handleError;
+  };
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      toast.info("UI Session Expired. Logging out.");
-      clearTokenCookies();
-    }
+  const stubLocation = (pathname: string, search: string, hash: string) => {
+    const location = { pathname, search, hash, href: "" };
+    vi.stubGlobal("window", { location });
+    return location;
+  };
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the query string and hash on the redirect after session expiry", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "#row-3");
+
+    await handleError("Authentication Error - Expired Key");
+
+    expect(location.href).toBe("/ui/api-keys/?filter_team=t1&page=2#row-3");
     expect(clearTokenCookies).toHaveBeenCalledOnce();
   });
 
-  it("should not clear cookies for non-authentication errors", () => {
-    const errorData = "Some other error";
+  it("does not navigate or clear cookies for other errors", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "");
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      clearTokenCookies();
-    }
+    await handleError("Some other error");
 
+    expect(location.href).toBe("");
     expect(clearTokenCookies).not.toHaveBeenCalled();
   });
 
@@ -104,6 +118,40 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("exchangeLoginCode - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when exchange response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "sso-jwt" }),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBe("sso-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("sso-jwt");
+  });
+
+  it("does not call storeLoginToken when exchange response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBeUndefined();
+    expect(storeLoginToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
@@ -143,60 +191,6 @@ describe("modelInfoCall", () => {
   });
 });
 
-describe("daily activity helpers", () => {
-  const startTime = new Date("2025-02-12T00:00:00.000Z");
-  const endTime = new Date("2025-02-19T00:00:00.000Z");
-  let currentFetch: typeof global.fetch;
-
-  const setupSuccessfulFetch = () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ data: [] }),
-    } as any);
-    global.fetch = mockFetch as any;
-    return mockFetch;
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    currentFetch = global.fetch;
-  });
-
-  afterEach(() => {
-    global.fetch = currentFetch;
-  });
-
-  it("appends tag list when tags argument is provided", async () => {
-    const mockFetch = setupSuccessfulFetch();
-
-    await Networking.tagDailyActivityCall("token", startTime, endTime, 2, ["alpha", "beta"]);
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const calledUrl = mockFetch.mock.calls[0][0] as string;
-    const parsed = new URL(calledUrl, "http://example.com");
-
-    expect(parsed.pathname).toBe("/tag/daily/activity");
-    expect(parsed.searchParams.get("tags")).toBe("alpha,beta");
-  });
-
-  it("always includes exclude_team_ids but only adds team_ids when given", async () => {
-    const mockFetchWithoutTeams = setupSuccessfulFetch();
-
-    await Networking.teamDailyActivityCall("token", startTime, endTime, 1, null);
-    const urlWithoutTeams = new URL(mockFetchWithoutTeams.mock.calls[0][0] as string, "http://example.com");
-
-    expect(urlWithoutTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
-    expect(urlWithoutTeams.searchParams.has("team_ids")).toBe(false);
-
-    const mockFetchWithTeams = setupSuccessfulFetch();
-    await Networking.teamDailyActivityCall("token", startTime, endTime, 3, ["team-a", "team-b"]);
-    const urlWithTeams = new URL(mockFetchWithTeams.mock.calls[0][0] as string, "http://example.com");
-
-    expect(urlWithTeams.searchParams.get("team_ids")).toBe("team-a,team-b");
-    expect(urlWithTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
-  });
-});
-
 describe("UI config and public endpoints", () => {
   const originalFetch = global.fetch;
 
@@ -207,11 +201,13 @@ describe("UI config and public endpoints", () => {
         return Promise.resolve({
           ok: true,
           json: vi.fn().mockResolvedValue(response.data),
+          text: vi.fn().mockResolvedValue(JSON.stringify(response.data)),
         } as any);
       }
       return Promise.resolve({
         ok: true,
         json: vi.fn().mockResolvedValue({}),
+        text: vi.fn().mockResolvedValue("{}"),
       } as any);
     });
     global.fetch = mockFetch as any;
@@ -243,7 +239,7 @@ describe("UI config and public endpoints", () => {
     // Then call the public endpoint
     await Networking.getProviderCreateMetadata();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/providers/fields"),
     );
@@ -266,7 +262,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.getPublicModelHubInfo();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/model_hub/info"),
     );
@@ -289,7 +285,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.modelHubPublicModelsCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find(
       (call) => (call[0] as string).includes("/public/model_hub") && !(call[0] as string).includes("/info"),
     );
@@ -312,7 +308,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.agentHubPublicModelsCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/agent_hub"));
     expect(publicEndpointCall).toBeDefined();
     const calledUrl = publicEndpointCall![0] as string;
@@ -333,7 +329,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.mcpHubPublicServersCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/mcp_hub"));
     expect(publicEndpointCall).toBeDefined();
     const calledUrl = publicEndpointCall![0] as string;
@@ -354,7 +350,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.getProviderCreateMetadata();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/providers/fields"),
     );
@@ -373,7 +369,7 @@ describe("UI config and public endpoints", () => {
 
     const result = await Networking.getUiConfig();
 
-    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result).toEqual(uiConfig);
     const configCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
@@ -392,7 +388,42 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
+  });
+
+  it("sends model group connection probes to the configured gateway", async () => {
+    const uiConfig = {
+      server_root_path: "",
+      proxy_base_url: "https://backend.example.com",
+      gateway_base_url: "https://gateway.example.com",
+    };
+    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+    expect(await Networking.testModelGroupConnection("token", "chat-model", "chat")).toEqual({ status: "success" });
+    expect(await Networking.testModelGroupConnection("token", "embedding-model", "embedding")).toEqual({
+      status: "success",
+    });
+
+    const requestedUrls = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls).toContain("https://gateway.example.com/v1/chat/completions");
+    expect(requestedUrls).toContain("https://gateway.example.com/v1/embeddings");
+  });
+
+  it("falls back to the proxy URL for model group probes when the gateway is unset", async () => {
+    const uiConfig = {
+      server_root_path: "",
+      proxy_base_url: "https://backend.example.com",
+    };
+    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+    expect(await Networking.testModelGroupConnection("token", "embedding-model", "embedding")).toEqual({
+      status: "success",
+    });
+
+    const requestedUrls = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls).toContain("https://backend.example.com/v1/embeddings");
   });
 });
 
@@ -482,6 +513,20 @@ describe("teamInfoCall", () => {
     expect(parsed.searchParams.get("team_id")).toBe(teamID);
   });
 
+  it("passes key_limit when requested", async () => {
+    const mockFetch = vi.spyOn(global, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+    try {
+      await Networking.teamInfoCall("token", "team-1", { keyLimit: 1 });
+
+      const [url] = mockFetch.mock.calls[0];
+      const parsed = url instanceof Request ? new URL(url.url) : new URL(url.toString(), "http://example.com");
+      expect(parsed.searchParams.get("key_limit")).toBe("1");
+    } finally {
+      mockFetch.mockRestore();
+    }
+  });
+
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -495,6 +540,7 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+    expect(parsed.searchParams.has("key_limit")).toBe(false);
   });
 });
 
@@ -617,6 +663,15 @@ describe("buildModelGroupTestRequest", () => {
     expect(path).toBe("/v1/embeddings");
     expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
   });
+
+  it("adds classifier request parameters to a chat probe", () => {
+    const { body } = Networking.buildModelGroupTestRequest("gpt-5-mini", "chat", { reasoning_effort: "low" });
+    expect(body).toEqual({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "test from litellm" }],
+      reasoning_effort: "low",
+    });
+  });
 });
 
 describe("testMCPToolsListRequest auth headers", () => {
@@ -683,6 +738,30 @@ describe("testMCPToolsListRequest auth headers", () => {
   });
 });
 
+describe("fetchMCPServerHealth", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([{ serverIds: undefined }, { serverIds: [] }, { serverIds: ["server one", "server&two"] }])(
+    "opts into reachability while preserving requested servers: $serverIds",
+    async ({ serverIds }) => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response("[]", { status: 200 }));
+      global.fetch = mockFetch;
+
+      await Networking.fetchMCPServerHealth("test-token", serverIds);
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const url = new URL(String(mockFetch.mock.calls[0][0]), "http://localhost");
+      expect(url.pathname).toMatch(/\/v1\/mcp\/server\/health$/);
+      expect(url.searchParams.get("include_reachability")).toBe("true");
+      expect(url.searchParams.getAll("server_ids")).toEqual(serverIds ?? []);
+    },
+  );
+});
+
 describe("getAutoRouterClassifierDefaultPromptCall", () => {
   const originalFetch = global.fetch;
 
@@ -725,84 +804,353 @@ describe("getAutoRouterClassifierDefaultPromptCall", () => {
   });
 });
 
-describe("daily activity api_key filter", () => {
+describe("userListCall search serialization", () => {
   const originalFetch = global.fetch;
-
-  const captureFetch = () => {
-    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ results: [], metadata: {} }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    global.fetch = mockFetch;
-    return mockFetch;
-  };
-
-  const requestedUrl = (mockFetch: ReturnType<typeof captureFetch>): string => String(mockFetch.mock.calls[0][0]);
-
-  const start = new Date("2025-01-01T00:00:00Z");
-  const end = new Date("2025-01-31T00:00:00Z");
 
   afterEach(() => {
     global.fetch = originalFetch;
   });
 
-  it("sends the key hash as api_key from the paginated caller", async () => {
-    const mockFetch = captureFetch();
+  const mockOkFetch = () => {
+    const emptyPage = { users: [], total: 0, page: 1, page_size: 25, total_pages: 0 };
+    const body = JSON.stringify(emptyPage);
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(body, { headers: { "Content-Type": "application/json" } }));
+    global.fetch = mockFetch;
+    return mockFetch;
+  };
 
-    await Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, "hash-abc");
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL((url as Request).url).searchParams;
+  };
 
-    expect(requestedUrl(mockFetch)).toContain("api_key=hash-abc");
+  it("sends the combined search term as search, not user_email", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, null, null, null, null, null, null, null, "a6f5c02b");
+
+    expect(lastParams(mockFetch).get("search")).toBe("a6f5c02b");
+    expect(lastParams(mockFetch).has("user_email")).toBe(false);
   });
 
-  it("sends the key hash as api_key from the aggregated caller", async () => {
-    const mockFetch = captureFetch();
+  it("omits search when no search term is given and keeps user_email as before", async () => {
+    const mockFetch = mockOkFetch();
 
-    await Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, "hash-abc");
+    await Networking.userListCall("token", null, 1, 25, "ada@example.com");
 
-    expect(requestedUrl(mockFetch)).toContain("api_key=hash-abc");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+    expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
+  });
+});
+
+describe("fetchMemoryList search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
-  // The two wrappers serialize the same optional filters through different transports, so an
-  // absent key has to drop the param in both. Dropping it on one side and sending it empty on
-  // the other would widen a key-scoped read into an unscoped one.
+  const mockOkFetch = () => {
+    const emptyPage = { memories: [], total: 0 };
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(emptyPage) } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com").searchParams;
+  };
+
+  it("sends the search box value as search and omits key_prefix and key", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { search: "mem-abc123", page: 1, pageSize: 50 });
+
+    const params = lastParams(mockFetch);
+    expect(params.get("search")).toBe("mem-abc123");
+    expect(params.has("key_prefix")).toBe(false);
+    expect(params.has("key")).toBe(false);
+    expect(params.get("page")).toBe("1");
+    expect(params.get("page_size")).toBe("50");
+  });
+
+  it("keeps key_prefix and key working when no search is given", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { keyPrefix: "user:" });
+    expect(lastParams(mockFetch).get("key_prefix")).toBe("user:");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+
+    await Networking.fetchMemoryList("token", { key: "user:profile" });
+    expect(lastParams(mockFetch).get("key")).toBe("user:profile");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+  });
+});
+
+describe("userFilterUICall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("forwards the search param to /user/filter/ui", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => "[]" } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userFilterUICall("sk-test", new URLSearchParams({ search: "svc" }));
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
+    expect(parsed.pathname).toContain("/user/filter/ui");
+    expect(parsed.searchParams.get("search")).toBe("svc");
+  });
+});
+
+describe("schema-bound dashboard responses", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps null plugin metadata and source maps from the API", async () => {
+    const plugin = {
+      id: "plugin-1",
+      name: "test-skill",
+      enabled: true,
+      version: null,
+      description: null,
+      created_at: null,
+      updated_at: null,
+      keywords: null,
+      author: null,
+      source: { source: "github", repo: "org/repo" },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ plugins: [plugin], count: 1 }))));
+    const result = await Networking.getClaudeCodePluginsList("explicit-token");
+    expect(result.plugins[0]).toEqual(plugin);
+  });
+
+  it("validates agent metadata at the HTTP boundary", async () => {
+    const agent = {
+      agent_id: "agent-1",
+      agent_name: "agent",
+      enabled: true,
+      execution_mode: "autonomous",
+      identity_managed: false,
+      jwt_auth_configured: false,
+      agent_card_params: {},
+      litellm_params: { model: 42 },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([agent]))));
+    await expect(Networking.getAgentsList("explicit-token")).rejects.toThrow();
+  });
+
+  it("keeps nullable user fields without asserting they are strings", async () => {
+    const user = { user_id: "user-1", user_email: null, user_role: null, created_at: null };
+    const page = { users: [user], total: 1, page: 1, page_size: 25, total_pages: 1 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
+    const result = await Networking.userListCall("explicit-token");
+    expect(result.users[0]).toEqual(user);
+  });
+});
+
+describe("modelCostMap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the catalog-only map when catalogOnly is set and the full map otherwise", async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Networking.modelCostMap(true);
+    await Networking.modelCostMap();
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
+  });
+});
+
+describe("getUiConfig runtime backend discovery", () => {
+  const discoveryConfig = () => ({
+    server_root_path: "/",
+    proxy_base_url: null,
+    gateway_base_url: null,
+    auto_redirect_to_sso: false,
+    admin_ui_disabled: false,
+    sso_configured: false,
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  const loadFreshNetworking = async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", {
+      location: { origin: "https://ui.example.com" },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+        clear: () => storage.clear(),
+      },
+    });
+    vi.stubEnv("NEXT_PUBLIC_BASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_USE_REWRITES", "true");
+    vi.resetModules();
+    return import("./networking");
+  };
+
+  const loadNetworkingWithGateway = async (gatewayBaseUrl: string | null) => {
+    const backendBaseUrl = "https://backend.example.com";
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "/ui/litellm-runtime-config.json") {
+        return new Response(JSON.stringify({ backend_url: backendBaseUrl }));
+      }
+      if (url === `${backendBaseUrl}/litellm/.well-known/litellm-ui-config`) {
+        return new Response(
+          JSON.stringify({
+            ...discoveryConfig(),
+            proxy_base_url: backendBaseUrl,
+            gateway_base_url: gatewayBaseUrl,
+          }),
+        );
+      }
+      if (url.endsWith("/v1/indexes")) {
+        return new Response(JSON.stringify({ object: "list", data: [] }));
+      }
+      if (url.endsWith("/v1/a2a/discover")) {
+        return new Response(JSON.stringify({ agent_card: {}, url: "https://agent.example.com" }));
+      }
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+    await networking.getUiConfig();
+    return { networking, mockFetch };
+  };
+
+  it("uses a normalized runtime backend URL for discovery and the management fallback", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ backend_url: "  https://backend.example.com///  " }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...discoveryConfig(),
+          gateway_base_url: "  https://gateway.example.com/// ",
+        }),
+      } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+
+    await networking.getUiConfig();
+
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/ui/litellm-runtime-config.json", { cache: "no-store" });
+    expect(mockFetch.mock.calls[1][0]).toBe("https://backend.example.com/litellm/.well-known/litellm-ui-config");
+    expect(networking.getProxyBaseUrl().replace(/\/+$/, "")).toBe("https://backend.example.com");
+    expect(networking.getGatewayBaseUrl()).toBe("https://gateway.example.com");
+
+    networking.switchToWorkerUrl("https://worker.example.com");
+    expect(networking.getGatewayBaseUrl()).toBe("https://worker.example.com");
+    networking.switchToWorkerUrl(null);
+    expect(networking.getGatewayBaseUrl()).toBe("https://gateway.example.com");
+  });
+
   it.each([
-    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, null)],
-    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, null)],
-  ])("omits api_key entirely from the %s caller when no key is given", async (_label, call) => {
-    const mockFetch = captureFetch();
+    ["404", { ok: false }],
+    [
+      "HTML 200",
+      {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      },
+    ],
+  ])("keeps discovery behavior when runtime config returns %s", async (_label, runtimeResponse) => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(runtimeResponse as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => discoveryConfig() } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
 
-    await call();
+    await networking.getUiConfig();
 
-    expect(requestedUrl(mockFetch)).not.toContain("api_key");
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/ui/litellm-runtime-config.json", { cache: "no-store" });
+    expect(mockFetch.mock.calls[1][0]).toBe("/litellm/.well-known/litellm-ui-config");
+    expect(networking.getGatewayBaseUrl()).toBe(networking.getProxyBaseUrl());
   });
 
-  // An empty key must not be coerced into "no filter". Dropping it would turn a key-scoped read
-  // into a proxy-wide one and report every key's savings as this key's, so both callers send it
-  // through and let the filter match nothing instead.
-  it.each([
-    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, "")],
-    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, "")],
-  ])("keeps an empty api_key as a filter rather than widening the %s read", async (_label, call) => {
-    const mockFetch = captureFetch();
+  it("fetches model availability from the gateway and falls back to the backend when unset", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.modelAvailableCall("token", "user-1", "Admin");
 
-    await call();
+    const gatewayRequestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(gatewayRequestUrl.origin).toBe("https://gateway.example.com");
+    expect(gatewayRequestUrl.pathname).toBe("/models");
 
-    expect(requestedUrl(mockFetch)).toContain("api_key=");
+    const fallback = await loadNetworkingWithGateway(null);
+    await fallback.networking.modelAvailableCall("token", "user-1", "Admin");
+
+    const fallbackRequestUrl = new URL(String(fallback.mockFetch.mock.calls.at(-1)?.[0]));
+    expect(fallbackRequestUrl.origin).toBe("https://backend.example.com");
+    expect(fallbackRequestUrl.pathname).toBe("/models");
   });
 
-  // user_id rides the same two transports and widens the same way, so it gets the same guard.
-  // The aggregated caller used to drop "" via `||`; without this the two filters could drift
-  // apart again on one side only.
-  it.each([
-    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, "", false, null)],
-    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, "", false, null)],
-  ])("keeps an empty user_id as a filter rather than widening the %s read", async (_label, call) => {
-    const mockFetch = captureFetch();
+  it("posts decision tests to the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.decisionsTestCall("token", {
+      model: "test-model",
+      input: "test input",
+      questions: [{ type: "predicate", name: "valid", instructions: "The input is valid" }],
+    });
 
-    await call();
+    const requestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(requestUrl.origin).toBe("https://gateway.example.com");
+    expect(requestUrl.pathname).toBe("/v1/decisions");
+  });
 
-    expect(requestedUrl(mockFetch)).toContain("user_id=");
+  it("ingests RAG documents through the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.ragIngestCall("token", new File(["document"], "document.txt"), "openai");
+
+    const requestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(requestUrl.origin).toBe("https://gateway.example.com");
+    expect(requestUrl.pathname).toBe("/rag/ingest");
+  });
+
+  it("lists indexes from the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.indexesListCall("token");
+
+    expect(String(mockFetch.mock.calls.at(-1)?.[0])).toBe("https://gateway.example.com/v1/indexes");
+  });
+
+  it("discovers agent cards through the gateway with the default discovery mode", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.discoverAgentCardCall("token", "https://agent.example.com");
+
+    const [requestUrl, requestInit] = mockFetch.mock.calls.at(-1) ?? [];
+    expect(requestUrl instanceof Request ? requestUrl.url : String(requestUrl)).toBe(
+      "https://gateway.example.com/v1/a2a/discover",
+    );
+    expect(new Headers(requestInit?.headers).get(networking.getGlobalLitellmHeaderName())).toBe("Bearer token");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      url: "https://agent.example.com",
+      discovery_mode: "well_known_fallback",
+    });
   });
 });

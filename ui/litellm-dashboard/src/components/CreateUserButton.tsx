@@ -59,7 +59,7 @@ interface UISettings {
 interface CreateUserFormValues {
   user_email?: string;
   user_role: string;
-  team_id?: string;
+  team_id?: string | null;
   organization_ids?: string[];
   metadata?: string;
   send_invite_email: boolean;

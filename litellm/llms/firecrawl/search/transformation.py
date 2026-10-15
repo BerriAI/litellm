@@ -4,9 +4,11 @@ Calls Firecrawl's /search endpoint to search the web.
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -15,6 +17,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _FirecrawlSearchRequestRequired(TypedDict):
@@ -170,7 +175,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
@@ -179,44 +184,54 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
-            for result in data:
+            for raw_result in _JSON_VALUES.validate_python(data):
+                result = _JSON_OBJECT.validate_python(raw_result)
                 snippet = result.get("markdown") or result.get("description", "")
-                search_result = SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=snippet,
-                    date=None,
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": snippet,
+                        "date": None,
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
         elif isinstance(data, dict):
             # Firecrawl Cloud (v2) format: data is a dict with web/news keys
-            web_results: Final = data.get("web", [])
+            sections: Final = _JSON_OBJECT.validate_python(data)
+            web_results: Final = _JSON_VALUES.validate_python(sections.get("web", []))
 
-            for result in web_results:
+            for raw_result in web_results:
+                result = _JSON_OBJECT.validate_python(raw_result)
                 # Use markdown if available, otherwise fall back to description
                 snippet = result.get("markdown") or result.get("description", "")
 
-                search_result = SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=snippet,
-                    date=None,
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": snippet,
+                        "date": None,
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
 
             # Process news results if available (they have date field)
-            news_results: Final = data.get("news", [])
-            for result in news_results:
+            news_results: Final = _JSON_VALUES.validate_python(sections.get("news", []))
+            for raw_result in news_results:
+                result = _JSON_OBJECT.validate_python(raw_result)
                 snippet = result.get("markdown") or result.get("snippet", "")
 
-                search_result = SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=snippet,
-                    date=result.get("date"),  # News results include date
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": snippet,
+                        "date": result.get("date"),  # News results include date
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
 

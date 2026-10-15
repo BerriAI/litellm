@@ -36,6 +36,21 @@ def stage_private_json(path: str, data: Mapping[str, object]) -> str:
     return tmp_path
 
 
+def stage_private_bytes(path: str, data: bytes) -> str:
+    parent: Final = Path(path).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+    return tmp_path
+
+
 def commit_staged_json(staged: str, path: str) -> None:
     """Move a staged file into place, replacing whatever is there in one step"""
     try:
@@ -68,3 +83,8 @@ def discard_staged_json(staged: str) -> None:
 def write_private_json(path: str, data: Mapping[str, object]) -> None:
     """Atomically write JSON to path with owner-only permissions (0600)"""
     commit_staged_json(stage_private_json(path, data), path)
+
+
+def write_private_bytes(path: str, data: bytes) -> None:
+    """Atomically write bytes to path with owner-only permissions (0600); a reader holding the old file keeps it whole"""
+    commit_staged_json(stage_private_bytes(path, data), path)

@@ -7,9 +7,11 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -72,7 +74,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         )
         project_id: Final = litellm_params.get("aws_bedrock_project_id")
         if project_id:
-            headers["anthropic-workspace"] = project_id
+            headers["anthropic-workspace-id"] = project_id
         return headers
 
     def transform_request(
@@ -110,20 +112,12 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model_id: Final = model.replace("mantle/", "", 1)
-
-        request: Final = self._build_bedrock_anthropic_request_base(
-            model=model_id,
-            messages=messages,
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
-        )
-        await self._async_convert_document_url_sources_to_base64(request)
-        return self._restore_mantle_body_fields(
-            request=request,
-            model_id=model_id,
-            optional_params=optional_params,
         )
 
     @staticmethod
@@ -141,10 +135,22 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         sync_stream: bool,
         json_mode: bool | None = False,
     ) -> Any:
+        return self.get_model_response_iterator_for_request(
+            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode, optional_params={}
+        )
+
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+    ) -> object:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
         )

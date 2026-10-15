@@ -2,10 +2,12 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
-import os
 from typing import Any, Final
 
+from pydantic import JsonValue
+
 from litellm._logging import verbose_logger
+from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
@@ -26,12 +28,12 @@ class AnthropicTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        messages: list[dict[str, JsonValue]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+        system: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.
@@ -46,28 +48,31 @@ class AnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
         if not messages:
             return None
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
-
-        # Get Anthropic API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
-        if not api_key:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if not api_key:
-            verbose_logger.warning("No Anthropic API key found for token counting")
-            return None
+        api_base: Final = litellm_params.get("api_base")
 
         try:
+            auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+                api_key=litellm_params.get("api_key"),
+                api_base=api_base,
+                litellm_params=litellm_params,
+                allow_workload_identity=True,
+            )
+            if auth_header is None:
+                verbose_logger.warning("No Anthropic credential found for token counting")
+                return None
+
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
-                api_key=api_key,
+                auth_header=auth_header,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
@@ -80,8 +85,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tokenizer_type="anthropic_api",
                     original_response=result,
                 )
-        except AnthropicError as e:
-            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
+        except (AnthropicError, AuthenticationError) as e:
+            verbose_logger.warning("Anthropic CountTokens error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

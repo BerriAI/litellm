@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CircleHelp, Eye, EyeOff, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
 import {
   VectorStoreProviders,
@@ -33,8 +33,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 
-const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey"]);
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb"]);
 
 export const buildVectorStoreLitellmParams = (
   provider: string,
@@ -70,6 +72,11 @@ const PROVIDER_FIELD_NAMES = [
   "vector_bucket_name",
   "index_name",
   "aws_region_name",
+  "mongodb_database",
+  "mongodb_collection",
+  "mongodb_embedding_field",
+  "mongodb_text_field",
+  "mongodb_num_candidates",
   "valkey_host",
   "valkey_port",
   "valkey_password",
@@ -101,6 +108,11 @@ const vectorStoreShape = {
   vector_bucket_name: optionalText,
   index_name: optionalText,
   aws_region_name: optionalText,
+  mongodb_database: optionalText,
+  mongodb_collection: optionalText,
+  mongodb_embedding_field: optionalText,
+  mongodb_text_field: optionalText,
+  mongodb_num_candidates: optionalText,
   valkey_host: optionalText,
   valkey_port: optionalText,
   valkey_password: optionalText,
@@ -126,20 +138,28 @@ const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) =
 
 type VectorStoreFormValues = z.output<typeof vectorStoreSchema>;
 
+const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
+  vertex_rag_engine: '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)',
+  "vertex_ai/search_api": 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)',
+  valkey: "my-search-index (FT index name in Valkey)",
+  mongodb: "my-vector-index (MongoDB Vector Search index name)",
+};
+
+const VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER = "Any identifier you'll use to reference this in LiteLLM";
+
+const DEFAULT_VECTOR_STORE_ID_PLACEHOLDER = "Enter vector store ID from your provider";
+
 const EMPTY_VALUES: VectorStoreFormValues = {
   custom_llm_provider: "bedrock",
   vector_store_id: "",
   vertex_location: "global",
+  mongodb_embedding_field: "embedding",
+  mongodb_text_field: "text",
   valkey_port: "6379",
   valkey_ssl: "false",
   valkey_text_field: "text",
   valkey_embedding_field: "embedding",
 };
-
-interface CredentialOption {
-  label: string;
-  value: string | null;
-}
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -202,14 +222,6 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
     loadModels();
   }, [accessToken]);
 
-  const credentialOptions: CredentialOption[] = [
-    { value: null, label: "None" },
-    ...credentials.map((credential) => ({
-      value: credential.credential_name,
-      label: credential.credential_name,
-    })),
-  ];
-
   const makeProviderChangeHandler = (onChange: (provider: string) => void) => (provider: string | null) => {
     if (provider === null) return;
     onChange(provider);
@@ -254,15 +266,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   };
 
   const vectorStoreIdPlaceholder =
-    selectedProvider === "vertex_rag_engine"
-      ? '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)'
-      : selectedProvider === "vertex_ai/search_api"
-        ? vertexEngineId
-          ? "Any identifier you'll use to reference this in LiteLLM"
-          : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
-        : selectedProvider === "valkey"
-          ? "my-search-index (FT index name in Valkey)"
-          : "Enter vector store ID from your provider";
+    selectedProvider === "vertex_ai/search_api" && vertexEngineId
+      ? VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER
+      : VECTOR_STORE_ID_PLACEHOLDERS[selectedProvider] ?? DEFAULT_VECTOR_STORE_ID_PLACEHOLDER;
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
@@ -478,35 +484,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
                 )}
               >
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Combobox
-                    items={credentialOptions}
-                    value={credentialOptions.find((option) => option.value === value) ?? null}
-                    onValueChange={(option: CredentialOption | null) => onChange(option ? option.value : undefined)}
-                    itemToStringLabel={(option: CredentialOption) => option.label}
-                    isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
-                      option.value === selected.value
-                    }
-                  >
-                    <ComboboxInput
-                      id={id}
-                      aria-invalid={ariaInvalid}
-                      aria-describedby={ariaDescribedBy}
-                      placeholder="Select or search for existing credentials"
-                      className="w-full"
-                      showClear={value !== undefined}
-                    />
-                    <ComboboxContent>
-                      <ComboboxEmpty>No matching credentials</ComboboxEmpty>
-                      <ComboboxList>
-                        {(option: CredentialOption) => (
-                          <ComboboxItem key={option.label} value={option}>
-                            {option.label}
-                          </ComboboxItem>
-                        )}
-                      </ComboboxList>
-                    </ComboboxContent>
-                  </Combobox>
+                {({ id, value, onChange }) => (
+                  <SearchSelect
+                    inputId={id}
+                    placeholder="Select or search for existing credentials"
+                    options={credentialOptions(credentials)}
+                    value={value ?? ""}
+                    onValueChange={(selected) => onChange(selected === "" || selected === null ? undefined : selected)}
+                  />
                 )}
               </FormField>
 
