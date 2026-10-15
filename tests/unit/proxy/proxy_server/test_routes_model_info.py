@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -462,7 +463,7 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     _invalidate_model_cost_lowercase_map()
 
 
-def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
+async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
 
@@ -482,12 +483,15 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
     expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
-    allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
+    allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
             models=[SpecialModelNames.all_proxy_models.value],
         ),
         llm_router=router,
+        prisma_client=None,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
     )
 
     result = proxy_server._filter_v1_model_info_deployments(
@@ -594,6 +598,167 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
     surfaced_names = [m.get("model_name") for m in data]
     assert _BYOK_PUBLIC_NAME not in surfaced_names
     assert _BYOK_INTERNAL_NAME not in surfaced_names
+
+
+_ACCESS_GROUP_TEAM_ID = "team-with-access-group"
+_ACCESS_GROUP_ID = "ag-group-models"
+
+
+@pytest.fixture
+def access_group_team(monkeypatch, mock_prisma):
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-unused"}}
+            for name in ("model-direct", "model-group", "model-other")
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+
+    def seed_team(models: list[str]) -> None:
+        cache.set_cache(
+            key=f"team_id:{_ACCESS_GROUP_TEAM_ID}",
+            value=LiteLLM_TeamTableCachedObj(
+                team_id=_ACCESS_GROUP_TEAM_ID, models=models, access_group_ids=[_ACCESS_GROUP_ID]
+            ),
+            model_type=LiteLLM_TeamTableCachedObj,
+        )
+
+    cache.set_cache(
+        key=f"access_group_id:{_ACCESS_GROUP_ID}",
+        value=LiteLLM_AccessGroupTable(
+            access_group_id=_ACCESS_GROUP_ID,
+            access_group_name="group-models",
+            access_model_names=["model-group"],
+            assigned_team_ids=[_ACCESS_GROUP_TEAM_ID],
+        ),
+        model_type=LiteLLM_AccessGroupTable,
+    )
+    mock_prisma.db.litellm_usertable.find_unique.return_value = None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    return seed_team
+
+
+@pytest.mark.parametrize(
+    ("path", "name_field"),
+    [
+        ("/v1/model/info", "model_name"),
+        ("/model/info", "model_name"),
+        ("/v1/models", "id"),
+        ("/model_group/info", "model_group"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("key_models", "team_models", "expected_names"),
+    [
+        (["all-team-models"], ["no-default-models"], ["model-group"]),
+        ([], ["model-direct"], ["model-direct", "model-group"]),
+        (["model-direct"], ["model-direct"], ["model-direct"]),
+    ],
+    ids=["team-key-gets-access-group-models", "team-models-plus-access-group", "key-own-list-stays-narrow"],
+)
+def test_model_listing_routes_list_team_access_group_models_the_key_can_call(
+    client, auth_as, access_group_team, path, name_field, key_models, team_models, expected_names
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_group_team(team_models)
+    with auth_as(
+        role=LitellmUserRoles.INTERNAL_USER,
+        user_id=None,
+        team_id=_ACCESS_GROUP_TEAM_ID,
+        models=key_models,
+        team_models=team_models,
+    ):
+        response: Final = client.get(path)
+
+    assert response.status_code == 200, response.text
+    assert sorted(model[name_field] for model in response.json()["data"]) == expected_names
+
+
+def test_v1_model_info_unrestricted_admin_key_still_lists_team_byok_rows(
+    client, auth_as, byok_team_router, mock_prisma, monkeypatch
+):
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    with auth_as():
+        response: Final = client.get("/v1/model/info")
+
+    assert response.status_code == 200, response.text
+    assert [model["model_name"] for model in response.json()["data"]] == [_BYOK_PUBLIC_NAME]
+
+
+@pytest.mark.parametrize(
+    ("key_models", "expected_names"),
+    [([], ["model-direct"]), (["model-direct", "model-other"], ["model-direct"])],
+    ids=["no-key-list", "own-key-list"],
+)
+def test_v1_model_info_scopes_a_personal_key_to_its_owner_teams(
+    client, auth_as, access_group_team, monkeypatch, key_models, expected_names
+):
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, LitellmUserRoles
+    from litellm.proxy.auth import auth_checks
+
+    async def owner(**_: object) -> LiteLLM_UserTable:
+        return LiteLLM_UserTable(user_id="owner", teams=[_ACCESS_GROUP_TEAM_ID])
+
+    async def owner_team(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
+        return LiteLLM_TeamTableCachedObj(team_id=team_id, models=["model-direct"])
+
+    async def no_membership(**_: object) -> None:
+        return None
+
+    access_group_team(["model-direct"])
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(auth_checks, "get_user_object", owner)
+    monkeypatch.setattr(auth_checks, "get_team_object", owner_team)
+    monkeypatch.setattr(auth_checks, "get_team_membership", no_membership)
+    with auth_as(role=LitellmUserRoles.INTERNAL_USER, user_id="owner", models=key_models):
+        response: Final = client.get("/v1/model/info")
+
+    assert response.status_code == 200, response.text
+    assert sorted(model["model_name"] for model in response.json()["data"]) == expected_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ceiling_models", "expected"),
+    [(frozenset({"model-direct"}), frozenset({"model-direct"})), (None, None)],
+    ids=["capped-agent", "agent-without-access-groups"],
+)
+async def test_v1_model_info_caps_an_agent_key_with_no_model_list_to_its_access_groups(
+    access_group_team, ceiling_models, expected
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+
+    async def ceiling(agent_id: str) -> AgentAccessGroupCeiling | None:
+        assert agent_id == "agent-1"
+        if ceiling_models is None:
+            return None
+        return AgentAccessGroupCeiling(
+            access_group_ids=("agent-group",),
+            models=ceiling_models,
+            mcp_server_ids=frozenset(),
+            agent_ids=frozenset(),
+        )
+
+    allowed: Final = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-agent", agent_id="agent-1", models=[]),
+        llm_router=proxy_server.llm_router,
+        prisma_client=None,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
+        resolve_agent_ceiling=ceiling,
+    )
+
+    assert allowed == expected
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +965,171 @@ def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(clie
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
     assert len(payload["data"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/model/info?blocked
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def routing_status_router(monkeypatch):
+    """Router with one paused (blocked) deployment and two active ones.
+
+    The real `_apply_search_filter_to_models` runs (its search path is what
+    the combined search+status tests exercise); only the bounded DB fetch is
+    stubbed so tests don't need Prisma.
+    """
+    model_list = [
+        {
+            "model_name": "paused-model",
+            "litellm_params": {"model": "openai/paused-model"},
+            "model_info": {"id": "paused-1", "db_model": True, "blocked": True},
+        },
+        {
+            "model_name": "active-model",
+            "litellm_params": {"model": "openai/active-model"},
+            "model_info": {"id": "active-1", "db_model": True, "blocked": False},
+        },
+        {
+            "model_name": "another-active",
+            "litellm_params": {"model": "openai/another-active"},
+            "model_info": {"id": "active-2", "db_model": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    async def fake_fetch_db_models_for_search(**kwargs):
+        return [], 0
+
+    monkeypatch.setattr(proxy_server, "_fetch_db_models_for_search", fake_fetch_db_models_for_search)
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+    yield router
+
+
+def test_v2_model_info_blocked_filter_returns_only_paused(client, auth_as, routing_status_router):
+    """`?blocked=true` keeps just the paused deployments."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"blocked": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["paused-model"]
+    assert payload["total_count"] == 1
+
+
+def test_v2_model_info_blocked_filter_returns_only_active(client, auth_as, routing_status_router):
+    """`?blocked=false` keeps just the active deployments."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"blocked": "false"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["active-model", "another-active"]
+    assert payload["total_count"] == 2
+
+
+def test_v2_model_info_search_and_blocked_filter_combine(client, auth_as, routing_status_router):
+    """`search` + `blocked` compose: matches of the other status are excluded
+    and the totals describe exactly the filtered set."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"search": "openai", "blocked": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["paused-model"]
+    assert payload["total_count"] == 1
+
+
+def test_fetch_db_models_for_search_pushes_blocked_into_the_where(monkeypatch):
+    """The bounded DB fetch must filter by routing status itself, or rows of
+    the other status consume the page budget before status filtering runs."""
+    captured: dict = {}
+
+    class FakeTable:
+        async def count(self, where=None):
+            captured["count_where"] = where
+            return 0
+
+        async def find_many(self, where=None, take=None):
+            captured["find_where"] = where
+            return []
+
+    class FakeRepository:
+        def __init__(self, client):
+            self.table = FakeTable()
+
+    monkeypatch.setattr(proxy_server, "ModelRepository", FakeRepository)
+
+    async def run():
+        await proxy_server._fetch_db_models_for_search(
+            prisma_client=MagicMock(),
+            proxy_config=MagicMock(),
+            search_lower="openai",
+            db_model_ids_in_router=set(),
+            router_models_count=0,
+            page=1,
+            size=50,
+            sort_by=None,
+            is_byok_outside_caller_teams=lambda info: False,
+            blocked=True,
+        )
+
+    asyncio.run(run())
+
+    where = captured["count_where"]
+    assert {"blocked": True} in where["AND"]
+    assert {"blocked": False} not in where["AND"]
+
+
+def test_v2_model_info_search_matches_litellm_model_name(client, auth_as, monkeypatch):
+    """`search` also hits the underlying LiteLLM model name (e.g. a provider
+    prefix), not just the public model name."""
+    model_list = [
+        {
+            "model_name": "paused-model",
+            "litellm_params": {"model": "openai/paused-model"},
+            "model_info": {"id": "paused-1", "db_model": True, "blocked": True},
+        },
+        {
+            "model_name": "active-model",
+            "litellm_params": {"model": "openai/active-model"},
+            "model_info": {"id": "active-1", "db_model": True, "blocked": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    async def fake_fetch_db_models_for_search(**kwargs):
+        return [], 0
+
+    monkeypatch.setattr(proxy_server, "_fetch_db_models_for_search", fake_fetch_db_models_for_search)
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+
+    with auth_as():
+        response = client.get("/v2/model/info", params={"search": "openai/paused"})
+    assert response.status_code == 200
+    assert _model_names(response.json()) == ["paused-model"]
 
 
 @pytest.mark.asyncio

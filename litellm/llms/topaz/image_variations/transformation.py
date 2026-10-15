@@ -39,8 +39,8 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = api_base or "https://api.topazlabs.com"
-        return f"{api_base}/image/v1/enhance"
+        clean_api_base: Final = (api_base or "https://api.topazlabs.com").rstrip("/")
+        return f"{clean_api_base}/image/v1/enhance"
 
     def map_openai_params(
         self,

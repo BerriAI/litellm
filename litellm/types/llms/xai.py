@@ -1,4 +1,15 @@
+from dataclasses import dataclass
 from typing import Literal, TypedDict
+
+
+@dataclass(frozen=True, slots=True)
+class RealtimeMeteredUsage:
+    """Per-session xAI realtime usage counted from raw wire frames."""
+
+    push_to_talk: bool
+    audio_seconds_sent: float
+    audio_seconds_received: float
+    text_messages: int
 
 
 class XAIWebSearchFilters(TypedDict, total=False):

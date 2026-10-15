@@ -1,6 +1,10 @@
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
+from importlib.resources import files
+from itertools import chain
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +20,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
 
 
@@ -459,6 +463,31 @@ def test_strands_decider_provider_fields():
     assert strands.default_model_placeholder.startswith("strands_decider/")
 
     fields_by_key: Final = {f.key: f for f in strands.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
+@pytest.mark.parametrize(
+    ("provider", "display_name", "litellm_provider", "model_placeholder"),
+    (
+        ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble"),
+    ),
+)
+def test_oss_decisions_provider_fields(
+    provider: str, display_name: str, litellm_provider: str, model_placeholder: str
+) -> None:
+    entry: Final = _decisions_provider_entry(provider)
+
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == litellm_provider
+    assert entry.default_model_placeholder == model_placeholder
+
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
 
     assert fields_by_key["api_base"].required is True
     assert fields_by_key["api_base"].field_type == "text"
@@ -1534,3 +1563,96 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     response.content = b"{}"
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+# ---------------------------------------------------------------------------
+# /public/agents/fields inherited provider credentials
+# ---------------------------------------------------------------------------
+
+
+def test_get_agent_fields_merge_does_not_compound_across_requests():
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
+        }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_appends_inherited_provider_credential_fields():
+    client: Final = _make_client()
+    providers: Final = {p["provider"]: p for p in client.get("/public/providers/fields").json()}
+    agents: Final = client.get("/public/agents/fields").json()
+    bundled: Final = json.loads(
+        files("litellm.proxy.public_endpoints").joinpath("agent_create_fields.json").read_text(encoding="utf-8")
+    )
+    own_counts: Final = {agent["agent_type"]: len(agent["credential_fields"]) for agent in bundled}
+    expected_inherited: Final = {
+        agent["agent_type"]: providers.get(agent.get("inherit_credentials_from_provider"), {}).get(
+            "credential_fields", []
+        )
+        for agent in bundled
+    }
+    inherited: Final = {
+        agent["agent_type"]: agent["credential_fields"][own_counts[agent["agent_type"]] :] for agent in agents
+    }
+
+    assert any(expected_inherited.values()), "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+    assert {
+        agent_type: [
+            {key: field[key] for key in field if key in ProviderCredentialField.model_fields} for field in fields
+        ]
+        for agent_type, fields in inherited.items()
+    } == expected_inherited
+    assert all(field["include_in_litellm_params"] is True for field in chain.from_iterable(inherited.values()))
+
+
+@pytest.mark.parametrize("preference", ["auto_install", None])
+def test_public_skill_hub_echoes_registered_installation_preference(preference):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
+    from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+
+    table: Final = MagicMock()
+    table.find_unique = AsyncMock(return_value=None)
+    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
+    table.find_many = AsyncMock(
+        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        asyncio.run(
+            register_plugin(
+                request=RegisterPluginRequest(
+                    name="security-review",
+                    source={
+                        "source": "archive",
+                        "url": "https://plugins.example.com/security-review-1.0.0.zip",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    },
+                    installation_preference=preference,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            )
+        )
+        response: Final = TestClient(app).get("/public/skill_hub")
+
+    assert response.status_code == 200
+    assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
+        ("security-review", preference)
+    ]

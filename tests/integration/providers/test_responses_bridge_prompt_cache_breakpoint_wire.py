@@ -485,6 +485,42 @@ def test_anthropic_sdk_cache_control_on_a_tool_result_marks_its_function_call_ou
     ], "OpenAI caches up to a breakpoint on a function_call_output part (prompt caching guide, read 2026-10-12)"
 
 
+def test_anthropic_sdk_cache_control_on_a_tool_result_with_a_screenshot_marks_the_screenshot(bridge: _Bridge) -> None:
+    marker: Final = uuid.uuid4().hex
+    screenshot_result: Final = {
+        "type": "tool_result",
+        "tool_use_id": "call_1",
+        "content": [
+            {"type": "text", "text": "captured"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "Zm9v"}},
+        ],
+        "cache_control": _EPHEMERAL,
+    }
+    with bridge.gateway.scenario() as scenario, _anthropic(bridge) as client:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, **_OPTED_IN)
+        message: Final = _anthropic_message(
+            client,
+            model,
+            [
+                {"role": "user", "content": pcb.prompt(marker)},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "shot", "input": {}}]},
+                {"role": "user", "content": [screenshot_result]},
+            ],
+        )
+    _anthropic_text(message, marker)
+    request: Final = pcb.posted(bridge.wire, marker)
+    _wire_body(request)
+    items: Final = pcb.input_items(request)
+    output_index: Final = next(index for index, item in enumerate(items) if item.get("call_id") == "call_1")
+    *_, screenshot = pcb.content_of(items[output_index + 1 :], "user")
+    assert screenshot == {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,Zm9v",
+        "prompt_cache_breakpoint": pcb.EXPLICIT,
+    }, "OpenAI caches only the prefix up to the breakpoint, so the screenshot must sit inside it"
+    assert request.body.count(b"prompt_cache_breakpoint") == 1, request.body
+
+
 def test_anthropic_sdk_cache_control_on_an_assistant_turn_is_dropped(bridge: _Bridge) -> None:
     marker: Final = uuid.uuid4().hex
     messages: Final[list[anthropic.types.MessageParam]] = [

@@ -1,7 +1,7 @@
 import json
 import os
 import socket
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,6 +20,8 @@ from litellm.proxy.common_utils.debug_utils import (
     get_memory_summary,
 )
 from litellm.proxy.common_utils.debug_utils import router as debug_router
+from litellm.router import Router
+from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 
 PAGE_SIZE = 4096
 STATM_SIZE_PAGES = 100_000
@@ -146,3 +148,53 @@ def test_debug_report_returns_what_the_bug_report_link_carries_and_nothing_from_
         "model_list[*].provider = [azure]",
     ]
     assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text
+
+
+PINNED_PREFIXES = 3
+
+
+@pytest.fixture
+def router_with_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    router = Router(model_list=[{"model_name": "claude", "litellm_params": {"model": "anthropic/claude-sonnet-4-5"}}])
+    pins = PromptCachingCache(cache=router.prompt_caching_pin_cache)
+    for prefix in range(PINNED_PREFIXES):
+        pins.add_model_id(
+            model_id=f"deployment-{prefix}",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"prefix {prefix} " * 300, "cache_control": {"type": "ephemeral"}}
+                    ],
+                }
+            ],
+            tools=None,
+        )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+
+@pytest.mark.parametrize(
+    ("path", "pin_count", "expected"),
+    [
+        (
+            "/memory-usage-in-mem-cache",
+            lambda body: body["num_items_in_prompt_caching_pin_cache"],
+            2 * PINNED_PREFIXES,
+        ),
+        ("/memory-usage-in-mem-cache-items", lambda body: len(body["prompt_caching_pin_cache"]), PINNED_PREFIXES),
+        ("/debug/memory/summary", lambda body: body["caches"]["breakdown"]["prompt_caching_pins"]["count"], PINNED_PREFIXES),
+        (
+            "/debug/memory/details?include_process_info=false",
+            lambda body: body["cache_memory"]["prompt_caching_pin_cache"]["num_items"],
+            PINNED_PREFIXES,
+        ),
+    ],
+)
+@pytest.mark.usefixtures("router_with_pins")
+def test_memory_routes_count_prompt_caching_pins(
+    path: str, pin_count: Callable[[dict[str, object]], int], expected: int
+) -> None:
+    response = _debug_client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).get(path)
+
+    assert response.status_code == 200
+    assert pin_count(response.json()) == expected
