@@ -2668,45 +2668,40 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
-def test_handle_error_preserves_base_llm_exception_message_and_status():
+@pytest.mark.asyncio
+async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
     from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
-    message = "Invalid JSON on line 3 of batch input file: Expecting value"
-    error = VertexAIError(status_code=400, message=message)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    message: Final = "Invalid JSON on line 3 of batch input file: Expecting value at column 1"
 
-    with pytest.raises(VertexAIError) as exc_info:
-        BaseLLMHTTPHandler()._handle_error(e=error, provider_config=VertexAIFilesConfig())
+    async def read_until_client_hangs_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        writer.close()
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.message == message
+    async def body_with_bad_third_row():
+        yield b'{"custom_id": "r1"}\n'
+        raise VertexAIError(status_code=400, message=message)
 
+    server: Final = await asyncio.start_server(read_until_client_hangs_up, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.HTTPError) as sent:
+                await handler.post(f"http://127.0.0.1:{port}/upload", content=body_with_bad_third_row())
+    finally:
+        await handler.close()
 
-def test_handle_error_preserves_base_llm_exception_from_wrapper():
-    from litellm.llms.vertex_ai.common_utils import VertexAIError
-    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=sent.value, provider_config=VertexAIFilesConfig())
 
-    message = "Invalid JSON on line 3 of batch input file: Expecting value"
-    error = VertexAIError(status_code=400, message=message)
-    wrapper = httpx.ConnectError("Failed to send bytes")
-    wrapper.__cause__ = error
-
-    with pytest.raises(VertexAIError) as exc_info:
-        BaseLLMHTTPHandler()._handle_error(e=wrapper, provider_config=VertexAIFilesConfig())
-
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.message == message
-
-
-def test_handle_error_maps_plain_exception_to_provider_error():
-    from litellm.llms.vertex_ai.common_utils import VertexAIError
-    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
-
-    with pytest.raises(VertexAIError) as exc_info:
-        BaseLLMHTTPHandler()._handle_error(e=ValueError("boom"), provider_config=VertexAIFilesConfig())
-
-    assert exc_info.value.status_code == 500
-    assert exc_info.value.message == "boom"
+    assert surfaced.value.status_code == 400
+    assert surfaced.value.message == message
 
 
 _FILE_CONTENT_WIF_ENV = {

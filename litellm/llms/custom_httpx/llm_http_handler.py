@@ -506,15 +506,17 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     )
 
 
-def _find_base_llm_exception(error: BaseException) -> BaseLLMException | None:
-    current: BaseException | None = error  # rebind-ok: walks the bounded exception cause chain
+def _unwrap_provider_error(error: Exception) -> Exception:
+    if isinstance(error, BaseLLMException):
+        return error
+    current: BaseException | None = error.__cause__  # rebind-ok: walks the bounded exception cause chain
     for _ in range(10):
         if current is None:
-            return None
+            return error
         if isinstance(current, BaseLLMException):
             return current
         current = current.__cause__
-    return None
+    return error
 
 
 class BaseLLMHTTPHandler:
@@ -6330,20 +6332,19 @@ class BaseLLMHTTPHandler:
             BaseRealtimeHTTPConfig,
         ],
     ):
-        provider_exception: Final = _find_base_llm_exception(e)
-        if provider_exception is not None:
-            raise provider_exception
-
+        error: Final = _unwrap_provider_error(e)
         received_status_code: Final = (
-            e.response.status_code if isinstance(e, httpx.HTTPStatusError) else getattr(e, "status_code", None)
+            error.response.status_code
+            if isinstance(error, httpx.HTTPStatusError)
+            else getattr(error, "status_code", None)
         )
         status_code = received_status_code if isinstance(received_status_code, int) else 500
-        error_headers = getattr(e, "headers", None)
-        if isinstance(e, httpx.HTTPStatusError):
-            error_text = e.response.text
+        error_headers = getattr(error, "headers", None)
+        if isinstance(error, httpx.HTTPStatusError):
+            error_text = error.response.text
         else:
-            error_text = getattr(e, "text", str(e))
-        error_response: Final = getattr(e, "response", None)
+            error_text = getattr(error, "text", str(error))
+        error_response: Final = getattr(error, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
