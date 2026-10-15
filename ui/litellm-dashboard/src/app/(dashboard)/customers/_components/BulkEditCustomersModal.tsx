@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useBudgetOptions } from "@/app/(dashboard)/hooks/budgets/useBudgetOptions";
 import type { BulkUpdateCustomersResponse } from "@/app/(dashboard)/hooks/customers/customerApi";
 import { useBulkUpdateCustomers } from "@/app/(dashboard)/hooks/customers/useCustomerMutations";
@@ -240,6 +240,8 @@ function BulkEditSession({
   const [results, setResults] = useState<BulkUpdateCustomersResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const { accessToken } = useAuthorized();
   const budgets = useBudgetOptions(accessToken);
   const models = useUserModels();
@@ -256,6 +258,13 @@ function BulkEditSession({
   const modelOptions = (models.data ?? []).map((model) => ({ label: model, value: model }));
   const modelsUnavailable = models.isLoading || models.isError;
   const actionLabel = results ? "Retry failed customers" : "Apply changes";
+
+  useEffect(() => {
+    if (results) resultsRef.current?.scrollIntoView({ block: "nearest" });
+  }, [results]);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ block: "nearest" });
+  }, [error]);
 
   const update = <Field extends keyof BulkCustomerEdits>(field: Field, value: BulkCustomerEdits[Field]) => {
     setEdits((current) => ({ ...current, [field]: value }));
@@ -445,7 +454,7 @@ function BulkEditSession({
             onChange={(edit) => update("mcpToolsets", edit)}
           />
           {results && (
-            <Alert aria-label="Bulk update results">
+            <Alert ref={resultsRef} aria-label="Bulk update results">
               <AlertTitle>
                 {results.successful_updates} succeeded, {results.failed_updates} failed out of {results.total_requested}
               </AlertTitle>
@@ -464,7 +473,7 @@ function BulkEditSession({
             </Alert>
           )}
           {error && (
-            <Alert variant="destructive" aria-label="Bulk update error">
+            <Alert ref={errorRef} variant="destructive" aria-label="Bulk update error">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}

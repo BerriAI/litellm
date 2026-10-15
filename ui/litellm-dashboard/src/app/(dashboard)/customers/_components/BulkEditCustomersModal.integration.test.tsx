@@ -71,6 +71,7 @@ const optIntoToolsets = async (user: ReturnType<typeof userEvent.setup>) => {
 describe("Bulk customer editor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
     testQueryClient.clear();
     get.mockResolvedValue([{ budget_id: "replacement-budget" }]);
     fetchModels.mockResolvedValue({ data: [{ id: "model-new" }] });
@@ -292,6 +293,7 @@ describe("Bulk customer editor", () => {
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
     const summary = await screen.findByRole("alert", { name: "Bulk update results" });
     expect(summary).toHaveTextContent(`${2 - failedIds.length} succeeded, ${failedIds.length} failed out of 2`);
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts).toContain(summary);
     for (const id of failedIds) expect(summary).toHaveTextContent(`Cannot update ${id}`);
     const targets = screen.getByRole("region", { name: "Customers to update" });
     expect(within(targets).getAllByRole("listitem")).toHaveLength(failedIds.length);
@@ -321,7 +323,9 @@ describe("Bulk customer editor", () => {
     const { onCancel, onCompleted } = mountModal();
     await optIntoToolsets(user);
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
-    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent("Proxy is unavailable");
+    const failure = await screen.findByRole("alert", { name: "Bulk update error" });
+    expect(failure).toHaveTextContent("Proxy is unavailable");
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts).toContain(failure);
     expect(onCancel).not.toHaveBeenCalled();
     expect(onCompleted).not.toHaveBeenCalled();
     expect(screen.getByRole("region", { name: "Customers to update" })).toHaveTextContent("customer-b");

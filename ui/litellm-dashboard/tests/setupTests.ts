@@ -185,6 +185,10 @@ if (typeof window !== "undefined") {
     Element.prototype.getAnimations = () => [];
   }
 
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+
   // Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
   if (!URL.revokeObjectURL) {
     URL.revokeObjectURL = () => {};
