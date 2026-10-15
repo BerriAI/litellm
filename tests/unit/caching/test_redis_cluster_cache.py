@@ -154,6 +154,22 @@ async def test_disconnect_closes_cluster_client_without_raising(mock_redis_clust
 
 @pytest.mark.asyncio
 @patch("redis.RedisCluster")
+async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mock_redis_cluster):
+    cache = RedisClusterCache(
+        startup_nodes=[{"host": "localhost", "port": 6379}],
+        password="hello",
+    )
+    cache.redis_async_redis_cluster_client = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("aclose failed")))
+    cache.redis_client = MagicMock()
+
+    with pytest.raises(RuntimeError, match="aclose failed"):
+        await cache.disconnect()
+
+    cache.redis_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("redis.RedisCluster")
 async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_cluster):
     """disconnect() must be a no-op for the cluster client when it was never
     initialized (e.g. shutdown before any request touched Redis), rather than
