@@ -22,10 +22,10 @@ def _add_savings_dollars(incoming: object, accumulated: object) -> float | None:
     zero. The row stays ``None`` exactly while every contributing request was
     unpriced, which is what the daily tables record as NULL.
     """
-    incoming_value: float | None = (
+    incoming_value: Final[float | None] = (
         float(incoming) if isinstance(incoming, (int, float)) and not isinstance(incoming, bool) else None
     )
-    accumulated_value: float | None = (
+    accumulated_value: Final[float | None] = (
         float(accumulated) if isinstance(accumulated, (int, float)) and not isinstance(accumulated, bool) else None
     )
     if incoming_value is None and accumulated_value is None:

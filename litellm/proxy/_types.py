@@ -5071,11 +5071,9 @@ class BaseDailySpendTransaction(TypedDict):
     # unmapped openrouter/* model since the cost-map removals, #46677): the
     # write path records NULL so the row never claims a measured $0.00 it never
     # made. The aggregation merges None as "no dollars from this row", not zero.
-    compression_savings_spend: float | None
-    prompt_caching_savings_spend: float | None
-    # writable-ok: the rollup queue accumulates into this key in place, as it
-    # does for every sibling spend field
-    gateway_injected_caching_savings_spend: float | None
+    compression_savings_spend: float | None  # writable-ok: accumulated in place by the rollup queue
+    prompt_caching_savings_spend: float | None  # writable-ok: accumulated in place by the rollup queue
+    gateway_injected_caching_savings_spend: float | None  # writable-ok: accumulated in place by the rollup queue
     # Not required: rows queued by a pod running the previous release, or replayed from
     # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
     # missing value to zero, so requiring it here would describe a shape the aggregation
