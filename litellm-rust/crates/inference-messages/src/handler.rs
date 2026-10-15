@@ -281,6 +281,12 @@ mod tests {
         "data: {\"type\":\"ping\"}\n\n",
         Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
     )]
+    #[case::unknown_event(
+        "data: {\"type\":\"future_event\",\"payload\":{\"keep\":null}}\n\n",
+        Some(
+            "event: future_event\ndata: {\"type\":\"future_event\",\"payload\":{\"keep\":null}}\n\n"
+        )
+    )]
     #[rstest::rstest]
     #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
     #[tokio::test]

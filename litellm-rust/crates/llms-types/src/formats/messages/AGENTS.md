@@ -11,6 +11,7 @@
   - rejecting fields or discriminators (DeepSeek rejects `type: custom` tools and billing system blocks)
   - Handle these in the provider adapter, never by loosening or forking a type here
 - Request and response bodies, messages, content blocks, tools, usage and stream-event payloads live here
+  - Stream event types Anthropic adds later decode into `MessagesStreamEvent::Other` and re-encode unchanged. Known event types stay strict
   - Web-search results, encrypted-content fields and thinking configuration are data here
   - Flattening results, stripping encrypted content, choosing thinking budgets and requiring betas are provider policy in `llms`
 - `MessagesTransformContext` and other adapter inputs live in `llms/src/base_llm/messages/`. Call envelopes live in `inference-messages`

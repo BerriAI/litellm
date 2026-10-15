@@ -1,5 +1,8 @@
 //! SSE decoding and encoding shared by every format's `streaming` module.
 //!
+//! An event type the format adds later is not malformed: each format's event type keeps it in
+//! `Other` and it re-encodes unchanged.
+//!
 //! DIVERGENCE: decoding is strict. An event whose `data` is not a valid event of the format is
 //! `InvalidResponse` and ends the stream, and so is `[DONE]` on a Messages stream. Python
 //! never fails a stream on a malformed event:
