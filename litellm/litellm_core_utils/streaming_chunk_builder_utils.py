@@ -1018,6 +1018,21 @@ class ChunkProcessor:
         ]
         return values[-1] if values else None
 
+    def _last_usage_iterations(
+        self,
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
+    ) -> list | None:
+        """Last ``iterations`` list reported on a usage chunk (Anthropic sends it cumulatively on the final
+        ``message_delta``)."""
+        values: Final = [
+            value
+            for chunk in chunks
+            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            and isinstance(value := getattr(usage_chunk, "iterations", None), list)
+            and len(value) > 0
+        ]
+        return values[-1] if values else None
+
     @staticmethod
     def _finish_reason_of_choice(choice: object) -> str | None:
         match choice:
@@ -1193,6 +1208,9 @@ class ChunkProcessor:
             )
             if value is not None
         }
+        usage_iterations: Final = self._last_usage_iterations(chunks)
+        if usage_iterations is not None:
+            provider_pricing_fields["iterations"] = usage_iterations
 
         returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
 

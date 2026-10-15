@@ -4514,6 +4514,29 @@ async def enforce_key_and_fallback_model_access(
                 user_model=None,
             )
 
+        for _advisor_model in dict.fromkeys(advisor_tool_models(request_data)):
+            await can_key_call_model(
+                model=_advisor_model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+
+
+def advisor_tool_models(request_data: Mapping[str, object]) -> list[str]:
+    """Models named by the request's ``advisor_20260301`` tools. A non-string model is returned as its repr so
+    the allowlist check denies it instead of skipping it."""
+    from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
+
+    tools: Final = request_data.get("tools")
+    if not isinstance(tools, list):
+        return []
+    return [
+        model if isinstance(model := tool.get("model"), str) else repr(model)
+        for tool in tools
+        if isinstance(tool, Mapping) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+    ]
+
 
 _enforce_key_and_fallback_model_access: Final = enforce_key_and_fallback_model_access  # pyright: ignore[reportUnknownVariableType]  # existing tests use this alias
 

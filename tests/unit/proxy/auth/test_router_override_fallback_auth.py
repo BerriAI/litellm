@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import fallback_target_model_name, iter_request_fallback_targets
 from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
@@ -337,3 +337,37 @@ async def test_router_override_without_fallbacks_does_not_break_auth():
         )
 
     assert seen == ["gpt-3.5-turbo"]
+
+
+def _advisor_request(advisor_model: str) -> dict:
+    return {
+        "model": "cheap-executor",
+        "tools": [{"type": "advisor_20260301", "name": "advisor", "model": advisor_model}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_advisor_tool_model_outside_the_key_allowlist_is_denied():
+    with pytest.raises(ProxyException) as denial:
+        await enforce_key_and_fallback_model_access(
+            valid_token=_key_with_models(["cheap-executor"]),
+            request_data=_advisor_request("premium-advisor"),
+            route="/v1/messages",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+
+    assert denial.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_advisor_tool_model_the_key_may_call_is_admitted():
+    await enforce_key_and_fallback_model_access(
+        valid_token=_key_with_models(["cheap-executor", "premium-advisor"]),
+        request_data=_advisor_request("premium-advisor"),
+        route="/v1/messages",
+        request=None,
+        llm_model_list=None,
+        llm_router=None,
+    )

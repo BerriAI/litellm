@@ -25,6 +25,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
+from litellm.exceptions import ModelNotMappedError
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -8998,6 +9000,67 @@ def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
     assert usage.completion_tokens == 250
     assert usage.prompt_tokens_details.cache_creation_tokens == 60
     assert usage.prompt_tokens_details.cached_tokens == 17020
+
+
+ADVISOR_EXECUTOR_MODEL: Final = "claude-haiku-4-5"
+ADVISOR_MODEL: Final = "claude-opus-4-8"
+
+
+def _advisor_usage_object(advisor_model: object = ADVISOR_MODEL) -> dict[str, object]:
+    return {
+        "input_tokens": 1760,
+        "cache_read_input_tokens": 412,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 531,
+        "iterations": [
+            {"type": "message", "input_tokens": 412, "output_tokens": 89},
+            {"type": "advisor_message", "model": advisor_model, "input_tokens": 823, "output_tokens": 1612},
+            {
+                "type": "message",
+                "input_tokens": 1348,
+                "cache_read_input_tokens": 412,
+                "output_tokens": 442,
+            },
+        ],
+    }
+
+
+def test_calculate_usage_keeps_advisor_iterations_out_of_the_request_model_tokens():
+    usage: Final = AnthropicConfig().calculate_usage(usage_object=_advisor_usage_object(), reasoning_content=None)
+    assert usage.prompt_tokens == 1760 + 412
+    assert usage.completion_tokens == 531
+    assert usage.prompt_tokens_details.cached_tokens == 412
+    assert [iteration["type"] for iteration in usage.iterations] == ["message", "advisor_message", "message"]
+
+
+def test_cost_per_token_prices_advisor_iterations_at_the_advisor_models_rate():
+    usage: Final = AnthropicConfig().calculate_usage(usage_object=_advisor_usage_object(), reasoning_content=None)
+    executor: Final = litellm.get_model_info(model=ADVISOR_EXECUTOR_MODEL, custom_llm_provider="anthropic")
+    advisor: Final = litellm.get_model_info(model=ADVISOR_MODEL, custom_llm_provider="anthropic")
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=ADVISOR_EXECUTOR_MODEL, usage=usage)
+
+    executor_cost: Final = (
+        1760 * executor["input_cost_per_token"]
+        + 412 * executor["cache_read_input_token_cost"]
+        + 531 * executor["output_cost_per_token"]
+    )
+    advisor_cost: Final = 823 * advisor["input_cost_per_token"] + 1612 * advisor["output_cost_per_token"]
+    assert prompt_cost + completion_cost == pytest.approx(executor_cost + advisor_cost, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "advisor_model, expected_error",
+    [("claude-no-such-advisor", ModelNotMappedError), (None, ValueError)],
+)
+def test_cost_per_token_rejects_an_advisor_iteration_it_cannot_price(
+    advisor_model: object, expected_error: type[Exception]
+):
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object=_advisor_usage_object(advisor_model), reasoning_content=None
+    )
+    with pytest.raises(expected_error):
+        anthropic_cost_per_token(model=ADVISOR_EXECUTOR_MODEL, usage=usage)
 
 
 PROMPT_CACHING_MODEL: Final = "claude-sonnet-5-5"

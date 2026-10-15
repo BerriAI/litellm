@@ -250,6 +250,8 @@ def _validated_defer_loading(value: object) -> bool:
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
+    type: ReadOnly[str]
+    model: ReadOnly[str]
     input_tokens: ReadOnly[int | None]
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
@@ -2701,8 +2703,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
+    def executor_billed_iterations(iterations: Sequence[Any]) -> list[Any]:
+        """Iterations billed at the request model's rates. ``advisor_message`` iterations ran on the advisor
+        model and are priced separately by ``advisor_iterations_cost``."""
+        return [it for it in iterations if not (isinstance(it, Mapping) and it.get("type") == "advisor_message")]
+
+    @staticmethod
     def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = usage.get("iterations")
+        all_iterations: Final = usage.get("iterations")
+        iterations: Final = AnthropicConfig.executor_billed_iterations(all_iterations) if all_iterations else None
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
@@ -2744,14 +2753,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
         iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
-        if iterations:
-            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
-            completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
-            cache_creation_input_tokens = sum(it.get("cache_creation_input_tokens", 0) or 0 for it in iterations)
-            cache_read_input_tokens = sum(it.get("cache_read_input_tokens", 0) or 0 for it in iterations)
+        executor_iterations: Final[Sequence[_AnthropicUsageIteration] | None] = (
+            self.executor_billed_iterations(iterations) if iterations else None
+        )
+        if executor_iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in executor_iterations)
+            completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in executor_iterations)
+            cache_creation_input_tokens = sum(
+                it.get("cache_creation_input_tokens", 0) or 0 for it in executor_iterations
+            )
+            cache_read_input_tokens = sum(it.get("cache_read_input_tokens", 0) or 0 for it in executor_iterations)
             prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
 
-        if not iterations:
+        if not executor_iterations:
             if "cache_creation_input_tokens" in _usage and _usage["cache_creation_input_tokens"] is not None:
                 cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
                 prompt_tokens += cache_creation_input_tokens
@@ -2791,7 +2805,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         completion_token_details: Final = self._build_completion_token_details(
             usage_object=_usage,
-            iterations=iterations,
+            iterations=executor_iterations,
             completion_tokens=completion_tokens,
             reasoning_content=reasoning_content,
             completion_response=completion_response,

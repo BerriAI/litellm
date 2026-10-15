@@ -2180,3 +2180,23 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+def test_chunk_builder_keeps_the_final_usage_iterations_for_cost_calculation():
+    iterations: Final = [
+        {"type": "message", "input_tokens": 412, "output_tokens": 89},
+        {"type": "advisor_message", "model": "claude-opus-4-8", "input_tokens": 823, "output_tokens": 1612},
+    ]
+    chunks: Final = [
+        ModelResponseStream(choices=[], usage=Usage(prompt_tokens=412, completion_tokens=1, total_tokens=413)),
+        ModelResponseStream(
+            choices=[],
+            usage=Usage(prompt_tokens=412, completion_tokens=89, total_tokens=501, iterations=iterations),
+        ),
+    ]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-haiku-4-5", completion_output=""
+    )
+
+    assert usage.iterations == iterations
