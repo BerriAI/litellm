@@ -32,13 +32,7 @@ def _call_handler_and_capture_optional_params(thinking=None, **extra_kwargs):
     with patch(
         "litellm.llms.anthropic.pass_through.messages.handler."
         "base_llm_http_handler"
-    ) as mock_handler, patch(
-        "litellm.llms.anthropic.pass_through.messages.handler."
-        "ProviderConfigManager"
-    ) as mock_pcm:
-        # Make get_provider_anthropic_messages_config return a non-None config
-        # so the handler takes the native Anthropic path
-        mock_pcm.get_provider_anthropic_messages_config.return_value = MagicMock()
+    ) as mock_handler:
         mock_handler.anthropic_messages_handler.return_value = MagicMock()
 
         kwargs = dict(extra_kwargs)
