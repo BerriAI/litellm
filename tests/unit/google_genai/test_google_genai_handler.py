@@ -3,10 +3,18 @@
 Test to verify the Google GenAI generate_content handler functionality
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
+from litellm import Router
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
@@ -275,3 +283,60 @@ async def test_generate_content_adapter_preserves_proxy_server_request():
 
         assert "proxy_server_request" in called_kwargs, "proxy_server_request was dropped from completion_kwargs"
         assert called_kwargs["proxy_server_request"] == dummy_proxy_request
+
+
+_REJECTED_ADAPTER_REQUEST: Final = MappingProxyType(
+    {
+        "model": "adapter-model",
+        "contents": [{"role": "user", "parts": [{"text": "Say hi"}]}],
+        "config": {"maxOutputTokens": -5},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "send_rejected_request",
+    [
+        pytest.param(lambda router: router.agenerate_content(**_REJECTED_ADAPTER_REQUEST), id="async"),
+        pytest.param(lambda router: router.agenerate_content_stream(**_REJECTED_ADAPTER_REQUEST), id="async_stream"),
+        pytest.param(
+            lambda router: asyncio.to_thread(router.generate_content, **_REJECTED_ADAPTER_REQUEST), id="sync"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_router_returns_provider_400_from_generate_content_adapter_without_retrying(
+    send_rejected_request: Callable[[Router], Awaitable[object]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Invalid 'max_completion_tokens': integer below minimum value.",
+                    "type": "invalid_request_error",
+                    "param": "max_completion_tokens",
+                    "code": "integer_below_min_value",
+                }
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "adapter-model",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-generate-content-adapter-400"},
+            }
+        ],
+        num_retries=2,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await send_rejected_request(router)
+
+    assert rejected.value.status_code == 400
+    assert "Invalid 'max_completion_tokens'" in rejected.value.message
+    assert route.call_count == 1

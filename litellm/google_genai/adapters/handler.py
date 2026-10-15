@@ -73,35 +73,17 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        try:
-            completion_response: Final = await litellm.acompletion(**completion_kwargs)
-
-            if stream:
-                # Check if completion_response is actually a stream or a ModelResponse
-                # This can happen in error cases or when stream is not properly supported
-                if not hasattr(completion_response, "__aiter__"):
-                    # If it's not a stream, treat it as a regular response
-                    generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
-                        cast(ModelResponse, completion_response)
-                    )
-                    return generate_content_response
-                else:
-                    # Transform streaming completion response to generate_content format
-                    transformed_stream: Final = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
-                    )
-                    if transformed_stream is not None:
-                        return transformed_stream
-                    raise ValueError("Failed to transform streaming response")
-            else:
-                # Transform completion response back to generate_content format
-                generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
-                    cast(ModelResponse, completion_response)
-                )
-                return generate_content_response
-
-        except Exception as e:
-            raise ValueError(f"Error calling litellm.acompletion for generate_content: {e}")
+        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        if not stream or not hasattr(completion_response, "__aiter__"):
+            return GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
+                cast(ModelResponse, completion_response)
+            )
+        transformed_stream: Final = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+            completion_response
+        )
+        if transformed_stream is None:
+            raise ValueError("Failed to transform streaming response")
+        return transformed_stream
 
     @staticmethod
     def generate_content_handler(
@@ -134,32 +116,14 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        try:
-            completion_response: Final = litellm.completion(**completion_kwargs)
-
-            if stream:
-                # Check if completion_response is actually a stream or a ModelResponse
-                # This can happen in error cases or when stream is not properly supported
-                if not hasattr(completion_response, "__iter__"):
-                    # If it's not a stream, treat it as a regular response
-                    generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
-                        cast(ModelResponse, completion_response)
-                    )
-                    return generate_content_response
-                else:
-                    # Transform streaming completion response to generate_content format
-                    transformed_stream: Final = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
-                    )
-                    if transformed_stream is not None:
-                        return transformed_stream
-                    raise ValueError("Failed to transform streaming response")
-            else:
-                # Transform completion response back to generate_content format
-                generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
-                    cast(ModelResponse, completion_response)
-                )
-                return generate_content_response
-
-        except Exception as e:
-            raise ValueError(f"Error calling litellm.completion for generate_content: {e}")
+        completion_response: Final = litellm.completion(**completion_kwargs)
+        if not stream or not hasattr(completion_response, "__iter__"):
+            return GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
+                cast(ModelResponse, completion_response)
+            )
+        transformed_stream: Final = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+            completion_response
+        )
+        if transformed_stream is None:
+            raise ValueError("Failed to transform streaming response")
+        return transformed_stream
