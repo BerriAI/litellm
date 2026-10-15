@@ -133,3 +133,44 @@ _PLAIN_TOOL: Final = MappingProxyType(
 )
 def test_model_rules_stay_on_python(request_fields: dict[str, object], expected: str | None) -> None:
     assert decline_reason(MappingProxyType({"model": "openai/gpt-6.1-sol", **request_fields})) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    (
+        pytest.param({"api_key": "azure-key"}, None, id="api_key"),
+        pytest.param(
+            {"api_key": None, "extra_headers": {"api-key": "caller-key"}}, None, id="forwarded_api_key_header"
+        ),
+        pytest.param(
+            {"api_key": None}, "native Azure Responses does not implement Azure AD token auth", id="azure_ad_token_auth"
+        ),
+        pytest.param(
+            {"api_key": "azure-key", "model": "azure/o_series/my-o3"},
+            "native Azure Responses does not implement the o-series config",
+            id="o_series",
+        ),
+        pytest.param(
+            {"api_key": "azure-key", "context_management": [{"type": "compaction"}]},
+            "native Azure Responses does not implement context_management",
+            id="context_management",
+        ),
+        pytest.param({"api_key": "azure-key", "api_version": "2025-03-01-preview"}, None, id="api_version"),
+    ),
+)
+def test_azure_requests_outside_the_native_config_stay_on_python(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object], expected: str | None
+) -> None:
+    for name in ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    request: Final = {"model": "azure/my-deployment", "input": "hi", **request_fields}
+    assert decline_reason(MappingProxyType(request)) == expected
+
+
+def test_azure_connection_defaults_read_the_azure_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", "azure-global")
+    monkeypatch.setattr(litellm, "api_base", None)
+    assert connection_defaults("azure") == ("azure-global", None)

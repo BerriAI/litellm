@@ -14,18 +14,26 @@ const REASONING_ITEM_ID_PREFIX: &str = "rs_";
 const MAX_STRIP_DEPTH: usize = 100;
 const REASONING_FIELDS_DROPPED_WHEN_NULL: [&str; 3] = ["status", "content", "encrypted_content"];
 
-/// Whether the host runs OpenAI's own item validator, which rejects reasoning it did not mint
-/// and tool-call item ids without its prefixes
+/// The host behind the OpenAI wire format. OpenAI and Azure run OpenAI's item validator, which
+/// rejects reasoning it did not mint and tool-call item ids without its prefixes, and Azure also
+/// rejects `status` on replayed reasoning and message items
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ItemValidation {
+pub enum ResponsesHost {
     OpenAi,
-    Lenient,
+    Azure,
+    Compatible,
+}
+
+impl ResponsesHost {
+    fn validates_items(self) -> bool {
+        matches!(self, Self::OpenAi | Self::Azure)
+    }
 }
 
 pub fn shape(
     input: Value,
     mut params: Map<String, Value>,
-    validation: ItemValidation,
+    host: ResponsesHost,
 ) -> Result<(Value, Map<String, Value>), Error> {
     if let Some(max_output_tokens) = params.get_mut("max_output_tokens")
         && max_output_tokens
@@ -49,17 +57,17 @@ pub fn shape(
     };
     let items = items
         .into_iter()
-        .filter(|item| validation == ItemValidation::Lenient || !is_minted_reasoning(item))
-        .map(without_null_reasoning_fields)
+        .filter(|item| !host.validates_items() || !is_minted_reasoning(item))
+        .map(|item| without_null_reasoning_fields(item, host))
         .map(|mut item| {
             if let Some(fields) = item.as_object_mut() {
                 strip_cache_control(fields, 0);
             }
             item
         })
-        .map(|item| match validation {
-            ItemValidation::OpenAi => without_foreign_tool_call_id(item),
-            ItemValidation::Lenient => item,
+        .map(|item| match host.validates_items() {
+            true => without_foreign_tool_call_id(item),
+            false => item,
         })
         .collect();
     Ok((Value::Array(items), params))
@@ -165,15 +173,23 @@ fn carries_thinking_blocks(encrypted_content: &str) -> bool {
 
 /// OpenAI rejects `status: null` on a replayed reasoning item. Python round-trips a valid item
 /// through the SDK model with `exclude_none`, and otherwise drops only the nullable fields
-fn without_null_reasoning_fields(item: Value) -> Value {
+fn without_null_reasoning_fields(item: Value, host: ResponsesHost) -> Value {
     let Value::Object(mut fields) = item else {
         return item;
     };
-    if fields.get("type").and_then(Value::as_str) != Some("reasoning") {
-        return Value::Object(fields);
+    match fields.get("type").and_then(Value::as_str) {
+        Some("message") if host == ResponsesHost::Azure => {
+            fields.remove("status");
+            return Value::Object(fields);
+        }
+        Some("reasoning") => {}
+        _ => return Value::Object(fields),
     }
     if is_sdk_reasoning_item(&fields) {
         drop_nulls(&mut fields);
+        if host == ResponsesHost::Azure {
+            fields.remove("status");
+        }
         fields
             .iter_mut()
             .filter(|(name, _)| matches!(name.as_str(), "summary" | "content"))
@@ -244,11 +260,11 @@ mod tests {
 
     use super::*;
 
-    fn shaped(input: Value, params: Value, validation: ItemValidation) -> (Value, Value) {
+    fn shaped(input: Value, params: Value, host: ResponsesHost) -> (Value, Value) {
         let Value::Object(params) = params else {
             panic!("params must be an object")
         };
-        let (input, params) = shape(input, params, validation).unwrap();
+        let (input, params) = shape(input, params, host).unwrap();
         (input, Value::Object(params))
     }
 
@@ -263,7 +279,7 @@ mod tests {
         let (_, params) = shaped(
             json!("hi"),
             json!({"max_output_tokens": requested}),
-            ItemValidation::Lenient,
+            ResponsesHost::Compatible,
         );
         assert_eq!(params, json!({"max_output_tokens": sent}));
     }
@@ -278,7 +294,7 @@ mod tests {
                 {"type": "function_call_output", "call_id": "c", "output": [{"type": "input_text", "text": "b", "cache_control": mark}]}
             ]),
             json!({"tools": [{"type": "function", "name": "a", "cache_control": mark, "parameters": {"type": "object"}}]}),
-            ItemValidation::Lenient,
+            ResponsesHost::Compatible,
         );
         assert_eq!(
             (input, params),
@@ -303,7 +319,7 @@ mod tests {
                 {"type": "function", "name": "c", "parameters": null},
                 {"type": "web_search"}
             ]}),
-            ItemValidation::Lenient,
+            ResponsesHost::Compatible,
         );
         assert_eq!(
             params,
@@ -330,7 +346,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(
-            shape(json!("hi"), params, ItemValidation::Lenient)
+            shape(json!("hi"), params, ResponsesHost::Compatible)
                 .unwrap_err()
                 .to_string(),
             format!(
@@ -357,7 +373,7 @@ mod tests {
         json!({"type": "message", "role": "user", "content": "hi", "status": null})
     )]
     fn drops_null_reasoning_fields(#[case] item: Value, #[case] expected: Value) {
-        let (input, _) = shaped(json!([item]), json!({}), ItemValidation::Lenient);
+        let (input, _) = shaped(json!([item]), json!({}), ResponsesHost::Compatible);
         assert_eq!(input, json!([expected]));
     }
 
@@ -376,8 +392,8 @@ mod tests {
     #[case::uuid_v1(json!({"type": "reasoning", "id": "rs_6f9619ff-8b86-11d0-b42d-00c04fc964ff", "summary": []}), false)]
     fn drops_minted_reasoning_for_openai(#[case] item: Value, #[case] minted: bool) {
         let input = json!([item, {"role": "user", "content": "hi"}]);
-        let (openai, _) = shaped(input.clone(), json!({}), ItemValidation::OpenAi);
-        let (lenient, _) = shaped(input.clone(), json!({}), ItemValidation::Lenient);
+        let (openai, _) = shaped(input.clone(), json!({}), ResponsesHost::OpenAi);
+        let (lenient, _) = shaped(input.clone(), json!({}), ResponsesHost::Compatible);
         assert_eq!(openai.as_array().unwrap().len(), if minted { 1 } else { 2 });
         assert_eq!(lenient, input);
     }
@@ -388,8 +404,8 @@ mod tests {
     #[case::foreign_custom_tool_call(json!({"type": "custom_tool_call", "id": "x", "call_id": "c"}), json!({"type": "custom_tool_call", "call_id": "c"}))]
     #[case::other_item(json!({"type": "message", "id": "x", "role": "user", "content": "hi"}), json!({"type": "message", "id": "x", "role": "user", "content": "hi"}))]
     fn drops_foreign_tool_call_ids_for_openai(#[case] item: Value, #[case] expected: Value) {
-        let (openai, _) = shaped(json!([item.clone()]), json!({}), ItemValidation::OpenAi);
-        let (lenient, _) = shaped(json!([item.clone()]), json!({}), ItemValidation::Lenient);
+        let (openai, _) = shaped(json!([item.clone()]), json!({}), ResponsesHost::OpenAi);
+        let (lenient, _) = shaped(json!([item.clone()]), json!({}), ResponsesHost::Compatible);
         assert_eq!((openai, lenient), (json!([expected]), json!([item])));
     }
 }

@@ -35,6 +35,7 @@ pub(crate) async fn create(
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
+        api_version: deployment.litellm_params.api_version.clone(),
         extra_headers: None,
         timeout: deployment.timeout,
     };

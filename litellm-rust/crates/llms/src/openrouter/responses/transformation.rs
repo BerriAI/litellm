@@ -10,7 +10,7 @@ use crate::{
         responses::transformation::BaseResponsesApiConfig,
     },
     openai::responses::{
-        request::ItemValidation,
+        request::ResponsesHost,
         transformation::{responses_request, responses_response},
     },
 };
@@ -67,11 +67,12 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
+        _api_version: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String {
+    ) -> Result<String, Error> {
         let base = resolve_non_empty(api_base, lookup, &[API_BASE_ENV])
             .unwrap_or_else(|| DEFAULT_BASE.into());
-        format!("{}{RESPONSES_PATH}", base.trim_end_matches('/'))
+        Ok(format!("{}{RESPONSES_PATH}", base.trim_end_matches('/')))
     }
 
     fn transform_responses_api_request(
@@ -80,7 +81,7 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        responses_request(model, input, params, ItemValidation::Lenient)
+        responses_request(model, input, params, ResponsesHost::Compatible)
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
@@ -115,7 +116,9 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            OPENROUTER_RESPONSES_CONFIG.get_complete_url(api_base, &env(secrets)),
+            OPENROUTER_RESPONSES_CONFIG
+                .get_complete_url(api_base, None, &env(secrets))
+                .unwrap(),
             expected
         );
     }

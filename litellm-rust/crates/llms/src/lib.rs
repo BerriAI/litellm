@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod aws_textract;
+pub mod azure;
 pub mod azure_ai;
 pub mod base_llm;
 pub mod bedrock;

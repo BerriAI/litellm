@@ -27,6 +27,7 @@ fn call() -> ResponsesCall {
         api_key: Some("test-key".into()),
         api_base: None,
         custom_llm_provider: None,
+        api_version: None,
         extra_headers: None,
         timeout: None,
     }

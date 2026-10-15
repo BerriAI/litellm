@@ -25,7 +25,7 @@ pytestmark = pytest.mark.requires_rust_extension
 MODEL: Final = "openai/gpt-6.1-sol"
 _OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LOGGED: Final = TypeAdapter(dict[str, object])
-_COMPARED_HEADERS: Final = ("authorization", "content-type", "openai-organization", "openai-project")
+_COMPARED_HEADERS: Final = ("api-key", "authorization", "content-type", "openai-organization", "openai-project")
 _COMPARED_LOG_FIELDS: Final = (
     "call_type",
     "custom_llm_provider",
@@ -156,6 +156,18 @@ AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": "And Germany?"},
 ]
 
+AZURE_MODEL: Final = "azure/my-deployment"
+
+WEATHER_TOOL_FUNCTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {name: value for name, value in WEATHER_TOOL.items() if name != "type"}
+)
+
+AZURE_STATUS_REPLAY_INPUT: Final[list[JsonValue]] = [
+    {"type": "message", "role": "user", "content": "Weather in Paris?", "status": "completed"},
+    {"type": "reasoning", "id": "rs_0a1b2c3d4e5f", "summary": [], "status": "completed"},
+    {"role": "user", "content": "And Germany?"},
+]
+
 MINTED_REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"type": "reasoning", "id": "rs_6f9619ff-8b86-4d01-b42d-00c04fc964ff", "summary": []},
     {
@@ -190,6 +202,7 @@ REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
 
 @dataclass(frozen=True, slots=True)
 class Leg:
+    request_path: str
     request_body: Mapping[str, JsonValue]
     request_headers: Mapping[str, str]
     response: Mapping[str, JsonValue]
@@ -301,6 +314,21 @@ CASES: Final = (
         "foreign_tool_call_ids_are_dropped",
         {"input": FOREIGN_TOOL_CALL_REPLAY_INPUT, "tools": [dict(WEATHER_TOOL)]},
     ),
+    Case("azure_default_v1_surface", {"model": AZURE_MODEL, "input": "hi"}),
+    Case("azure_dated_api_version", {"model": AZURE_MODEL, "input": "hi", "api_version": "2025-03-01-preview"}),
+    Case(
+        "azure_replay_without_status",
+        {
+            "model": AZURE_MODEL,
+            "input": AZURE_STATUS_REPLAY_INPUT,
+            "tools": [{"type": "function", "function": dict(WEATHER_TOOL_FUNCTION)}],
+        },
+    ),
+    Case(
+        "azure_forwarded_api_key_header",
+        {"model": AZURE_MODEL, "input": "hi", "api_key": None, "extra_headers": {"api-key": "caller-key"}},
+    ),
+    Case("azure_o_series_stays_on_python", {"model": "azure/o_series/my-o3", "input": "hi"}, falls_back=True),
     Case(
         "tool_schema_repair_stays_on_python",
         {
@@ -348,6 +376,7 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
     sent: Final = server.requests[-1]
     standard: Final = _LOGGED.validate_python(_LOGGED.validate_python(success[0].kwargs)["standard_logging_object"])
     return Leg(
+        request_path=sent.path,
         request_body=_OBJECT.validate_python(sent.body),
         request_headers=MappingProxyType(
             {name: value for name, value in sent.headers.items() if name in _COMPARED_HEADERS}
@@ -377,7 +406,11 @@ async def test_native_responses_match_python(
         case "dispatch":
             assert native.fell_back == case.falls_back
         case "request":
-            assert (native.request_body, native.request_headers) == (python.request_body, python.request_headers)
+            assert (native.request_path, native.request_body, native.request_headers) == (
+                python.request_path,
+                python.request_body,
+                python.request_headers,
+            )
         case "response":
             assert native.response == python.response
         case "logged":
