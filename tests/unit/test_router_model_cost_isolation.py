@@ -2290,6 +2290,56 @@ def test_a_non_routing_mode_pin_still_reaches_the_shared_row(monkeypatch: pytest
     )
 
 
+def test_a_non_routing_mode_pin_leaves_a_responses_row_on_the_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    _register_routing_test_row(monkeypatch, "responses")
+
+    Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"},
+                "model_info": {"id": "transcriber-id", "mode": "audio_transcription"},
+            }
+        ]
+    )
+
+    shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
+    assert shared_info["mode"] == "responses"
+
+
+def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """``github_copilot`` sends a model listing both endpoints to ``/v1/responses`` unless its row says ``chat``,
+    so a ``chat`` pin has to reach the row to keep that model on chat completions."""
+    from litellm.llms.github_copilot.responses.transformation import github_copilot_supports_responses_api
+
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["github_copilot/routing-test-model"] = {
+        "litellm_provider": "github_copilot",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "max_input_tokens": 1000,
+    }
+    _invalidate_model_cost_lowercase_map()
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is True
+
+    Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {"model": "github_copilot/routing-test-model"},
+                "model_info": {"id": "copilot-chat-pinned", "mode": "chat"},
+            }
+        ]
+    )
+
+    assert github_copilot_supports_responses_api("github_copilot/routing-test-model") is False
+
+
 @pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
 @pytest.mark.parametrize(
     "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]

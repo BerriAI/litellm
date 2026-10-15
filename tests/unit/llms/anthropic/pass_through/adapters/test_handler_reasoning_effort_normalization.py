@@ -146,6 +146,23 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         assert sent == {"effort": "high", "summary": "detailed"}
 
     @pytest.mark.parametrize(
+        "model, provider, summary",
+        [
+            ("bedrock_mantle/openai.gpt-5.4", "bedrock_mantle", "auto"),
+            ("azure/responses/gpt-5-mini", "azure", "detailed"),
+        ],
+    )
+    def test_auto_summary_asks_each_bridged_target_for_a_level_it_accepts(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
+    ) -> None:
+        """Mantle's OpenAI path accepts only ``auto``, so the opt-in summary must not send it ``detailed``."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking(model, provider, PLAIN_THINKING)
+
+        assert sent == {"effort": "high", "summary": summary}
+
+    @pytest.mark.parametrize(
         "api_base, expected",
         [
             ("https://foo.services.ai.azure.com/openai/v1", "high"),

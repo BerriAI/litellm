@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -108,6 +108,27 @@ def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_reje
     )
     assert "include" not in responses_kwargs
     assert "reasoning" in responses_kwargs
+
+
+@pytest.mark.parametrize(
+    "model, provider, summary",
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", "bedrock_mantle", "auto"),
+        ("openai/gpt-5.6-luna", "openai", "detailed"),
+    ],
+)
+def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
+) -> None:
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        thinking={"type": "enabled", "budget_tokens": 4096},
+        extra_kwargs={"custom_llm_provider": provider},
+    )
+    assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():

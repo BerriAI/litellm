@@ -637,6 +637,55 @@ def test_a_chat_pin_cannot_pull_gpt_5_4_function_tool_calls_off_the_responses_ap
     assert (info["mode"], model) == ("responses", "gpt-5.4")
 
 
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-terra", "us-east-1/openai.gpt-5.6-terra"])
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
+def test_a_chat_pinned_mantle_deployment_sends_function_tools_to_the_responses_api(
+    model: str, reasoning_effort: str | None
+) -> None:
+    """Mantle Chat Completions rejects function tools on gpt-5.4+ unless reasoning is off, so a ``mode: chat``
+    pin cannot keep a tool call there."""
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider="bedrock_mantle",
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=reasoning_effort,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("responses", model)
+
+
+def test_a_chat_pinned_mantle_deployment_sends_a_reasoning_summary_to_the_responses_api() -> None:
+    info, _ = responses_api_bridge_check(
+        model="openai.gpt-5.6-terra",
+        custom_llm_provider="bedrock_mantle",
+        reasoning_effort="low",
+        reasoning_summary="auto",
+        deployment_model_info=_CHAT,
+    )
+    assert info["mode"] == "responses"
+
+
+@pytest.mark.parametrize(
+    "model, reasoning_effort",
+    [
+        ("openai.gpt-5.6-terra", "none"),
+        ("openai.gpt-oss-120b", "low"),
+        ("openai.gpt-oss-safeguard-120b", "low"),
+    ],
+)
+def test_a_chat_pinned_mantle_tool_call_stays_on_chat_completions_when_chat_accepts_it(
+    model: str, reasoning_effort: str
+) -> None:
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider="bedrock_mantle",
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=reasoning_effort,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("chat", model)
+
+
 def test_a_chat_pin_cannot_pull_xai_web_search_off_the_responses_api() -> None:
     info, model = responses_api_bridge_check(
         model="grok-4",

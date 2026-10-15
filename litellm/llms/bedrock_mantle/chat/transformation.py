@@ -10,7 +10,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any, Final
 
 import httpx
@@ -22,7 +22,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_5_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -31,6 +31,17 @@ from ...base_llm.chat.transformation import BaseLLMException
 from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
+
+
+def _with_chat_reasoning_effort(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Chat Completions takes ``reasoning_effort`` as a level, so a Responses-shaped ``{"effort", "summary"}``
+    passes only its effort, the way the OpenAI GPT-5 chat config reads it."""
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    if not isinstance(reasoning_effort, dict):
+        return non_default_params
+    effort: Final = get_effort_level(reasoning_effort)
+    rest: Final = {key: value for key, value in non_default_params.items() if key != "reasoning_effort"}
+    return rest if effort is None else {**rest, "reasoning_effort": effort}
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -138,7 +149,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
         mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
-            non_default_params,
+            dict(_with_chat_reasoning_effort(non_default_params)),
             optional_params,
             model,
             drop_params,

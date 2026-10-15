@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
+    auto_reasoning_summary,
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
 )
@@ -735,7 +736,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if reasoning_effort:
                 return {
                     "reasoning_effort": LiteLLMAnthropicMessagesAdapter._apply_reasoning_summary_wrapping(
-                        reasoning_effort, thinking
+                        reasoning_effort, thinking, model, None
                     )
                 }
             return {}
@@ -744,6 +745,8 @@ class LiteLLMAnthropicMessagesAdapter:
     def _apply_reasoning_summary_wrapping(
         reasoning_effort: str,
         thinking: Mapping[str, object],
+        model: str,
+        custom_llm_provider: str | None,
     ) -> Any:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
@@ -761,7 +764,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if summary:
             return {"effort": reasoning_effort, "summary": summary}
         if is_reasoning_auto_summary_enabled():
-            return {"effort": reasoning_effort, "summary": "detailed"}
+            return {"effort": reasoning_effort, "summary": auto_reasoning_summary(model, custom_llm_provider)}
         return reasoning_effort
 
     def translate_anthropic_tool_choice_to_openai(
@@ -1173,7 +1176,9 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs["reasoning_effort"] = (
             reasoning_effort
             if is_claude_target
-            else self._apply_reasoning_summary_wrapping(reasoning_effort, cast(dict[str, object], thinking))
+            else self._apply_reasoning_summary_wrapping(
+                reasoning_effort, cast(dict[str, object], thinking), model, custom_llm_provider
+            )
         )
 
     def _translate_output_format_to_openai(

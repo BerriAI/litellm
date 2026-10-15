@@ -50,6 +50,15 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def _mantle_responses_series_name(model: str) -> str | None:
+    """The bare OpenAI series name of a Bedrock Mantle model that also serves the Responses API, or ``None``."""
+    from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses, split_mantle_region_prefix
+
+    if not mantle_supports_responses(model, litellm.model_cost):
+        return None
+    return split_mantle_region_prefix(model)[1].removeprefix("openai.")
+
+
 def bridge_deployment_info(model_info: object) -> Mapping[str, object] | None:
     """The router deployment's ``model_info`` when the call carries one, read without narrowing the
     caller's variable (``litellm.completion`` reuses it for pricing registration)."""
@@ -134,6 +143,9 @@ def responses_api_bridge_check(
     #   an explicit effort with function tools is rejected from gpt-5.6 on, and the unset
     #   effort only from gpt-6 on (gpt-5.6 serves tools with reasoning silently off), so the
     #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
+    # - Bedrock Mantle serves the same API and enforces the gpt-5.4+ rule even with the effort
+    #   unset (measured on gpt-5.6-terra), so a Mantle row that also serves Responses follows
+    #   these rules, which keeps a deployment pinned to ``mode: chat`` from a 400 on them.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     has_function_tool: Final = any(
@@ -158,8 +170,16 @@ def responses_api_bridge_check(
     on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
         model, api_base
     )
+    mantle_series_name: Final = (
+        _mantle_responses_series_name(model) if custom_llm_provider == "bedrock_mantle" else None
+    )
+    on_mantle_responses_endpoint: Final = mantle_series_name is not None
+    gpt_series_name: Final = mantle_series_name or model
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
+        custom_llm_provider == "azure"
+        or on_mantle_responses_endpoint
+        or resolved_api_base == ""
+        or _is_openai_backed_api_base(resolved_api_base)
     )
     chat_rejects_function_tools: Final = (
         has_function_tool
@@ -168,16 +188,16 @@ def responses_api_bridge_check(
             foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
             if on_foundry_openai_endpoint
             else (
-                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(gpt_series_name)
                 and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
             )
         )
     )
     if (
-        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
+        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint or on_mantle_responses_endpoint)
         and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(gpt_series_name)
         and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
     ):
         model_info["mode"] = "responses"

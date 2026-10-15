@@ -22,7 +22,6 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -73,6 +72,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
+
+    def auto_reasoning_summary(self) -> str:
+        return "auto" if self.use_openai_path else super().auto_reasoning_summary()
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
@@ -159,11 +161,6 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             isinstance(summary, str) and summary in _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES
         ):
             return params
-        if summary == "detailed" and is_reasoning_auto_summary_enabled():
-            verbose_logger.debug(
-                "Bedrock Mantle Responses API: sending reasoning.summary 'auto' for the auto summary 'detailed'."
-            )
-            return {**params, "reasoning": {**reasoning, "summary": "auto"}}
         if not drop_params:
             raise litellm.utils.UnsupportedParamsError(
                 status_code=400,

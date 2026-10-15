@@ -10641,22 +10641,25 @@ class Router:
     @staticmethod
     def _keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, object]) -> Mapping[str, object]:
         """A deployment's ``chat`` or ``responses`` pin routes only that deployment, so it never replaces the
-        routing mode registered for its shared backend row, which the SDK and every sibling deployment route by.
+        routing mode registered for its shared backend row, which the SDK and every sibling deployment route by,
+        and no other mode replaces a registered ``responses`` mode either.
 
-        A ``responses`` pin still marks a row that has no routing mode, and any row of a Responses-only
-        provider, since that is how a model missing from the cost map, or a ``github_copilot`` model,
-        opts into the Responses API. A ``chat`` pin never marks a row, so the outcome does not depend
-        on which deployment registers first."""
+        A ``responses`` pin still marks a row that has no routing mode, since that is how a model missing from
+        the cost map opts into the Responses API. A ``chatgpt`` or ``github_copilot`` row takes any mode until it
+        is ``responses``, since those providers read it by name to pick their endpoint. Elsewhere a ``chat`` pin
+        never marks a row, so the outcome does not depend on which deployment registers first."""
         deployment_mode: Final = shared_model_info.get("mode")
-        if not isinstance(deployment_mode, str) or deployment_mode not in ROUTABLE_MODES:
-            return shared_model_info
-        if deployment_mode == "responses" and backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS:
+        if not isinstance(deployment_mode, str):
             return shared_model_info
         registration_key: Final = model_cost_registration_key(
             backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
         )
         registered_row: Final = cast(Mapping[str, object] | None, litellm.model_cost.get(registration_key)) or {}
         registered_mode: Final = registered_row.get("mode")
+        if registered_mode != "responses" and (
+            deployment_mode not in ROUTABLE_MODES or backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS
+        ):
+            return shared_model_info
         if registered_mode is None and deployment_mode == "chat":
             return {key: value for key, value in shared_model_info.items() if key != "mode"}
         if registered_mode is None or registered_mode == deployment_mode:

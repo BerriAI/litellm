@@ -32,7 +32,7 @@ from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import request_safeguards_evaluator
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import auto_reasoning_summary, litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -182,6 +182,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
     )
 
     # Normalize reasoning effort based on model capabilities

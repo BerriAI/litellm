@@ -273,6 +273,20 @@ class TestBedrockMantleConfig:
         assert optional_params["max_completion_tokens"] == 50
         assert "max_tokens" not in optional_params
 
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected",
+        [({"effort": "low", "summary": "auto"}, "low"), ("medium", "medium"), ({"summary": "auto"}, None)],
+    )
+    def test_chat_completions_gets_reasoning_effort_as_a_level(self, reasoning_effort, expected) -> None:
+        """Mantle chat answers a Responses-shaped ``{"effort", "summary"}`` with ``invalid_type``."""
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-terra",
+            custom_llm_provider="bedrock_mantle",
+            drop_params=False,
+            reasoning_effort=reasoning_effort,
+        )
+        assert optional_params.get("reasoning_effort") == expected
+
     def test_non_gpt_reasoning_models_keep_the_openai_compatible_max_tokens(self):
         optional_params = litellm.get_optional_params(
             model="openai.gpt-oss-120b",

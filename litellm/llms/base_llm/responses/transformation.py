@@ -90,6 +90,10 @@ class BaseResponsesAPIConfig(ABC):
     def get_supported_openai_params(self, model: str) -> list:
         pass
 
+    def auto_reasoning_summary(self) -> str:
+        """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
+        return "detailed"
+
     @abstractmethod
     def map_openai_params(
         self,
