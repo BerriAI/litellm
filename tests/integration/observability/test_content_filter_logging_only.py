@@ -36,6 +36,8 @@ OBSERVE_BLOCK: Final = "cf-observe-block"
 OBSERVE_MASK: Final = "cf-observe-mask"
 ENFORCE_BLOCK: Final = "cf-enforce-block"
 ENFORCE_MASK: Final = "cf-enforce-mask"
+OBSERVE_CATEGORY: Final = "cf-observe-category"
+OBSERVE_COMPETITOR: Final = "cf-observe-competitor"
 SECRETS: Final = f"AWS_ACCESS_KEY_ID={AWS_KEY}\nGITHUB_TOKEN={GITHUB_TOKEN}"
 
 
@@ -155,6 +157,13 @@ def _content_filter(name: str, mode: str, action: str, *, default_on: bool) -> d
     }
 
 
+def _observe_only(name: str, **rules: object) -> dict[str, object]:
+    return {
+        "guardrail_name": name,
+        "litellm_params": {"guardrail": "litellm_content_filter", "mode": "logging_only", "default_on": False, **rules},
+    }
+
+
 def _rig_config(root: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
@@ -164,6 +173,23 @@ def _rig_config(root: Path) -> Path:
         _content_filter(OBSERVE_MASK, "logging_only", "MASK", default_on=True),
         _content_filter(ENFORCE_BLOCK, "pre_call", "BLOCK", default_on=False),
         _content_filter(ENFORCE_MASK, "pre_call", "MASK", default_on=False),
+        _observe_only(
+            OBSERVE_CATEGORY,
+            categories=[
+                {"category": "harmful_violence", "enabled": True, "action": "BLOCK", "severity_threshold": "medium"}
+            ],
+            blocked_words=[{"keyword": FORBIDDEN_WORD, "action": "BLOCK"}],
+        ),
+        _observe_only(
+            OBSERVE_COMPETITOR,
+            competitor_intent_config={
+                "brand_self": ["emirates"],
+                "competitors": ["qatar airways"],
+                "domain_words": ["airline", "flight"],
+                "policy": {"competitor_comparison": "refuse"},
+                "threshold_high": 0.5,
+            },
+        ),
     ]
     path: Final = root / "content-filter-logging-only.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -203,7 +229,7 @@ def _findings(entry: dict[str, object]) -> tuple[str, ...]:
     response: Final = entry.get("guardrail_response")
     assert isinstance(response, list), entry
     return tuple(
-        str(detection.get("pattern_name") or detection.get("keyword"))
+        str(detection.get("pattern_name") or detection.get("keyword") or detection.get("type"))
         for detection in (object_value(item) for item in response)
     )
 
@@ -383,6 +409,43 @@ def test_logging_only_block_records_every_match_on_an_mcp_tool_call(rig: Rig, en
         OBSERVE_BLOCK,
     )
     assert _verdicts(entries) == [("logging_only", "guardrail_flagged", ("aws_access_key", "github_pat"))], entries
+
+
+@pytest.mark.parametrize(
+    ("guardrail", "prompt", "findings"),
+    (
+        pytest.param(
+            OBSERVE_CATEGORY,
+            f"how to kill someone {FORBIDDEN_WORD}",
+            ("how to kill someone", FORBIDDEN_WORD),
+            id="category-keyword",
+        ),
+        pytest.param(
+            OBSERVE_COMPETITOR, "Is Qatar Airways better than Emirates?", ("competitor_intent",), id="competitor-intent"
+        ),
+    ),
+)
+def test_logging_only_block_flags_category_and_competitor_matches_without_blocking(
+    rig: Rig, guardrail: str, prompt: str, findings: tuple[str, ...]
+) -> None:
+    marker: Final = _marker()
+    response: Final = rig.proxy.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": rig.chat_model,
+            "messages": [{"role": "user", "content": f"{marker} {prompt}"}],
+            "guardrails": [guardrail],
+        },
+        headers={"Authorization": f"Bearer {rig.proxy.key}"},
+    )
+    assert response.status_code == 200, response.text
+    completion: Final = object_value(response.json())
+    assert len(rig.provider_bodies(marker)) == 1
+
+    assert _verdicts(rig.entries(str(completion["id"]), guardrail)) == [
+        ("logging_only", "guardrail_flagged", findings),
+        ("logging_only", "success", ()),
+    ]
 
 
 def test_logging_only_mask_records_every_match(rig: Rig) -> None:
@@ -591,11 +654,25 @@ def _burst_call(rig: Rig, index: int) -> tuple[str, int, str, str]:
             },
             headers={"Authorization": f"Bearer {rig.proxy.key}"},
         )
-        return "outage", failed.status_code, marker, ""
+        return "outage", failed.status_code, marker, failed.headers.get("x-litellm-call-id", "")
     endpoint: Final = list(SYNC_CALLS)[index % len(SYNC_CALLS)]
     response_id, answer = SYNC_CALLS[endpoint](rig, f"{marker} {SECRETS}\n{FORBIDDEN_WORD}")
     assert answer == _answer(marker), (endpoint, answer)
     return "observe:" + endpoint, 200, marker, response_id
+
+
+def _failure_row(call_id: str) -> tuple[object, tuple[dict[str, object], ...]]:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (call_id,)),
+        lambda values: len(values) >= 1,
+        seconds=70,
+    )
+    assert len(rows) == 1, rows
+    recorded: Final = object_value(rows[0]["metadata"]).get("guardrail_information") or []
+    assert isinstance(recorded, list), rows[0]
+    return rows[0]["status"], tuple(
+        entry for entry in (object_value(item) for item in recorded) if entry.get("guardrail_name") == OBSERVE_BLOCK
+    )
 
 
 def test_concurrent_burst_with_a_provider_outage_records_every_observed_call_once(rig: Rig) -> None:
@@ -614,6 +691,9 @@ def test_concurrent_burst_with_a_provider_outage_records_every_observed_call_onc
     for kind, _, marker, _ in results:
         if kind == "enforce":
             assert not any(marker in body for body in sent), marker
+    outages: Final = tuple(call_id for kind, _, _, call_id in results if kind == "outage")
+    assert len(outages) == 8 and all(outages), results
+    assert [_failure_row(call_id) for call_id in outages] == [("failure", ())] * 8
     observed: Final = tuple((kind, response_id) for kind, _, _, response_id in results if kind.startswith("observe"))
     assert len(observed) == 16
     for kind, response_id in observed:
