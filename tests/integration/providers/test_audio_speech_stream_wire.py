@@ -360,7 +360,9 @@ def test_a_health_check_on_a_deployment_level_streamed_speech_model_reports_it_h
         assert response.status_code == 200, response.text[:400]
         report: Final = object_value(response.json())
         assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
-        assert [request.method for request in wire.drain()] == ["POST"]
+        assert [(request.method, urlsplit(request.target).path) for request in wire.drain()] == [
+            ("POST", PROVIDERS[provider].buffered_path)
+        ]
 
 
 def _long_audio(request: Request) -> Reply:
