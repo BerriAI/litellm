@@ -9,6 +9,7 @@ from _langfuse_otel import (
     _span_attributes_containing_marker,
     _trace_user_span_attributes,
     _upstream_reply,
+    _user_id_session_id,
 )
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, wire_server
@@ -243,13 +244,13 @@ def test_langfuse_otel_v2_header_end_user_lands_in_user_id(gateway: Gateway, tmp
         batches: Final[list[bytes]] = []
         user_spans: Final = eventually(
             lambda: _trace_user_span_attributes(collector, batches, marker),
-            lambda spans: len(spans) == 1,
+            lambda spans: len(spans) == 2,
             seconds=30,
         )
-        assert {key: user_spans[0].get(key) for key in ("user.id", "session.id")} == {
-            "user.id": f"end-user-{marker}",
-            "session.id": None,
-        }, user_spans[0]
+        assert [_user_id_session_id(attributes) for attributes in user_spans] == [
+            {"user.id": f"end-user-{marker}", "session.id": None}
+        ] * 2, user_spans
+        assert any(attributes.get("gen_ai.response.id") == marker for attributes in user_spans), user_spans
 
 
 def test_langfuse_otel_messages_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user(

@@ -48,7 +48,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.trace_controls import TraceControls, langfuse_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 from litellm.types.utils import InternalCallOrigin
 
@@ -260,7 +260,7 @@ class LLMCallEvent:
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
         model: Final = as_str(kwargs.get("model")) or ""
-        trace: Final = caller_trace_controls(kwargs)
+        trace: Final = langfuse_trace_controls(kwargs)
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,

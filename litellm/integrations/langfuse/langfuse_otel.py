@@ -12,8 +12,8 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-from litellm.integrations.otel.model.trace_controls import metadata_bodies
-from litellm.integrations.otel.model.utils import as_str, as_str_mapping
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls, langfuse_trace_controls
+from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -56,13 +56,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        LangfuseOtelLogger._set_trace_user_attribute(
-            span=span,
-            kwargs=kwargs,
-            metadata=as_str_mapping(
-                LangfuseOtelLogger._extract_langfuse_metadata(kwargs)  # pyright: ignore[reportUnknownArgumentType,reportUnknownMemberType]  # helper returns a loosely typed dict
-            ),
-        )
+        LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: dict) -> dict:
@@ -267,25 +261,19 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
     @staticmethod
-    def _set_trace_user_attribute(
-        span: Span, kwargs: Mapping[str, object], metadata: Mapping[str, object] | None
-    ) -> None:
+    def _set_trace_user_attribute(span: Span, kwargs: Mapping[str, object]) -> None:
         slp: Final = as_str_mapping(kwargs.get("standard_logging_object"))
         slp_metadata: Final = as_str_mapping(slp.get("metadata")) if slp is not None else None
         if slp is None or slp_metadata is None:
             return
-        litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
-        bodies: Final = metadata_bodies(litellm_params)
-        caller: Final = (as_str(metadata.get("trace_user_id")) if metadata is not None else None) or next(
-            (value for body in bodies if (value := as_str(body.get("trace_user_id")))), None
-        )
+        caller: Final = caller_trace_controls(kwargs).user_id
         if caller is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
             return
         end_user: Final = (
             slp_metadata.get("user_api_key_end_user_id")
             or slp.get("end_user")
-            or next((found for body in bodies if (found := as_str(body.get("user_api_key_end_user_id")))), None)
+            or langfuse_trace_controls(kwargs).user_id
         )
         if end_user:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))

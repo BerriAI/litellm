@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Final
@@ -1098,6 +1099,17 @@ class TestLangfuseOtelTraceIdentity:
             )
         )
         assert identity == {"user.id": "end-1", "session.id": "sess-1"}
+
+    def test_langfuse_trace_user_id_header_wins_without_an_overwrite_warning(self, caplog):
+        kwargs = self._kwargs(
+            slp_metadata={"user_api_key_end_user_id": "end-1"},
+            litellm_metadata={"user_api_key_end_user_id": "end-1"},
+        )
+        kwargs["litellm_params"]["proxy_server_request"] = {"headers": {"langfuse_trace_user_id": "header-1"}}
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "header-1", "session.id": None}
+        assert [record.message for record in caplog.records if "Overwriting" in record.message] == []
 
     def test_internal_user_without_an_end_user_never_lands_in_user_id(self):
         identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_user_id": "internal-1"}))

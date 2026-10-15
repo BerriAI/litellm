@@ -447,6 +447,7 @@ def test_the_proxy_end_user_fills_user_id_when_the_caller_names_no_trace_user():
     )
 
     assert root_attrs["user.id"] == "end-1"
+    assert generation_attrs["user.id"] == "end-1"
 
 
 def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
@@ -462,6 +463,7 @@ def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
     )
 
     assert root_attrs["user.id"] == "caller-1"
+    assert generation_attrs["user.id"] == "caller-1"
 
 
 def test_caller_metadata_cannot_override_the_proxy_team_identity():

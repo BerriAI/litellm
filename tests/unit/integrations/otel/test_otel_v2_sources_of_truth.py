@@ -1387,6 +1387,7 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
 )
 def test_langfuse_trace_controls_fall_back_to_the_proxy_end_user(request_data, expected):
     assert langfuse_trace_controls({"litellm_params": request_data}) == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
 
 
 def test_llm_span_data_carries_the_caller_trace_controls():
