@@ -4719,7 +4719,7 @@ def test_completion_cost_on_translated_anthropic_response_includes_web_search():
     "model, provider, carried",
     [
         ("databricks/databricks-claude-opus-4-7", "databricks", "max"),
-        ("openrouter/anthropic/claude-opus-4.7", "openrouter", "xhigh"),
+        ("openrouter/anthropic/claude-opus-4.7", "openrouter", "max"),
     ],
 )
 def test_a_summary_bearing_adaptive_request_still_delivers_its_tier(model, provider, carried):
@@ -4729,8 +4729,8 @@ def test_a_summary_bearing_adaptive_request_still_delivers_its_tier(model, provi
     exactly the path this translator exists to serve.
 
     Each case names the exact tier that provider ends up sending, not merely that something arrived:
-    bedrock and databricks rebuild `output_config`, and openrouter applies its own max to xhigh
-    remap, so asserting presence alone would pass on a mapping that silently changed the tier."""
+    bedrock and databricks rebuild `output_config`, while OpenRouter keeps its gateway effort
+    unchanged, so asserting presence alone would pass on a mapping that silently changed the tier."""
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
     from litellm.utils import get_optional_params
 

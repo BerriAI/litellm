@@ -13,7 +13,13 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.authenticator import prevent_device_login
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
+from litellm.proxy.common_utils.model_listing_utils import (
+    DeployedModelGroups,
+    TeamModelNameTranslator,
+    alias_listing_entries,
+    alias_target,
+    caller_alias_maps,
+)
 from litellm.router import Router
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -153,19 +159,19 @@ class OfferingAccessGuard(CustomLogger):
     def _offering_name(self, name: str, auth: UserAPIKeyAuth) -> str:
         snapshot: Final = self.router.serving_snapshot()
         auth_metadata: Final = _METADATA_ADAPTER.validate_python(auth.model_dump())
-        caller_target: Final = (
-            alias_target(
-                name,
-                caller_alias_maps(
-                    _METADATA_ADAPTER.validate_python(auth_metadata.get("aliases") or MappingProxyType({})),
-                    _METADATA_ADAPTER.validate_python(auth_metadata.get("team_model_aliases") or MappingProxyType({})),
-                    auth.team_id,
-                    auth.team_id,
-                ),
-                snapshot.available_models | frozenset(snapshot.unavailable_models),
-            )
-            or name
+        aliases: Final = caller_alias_maps(
+            _METADATA_ADAPTER.validate_python(auth_metadata.get("aliases") or MappingProxyType({})),
+            _METADATA_ADAPTER.validate_python(auth_metadata.get("team_model_aliases") or MappingProxyType({})),
+            auth.team_id,
+            auth.team_id,
         )
+        deployed: Final = DeployedModelGroups(snapshot.router, team_id=auth.team_id)
+        entries: Final = alias_listing_entries(
+            tuple((name, name) for name in snapshot.available_models | frozenset(snapshot.unavailable_models)),
+            aliases,
+            deployed,
+        )
+        caller_target: Final = alias_target(name, aliases, entries, deployed) or dict(entries).get(name, name)
         target: Final = resolve_model_group_alias(snapshot.router.model_group_alias, caller_target) or caller_target
         rows: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(
             snapshot.router.get_model_list() or ()
