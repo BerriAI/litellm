@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -93,6 +94,7 @@ class GetModelCostMap:
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
 
     _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
+    _loaded_catalog_fields: frozenset[str] = frozenset()
 
     @classmethod
     def loaded_model_cost_map(cls) -> Mapping[str, Mapping[str, object]]:
@@ -100,9 +102,15 @@ class GetModelCostMap:
         return cls._loaded_catalog
 
     @classmethod
+    def loaded_model_cost_map_fields(cls) -> frozenset[str]:
+        """Every field name that at least one entry of the loaded catalog carries."""
+        return cls._loaded_catalog_fields
+
+    @classmethod
     def _snapshot_loaded_catalog(cls, model_cost: Mapping[str, object]) -> None:
         raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
+        cls._loaded_catalog_fields = frozenset(chain.from_iterable(entry.keys() for entry in raw.values()))
 
     @classmethod
     def get_backup_model_count(cls) -> int:

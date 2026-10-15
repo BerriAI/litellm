@@ -8,6 +8,7 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from typing import Final
 
 import pytest
 
@@ -438,6 +439,22 @@ async def test_loaded_catalog_snapshot_follows_the_fetched_map_and_ignores_later
     litellm.register_model({"gpt-5.4-mini": {"max_input_tokens": 2048}}, persist_across_reloads=False)
     assert litellm.model_cost["gpt-5.4-mini"]["max_input_tokens"] == 2048
     assert GetModelCostMap.loaded_model_cost_map()["gpt-5.4-mini"]["max_input_tokens"] == 777
+
+
+@pytest.mark.asyncio
+async def test_loaded_catalog_fields_follow_each_fetched_map():
+    added = json.loads(_real_map_bytes())
+    added["gpt-5.4-mini"]["supports_litellm_qa_capability"] = True
+    with_field, _ = _mock_client([httpx.Response(200, content=json.dumps(added).encode())])
+    without_field, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())])
+
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=with_field)
+    fields_after_adding: Final = GetModelCostMap.loaded_model_cost_map_fields()
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=without_field)
+
+    assert "supports_litellm_qa_capability" in fields_after_adding
+    assert "supports_litellm_qa_capability" not in GetModelCostMap.loaded_model_cost_map_fields()
+    assert "max_input_tokens" in GetModelCostMap.loaded_model_cost_map_fields()
 
 
 @pytest.mark.asyncio
