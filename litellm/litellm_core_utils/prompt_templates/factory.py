@@ -5448,6 +5448,10 @@ def _content_with_function_prompt(content: object, function_prompt: str) -> str 
         return function_prompt
     if isinstance(content, str):
         return f"{content} {function_prompt}"
+    if not isinstance(content, list | tuple):
+        raise TypeError(
+            f"system message content must be a string or a list of content parts, got {type(content).__name__}"
+        )
     return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
 
 

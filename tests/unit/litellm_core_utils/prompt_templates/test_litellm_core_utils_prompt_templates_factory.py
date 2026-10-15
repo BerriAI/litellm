@@ -94,6 +94,22 @@ def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history
     assert json.dumps(turns[0]).count("You are helpful.") == json.dumps(history).count("You are helpful.")
 
 
+@pytest.mark.parametrize(
+    "content",
+    (
+        {"type": "text", "text": "private system prompt"},
+        {"private system prompt"},
+        (part for part in ("private system prompt",)),
+    ),
+    ids=("dict", "set", "generator"),
+)
+def test_function_call_prompt_rejects_unreadable_system_content_without_echoing_it(content: object) -> None:
+    with pytest.raises(TypeError) as error:
+        function_call_prompt([{"role": "system", "content": content}], [{"name": "read_file"}])
+
+    assert "private system prompt" not in str(error.value)
+
+
 def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
     messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
 
