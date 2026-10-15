@@ -9,6 +9,7 @@ use litellm_llms::{
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
+    github_copilot::messages::transformation::COPILOT_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
@@ -55,6 +56,9 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Edenai => &EDENAI_MESSAGES_CONFIG,
+        LlmProviders::GithubCopilot if model.to_ascii_lowercase().contains("claude") => {
+            &COPILOT_MESSAGES_CONFIG
+        }
         LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             &VERTEX_ANTHROPIC_MESSAGES_CONFIG
@@ -88,6 +92,7 @@ mod tests {
     #[case::bedrock("bedrock")]
     #[case::deepseek("deepseek")]
     #[case::edenai("edenai")]
+    #[case::github_copilot("github_copilot")]
     #[case::minimax("minimax")]
     #[case::vertex_ai("vertex_ai")]
     fn provider_keeps_its_python_name(#[case] name: &str) {
@@ -98,6 +103,7 @@ mod tests {
 
     #[rstest]
     #[case::openai(LlmProviders::Openai, "gpt-5")]
+    #[case::copilot_non_claude(LlmProviders::GithubCopilot, "native-model")]
     #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,
