@@ -108,6 +108,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
             team_id: null,
             user_id: metrics.metadata.user_id,
             user_email: metrics.metadata.user_email,
+            user_alias: metrics.metadata.user_alias,
             key_exists: metrics.metadata.key_exists,
             tags: metrics.metadata.tags || [],
           },
@@ -129,7 +130,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
     .map(([api_key, metrics]) => ({
       api_key,
       key_alias: keyActivityLabel(metrics.metadata, metrics.metadata.user_id ?? "-"),
-      user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
+      user: metrics.metadata.user_alias ?? metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,
@@ -174,6 +175,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
             team_id: metrics.metadata.team_id || null,
             user_id: metrics.metadata.user_id,
             user_email: metrics.metadata.user_email,
+            user_alias: metrics.metadata.user_alias,
             key_exists: metrics.metadata.key_exists,
             tags: tagDictionary[key] || [],
           },
@@ -195,7 +197,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
     .map(([api_key, metrics]) => ({
       api_key,
       key_alias: keyActivityLabel(metrics.metadata, metrics.metadata.user_id ?? "-"),
-      user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
+      user: metrics.metadata.user_alias ?? metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,

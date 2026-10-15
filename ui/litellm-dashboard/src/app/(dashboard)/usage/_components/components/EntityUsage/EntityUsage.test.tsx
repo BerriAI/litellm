@@ -533,6 +533,25 @@ describe("EntityUsage", () => {
       expect(getTopAPIKeys(results, 5)[0]?.user).toBe("user-123");
     });
 
+    it("names the owner by alias rather than email for global and entity top keys", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "key-123": createKeyMetrics(12.5, {
+            key_alias: null,
+            team_id: null,
+            user_id: "user-123",
+            user_email: "alice@example.com",
+            user_alias: "Alice Chen",
+          }),
+        }),
+      ];
+
+      expect(getGlobalTopKeys(results, 5)[0]?.key_alias).toBe("Alice Chen");
+      expect(getGlobalTopKeys(results, 5)[0]?.user).toBe("Alice Chen");
+      expect(getTopAPIKeys(results, 5)[0]?.key_alias).toBe("Alice Chen");
+      expect(getTopAPIKeys(results, 5)[0]?.user).toBe("Alice Chen");
+    });
+
     it("labels keys with their owner when no alias or email was recorded", () => {
       const results = [
         createDailyData("2025-01-01", {
@@ -1161,6 +1180,37 @@ describe("EntityUsage", () => {
       expect(screen.getByText("spender@example.com")).toBeInTheDocument();
     });
     expect(screen.queryByText(userUuid)).not.toBeInTheDocument();
+  });
+
+  it("prefers the user alias when labelling an owner who has both a name and an email", async () => {
+    const userUuid = "c0e68be8-057e-4e2f-9d3a-000000000001";
+    const spendDataForUser = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            entities: {
+              [userUuid]: {
+                ...mockSpendData.results[0].breakdown.entities["tag-1"],
+                metadata: { user_alias: "Chen Yan", user_email: "spender@example.com" },
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    mockUserDailyActivityCall.mockResolvedValue(spendDataForUser);
+
+    // entityList is null to simulate a spender missing from the paginated user list
+    render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Chen Yan")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("spender@example.com")).not.toBeInTheDocument();
   });
 
   it("renders the provider spend table logo from the bundled provider map", async () => {

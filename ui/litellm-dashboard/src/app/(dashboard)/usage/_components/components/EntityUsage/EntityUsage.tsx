@@ -258,13 +258,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     if (metadata?.team_alias) {
       return metadata.team_alias;
     }
-    // Resolve user_id to email/alias so the Spend Per User chart never shows a raw UUID
-    // when an email is on file (the entityList is paginated and may miss spenders)
-    if (metadata?.user_email) {
-      return metadata.user_email;
-    }
+    // Resolve user_id to the owner's name or email so the Spend Per User chart never
+    // shows a raw UUID when either is on file (the entityList is paginated and may
+    // miss spenders)
     if (metadata?.user_alias) {
       return metadata.user_alias;
+    }
+    if (metadata?.user_email) {
+      return metadata.user_email;
     }
     return entity;
   };
