@@ -4,12 +4,14 @@ Helper functions to handle images passed in messages
 
 import asyncio
 import base64
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 from httpx import Response
 
 import litellm
@@ -22,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
 MAX_CONCURRENT_REMOTE_MEDIA_FETCHES: Final = 20
+_FETCH_ATTEMPTS: Final = 3
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
@@ -80,6 +83,13 @@ def _process_image_response(response: Response, url: str) -> str:
     return result
 
 
+def _attempt_timeouts(timeout: float | httpx.Timeout | None) -> Iterable[float | httpx.Timeout | None]:
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return (timeout,) * _FETCH_ATTEMPTS
+    deadline: Final = time.monotonic() + timeout
+    return (remaining for _ in range(_FETCH_ATTEMPTS) if (remaining := deadline - time.monotonic()) > 0)
+
+
 def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
     verbose_logger.warning("Image fetch of %s rejected before any request went out: %s", url, verdict)
     return litellm.ImageFetchError(
@@ -88,7 +98,7 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     )
 
 
-async def async_convert_url_to_base64(url: str) -> str:
+async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -103,9 +113,9 @@ async def async_convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client: Final = litellm.module_level_aclient
-    for _ in range(3):
+    for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = await async_safe_get(client, url)
+            response = await async_safe_get(client, url, timeout=attempt_timeout)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
@@ -116,7 +126,7 @@ async def async_convert_url_to_base64(url: str) -> str:
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
-def convert_url_to_base64(url: str) -> str:
+def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -131,9 +141,9 @@ def convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client: Final = litellm.module_level_client
-    for _ in range(3):
+    for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = safe_get(client, url)
+            response = safe_get(client, url, timeout=attempt_timeout)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
@@ -293,14 +303,16 @@ def _inline_message(
     return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
 
 
-async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore) -> str:
+async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None) -> str:
     async with in_flight:
-        return await async_convert_url_to_base64(url)
+        return await async_convert_url_to_base64(url, timeout=timeout)
 
 
-async def _fetch_data_urls(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
+async def async_convert_urls_to_base64(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+) -> tuple[str, ...]:
     in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight)) for url in remote_urls)
+    fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
     try:
         return tuple(await asyncio.gather(*fetches))
     except BaseException:
@@ -336,6 +348,6 @@ async def async_inline_remote_media(
     remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
     if not remote_urls:
         return messages
-    data_urls: Final = await _fetch_data_urls(remote_urls)
+    data_urls: Final = await async_convert_urls_to_base64(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
     return [_inline_message(message, inlined, should_inline) for message in messages]

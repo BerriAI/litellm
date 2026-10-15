@@ -27,6 +27,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -465,6 +466,7 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -503,6 +505,19 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
     )
+
+
+def _unwrap_provider_error(error: Exception) -> Exception:
+    if not isinstance(error, httpx.TransportError):
+        return error
+    current: BaseException | None = error.__cause__  # rebind-ok: walks the bounded exception cause chain
+    for _ in range(10):
+        if current is None:
+            return error
+        if isinstance(current, BaseLLMException):
+            return current
+        current = current.__cause__
+    return error
 
 
 class BaseLLMHTTPHandler:
@@ -1001,11 +1016,14 @@ class BaseLLMHTTPHandler:
 
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
-            completion_stream = provider_config.get_model_response_iterator(
+            completion_stream = provider_config.get_model_response_iterator_for_request(
                 streaming_response=response.iter_lines(),
                 sync_stream=True,
                 json_mode=json_mode,
+                optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
             )
+            if isinstance(completion_stream, BaseModelResponseIterator):
+                completion_stream.http_response = response
 
         # LOGGING
         logging_obj.post_call(
@@ -1140,8 +1158,11 @@ class BaseLLMHTTPHandler:
 
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.aiter_lines(), sync_stream=False
+            completion_stream = provider_config.get_model_response_iterator_for_request(
+                streaming_response=response.aiter_lines(),
+                sync_stream=False,
+                json_mode=json_mode,
+                optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1490,6 +1511,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1499,7 +1521,7 @@ class BaseLLMHTTPHandler:
         data: Final = dict(body)
         if logging_obj is not None:
             logging_obj.pre_call(
-                input=data,
+                input=dict(logged_body),
                 api_key=api_key,
                 model=model,
                 additional_args={"api_base": url, "complete_input_dict": data, "headers": outbound_headers},
@@ -1514,6 +1536,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1526,6 +1549,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -1562,6 +1586,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1574,6 +1599,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -2459,7 +2485,7 @@ class BaseLLMHTTPHandler:
         api_base: str | None = None,
         stream: bool | None = False,
         kwargs: dict[str, object] | None = None,
-    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator]:
+    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]:
         """
         LLM HTTP Handler for Anthropic Messages
         """
@@ -6306,16 +6332,19 @@ class BaseLLMHTTPHandler:
             BaseRealtimeHTTPConfig,
         ],
     ):
+        error: Final = _unwrap_provider_error(e)
         received_status_code: Final = (
-            e.response.status_code if isinstance(e, httpx.HTTPStatusError) else getattr(e, "status_code", None)
+            error.response.status_code
+            if isinstance(error, httpx.HTTPStatusError)
+            else getattr(error, "status_code", None)
         )
         status_code = received_status_code if isinstance(received_status_code, int) else 500
-        error_headers = getattr(e, "headers", None)
-        if isinstance(e, httpx.HTTPStatusError):
-            error_text = e.response.text
+        error_headers = getattr(error, "headers", None)
+        if isinstance(error, httpx.HTTPStatusError):
+            error_text = error.response.text
         else:
-            error_text = getattr(e, "text", str(e))
-        error_response: Final[object] = getattr(e, "response", None)
+            error_text = getattr(error, "text", str(error))
+        error_response: Final[object] = getattr(error, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
@@ -7719,6 +7748,7 @@ class BaseLLMHTTPHandler:
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -7798,6 +7828,7 @@ class BaseLLMHTTPHandler:
             return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=async_httpx_client,
             )
 
         except Exception as e:

@@ -15,7 +15,7 @@ from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
 from litellm.types.utils import LlmProviders
 
 _V = TypeVar("_V")
@@ -135,15 +135,61 @@ def format_fallback_outcome_message(
     model_group: str | None,
     fallback_model_group: Sequence[object] | None,
     fallback_failure_detail: str,
+    skipped: Sequence[SkippedFallbackTarget] = (),
 ) -> str:
     """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
     lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
+
+    def fallback_target_model_group(target: object) -> str | None:
+        if isinstance(target, str):
+            return target
+        if not isinstance(target, Mapping):
+            return None
+        model: Final = target.get("model")
+        return model if isinstance(model, str) else None
+
+    skipped_targets: Final = frozenset(target.target for target in skipped)
+    attempted_targets: Final = tuple(
+        target for target in fallback_model_group if fallback_target_model_group(target) not in skipped_targets
+    )
+    not_authorized_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.NOT_AUTHORIZED)
+    )
+    over_budget_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
+    )
+    attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
+    not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
+    over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    attempted_failure: Final = (
+        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        if fallback_failure_detail and attempted_targets
+        else ()
+    )
+    not_authorized_sentence: Final = (
+        (
+            f"Fallback to {not_authorized_text} was skipped because the caller is not authorized to call "
+            f"{'it' if len(not_authorized_targets) == 1 else 'them'}.",
+        )
+        if not_authorized_targets
+        else ()
+    )
+    over_budget_sentence: Final = (
+        (
+            f"Fallback to {over_budget_text} was skipped because the caller is over budget for "
+            f"{'it' if len(over_budget_targets) == 1 else 'them'}.",
+        )
+        if over_budget_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    if sentences:
+        return f"{lead} {' '.join(sentences)}"
+
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
-    if not fallback_failure_detail:
-        return f"{lead} Fallback model group(s) configured: {targets}."
-    return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
+    return f"{lead} Fallback model group(s) configured: {targets}."
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:

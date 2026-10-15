@@ -3,11 +3,12 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -31,6 +32,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
     AgentCreateInfo,
+    AgentCredentialField,
     AutoRouterPresetRecord,
     ComplexityScorerDefaults,
     ProviderCreateInfo,
@@ -201,7 +203,6 @@ def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
 
 _PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(_ProvidersFile)
 _PROVIDER_CREATE_FIELDS_ADAPTER: Final = TypeAdapter(list[ProviderCreateInfo])
-_JSON_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _load_endpoints() -> list[_EndpointEntry]:
@@ -209,6 +210,54 @@ def _load_endpoints() -> list[_EndpointEntry]:
         json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     )
     return _build_endpoints(raw)
+
+
+class _BundledAgentCreateInfo(AgentCreateInfo):
+    model_config = ConfigDict(frozen=True)
+
+    inherit_credentials_from_provider: str | None = None
+
+
+_BUNDLED_AGENTS_ADAPTER: Final = TypeAdapter(list[_BundledAgentCreateInfo])
+
+
+def _read_bundled_file(filename: str) -> bytes:
+    return files("litellm.proxy.public_endpoints").joinpath(filename).read_bytes()
+
+
+@cache
+def _provider_create_fields() -> tuple[ProviderCreateInfo, ...]:
+    return tuple(_PROVIDER_CREATE_FIELDS_ADAPTER.validate_json(_read_bundled_file("provider_create_fields.json")))
+
+
+def _inherited_credential_fields(provider: ProviderCreateInfo) -> tuple[AgentCredentialField, ...]:
+    return tuple(
+        AgentCredentialField.model_validate({**field.model_dump(), "include_in_litellm_params": True})
+        for field in provider.credential_fields
+    )
+
+
+def _with_inherited_credentials(
+    agent: _BundledAgentCreateInfo, providers: Mapping[str, ProviderCreateInfo]
+) -> AgentCreateInfo:
+    provider_name: Final = agent.inherit_credentials_from_provider
+    provider: Final = providers.get(provider_name) if provider_name else None
+    inherited: Final = _inherited_credential_fields(provider) if provider else ()
+    return AgentCreateInfo.model_validate(
+        {
+            **agent.model_dump(exclude={"inherit_credentials_from_provider"}),
+            "credential_fields": [*agent.credential_fields, *inherited],
+        }
+    )
+
+
+@cache
+def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
+    providers: Final = {provider.provider: provider for provider in _provider_create_fields()}
+    return tuple(
+        _with_inherited_credentials(agent, providers)
+        for agent in _BUNDLED_AGENTS_ADAPTER.validate_json(_read_bundled_file("agent_create_fields.json"))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +372,8 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+        MANIFEST_FIELDS,
+        get_installation_preference,
         get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
@@ -353,6 +404,7 @@ async def public_skill_hub():
                     homepage=manifest.get("homepage"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
+                    installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))
@@ -402,22 +454,15 @@ async def get_supported_providers() -> list[str]:
     tags=["public", "providers"],
     response_model=list[ProviderCreateInfo],
 )
-async def get_provider_fields() -> list[ProviderCreateInfo]:
+async def get_provider_fields() -> tuple[ProviderCreateInfo, ...]:
     """
     Return provider metadata required by the dashboard create-model flow.
+
+    Reads from the bundled local file. Result is cached in-process for the
+    lifetime of the server process.
     """
 
-    provider_create_fields_path: Final = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "proxy",
-        "public_endpoints",
-        "provider_create_fields.json",
-    )
-
-    with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = _PROVIDER_CREATE_FIELDS_ADAPTER.validate_python(json.load(f))
-
-    return provider_create_fields
+    return _provider_create_fields()
 
 
 @router.get(
@@ -599,56 +644,14 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     tags=["public", "[beta] Agents"],
     response_model=list[AgentCreateInfo],
 )
-async def get_agent_fields() -> Sequence[Mapping[str, object]]:
+async def get_agent_fields() -> tuple[AgentCreateInfo, ...]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
 
     If an agent has `inherit_credentials_from_provider`, the provider's credential
     fields are automatically appended to the agent's credential_fields.
+
+    Reads from the bundled local files. Result is cached in-process for the
+    lifetime of the server process.
     """
-    base_path: Final = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "proxy",
-        "public_endpoints",
-    )
-
-    agent_create_fields_path: Final = os.path.join(base_path, "agent_create_fields.json")
-    provider_create_fields_path: Final = os.path.join(base_path, "provider_create_fields.json")
-
-    agent_create_fields: Final = _read_json_object_list(agent_create_fields_path)
-    provider_create_fields: Final = _read_json_object_list(provider_create_fields_path)
-
-    # Build a lookup map for providers by name
-    provider_map: Final = {p["provider"]: p for p in provider_create_fields}
-
-    return [_agent_with_inherited_credential_fields(agent, provider_map) for agent in agent_create_fields]
-
-
-def _read_json_object_list(path: str) -> Sequence[Mapping[str, object]]:
-    with open(path, "r") as f:
-        return _JSON_OBJECT_LIST_ADAPTER.validate_python(json.load(f))
-
-
-def _inherited_credential_fields(provider: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
-    return [
-        {**field, "include_in_litellm_params": True}
-        for field in _JSON_OBJECT_LIST_ADAPTER.validate_python(provider.get("credential_fields", []))
-    ]
-
-
-def _agent_with_inherited_credential_fields(
-    agent: Mapping[str, object], provider_map: Mapping[object, Mapping[str, object]]
-) -> Mapping[str, object]:
-    inherit_from: Final = agent.get("inherit_credentials_from_provider")
-    merged_agent: Final = (
-        {
-            **agent,
-            "credential_fields": [
-                *_JSON_OBJECT_LIST_ADAPTER.validate_python(agent.get("credential_fields", [])),
-                *_inherited_credential_fields(provider_map[inherit_from]),
-            ],
-        }
-        if inherit_from and inherit_from in provider_map
-        else agent
-    )
-    return {key: value for key, value in merged_agent.items() if key != "inherit_credentials_from_provider"}
+    return _agent_create_fields()

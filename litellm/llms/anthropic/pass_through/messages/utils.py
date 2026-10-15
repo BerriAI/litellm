@@ -206,6 +206,11 @@ class AnthropicMessagesRequestUtils:
                 drop_params=drop_params,
                 custom_llm_provider=custom_llm_provider,
             )
+            AnthropicConfig.maybe_drop_service_tier_param(
+                model=model,
+                optional_params=filtered_params,
+                custom_llm_provider=custom_llm_provider,
+            )
             for param in ("temperature", "top_p", "top_k"):
                 if param in filtered_params:
                     AnthropicModelInfo._apply_sampling_param(  # pyright: ignore[reportPrivateUsage]  # same gating the /chat/completions path applies; forking it would drift

@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +12,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
     resolve_served_model,
@@ -19,6 +20,7 @@ from litellm.router_utils.common_utils import (
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
+from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 
 
 class TestFilterTeamBasedModels:
@@ -608,6 +610,56 @@ class TestTruncateFallbackErrorDetail:
         to stay small enough that a walk over many model groups cannot compound it into an
         output volume that starves the process."""
         assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
+
+
+def test_format_fallback_outcome_reports_unauthorized_skips_without_failure_detail() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model",),
+        "",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+
+    assert "Fallback to restricted-model was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+def test_format_fallback_outcome_separates_attempted_failures_from_skipped_targets() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("restricted-model", "dead-allowed"),
+        "boom",
+        skipped=(SkippedFallbackTarget("restricted-model", FallbackSkipReason.NOT_AUTHORIZED),),
+    )
+    failed_sentence: Final = message.split("Fallback to dead-allowed also failed:", 1)[1].split(
+        " Fallback to restricted-model was skipped", 1
+    )[0]
+
+    assert "Fallback to dead-allowed also failed: boom" in message
+    assert "Fallback to restricted-model was skipped because the caller is not authorized" in message
+    assert "restricted-model" not in failed_sentence
+
+
+def test_format_fallback_outcome_uses_plural_for_multiple_over_budget_skips() -> None:
+    message: Final = format_fallback_outcome_message(
+        "primary",
+        ("paid-one", "paid-two"),
+        "",
+        skipped=(
+            SkippedFallbackTarget("paid-one", FallbackSkipReason.OVER_BUDGET),
+            SkippedFallbackTarget("paid-two", FallbackSkipReason.OVER_BUDGET),
+        ),
+    )
+
+    assert "Fallback to paid-one, paid-two was skipped because the caller is over budget for them." in message
+
+
+def test_format_fallback_outcome_preserves_attempted_failure_wording_without_skips() -> None:
+    assert (
+        format_fallback_outcome_message("primary", ("fallback",), "detail")
+        == "\n\nLiteLLM: model group 'primary' failed with the error above. "
+        "Fallback to fallback also failed: detail"
+    )
 
 
 class TestWarnOnProviderCredentialMismatch:

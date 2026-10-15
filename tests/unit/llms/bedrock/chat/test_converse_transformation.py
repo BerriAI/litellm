@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import re
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -40,16 +41,11 @@ def test_transform_usage():
     openai_usage = config.transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
-        == usage["inputTokens"]
-        + usage["cacheReadInputTokens"]
-        + usage["cacheWriteInputTokens"]
+        == usage["inputTokens"] + usage["cacheReadInputTokens"] + usage["cacheWriteInputTokens"]
     )
     assert openai_usage.completion_tokens == usage["outputTokens"]
     assert openai_usage.total_tokens == usage["totalTokens"]
-    assert (
-        openai_usage.prompt_tokens_details.cached_tokens
-        == usage["cacheReadInputTokens"]
-    )
+    assert openai_usage.prompt_tokens_details.cached_tokens == usage["cacheReadInputTokens"]
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
     # completion_tokens_details should always be populated
@@ -97,10 +93,7 @@ def test_transform_usage_with_mismatched_cache_details_falls_back():
     )
     config = AmazonConverseConfig()
     openai_usage = config.transform_usage(usage)
-    assert (
-        getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None)
-        is None
-    )
+    assert getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None) is None
 
 
 def test_transform_usage_without_cache_details_stays_none():
@@ -116,10 +109,7 @@ def test_transform_usage_without_cache_details_stays_none():
     )
     config = AmazonConverseConfig()
     openai_usage = config.transform_usage(usage)
-    assert (
-        getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None)
-        is None
-    )
+    assert getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None) is None
 
 
 def test_bedrock_converse_1h_cache_write_billed_at_1h_rate(monkeypatch):
@@ -564,6 +554,157 @@ def test_bedrock_application_profile_model_and_model_id_use_same_route(respx_moc
     assert route.call_count == 2
 
 
+_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
+_PROFILE_ARN_CONVERSE_URL: Final = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+    "arn%3Aaws%3Abedrock%3Aus-east-1%3A000000000000%3Aapplication-inference-profile%2Fprofile-id/converse"
+)
+
+
+def _routed_profile_request_body(
+    respx_mock: respx.Router, litellm_params: dict, model_info: dict, **completion_kwargs: object
+) -> dict:
+    route: Final = respx_mock.post(_PROFILE_ARN_CONVERSE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": f"bedrock/{_PROFILE_ARN}",
+                    "aws_access_key_id": "AKIAPROFILEKEY",
+                    "aws_secret_access_key": "profile-secret",
+                    "aws_region_name": "us-east-1",
+                    **litellm_params,
+                },
+                "model_info": model_info,
+            }
+        ]
+    )
+    router.completion(
+        model="claude",
+        max_tokens=16000,
+        drop_params=True,
+        client=HTTPHandler(),
+        **{"messages": [{"role": "user", "content": "hi"}], **completion_kwargs},
+    )
+    return json.loads(route.calls[0].request.content)
+
+
+def _routed_profile_request_fields(
+    respx_mock: respx.Router, litellm_params: dict, model_info: dict, thinking: dict
+) -> dict:
+    return _routed_profile_request_body(respx_mock, litellm_params, model_info, thinking=thinking).get(
+        "additionalModelRequestFields", {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({}, {"base_model": "us.anthropic.claude-opus-4-8"}),
+        ({"base_model": "bedrock/us.anthropic.claude-opus-4-8"}, {}),
+    ],
+    ids=["model_info", "litellm_params"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_keeps_adaptive_thinking_when_base_model_is_adaptive(
+    litellm_params: dict, model_info: dict, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    thinking: Final = {"type": "adaptive", "display": "summarized"}
+
+    fields: Final = _routed_profile_request_fields(respx_mock, litellm_params, model_info, thinking)
+
+    assert fields["thinking"] == thinking
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_drops_disabled_thinking_when_base_model_always_thinks(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    fields: Final = _routed_profile_request_fields(
+        respx_mock, {}, {"base_model": "us.anthropic.claude-fable-5"}, {"type": "disabled"}
+    )
+
+    assert "thinking" not in fields
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_without_base_model_warns_when_adaptive_thinking_becomes_a_budget(
+    respx_mock: respx.Router, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        fields: Final = _routed_profile_request_fields(respx_mock, {}, {}, {"type": "adaptive"})
+
+    assert fields["thinking"]["type"] == "enabled"
+    assert any(
+        _PROFILE_ARN in record.getMessage() and "`base_model`" in record.getMessage() for record in caplog.records
+    )
+
+
+_CACHED_FOR_AN_HOUR: Final = {"type": "ephemeral", "ttl": "1h"}
+_OPUS: Final = "us.anthropic.claude-opus-4-8"
+_LLAMA: Final = "us.meta.llama3-3-70b-instruct-v1:0"
+
+
+def _cache_points(node: object) -> Iterator[object]:
+    if isinstance(node, dict):
+        yield from ((node["cachePoint"],) if "cachePoint" in node else ())
+        yield from (point for value in node.values() for point in _cache_points(value))
+    elif isinstance(node, list):
+        yield from (point for item in node for point in _cache_points(item))
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected_cache_point"),
+    [
+        ({"base_model": _OPUS}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, None),
+        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": True}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _LLAMA}, None),
+        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, {"type": "default"}),
+    ],
+    ids=[
+        "base_model_allows",
+        "deployment_disables",
+        "deployment_enables_keeps_ttl",
+        "base_model_disallows",
+        "deployment_enables",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_application_profile_arn_cache_points_follow_deployment_setting_then_base_model(
+    model_info: dict, expected_cache_point: dict | None, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    body: Final = _routed_profile_request_body(
+        respx_mock,
+        {},
+        model_info,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": _CACHED_FOR_AN_HOUR}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _CACHED_FOR_AN_HOUR}]},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+                "cache_control": _CACHED_FOR_AN_HOUR,
+            }
+        ],
+    )
+
+    expected: Final = [] if expected_cache_point is None else [expected_cache_point] * 3
+    assert list(_cache_points(body)) == expected, body
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_cross_region_inference_profile_keeps_prefix_in_converse_url(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(
@@ -618,23 +759,21 @@ def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Route
     assert response.choices[0].message.content == "ok"
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_blocks = [
-        {
-            "reasoningText": {
-                "text": "This is a test",
-                "signature": "test_signature",
-            }
-        },
-        {
-            "redactedContent": "This is a redacted content",
-        },
+def test_transform_thinking_blocks_unwraps_redacted_content_to_claude_native_data():
+    """Converse returns Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    thinking_blocks: Final = [
+        {"reasoningText": {"text": "This is a test", "signature": "test_signature"}},
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()},
     ]
-    config = AmazonConverseConfig()
-    transformed_thinking_blocks = config._transform_thinking_blocks(thinking_blocks)
-    assert len(transformed_thinking_blocks) == 2
-    assert transformed_thinking_blocks[0]["type"] == "thinking"
-    assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
+
+    transformed_thinking_blocks: Final = AmazonConverseConfig()._transform_thinking_blocks(thinking_blocks)
+
+    assert transformed_thinking_blocks == [
+        {"type": "thinking", "thinking": "This is a test", "signature": "test_signature"},
+        {"type": "redacted_thinking", "data": native_data},
+    ]
 
 
 def test_apply_tool_call_transformation_if_needed():
@@ -659,14 +798,10 @@ def test_apply_tool_call_transformation_if_needed():
         role="user",
         content=json.dumps(tool_response),
     )
-    transformed_message, _ = config.apply_tool_call_transformation_if_needed(
-        message, tool_calls
-    )
+    transformed_message, _ = config.apply_tool_call_transformation_if_needed(message, tool_calls)
     assert len(transformed_message.tool_calls) == 1
     assert transformed_message.tool_calls[0].function.name == "test_function"
-    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
-        tool_response["parameters"]
-    )
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(tool_response["parameters"])
 
 
 def test_transform_tool_call_with_cache_control():
@@ -715,12 +850,7 @@ def test_transform_tool_call_with_cache_control():
     print(function_out_msg)
     assert function_out_msg["toolSpec"]["name"] == "get_location"
     assert function_out_msg["toolSpec"]["description"] == "Get the user's location"
-    assert (
-        function_out_msg["toolSpec"]["inputSchema"]["json"]["properties"]["location"][
-            "type"
-        ]
-        == "string"
-    )
+    assert function_out_msg["toolSpec"]["inputSchema"]["json"]["properties"]["location"]["type"] == "string"
 
     transformed_cache_msg = result["toolConfig"]["tools"][1]
     assert "cachePoint" in transformed_cache_msg
@@ -916,9 +1046,7 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
     ],
 )
-def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
-    model, effort, expected_effort
-):
+def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(model, effort, expected_effort):
     """Adaptive Claude 4.6 / 4.7 on Bedrock Converse routes the tier via ``output_config.effort``."""
     config = AmazonConverseConfig()
 
@@ -1086,6 +1214,63 @@ def test_transform_request_resolves_an_inference_profile_through_its_base_model(
     )
 
     assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+_APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, optional_params, litellm_params, replays_redacted",
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("anthropic.claude-sonnet-4-6", {"model_id": _APPLICATION_PROFILE_ARN}, {}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {}, False),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "us.amazon.nova-pro-v1:0"}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {"base_model": "anthropic.claude-sonnet-4-6"}, False),
+    ],
+)
+async def test_transform_request_replays_redacted_thinking_only_to_claude(
+    use_async: bool,
+    model: str,
+    optional_params: dict[str, str],
+    litellm_params: dict[str, str],
+    replays_redacted: bool,
+):
+    """A model id that names its model decides on its own. An application inference profile ARN hides its model,
+    so the deployment's ``base_model`` is what marks it as Claude, and without one the redacted block is dropped
+    the way it is for every non-Claude target."""
+    redacted_data: Final = base64.b64encode(b"EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP").decode()
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": redacted_data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model, messages=messages, optional_params=dict(optional_params), litellm_params=dict(litellm_params)
+    )
+
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"reasoningContent": {"redactedContent": redacted_data}}, {"text": "hello"}]
+        if replays_redacted
+        else [{"text": "hello"}],
+    }
 
 
 def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
@@ -1282,9 +1467,7 @@ def test_output_config_format_translated_to_native_output_config_converse():
     assert additional.get("output_config") == {"effort": "max"}
     assert "format" not in additional["output_config"]
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
-    parsed_schema = json.loads(
-        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
-    )
+    parsed_schema = json.loads(result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert parsed_schema == {**schema, "additionalProperties": False}
 
 
@@ -1320,10 +1503,7 @@ def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog
             )
 
     assert "outputConfig" not in result
-    assert any(
-        "dropping `output_config.format`" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("dropping `output_config.format`" in record.getMessage() for record in caplog.records)
 
 
 def test_output_config_normalized_marker_does_not_leak_into_optional_params():
@@ -1359,9 +1539,7 @@ def test_output_config_normalized_marker_does_not_leak_into_optional_params():
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_output_config_effort_normalized_for_bedrock_converse_opus(
-    model, expected_effort
-):
+def test_output_config_effort_normalized_for_bedrock_converse_opus(model, expected_effort):
     """Bedrock Converse accepts ``xhigh`` and forwards the provider-safe effort."""
     config = AmazonConverseConfig()
 
@@ -1634,17 +1812,13 @@ def test_get_supported_openai_params_bedrock_converse():
     for model in litellm.BEDROCK_CONVERSE_MODELS:
         print(f"Testing model: {model}")
         config = AmazonConverseConfig()
-        supported_params_without_prefix = config.get_supported_openai_params(
-            model=model
-        )
+        supported_params_without_prefix = config.get_supported_openai_params(model=model)
 
-        supported_params_with_prefix = config.get_supported_openai_params(
-            model=f"bedrock/converse/{model}"
-        )
+        supported_params_with_prefix = config.get_supported_openai_params(model=f"bedrock/converse/{model}")
 
-        assert set(supported_params_without_prefix) == set(
-            supported_params_with_prefix
-        ), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
+        assert set(supported_params_without_prefix) == set(supported_params_with_prefix), (
+            f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
+        )
         print(f"✅ Passed for model: {model}")
 
 
@@ -2136,9 +2310,7 @@ def test_transform_response_with_structured_response_calling_tool():
         "output": {
             "message": {
                 "content": [
-                    {
-                        "text": "I'll check the current weather in San Francisco for you."
-                    },
+                    {"text": "I'll check the current weather in San Francisco for you."},
                     {
                         "toolUse": {
                             "input": {
@@ -2648,9 +2820,7 @@ def test_transform_request_with_function_tool():
         }
     ]
 
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
 
     # Transform request
     request_data = config._transform_request(
@@ -2758,22 +2928,18 @@ async def test_assistant_message_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -2819,12 +2985,10 @@ async def test_assistant_message_list_content_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -2877,12 +3041,10 @@ async def test_tool_message_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -2896,10 +3058,7 @@ async def test_tool_message_cache_control():
 
     # First should be tool result
     assert "toolResult" in tool_message_content[0]
-    assert (
-        tool_message_content[0]["toolResult"]["content"][0]["text"]
-        == "Weather data: sunny, 25°C"
-    )
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather data: sunny, 25°C"
 
     # Second should be cachePoint
     assert "cachePoint" in tool_message_content[1]
@@ -2941,12 +3100,10 @@ async def test_tool_message_string_content_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -2957,10 +3114,7 @@ async def test_tool_message_string_content_cache_control():
 
     # First should be tool result
     assert "toolResult" in tool_message_content[0]
-    assert (
-        tool_message_content[0]["toolResult"]["content"][0]["text"]
-        == "Weather: sunny, 25°C"
-    )
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather: sunny, 25°C"
 
     # Second should be cachePoint
     assert "cachePoint" in tool_message_content[1]
@@ -3000,9 +3154,7 @@ async def test_tool_message_search_results_maps_to_bedrock_search_result_block()
                     "source": "Great Source of Information About Apptio",
                     "title": "12adbd74-46bd-4a88-88b2-0048755f6eb5",
                     "content": [
-                        {
-                            "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
-                        }
+                        {"text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"}
                     ],
                     "citations": {"enabled": True},
                 }
@@ -3015,12 +3167,10 @@ async def test_tool_message_search_results_maps_to_bedrock_search_result_block()
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         llm_provider="bedrock_converse",
     )
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
     assert result == async_result
 
@@ -3029,10 +3179,7 @@ async def test_tool_message_search_results_maps_to_bedrock_search_result_block()
     assert tool_result["status"] == "success"
     assert len(tool_result["content"]) == 1
     assert "searchResult" in tool_result["content"][0]
-    assert (
-        tool_result["content"][0]["searchResult"]["title"]
-        == "12adbd74-46bd-4a88-88b2-0048755f6eb5"
-    )
+    assert tool_result["content"][0]["searchResult"]["title"] == "12adbd74-46bd-4a88-88b2-0048755f6eb5"
 
 
 @pytest.mark.asyncio
@@ -3069,12 +3216,10 @@ async def test_tool_message_empty_search_results_falls_back_to_content():
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         llm_provider="bedrock_converse",
     )
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
     assert result == async_result
 
@@ -3236,12 +3381,10 @@ async def test_assistant_tool_calls_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -3296,12 +3439,10 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -3347,12 +3488,10 @@ async def test_no_cache_control_no_cache_point():
         llm_provider="bedrock_converse",
     )
 
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -3522,10 +3661,7 @@ def test_guarded_text_with_mixed_content_types():
 
     # Third should be guardContent
     assert "guardContent" in content[2]
-    assert (
-        content[2]["guardContent"]["text"]["text"]
-        == "This sensitive content should be guarded"
-    )
+    assert content[2]["guardContent"]["text"]["text"] == "This sensitive content should be guarded"
 
 
 @pytest.mark.asyncio
@@ -3620,10 +3756,7 @@ def test_guarded_text_with_tool_calls():
 
     # Second should be guardContent
     assert "guardContent" in content[1]
-    assert (
-        content[1]["guardContent"]["text"]["text"]
-        == "Please be careful with sensitive information"
-    )
+    assert content[1]["guardContent"]["text"]["text"] == "Please be careful with sensitive information"
 
     # Other messages should not have guardContent
     for i in range(1, 3):
@@ -3684,52 +3817,36 @@ def test_auto_convert_last_user_message_to_guarded_text():
         }
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion
     assert len(converted_messages) == 1
     assert converted_messages[0]["role"] == "user"
     assert len(converted_messages[0]["content"]) == 1
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert (
-        converted_messages[0]["content"][0]["text"]
-        == "What is the main topic of this legal document?"
-    )
+    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
 
 
 def test_auto_convert_last_user_message_string_content():
     """Test that last user message with string content is automatically converted to guarded_text when guardrailConfig is present."""
     config = AmazonConverseConfig()
 
-    messages = [
-        {"role": "user", "content": "What is the main topic of this legal document?"}
-    ]
+    messages = [{"role": "user", "content": "What is the main topic of this legal document?"}]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion
     assert len(converted_messages) == 1
     assert converted_messages[0]["role"] == "user"
     assert len(converted_messages[0]["content"]) == 1
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert (
-        converted_messages[0]["content"][0]["text"]
-        == "What is the main topic of this legal document?"
-    )
+    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
 
 
 def test_no_conversion_when_no_guardrail_config():
@@ -3751,9 +3868,7 @@ def test_no_conversion_when_no_guardrail_config():
     optional_params = {}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify no conversion happened
     assert converted_messages == messages
@@ -3770,14 +3885,10 @@ def test_no_conversion_when_guarded_text_already_present():
         }
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify no conversion happened
     assert converted_messages == messages
@@ -3803,14 +3914,10 @@ def test_auto_convert_with_mixed_content():
         }
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion
     assert len(converted_messages) == 1
@@ -3819,17 +3926,11 @@ def test_auto_convert_with_mixed_content():
 
     # First element should be converted to guarded_text
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert (
-        converted_messages[0]["content"][0]["text"]
-        == "What is the main topic of this legal document?"
-    )
+    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
 
     # Second element should remain unchanged
     assert converted_messages[0]["content"][1]["type"] == "image_url"
-    assert (
-        converted_messages[0]["content"][1]["image_url"]["url"]
-        == "https://example.com/image.jpg"
-    )
+    assert converted_messages[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
 
 
 def test_auto_convert_in_full_transformation():
@@ -3848,9 +3949,7 @@ def test_auto_convert_in_full_transformation():
         }
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the full transformation
     result = config._transform_request(
@@ -3870,10 +3969,7 @@ def test_auto_convert_in_full_transformation():
     assert "content" in message
     assert len(message["content"]) == 1
     assert "guardContent" in message["content"][0]
-    assert (
-        message["content"][0]["guardContent"]["text"]["text"]
-        == "What is the main topic of this legal document?"
-    )
+    assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():
@@ -3887,14 +3983,10 @@ def test_convert_consecutive_user_messages_to_guarded_text():
         {"role": "user", "content": [{"type": "text", "text": "Third user message"}]},
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion - only the last two user messages should be converted
     assert len(converted_messages) == 4
@@ -3929,14 +4021,10 @@ def test_convert_all_user_messages_when_all_consecutive():
         {"role": "user", "content": [{"type": "text", "text": "Third user message"}]},
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify all three user messages are converted
     assert len(converted_messages) == 3
@@ -3960,14 +4048,10 @@ def test_convert_consecutive_user_messages_with_string_content():
         {"role": "user", "content": "Second user message"},
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion
     assert len(converted_messages) == 3
@@ -4000,14 +4084,10 @@ def test_skip_consecutive_user_messages_with_existing_guarded_text():
         {"role": "user", "content": [{"type": "text", "text": "Should be converted"}]},
     ]
 
-    optional_params = {
-        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
-    }
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
-        messages, optional_params
-    )
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
 
     # Verify the conversion
     assert len(converted_messages) == 2
@@ -4592,24 +4672,22 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
         optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
 
         # Verify the condition is detected
-        assert last_assistant_with_tool_calls_has_no_thinking_blocks(
-            messages_without_thinking_blocks
-        ), "Should detect missing thinking_blocks"
+        assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks), (
+            "Should detect missing thinking_blocks"
+        )
 
         # Simulate what _transform_request_helper does
         if (
             optional_params.get("thinking") is not None
             and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(
-                messages_without_thinking_blocks
-            )
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
 
-        assert (
-            "thinking" not in optional_params
-        ), "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
+        assert "thinking" not in optional_params, (
+            "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
+        )
 
         # Test case 2: thinking should NOT be dropped when thinking_blocks are present
         messages_with_thinking_blocks = [
@@ -4624,58 +4702,46 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
                         "function": {"name": "search", "arguments": "{}"},
                     }
                 ],
-                "thinking_blocks": [
-                    {"type": "thinking", "thinking": "Let me search for weather..."}
-                ],
+                "thinking_blocks": [{"type": "thinking", "thinking": "Let me search for weather..."}],
             },
             {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
         ]
 
-        optional_params_with_thinking = {
-            "thinking": {"type": "enabled", "budget_tokens": 1000}
-        }
+        optional_params_with_thinking = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
 
         # Verify the condition is NOT detected when thinking_blocks are present
-        assert not last_assistant_with_tool_calls_has_no_thinking_blocks(
-            messages_with_thinking_blocks
-        ), "Should NOT detect missing thinking_blocks when they are present"
+        assert not last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks), (
+            "Should NOT detect missing thinking_blocks when they are present"
+        )
 
         # Simulate what _transform_request_helper does
         if (
             optional_params_with_thinking.get("thinking") is not None
             and messages_with_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(
-                messages_with_thinking_blocks
-            )
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks)
         ):
             if litellm.modify_params:
                 optional_params_with_thinking.pop("thinking", None)
 
-        assert (
-            "thinking" in optional_params_with_thinking
-        ), "thinking param should NOT be dropped when thinking_blocks are present"
+        assert "thinking" in optional_params_with_thinking, (
+            "thinking param should NOT be dropped when thinking_blocks are present"
+        )
 
         # Test case 3: thinking should NOT be dropped when modify_params=False
         litellm.modify_params = False
 
-        optional_params_no_modify = {
-            "thinking": {"type": "enabled", "budget_tokens": 1000}
-        }
+        optional_params_no_modify = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
 
         # Simulate what _transform_request_helper does
         if (
             optional_params_no_modify.get("thinking") is not None
             and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(
-                messages_without_thinking_blocks
-            )
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
         ):
             if litellm.modify_params:
                 optional_params_no_modify.pop("thinking", None)
 
-        assert (
-            "thinking" in optional_params_no_modify
-        ), "thinking param should NOT be dropped when modify_params=False"
+        assert "thinking" in optional_params_no_modify, "thinking param should NOT be dropped when modify_params=False"
 
     finally:
         # Restore original modify_params setting
@@ -4759,19 +4825,14 @@ def test_translate_response_format_native_output_config(monkeypatch):
         assert "fake_stream" not in result
 
         # Verify the schema content (additionalProperties: false is added by normalization)
-        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"][
-            "schema"
-        ]
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
         parsed_schema = json.loads(schema_str)
         expected_schema = {
             **response_format["json_schema"]["schema"],
             "additionalProperties": False,
         }
         assert parsed_schema == expected_schema
-        assert (
-            result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"]
-            == "WeatherResult"
-        )
+        assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "WeatherResult"
     finally:
         litellm.model_cost = old_cost
         if old_env is None:
@@ -4927,9 +4988,7 @@ def test_native_structured_output_no_fake_stream(monkeypatch):
         assert "fake_stream" not in result
 
         # Verify the schema content
-        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"][
-            "schema"
-        ]
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
         assert json.loads(schema_str) == {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
@@ -4982,10 +5041,7 @@ def test_transform_request_with_output_config():
 
     assert "outputConfig" in result
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
-    assert (
-        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"]
-        == "TestSchema"
-    )
+    assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "TestSchema"
 
 
 def test_transform_request_strips_anthropic_output_config():
@@ -5106,10 +5162,7 @@ def test_transform_response_native_structured_output():
     )
 
     # Content should be the JSON text directly
-    assert (
-        result.choices[0].message.content
-        == '{"temp": 62, "description": "Mild and foggy"}'
-    )
+    assert result.choices[0].message.content == '{"temp": 62, "description": "Mild and foggy"}'
     # Should NOT have tool_calls
     assert result.choices[0].message.tool_calls is None
     assert result.choices[0].finish_reason == "stop"
@@ -5222,10 +5275,7 @@ def test_add_additional_properties_definitions():
     # definitions object
     assert result["definitions"]["Item"]["additionalProperties"] is False
     # Nested object inside definitions
-    assert (
-        result["definitions"]["Item"]["properties"]["details"]["additionalProperties"]
-        is False
-    )
+    assert result["definitions"]["Item"]["properties"]["details"]["additionalProperties"] is False
 
 
 def test_json_object_no_schema_skips_tool_injection(monkeypatch):
@@ -5282,9 +5332,7 @@ def test_output_config_applies_additional_properties():
     output_config = AmazonConverseConfig._create_output_config_for_response_format(
         json_schema=schema, name="test_schema"
     )
-    parsed = json.loads(
-        output_config["textFormat"]["structure"]["jsonSchema"]["schema"]
-    )
+    parsed = json.loads(output_config["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
 
@@ -5333,12 +5381,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
-    assert (
-        request_data["additionalModelRequestFields"]["tool_choice"][
-            "disable_parallel_tool_use"
-        ]
-        is True
-    )
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
@@ -5370,12 +5413,7 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
         headers={},
     )
 
-    assert (
-        request_data["additionalModelRequestFields"]["tool_choice"][
-            "disable_parallel_tool_use"
-        ]
-        is True
-    )
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
 
 
 def test_parallel_tool_calls_older_model_drops_disable_flag():
@@ -5522,9 +5560,7 @@ def test_parallel_tool_use_merge_preserves_user_tool_choice_type():
 class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
-    def _map_params(
-        self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    ):
+    def _map_params(self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"):
         """Helper to call map_openai_params with the given thinking value."""
         config = AmazonConverseConfig()
         non_default_params = {"thinking": thinking_value}
@@ -5751,9 +5787,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
 
     # Chunk 2: json_tool_call delta — should become text, not tool_use
     json_delta = ContentBlockDeltaEvent(toolUse={"input": '{"temp": 62}'})
-    text_2, tool_use_2, _, _, _ = decoder._handle_converse_delta_event(
-        json_delta, index=0
-    )
+    text_2, tool_use_2, _, _, _ = decoder._handle_converse_delta_event(json_delta, index=0)
     assert text_2 == '{"temp": 62}'
     assert tool_use_2 is None
 
@@ -5777,9 +5811,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
 
     # Chunk 5: real tool delta
     real_delta = ContentBlockDeltaEvent(toolUse={"input": '{"location": "SF"}'})
-    text_5, tool_use_5, _, _, _ = decoder._handle_converse_delta_event(
-        real_delta, index=1
-    )
+    text_5, tool_use_5, _, _, _ = decoder._handle_converse_delta_event(real_delta, index=1)
     assert text_5 == ""
     assert tool_use_5 is not None
     assert tool_use_5["function"]["arguments"] == '{"location": "SF"}'
@@ -5812,9 +5844,7 @@ def test_streaming_without_json_mode_passes_all_tools():
 
     # json_tool_call delta — should be a tool_use, not text
     json_delta = ContentBlockDeltaEvent(toolUse={"input": '{"data": 1}'})
-    text, tool_use_delta, _, _, _ = decoder._handle_converse_delta_event(
-        json_delta, index=0
-    )
+    text, tool_use_delta, _, _, _ = decoder._handle_converse_delta_event(json_delta, index=0)
     assert text == ""
     assert tool_use_delta is not None
     assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
@@ -6167,8 +6197,6 @@ def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_
     assert "litellm_gateway_injected_cache" not in bucket
 
 
-
-
 def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools():
     """
     When json_mode is True and _filter_json_mode_tools strips all synthetic
@@ -6424,11 +6452,7 @@ def test_transform_response_citation_null_source_title_become_empty_strings():
                 "content": [
                     {
                         "citationsContent": {
-                            "content": [
-                                {
-                                    "text": "Apptio is a company that makes calls to Bedrock"
-                                }
-                            ],
+                            "content": [{"text": "Apptio is a company that makes calls to Bedrock"}],
                             "citations": [
                                 {
                                     "location": {
@@ -6563,15 +6587,11 @@ def test_transform_response_citations_offset_tracks_text_only_blocks():
     message = result.choices[0].message
     expected_start = len(leading_text)
     assert message.content == leading_text + cited_text
-    assert (
-        message.content[expected_start : expected_start + len(cited_text)] == cited_text
-    )
+    assert message.content[expected_start : expected_start + len(cited_text)] == cited_text
     assert message.annotations is not None
     assert len(message.annotations) == 1
     assert message.annotations[0]["url_citation"]["start_index"] == expected_start
-    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(
-        cited_text
-    )
+    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(cited_text)
 
 
 def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
@@ -6681,9 +6701,7 @@ def test_bedrock_tool_message_openai_file_pdf_becomes_document():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
     assert tool_result["toolUseId"] == "tooluse_pdf_1"
@@ -6725,9 +6743,7 @@ def test_bedrock_tool_message_image_url_pdf_data_uri_becomes_document():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
     assert tool_result["toolUseId"] == "tooluse_pdf_img_1"
@@ -6784,9 +6800,7 @@ def test_bedrock_tool_message_file_id_http_url_becomes_document():
         "process_image_sync",
         return_value=fake_document_block,
     ) as mock_proc:
-        translated_msg = _bedrock_converse_messages_pt(
-            messages=messages, model="", llm_provider=""
-        )
+        translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     mock_proc.assert_called_once()
     assert mock_proc.call_args.kwargs["image_url"] == pdf_url
@@ -6857,9 +6871,7 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
     assert len(tool_result["content"]) == 1
@@ -6884,9 +6896,7 @@ def _png_tool_messages(text: str | None = None) -> list[AllMessageValues]:
         type="image_url",
         image_url=ChatCompletionImageUrlObject(url=f"data:image/png;base64,{png_b64}"),
     )
-    parts: Final = (
-        (ChatCompletionTextObject(type="text", text=text), image) if text is not None else (image,)
-    )
+    parts: Final = (ChatCompletionTextObject(type="text", text=text), image) if text is not None else (image,)
     user: Final = ChatCompletionUserMessage(role="user", content="Describe the attached image.")
     tool: Final = ChatCompletionToolMessage(role="tool", tool_call_id="tooluse_png_gpt", content=list(parts))
     return [user, tool]
@@ -7129,12 +7139,10 @@ async def test_grounding_source_and_query_rendered_as_text():
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         llm_provider="bedrock_converse",
     )
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
     assert result == async_result
@@ -7178,9 +7186,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     (#24158, #27138)."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-        messages, optional_params={}
-    )
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7201,9 +7207,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_tools_empty(tools_value):
     structured tool blocks with no toolConfig."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-        messages, optional_params={"tools": tools_value}
-    )
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={"tools": tools_value})
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7219,9 +7223,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
         {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-        messages, optional_params={}
-    )
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
 
     assert not any(m.get("role") in ("tool", "function") for m in result)
     serialized = json.dumps(result)
@@ -7258,13 +7260,9 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         },
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-        messages, optional_params={}
-    )
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
 
-    rewritten = next(
-        m for m in result if m.get("role") == "user" and m is not messages[0]
-    )
+    rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
     text = rewritten["content"]
     assert text.strip()  # never empty
     assert "non-text tool result omitted" in text
@@ -7287,9 +7285,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
     """Plain conversation with no tool blocks is returned unchanged."""
     messages = [{"role": "user", "content": "hi"}]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-        messages, optional_params={}
-    )
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
 
     assert result is messages
 
@@ -7300,14 +7296,9 @@ def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
     messages = _orphaned_tool_history_messages()
 
     with caplog.at_level("WARNING"):
-        AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-            messages, optional_params={}
-        )
+        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
 
-    assert any(
-        "neutralizing orphaned tool blocks" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("neutralizing orphaned tool blocks" in record.getMessage() for record in caplog.records)
 
 
 def _assert_no_structured_tool_blocks(result):
@@ -7425,9 +7416,7 @@ def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
             },
             {"role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
         ],
-        optional_params={
-            "guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}
-        },
+        optional_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}},
         litellm_params={},
         headers={},
     )
@@ -7467,23 +7456,19 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
             {"role": "assistant", "content": "Here is the summary."},
             {"role": "user", "content": "thanks"},
         ],
-        optional_params={
-            "guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}
-        },
+        optional_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}},
         litellm_params={},
         headers={},
     )
 
     _assert_no_structured_tool_blocks(result)
     blocks = [block for message in result["messages"] for block in message["content"]]
-    guarded_texts = [
-        block["guardContent"]["text"]["text"] for block in blocks if "guardContent" in block
-    ]
+    guarded_texts = [block["guardContent"]["text"]["text"] for block in blocks if "guardContent" in block]
     plain_texts = [block["text"] for block in blocks if "text" in block and "guardContent" not in block]
     assert any("malware" in text for text in guarded_texts), "mid-history tool output must be guarded"
-    assert not any(
-        "malware" in text for text in plain_texts
-    ), "mid-history tool output must not reach the model as unguarded text"
+    assert not any("malware" in text for text in plain_texts), (
+        "mid-history tool output must not reach the model as unguarded text"
+    )
 
 
 @pytest.mark.asyncio
@@ -7619,10 +7604,7 @@ def _agentic_messages_with_ttl(ttl_target: str):
 
 def _collect_cache_points(result):
     return [
-        block["cachePoint"]
-        for message in result
-        for block in message.get("content") or []
-        if "cachePoint" in block
+        block["cachePoint"] for message in result for block in message.get("content") or [] if "cachePoint" in block
     ]
 
 
@@ -7648,12 +7630,10 @@ async def test_message_level_cache_control_honors_ttl_for_supported_model(
         model="global.anthropic.claude-opus-4-7",
         llm_provider="bedrock_converse",
     )
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model="global.anthropic.claude-opus-4-7",
-            llm_provider="bedrock_converse",
-        )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="global.anthropic.claude-opus-4-7",
+        llm_provider="bedrock_converse",
     )
     assert result == async_result
 
@@ -7965,9 +7945,7 @@ def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_cras
         ("us.anthropic.claude-opus-4-8", False),
     ],
 )
-def test_disabled_thinking_omitted_for_always_on_models_converse(
-    local_model_cost_map, model, expected_dropped
-):
+def test_disabled_thinking_omitted_for_always_on_models_converse(local_model_cost_map, model, expected_dropped):
     """Bedrock Converse: ``thinking={"type": "disabled"}`` is omitted for always-on-thinking
     models and forwarded verbatim for models that accept it."""
     config = AmazonConverseConfig()
@@ -7986,6 +7964,7 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
     else:
         assert additional.get("thinking") == {"type": "disabled"}
 
+
 @pytest.mark.parametrize(
     "model",
     ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
@@ -7994,14 +7973,10 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
     "tool_choice",
     ["required", {"type": "function", "function": {"name": "get_weather"}}],
 )
-def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(
-    local_model_cost_map, model, tool_choice
-):
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(local_model_cost_map, model, tool_choice):
     config = AmazonConverseConfig()
 
-    result = config.map_tool_choice_values(
-        model=model, tool_choice=tool_choice, drop_params=True
-    )
+    result = config.map_tool_choice_values(model=model, tool_choice=tool_choice, drop_params=True)
 
     assert result == {"auto": {}}
 
@@ -8010,16 +7985,12 @@ def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(
     "tool_choice",
     ["required", {"type": "function", "function": {"name": "get_weather"}}],
 )
-def test_forced_tool_choice_raises_clean_error_on_fable_5_1_converse(
-    local_model_cost_map, tool_choice, monkeypatch
-):
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_converse(local_model_cost_map, tool_choice, monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
-        config.map_tool_choice_values(
-            model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=False
-        )
+        config.map_tool_choice_values(model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=False)
 
 
 @pytest.mark.parametrize("tool_choice", ["auto", "none"])
@@ -8037,9 +8008,7 @@ def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_
     "model",
     ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
 )
-def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(
-    local_model_cost_map, model
-):
+def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(local_model_cost_map, model):
     """Regression: Bedrock rejects both ``outputConfig`` structured output and forced
     tool_choice for Fable 5.1, so response_format must map to a tool without a forced
     tool_choice."""
@@ -8066,15 +8035,11 @@ def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_conve
     assert result.get("json_mode") is True
 
 
-def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
-    local_model_cost_map, monkeypatch
-):
+def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(local_model_cost_map, monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     config = AmazonConverseConfig()
 
-    result = config.map_tool_choice_values(
-        model="anthropic.claude-fable-5", tool_choice="required", drop_params=False
-    )
+    result = config.map_tool_choice_values(model="anthropic.claude-fable-5", tool_choice="required", drop_params=False)
 
     assert result == {"any": {}}
 
@@ -8415,7 +8380,11 @@ def test_system_entry_without_content_key_transforms_like_an_empty_one():
     assert config._transform_system_message(leading_without_key) == config._transform_system_message(leading_empty)
     assert config._transform_system_message(leading_without_key) == ([{"role": "user", "content": "hi"}], [])
     mid_without_key = [{"role": "user", "content": "hi"}, {"role": "system"}, {"role": "user", "content": "done"}]
-    mid_empty = [{"role": "user", "content": "hi"}, {"role": "system", "content": ""}, {"role": "user", "content": "done"}]
+    mid_empty = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "done"},
+    ]
     assert config._transform_system_message(mid_without_key) == config._transform_system_message(mid_empty)
 
 
@@ -8433,7 +8402,11 @@ def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], li
     second_question = {"role": "user", "content": "Second question"}
     second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
     turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
-    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
+    turn_n_plus_two = [
+        *turn_n_plus_one,
+        _thinking_reply("Second answer"),
+        {"role": "user", "content": "Third question"},
+    ]
     return turn_n, turn_n_plus_one, turn_n_plus_two
 
 
@@ -8563,16 +8536,6 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -8827,24 +8790,18 @@ def test_bedrock_converse_translation_tool_message():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     print(translated_msg)
     assert translated_msg == [
         {
             "role": "user",
             "content": [
-                {
-                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
-                },
+                {"text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"},
                 {
                     "toolResult": {
                         "content": [
-                            {
-                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
-                            }
+                            {"text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}
                         ],
                         "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
                     }
@@ -9309,10 +9266,7 @@ def test_bedrock_empty_content_handling(messages, continue_message_index):
     # Verify assistant message with default text was inserted
     assert formatted_messages[0]["role"] == "user"
     assert formatted_messages[1]["role"] == "assistant"
-    assert (
-        formatted_messages[continue_message_index]["content"][0]["text"]
-        == "Please continue."
-    )
+    assert formatted_messages[continue_message_index]["content"][0]["text"] == "Please continue."
 
 
 def test_bedrock_custom_continue_message():
@@ -9361,9 +9315,7 @@ def test_bedrock_no_default_message():
     )
 
     # Verify empty message is replaced with placeholder and valid message remains
-    assistant_messages = [
-        msg for msg in formatted_messages if msg["role"] == "assistant"
-    ]
+    assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
@@ -9473,9 +9425,7 @@ def test_bedrock_top_k_param(model, expected_params):
         mock_response = Mock()
 
         if "mistral" in model:
-            mock_response.text = json.dumps(
-                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
-            )
+            mock_response.text = json.dumps({"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]})
         else:
             mock_response.text = json.dumps(
                 {
@@ -9923,9 +9873,7 @@ def test_cross_region_bedrock_model_cost_falls_back_to_base_model(monkeypatch: p
         prompt="synthetic prompt",
         completion="synthetic completion",
     )
-    base_info: Final = litellm.get_model_info(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    base_info: Final = litellm.get_model_info(model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0")
 
     assert info["input_cost_per_token"] == base_info["input_cost_per_token"]
     assert cost == pytest.approx(base_cost)
@@ -10035,9 +9983,7 @@ def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: res
     respx_mock.get("https://1.1.1.1/image.png").mock(
         return_value=httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"})
     )
-    bedrock_route: Final = respx_mock.post(
-        re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")
-    ).mock(
+    bedrock_route: Final = respx_mock.post(re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -10068,9 +10014,9 @@ def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: res
 
     assert response.choices[0].message.content == "a synthetic image"
     assert request_body["messages"][0]["content"][1]["image"]["format"] == "png"
-    assert request_body["messages"][0]["content"][1]["image"]["source"]["bytes"] == base64.b64encode(
-        image_bytes
-    ).decode()
+    assert (
+        request_body["messages"][0]["content"][1]["image"]["source"]["bytes"] == base64.b64encode(image_bytes).decode()
+    )
 
 
 async def _transform_converse_request(sync_mode: bool, messages: list[AllMessageValues]) -> RequestObject:
@@ -10145,3 +10091,59 @@ async def test_bedrock_user_file_element_becomes_document_block(sync_mode: bool)
     assert content[0] == {"text": "Summarize this report"}
     assert content[1]["document"]["source"] == {"bytes": base64.b64encode(pdf_bytes).decode()}
     assert content[1]["document"]["format"] == "pdf"
+
+
+def _openai_tool_search_with_deferred_functions() -> list[dict[str, object]]:
+    return [
+        {"type": "tool_search", "execution": "server"},
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "defer_loading": True,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "names_invoke_route"),
+    [
+        pytest.param("us.anthropic.claude-sonnet-5-5", True, id="claude-that-runs-tool-search-on-invoke"),
+        pytest.param("anthropic.claude-3-haiku-20240307-v1:0", False, id="claude-without-tool-search"),
+        pytest.param("us.amazon.nova-pro-v1:0", False, id="nova"),
+    ],
+)
+def test_map_openai_params_answers_400_for_the_openai_tool_search_tool_without_drop_params(
+    monkeypatch, model, names_invoke_route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
+    assert ("bedrock/invoke/" in str(raised.value)) is names_invoke_route
+
+
+def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = AmazonConverseConfig().map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-5-5",
+        drop_params=True,
+    )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather", "get_stock_price"]
+    assert all("defer_loading" not in tool and "defer_loading" not in tool["function"] for tool in mapped["tools"])

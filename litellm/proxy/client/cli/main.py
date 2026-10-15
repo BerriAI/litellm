@@ -6,6 +6,7 @@ from typing import Final, Literal, Protocol
 import click
 
 from litellm._version import version as litellm_version
+from litellm.litellm_core_utils.cli_token_utils import load_cli_token
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
@@ -14,6 +15,7 @@ from .commands.auth import (
     cli_context_obj,
     context_secret_vault,
     get_stored_api_key,
+    keychain_unreadable_notice,
     login,
     logout,
     whoami,
@@ -98,7 +100,7 @@ class HideConfiguredCommandsGroup(click.Group):
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
     default=None,
-    show_default="base_url from `lite config`, else http://localhost:4000",
+    show_default="base_url from `lite config`, else the `lite login` server for a bare `lite` with no key, else http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -114,10 +116,27 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     stored_base_url: Final = get_config_value("base_url")
     base_url_provided: Final = base_url is not None
+    shell: Final = ctx.invoked_subcommand is None and not show_version
+    login: Final = (
+        load_cli_token(vault=context_secret_vault(ctx))
+        if shell and base_url is None and not stored_base_url and api_key is None
+        else None
+    )
+    login_base_url: Final = login.base_url if login is not None and login.key else None
+    if login is not None and login.base_url and not login.key:
+        click.secho(
+            keychain_unreadable_notice(
+                context_secret_vault(ctx), login_command=f"lite --base-url {login.base_url} login"
+            ),
+            fg="yellow",
+            err=True,
+        )
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
-    base_url = ((stored_base_url or "http://localhost:4000") if base_url is None else base_url).rstrip("/")
+    base_url = (
+        (stored_base_url or login_base_url or "http://localhost:4000") if base_url is None else base_url
+    ).rstrip("/")
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
@@ -147,7 +166,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
-        interactive_shell(ctx)
+        interactive_shell(ctx, cli)
 
 
 @cli.command()

@@ -677,7 +677,10 @@ def _get_redis_client_logic(**env_overrides):
         if redis_kwargs.get("startup_nodes")
         else redis.Redis
     )
-    return _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    coerced_kwargs: Final = _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    if coerced_kwargs.get("socket_timeout") is None:
+        coerced_kwargs["socket_timeout"] = REDIS_SOCKET_TIMEOUT
+    return coerced_kwargs
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
@@ -724,7 +727,6 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
@@ -757,7 +759,6 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:

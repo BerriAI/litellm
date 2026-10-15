@@ -4,11 +4,13 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +24,14 @@ from litellm.utils import ProviderConfigManager, client, filter_out_litellm_para
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+_SEARCH_KWARGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _search_pricing_params(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    cost_per_query: Final = kwargs.get("input_cost_per_query")
+    return MappingProxyType({} if cost_per_query is None else {"input_cost_per_query": cost_per_query})
 
 
 def _build_search_optional_params(
@@ -258,7 +268,8 @@ def search(
         )
 
         # Filter out internal LiteLLM parameters from kwargs
-        filtered_kwargs: Final = filter_out_litellm_params(kwargs=kwargs)
+        search_kwargs: Final = _SEARCH_KWARGS.validate_python(kwargs)
+        filtered_kwargs: Final = filter_out_litellm_params(kwargs=search_kwargs)
 
         # Add remaining kwargs to optional_params (for provider-specific params)
         for key, value in filtered_kwargs.items():
@@ -290,6 +301,7 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "api_base": complete_url,
+                **_search_pricing_params(search_kwargs),
             },
             custom_llm_provider=search_provider,
         )

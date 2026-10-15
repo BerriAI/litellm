@@ -13,7 +13,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    strip_litellm_response_only_fields,
+    unpack_legacy_defs,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -521,15 +524,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                                 llm_provider="fireworks_ai",
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
-            # Remove fields not permitted by FireworksAI (additionalProperties: false
-            # on their ChatMessage schema) that may cause:
-            # "Extra inputs are not permitted, field: 'messages[n].<field>'"
-            if isinstance(message, dict):
-                m = cast(dict, message)
-                m.pop("provider_specific_fields", None)
-                m.pop("thinking_blocks", None)
 
-        return messages
+        return [strip_litellm_response_only_fields(message) for message in messages]
 
     # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
     # this index requires a full scan of model_cost (tens of thousands of

@@ -191,26 +191,26 @@ def storage_notice(outcome: SecretSave) -> str:
             )
 
 
-def keychain_unreadable_notice(vault: SecretVault) -> str:
+def keychain_unreadable_notice(vault: SecretVault, login_command: str = "lite login") -> str:
     """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
     match vault.read():
         case KeyringNotInstalled():
             return (
                 "Your credential is in your OS keychain, which this install cannot read without the "
-                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run '{login_command}' to start over."
             )
         case KeyringDisabled():
             return (
                 f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
-                "Unset it, or run 'lite login' to start over."
+                f"Unset it, or run '{login_command}' to start over."
             )
         case KeyringUnreachable():
             return (
                 "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
-                "'lite login' to start over."
+                f"'{login_command}' to start over."
             )
         case SecretFound() | SecretMissing():
-            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+            return f"Your credential could not be read from your OS keychain. Run '{login_command}' to start over."
 
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:

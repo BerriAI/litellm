@@ -366,7 +366,15 @@ def file_retrieve(
 
         _is_async: Final = kwargs.pop("is_async", False) is True
 
-        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+        if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
+            response = xai_batch_results_instance.batch_results_file(  # rebind-ok: shares the result slot with the provider branches below
+                _is_async=_is_async,
+                batch_id=file_id,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+            )
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             openai_creds: Final = get_openai_credentials(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
