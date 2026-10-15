@@ -534,6 +534,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
             value=client_private_key,
             new_encryption_key=encryption_key,
         )
+    id_jag_resource_client_secret: Final = credentials.get("id_jag_resource_client_secret")
+    if id_jag_resource_client_secret is not None:
+        credentials["id_jag_resource_client_secret"] = encrypt_value_helper(  # rebind-ok: encrypt before persist
+            value=id_jag_resource_client_secret,
+            new_encryption_key=encryption_key,
+        )
     # AWS SigV4 credential fields
     aws_access_key_id: Final = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
@@ -816,6 +822,7 @@ MCP_CREDENTIAL_SECRET_FIELDS: Final = (
     "client_id",
     "client_secret",
     "client_private_key",
+    "id_jag_resource_client_secret",
     "aws_access_key_id",
     "aws_secret_access_key",
     "aws_session_token",
