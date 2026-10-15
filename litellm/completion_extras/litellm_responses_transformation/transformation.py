@@ -35,6 +35,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
     record_output_item_chunk,
@@ -1473,7 +1474,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "client"
             if any(tool.get("type") == "tool_search" and tool.get("execution") == "client" for tool in tools)
             else "hosted"
-            if any(tool.get("type") == "tool_search" for tool in tools)
+            if any(tool.get("type") == "tool_search" or is_anthropic_tool_search_chat_tool(tool) for tool in tools)
             else "absent"
         )
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
