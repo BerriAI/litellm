@@ -890,6 +890,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token_priority": 4e-06,
         "output_cost_per_token_flex": 5e-06,
         "input_cost_per_token_flex": 1e-06,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "litellm_provider": "openai",
         "mode": "chat",
         "input_cost_per_token": 2e-06,
@@ -1071,6 +1073,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     },
     "gpt-6-astra": {
         "cache_read_input_token_cost": 1.2e-06,
+        "cache_creation_input_token_cost": 1.5e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 3e-05,
         "input_cost_per_token": 1.2e-05,
         "input_cost_per_token_flex": 6e-06,
         "input_cost_per_token_priority": 2.4e-05,
@@ -1116,6 +1120,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     },
     "azure/gpt-6-luna": {
         "cache_read_input_token_cost": 1.3e-08,
+        "cache_creation_input_token_cost": 1.625e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 3.25e-07,
         "input_cost_per_token": 1.3e-07,
         "input_cost_per_token_flex": 6.5e-08,
         "input_cost_per_token_priority": 2.6e-07,
@@ -1139,6 +1145,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     },
     "azure/gpt-6-astra": {
         "cache_read_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost": 1.5625e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_flex": 6.25e-06,
         "input_cost_per_token_priority": 2.5e-05,
@@ -1162,6 +1170,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     },
     "azure/gpt-6.1-sol": {
         "cache_read_input_token_cost": 2.4e-07,
+        "cache_creation_input_token_cost": 3e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 6e-06,
         "input_cost_per_token": 2.4e-06,
         "input_cost_per_token_flex": 1.2e-06,
         "input_cost_per_token_priority": 4.8e-06,
