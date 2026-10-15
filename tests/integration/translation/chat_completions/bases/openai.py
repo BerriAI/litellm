@@ -1,8 +1,18 @@
 from typing import Final
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
+from integration.translation.chat_completions.templates import (
+    CHAT_COMPLETIONS_REQUEST,
+    CHAT_COMPLETIONS_RESPONSE,
+    CODING_AGENT_REQUEST,
+    CODING_AGENT_RESPONSE,
+)
 from integration.translation.templates.openai import (
+    OPENAI_CHAT_AGENT_REQUEST,
+    OPENAI_CHAT_AGENT_RESPONSE,
+    OPENAI_RESPONSES_AGENT_REQUEST,
+    OPENAI_RESPONSES_AGENT_RESPONSE,
     OPENAI_RESPONSES_REQUEST_FROM_CHAT_COMPLETIONS,
     OPENAI_RESPONSES_RESPONSE,
 )
@@ -418,6 +428,315 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 453,
             "completion_tokens_details": {"reasoning_tokens": 76},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+        },
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+    },
+)
+
+
+GPT_5_MINI_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-5-mini"},
+    expected_provider_endpoint="/chat/completions",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={**OPENAI_CHAT_AGENT_REQUEST, "model": "gpt-5-mini"},
+    mock_provider_response={
+        **OPENAI_CHAT_AGENT_RESPONSE,
+        "id": "chatcmpl-EZ6ZkY5c57uHF4jMweilQxn2h2XUv",
+        "created": 1792035464,
+        "model": "gpt-5-mini-2025-08-07",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I'll search for callers and run the specific test.",
+                    "tool_calls": [
+                        {
+                            "id": "call_mFie59uQ12eusnoPzdw7qlho",
+                            "type": "function",
+                            "function": {"name": "search_code", "arguments": '{"query": "retries_remaining("}'},
+                        },
+                        {
+                            "id": "call_hEFM0TcGu1J2VeKD4SjqoBg2",
+                            "type": "function",
+                            "function": {"name": "run_tests", "arguments": '{"path": "tests/test_retry.py"}'},
+                        },
+                    ],
+                    "refusal": None,
+                    "annotations": [],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {
+            **object_value(OPENAI_CHAT_AGENT_RESPONSE["usage"]),
+            "prompt_tokens": 529,
+            "completion_tokens": 70,
+            "total_tokens": 599,
+            "completion_tokens_details": {
+                **object_value(object_value(OPENAI_CHAT_AGENT_RESPONSE["usage"])["completion_tokens_details"]),
+                "reasoning_tokens": 0,
+            },
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "chatcmpl-EZ6ZkY5c57uHF4jMweilQxn2h2XUv",
+        "model": "openai/gpt-5-mini",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "I'll search for callers and run the specific test.",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {"arguments": '{"query": "retries_remaining("}', "name": "search_code"},
+                            "id": "call_mFie59uQ12eusnoPzdw7qlho",
+                            "type": "function",
+                        },
+                        {
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_hEFM0TcGu1J2VeKD4SjqoBg2",
+                            "type": "function",
+                        },
+                    ],
+                    "annotations": [],
+                    "refusal": None,
+                },
+                "provider_specific_fields": {},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 70,
+            "prompt_tokens": 529,
+            "total_tokens": 599,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+        },
+        "service_tier": "default",
+        "system_fingerprint": None,
+    },
+)
+
+
+GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-5.4-mini"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.4-mini"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_AGENT_RESPONSE,
+        "id": "resp_04479f74ce91556d006ad04a8ad01487d0b4589fd4fb7af2c8",
+        "created_at": 1792035466,
+        "status": "completed",
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035467,
+        "model": "gpt-5.4-mini-2026-03-17",
+        "output": [
+            {
+                "id": "msg_04479f74ce91556d006ad04a8b3bb487d0a20160b9ea713410",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": "I’ll search for other callers and run the retry tests now, then inspect the results "
+                        "before patching.",
+                    }
+                ],
+                "phase": "commentary",
+                "role": "assistant",
+            },
+            {
+                "id": "fc_04479f74ce91556d006ad04a8ba50887d080f7c2a89fcc0f03",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"query":"retries_remaining("}',
+                "call_id": "call_KG0GOlKRaaLKw5nHIZoptT4K",
+                "name": "search_code",
+            },
+            {
+                "id": "fc_04479f74ce91556d006ad04a8ba51c87d09f89e16548408470",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "call_id": "call_pMG9sdoFy24PVF4ZP95Mo6ay",
+                "name": "run_tests",
+            },
+        ],
+        "prompt_cache_retention": "24h",
+        "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "current_turn"},
+        "service_tier": "default",
+        "usage": {
+            "input_tokens": 448,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 82,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 530,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "resp_04479f74ce91556d006ad04a8ad01487d0b4589fd4fb7af2c8",
+        "model": "openai/gpt-5.4-mini",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "I’ll search for other callers and run the retry tests now, then inspect the "
+                    "results before patching.",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"retries_remaining("}', "name": "search_code"},
+                            "id": "call_KG0GOlKRaaLKw5nHIZoptT4K",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_pMG9sdoFy24PVF4ZP95Mo6ay",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 82,
+            "prompt_tokens": 448,
+            "total_tokens": 530,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+        },
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+    },
+)
+
+
+GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-6-sol"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-agent-key"},
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6-sol"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_AGENT_RESPONSE,
+        "id": "resp_0bd4e7f6afc56841006ad04aa3bdc887d089b162423410f96b",
+        "created_at": 1792035491,
+        "status": "completed",
+        "access_programs": {"cyber": "daybreak_blue"},
+        "billing": {"payer": "developer"},
+        "completed_at": 1792035492,
+        "model": "gpt-6-sol",
+        "output": [
+            {
+                "id": "fc_0bd4e7f6afc56841006ad04aa4bf0887d084f8e292c4114028",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"query":"retries_remaining"}',
+                "call_id": "call_R9OwdkIw3MYvLUzFLkNUgcof",
+                "name": "search_code",
+            },
+            {
+                "id": "fc_0bd4e7f6afc56841006ad04aa4bf2887d0b087e91a6af43f50",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "call_id": "call_9jA0N8trabVxGFS04x6FbMQ4",
+                "name": "run_tests",
+            },
+        ],
+        "prompt_cache_retention": "24h",
+        "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "all_turns"},
+        "service_tier": "default",
+        "usage": {
+            "input_tokens": 448,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 53,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 501,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "resp_0bd4e7f6afc56841006ad04aa3bdc887d089b162423410f96b",
+        "model": "openai/gpt-6-sol",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
+                            "id": "call_R9OwdkIw3MYvLUzFLkNUgcof",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_9jA0N8trabVxGFS04x6FbMQ4",
+                            "type": "function",
+                        },
+                    ],
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 53,
+            "prompt_tokens": 448,
+            "total_tokens": 501,
+            "completion_tokens_details": {"reasoning_tokens": 0},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
         "access_programs": {"cyber": "daybreak_blue"},

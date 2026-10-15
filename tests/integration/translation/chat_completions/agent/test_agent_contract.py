@@ -1,101 +1,76 @@
-import json
 from collections.abc import Mapping
+from dataclasses import replace
 from itertools import chain
 from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
+from integration.translation.case import (
+    StreamingTranslationTestCase,
+    TranslationTestCase,
+)
 from integration.translation.chat_completions.agent.case import (
     CASES,
-    AgentCase,
-    Exchange,
-    assert_extensions,
     reference_for,
 )
 from integration.translation.chat_completions.agent.contracts import (
-    FOLLOWUP,
     Usage,
     assembled_tools,
-    assert_completion,
     assert_final_text,
+    followup_request,
     tool_calls_shape,
-    tool_results,
     tool_shape,
 )
-from integration.translation.chat_completions.templates import CODING_AGENT_REQUEST
-from integration.translation.runner import parse_sse_frames
+from integration.translation.runner import (
+    assert_provider_request,
+    assert_translation,
+    parse_sse_frames,
+    streaming_reply,
+)
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import JsonValue, TypeAdapter
 
-ENDPOINT: Final = "/v1/chat/completions"
 MESSAGES: Final = TypeAdapter(list[ChatCompletionMessageParam])
-CASE_IDS: Final = tuple(f"{case.tier}-{case.model}" for case in CASES)
+CASE_IDS: Final = tuple(str(case.litellm_request["model"]) for case, _, _ in CASES)
 
 
-def assert_upstream(provider: SharedProvider, exchange: Exchange) -> None:
-    received: Final = provider.received()
-    assert len(received) == 1
-    assert received[0].method == "POST"
-    assert received[0].target == exchange.target
-    assert json.loads(received[0].body) == exchange.request
+def assert_upstream(provider: SharedProvider, case: StreamingTranslationTestCase) -> None:
+    assert_provider_request(
+        provider.received(),
+        case.expected_provider_endpoint,
+        case.expected_provider_headers,
+        case.expected_provider_request,
+    )
 
 
-def tools_response(case: AgentCase, gateway: Gateway, provider: SharedProvider) -> dict[str, JsonValue]:
-    provider.expect(case.tools.reply())
-    response: Final = gateway.request("POST", ENDPOINT, {**CODING_AGENT_REQUEST, "model": case.model})
-    assert_upstream(provider, case.tools)
-    assert response.status_code == 200, response.text
-    body: Final = JSON_OBJECT.validate_json(response.content)
-    assert_extensions(body, case)
-    return body
-
-
-@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+@pytest.mark.parametrize("case", tuple(case for case, _, _ in CASES), ids=CASE_IDS)
 def test_same_coding_request_has_the_same_tool_shape_within_tier(
-    case: AgentCase, gateway: Gateway, provider: SharedProvider
+    case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    reference: Final = tools_response(reference_for(case), gateway, provider)
-    response: Final = tools_response(case, gateway, provider)
+    reference: Final = assert_translation(reference_for(case), gateway, provider)
+    response: Final = assert_translation(case, gateway, provider)
     assert tool_shape(response) == tool_shape(reference)
 
 
-@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+@pytest.mark.parametrize("case,followup", tuple((case, followup) for case, followup, _ in CASES), ids=CASE_IDS)
 def test_returned_assistant_message_and_tool_ids_replay_into_a_final_answer(
-    case: AgentCase, gateway: Gateway, provider: SharedProvider
+    case: TranslationTestCase, followup: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    response: Final = tools_response(case, gateway, provider)
+    response: Final = assert_translation(case, gateway, provider)
     tool_shape(response)
-    completion: Final = assert_completion(response)
-    messages: Final = CODING_AGENT_REQUEST["messages"]
-    assert isinstance(messages, list)
-    message: Final = JSON_OBJECT.validate_python(
-        completion.choices[0].message.model_dump(mode="json", exclude_none=True)
-    )
-    followup: Final[dict[str, JsonValue]] = {
-        **CODING_AGENT_REQUEST,
-        "model": case.model,
-        "messages": [*messages, message, *tool_results(completion.choices[0].message), FOLLOWUP],
-    }
-    provider.expect(case.followup.reply())
-    answer: Final = gateway.request("POST", ENDPOINT, followup)
-    assert_upstream(provider, case.followup)
-    assert answer.status_code == 200, answer.text
-    assert_final_text(JSON_OBJECT.validate_json(answer.content))
+    replay: Final = replace(followup, litellm_request=followup_request(case.litellm_request, response))
+    assert_final_text(assert_translation(replay, gateway, provider))
 
 
-@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+@pytest.mark.parametrize("case", tuple(stream for _, _, stream in CASES), ids=CASE_IDS)
 def test_raw_agent_stream_preserves_tool_indexes_finish_reason_and_usage(
-    case: AgentCase, gateway: Gateway, provider: SharedProvider
+    case: StreamingTranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    provider.expect(case.stream.reply())
-    response: Final = gateway.request(
-        "POST",
-        ENDPOINT,
-        {**CODING_AGENT_REQUEST, "model": case.model, "stream": True, "stream_options": {"include_usage": True}},
-    )
-    assert_upstream(provider, case.stream)
+    provider.expect(streaming_reply(case))
+    response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
+    assert_upstream(provider, case)
     assert response.status_code == 200, response.text
     frames: Final = parse_sse_frames(response.text)
     assert frames and frames[-1].data == "[DONE]", response.text
@@ -143,26 +118,31 @@ def _finish_reasons(chunk: dict[str, JsonValue]) -> tuple[JsonValue, ...]:
     )
 
 
-@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+@pytest.mark.parametrize("case", tuple(stream for _, _, stream in CASES), ids=CASE_IDS)
 def test_openai_sdk_stream_helper_assembles_the_agent_tool_calls(
-    case: AgentCase, gateway: Gateway, provider: SharedProvider
+    case: StreamingTranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    if "haiku" in case.model:
+    model: Final = case.litellm_request["model"]
+    assert isinstance(model, str)
+    if "haiku" in model:
         pytest.skip("BUG: LIT-9653, reasoning thinking_blocks lack index and crash OpenAI SDK stream assembly")
-    provider.expect(case.stream.reply())
+    provider.expect(streaming_reply(case))
     with OpenAI(
         api_key=gateway.key, base_url=str(gateway.client.base_url).rstrip("/") + "/v1", max_retries=0
     ) as client:
         with client.chat.completions.stream(
-            model=case.model,
-            messages=MESSAGES.validate_python(CODING_AGENT_REQUEST["messages"]),
+            model=model,
+            messages=MESSAGES.validate_python(case.litellm_request["messages"]),
             extra_body={
-                **{key: value for key, value in CODING_AGENT_REQUEST.items() if key != "messages"},
-                "stream_options": {"include_usage": True},
+                **{
+                    key: value
+                    for key, value in case.litellm_request.items()
+                    if key not in ("model", "messages", "stream")
+                },
             },
         ) as stream:
             for event in stream:
                 assert event.type
             final: Final = stream.get_final_completion()
-    assert_upstream(provider, case.stream)
+    assert_upstream(provider, case)
     assert tool_shape(JSON_OBJECT.validate_python(final.model_dump(mode="json")))

@@ -1,66 +1,256 @@
-import json
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Final, Literal
+from typing import Final
 
-from integration._support.upstream import aws_event_stream_frame
-from integration._support.wire import Reply
-from integration.translation.case import SSEFrame
-from integration.translation.runner import encode_sse_frame
-from pydantic import BaseModel, ConfigDict, JsonValue
+from integration.translation.case import (
+    StreamingTranslationTestCase,
+    TranslationTestCase,
+)
+from integration.translation.chat_completions.agent import (
+    anthropic,
+    azure,
+    azure_ai,
+    bedrock_converse,
+    openai,
+    vertex_ai,
+)
+
+AgentCases = tuple[TranslationTestCase, TranslationTestCase, StreamingTranslationTestCase]
+
+SMALL: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_4_MINI_TEST_CASE,
+        azure.GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_LUNA_AGENT_TEST_CASE,
+        azure.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_LUNA_AGENT_TEST_CASE,
+        azure.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_LUNA_TEST_CASE,
+        bedrock_converse.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_LUNA_TEST_CASE,
+        bedrock_converse.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_MINI_TEST_CASE,
+        openai.GPT_5_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_4_MINI_TEST_CASE,
+        openai.GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_4_MINI_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_LUNA_AGENT_TEST_CASE,
+        openai.GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_6_LUNA_AGENT_TEST_CASE,
+        openai.GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_LUNA_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+MID: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_OPUS_5_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_SOL_AGENT_TEST_CASE,
+        azure.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_5_6_TERRA_AGENT_TEST_CASE,
+        azure.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_1_SOL_AGENT_TEST_CASE,
+        azure.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_OPUS_5_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_SOL_TEST_CASE,
+        bedrock_converse.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_5_6_TERRA_TEST_CASE,
+        bedrock_converse.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_SOL_TEST_CASE,
+        bedrock_converse.GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_1_SOL_TEST_CASE,
+        bedrock_converse.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_OPUS_5_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_SOL_AGENT_TEST_CASE,
+        openai.GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_5_6_TERRA_AGENT_TEST_CASE,
+        openai.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (openai.GPT_6_SOL_TEST_CASE, openai.GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE, openai.GPT_6_SOL_AGENT_STREAMING_TEST_CASE),
+    (
+        openai.GPT_6_1_SOL_AGENT_TEST_CASE,
+        openai.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+HIGH: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_FABLE_5_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure_ai.CLAUDE_FABLE_5_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        azure.GPT_6_ASTRA_AGENT_TEST_CASE,
+        azure.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        azure.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.CLAUDE_FABLE_5_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        bedrock_converse.GPT_6_ASTRA_TEST_CASE,
+        bedrock_converse.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.CLAUDE_FABLE_5_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_4_ARGON_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        openai.GPT_6_ASTRA_AGENT_TEST_CASE,
+        openai.GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_ASTRA_AGENT_STREAMING_TEST_CASE,
+    ),
+)
+
+TIERS: Final = (SMALL, MID, HIGH)
+CASES: Final = (*SMALL, *MID, *HIGH)
 
 
-class Frame(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    data: dict[str, JsonValue] | Literal["[DONE]"]
-    event: str | None = None
-    headers: dict[str, str | int] | None = None
-
-    def encode(self) -> bytes:
-        if self.headers is not None:
-            return aws_event_stream_frame(self.headers, json.dumps(self.data).encode())
-        return encode_sse_frame(SSEFrame(data=self.data, event=self.event))
-
-
-class Exchange(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    request: dict[str, JsonValue]
-    target: str
-    content_type: str = "application/json"
-    response: dict[str, JsonValue] | None = None
-    frames: tuple[Frame, ...] = ()
-
-    def reply(self) -> Reply:
-        if self.response is not None:
-            return Reply(body=json.dumps(self.response).encode())
-        return Reply(content_type=self.content_type, chunks=tuple(frame.encode() for frame in self.frames))
-
-
-class AgentCase(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    tier: Literal["small", "mid", "high"]
-    model: str
-    tools: Exchange
-    stream: Exchange
-    followup: Exchange
-    reasoning_fields: tuple[str, ...]
-
-
-DIRECTORY: Final = Path(__file__).parent / "captures"
-CASES: Final = tuple(AgentCase.model_validate_json(path.read_text()) for path in sorted(DIRECTORY.glob("*.json")))
-
-
-def reference_for(case: AgentCase) -> AgentCase:
-    provider: Final = "anthropic/" if case.model.startswith("openai/") else "openai/"
-    return next(row for row in CASES if row.tier == case.tier and row.model.startswith(provider))
-
-
-def assert_extensions(body: Mapping[str, JsonValue], case: AgentCase) -> None:
-    choices: Final = body["choices"]
-    assert isinstance(choices, list) and len(choices) == 1
-    choice: Final = choices[0]
-    assert isinstance(choice, dict)
-    message: Final = choice["message"]
-    assert isinstance(message, dict)
-    for field in case.reasoning_fields:
-        assert message.get(field), f"{case.model} lost {field}"
+def reference_for(case: TranslationTestCase) -> TranslationTestCase:
+    model: Final = str(case.litellm_request["model"])
+    provider: Final = "anthropic/" if model.startswith("openai/") else "openai/"
+    tier: Final = next(group for group in TIERS if any(row[0] is case for row in group))
+    return next(row[0] for row in tier if str(row[0].litellm_request["model"]).startswith(provider))

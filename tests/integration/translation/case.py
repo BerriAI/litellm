@@ -34,8 +34,14 @@ class SSEFrame:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class EventStreamFrame:
+    data: Mapping[str, JsonValue]
+    headers: Mapping[str, str | int]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class StreamingTranslationTestCase:
-    """The stream request, provider request, provider SSE frames, exact LiteLLM frames, and the final message they join into."""
+    """The stream request, provider frames, and optional exact LiteLLM frames and assembled response."""
 
     scenario: str
     litellm_endpoint: str
@@ -43,9 +49,9 @@ class StreamingTranslationTestCase:
     expected_provider_endpoint: str
     expected_provider_headers: Mapping[str, str]
     expected_provider_request: Mapping[str, JsonValue]
-    mock_provider_frames: tuple[SSEFrame, ...]
-    expected_litellm_frames: tuple[SSEFrame, ...]
-    expected_litellm_response: Mapping[str, JsonValue]
+    mock_provider_frames: tuple[SSEFrame | EventStreamFrame, ...]
+    expected_litellm_frames: tuple[SSEFrame, ...] | None = None
+    expected_litellm_response: Mapping[str, JsonValue] | None = None
 
     @property
     def id(self) -> str:

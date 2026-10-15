@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import Annotated, Final, Literal
 
+from integration._support.client import JSON_OBJECT, list_value, object_value
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 NonemptyString = Annotated[str, Field(min_length=1)]
@@ -157,3 +158,13 @@ def tool_results(message: Message) -> list[JsonValue]:
         {"role": "tool", "tool_call_id": call.id, "content": json.dumps(TOOL_RESULTS[call.function.name])}
         for call in message.tool_calls
     ]
+
+
+def followup_request(request: Mapping[str, JsonValue], response: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    choice: Final = object_value(list_value(response["choices"])[0])
+    message: Final = Message.model_validate(choice["message"])
+    assistant: Final = JSON_OBJECT.validate_python(message.model_dump(mode="json", exclude_none=True))
+    return {
+        **request,
+        "messages": [*list_value(request["messages"]), assistant, *tool_results(message), FOLLOWUP],
+    }

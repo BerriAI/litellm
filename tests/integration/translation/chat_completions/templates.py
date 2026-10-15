@@ -283,3 +283,6 @@ CHAT_COMPLETIONS_RESPONSE: Final[Mapping[str, JsonValue]] = {
         "service_tier": "standard",
     },
 }
+
+
+CODING_AGENT_RESPONSE: Final[Mapping[str, JsonValue]] = {"id": ANY, "created": ANY, "object": "chat.completion"}
