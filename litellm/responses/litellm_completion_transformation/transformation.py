@@ -2081,11 +2081,11 @@ class LiteLLMCompletionResponsesConfig:
                             text_acc.append(txt)
                             normalized_blocks.append({"type": "text", "text": txt})
                     elif part_type == "tool_reference":
-                        if isinstance(
-                            tool_name := cast(Mapping[str, object], part).get("tool_name"),  # cast-ok: dict checked above
-                            str,
-                        ) and tool_name:
-                            normalized_blocks.append({"type": "tool_reference", "tool_name": tool_name})
+                        match cast(Mapping[str, object], part):  # cast-ok: dict checked above
+                            case {"tool_name": str(tool_name)} if tool_name:
+                                normalized_blocks.append({"type": "tool_reference", "tool_name": tool_name})
+                            case _:
+                                continue
                     elif part_type in ("input_image", "image_url"):
                         image_url_val = part.get("image_url") or part.get("url")
                         if isinstance(image_url_val, dict):
