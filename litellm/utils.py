@@ -10445,7 +10445,7 @@ def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str,
     return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
-def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
     """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
 
     Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
@@ -10461,6 +10461,15 @@ def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
         if "reasoning_summary" in extra_body:
             return extra_body["reasoning_summary"]
     return None
+
+
+def reasoning_effort_with_summary_alias(
+    reasoning_effort: object, params: Mapping[str, object], accepts_summary: bool
+) -> object:
+    if not accepts_summary or not isinstance(reasoning_effort, str):
+        return reasoning_effort
+    summary: Final = peek_reasoning_summary_aliases(params)
+    return {"effort": reasoning_effort, "summary": summary} if isinstance(summary, str) else reasoning_effort
 
 
 def strip_reasoning_summary_aliases_from_optional_params(

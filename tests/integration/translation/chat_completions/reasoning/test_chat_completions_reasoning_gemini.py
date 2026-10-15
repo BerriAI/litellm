@@ -807,6 +807,14 @@ SUMMARY_ASKS: Final = (
     with_summary(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_int", 7),
     with_summary(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_list", ["auto"]),
     with_summary(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_null", None),
+    with_request(GEMINI_3_8_FLASH_TEST_CASE, "summary_alias", reasoning_summary="auto"),
+    with_request(GEMINI_3_8_FLASH_TEST_CASE, "summary_alias_camel", reasoningSummary="detailed"),
+    with_request(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_alias_null", reasoning_summary=None),
+    with_request(
+        GEMINI_3_8_FLASH_THINKING_SHOWN_TEST_CASE,
+        "thinking_summary",
+        thinking={"type": "enabled", "budget_tokens": 1024, "summary": "auto"},
+    ),
 )
 
 

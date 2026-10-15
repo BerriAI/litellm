@@ -52,6 +52,7 @@ from litellm.utils import (
     get_litellm_params,
     get_optional_params,
     peek_reasoning_summary_aliases,
+    reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
 )
 
@@ -5664,7 +5665,12 @@ def completion(
             "api_version": api_version,
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning_effort_with_summary_alias(
+                reasoning_effort,
+                non_default_params,
+                accepts_summary=provider_config is not None
+                and provider_config.accepts_reasoning_summary_in_reasoning_effort,
+            ),
             "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,

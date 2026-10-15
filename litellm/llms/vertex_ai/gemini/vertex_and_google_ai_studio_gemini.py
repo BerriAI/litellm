@@ -1052,14 +1052,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
     @staticmethod
+    def _thinking_asks_for_thoughts(thinking_param: Mapping[str, object]) -> bool:
+        display: Final = thinking_param.get("display")
+        return isinstance(thinking_param.get("summary"), str) or (display is not None and display != "omitted")
+
+    @staticmethod
     def _map_thinking_param(
         thinking_param: AnthropicThinkingParam,
         model: str | None = None,
     ) -> GeminiThinkingConfig:
         thinking_enabled: Final = thinking_param.get("type") == "enabled"
         thinking_budget: Final = thinking_param.get("budget_tokens")
-        display: Final = thinking_param.get("display")
-        asks_for_thoughts: Final = display is not None and display != "omitted"
+        asks_for_thoughts: Final = VertexGeminiConfig._thinking_asks_for_thoughts(thinking_param)
         sends_thoughts: Final = VertexGeminiConfig._include_thoughts(True if asks_for_thoughts else None)
 
         params: Final[GeminiThinkingConfig] = {}

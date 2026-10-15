@@ -393,7 +393,7 @@ key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
-gemini_include_thoughts_default: bool = True  # set False to keep Gemini thinking on while dropping thought summaries
+gemini_include_thoughts_default: bool = True
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
