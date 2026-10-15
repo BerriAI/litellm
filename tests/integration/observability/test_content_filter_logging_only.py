@@ -29,6 +29,7 @@ LEAK_MARK: Final = "SYNTHETIC-LEAK-TOKEN"
 OBSERVE_BLOCK: Final = "cf-observe-block"
 OBSERVE_MASK: Final = "cf-observe-mask"
 ENFORCE_BLOCK: Final = "cf-enforce-block"
+ENFORCE_MASK: Final = "cf-enforce-mask"
 SECRETS: Final = f"AWS_ACCESS_KEY_ID={AWS_KEY}\nGITHUB_TOKEN={GITHUB_TOKEN}"
 
 
@@ -154,6 +155,7 @@ def _rig_config(root: Path) -> Path:
         _content_filter(OBSERVE_BLOCK, "logging_only", "BLOCK", default_on=True),
         _content_filter(OBSERVE_MASK, "logging_only", "MASK", default_on=True),
         _content_filter(ENFORCE_BLOCK, "pre_call", "BLOCK", default_on=False),
+        _content_filter(ENFORCE_MASK, "pre_call", "MASK", default_on=False),
     ]
     path: Final = root / "content-filter-logging-only.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -306,6 +308,54 @@ def test_logging_only_block_still_scans_the_response_after_a_request_match(rig: 
     assert _verdicts(rig.entries(response_id, OBSERVE_BLOCK)) == [
         ("logging_only", "guardrail_flagged", ("aws_access_key",)),
         ("logging_only", "guardrail_flagged", ("github_pat",)),
+    ]
+
+
+def _tool_call_history(text: str, arguments: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": text},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "request_findings"),
+    (
+        pytest.param(json.dumps({AWS_KEY: 1}), ("aws_access_key",), id="masked-argument-key"),
+        pytest.param("[" * 150 + "1" + "]" * 150, (), id="too-deep"),
+    ),
+)
+def test_logging_only_flags_tool_arguments_an_enforcing_mode_rejects_and_keeps_scanning(
+    rig: Rig, arguments: str, request_findings: tuple[str, ...]
+) -> None:
+    marker: Final = _marker()
+    messages: Final = _tool_call_history(f"{marker} {LEAK_MARK}", arguments)
+    headers: Final = {"Authorization": f"Bearer {rig.proxy.key}"}
+    enforced: Final = rig.proxy.client.post(
+        "/v1/chat/completions",
+        json={"model": rig.chat_model, "messages": messages, "guardrails": [ENFORCE_MASK]},
+        headers=headers,
+    )
+    assert enforced.status_code == 400, enforced.text
+    assert rig.provider_bodies(marker) == ()
+
+    observed: Final = rig.proxy.client.post(
+        "/v1/chat/completions", json={"model": rig.chat_model, "messages": messages}, headers=headers
+    )
+    assert observed.status_code == 200, observed.text
+    completion: Final = object_value(observed.json())
+    assert len(rig.provider_bodies(marker)) == 1
+
+    assert _verdicts(rig.entries(str(completion["id"]), OBSERVE_MASK)) == [
+        ("logging_only", "guardrail_flagged", request_findings),
+        ("logging_only", "success", ("github_pat",)),
     ]
 
 

@@ -1967,7 +1967,9 @@ async def test_logging_only_flags_tool_arguments_enforcement_rejects_and_keeps_s
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": "done"},
     )
