@@ -10,9 +10,11 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -76,6 +78,59 @@ MULTIPLY_TOOL = {
     "description": "Multiply two integers",
     "input_schema": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}},
 }
+
+
+class TestAThinkingSummaryAskReachesGemini:
+    """Gemini maps a summary ask to ``includeThoughts``, so ``gemini_include_thoughts_default`` only
+    decides for a ``/v1/messages`` request that asks for nothing, the same as on chat completions."""
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [("gemini/gemini-3.1-pro-preview", "gemini"), ("vertex_ai/gemini-2.5-flash", "vertex_ai")],
+    )
+    @pytest.mark.parametrize(
+        "thinking, sends_thoughts",
+        [
+            (SUMMARIZED_THINKING, True),
+            ({**PLAIN_THINKING, "display": "summarized"}, True),
+            ({**PLAIN_THINKING, "display": "updates"}, True),
+            ({**PLAIN_THINKING, "display": "omitted"}, False),
+            (PLAIN_THINKING, False),
+            ({"type": "disabled", "display": "summarized"}, False),
+        ],
+    )
+    def test_the_request_ask_beats_the_gateway_default(
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        provider: str,
+        thinking: dict[str, object],
+        sends_thoughts: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+
+        sent = _reasoning_effort_sent_for_thinking(model, provider, thinking)
+        mapped = VertexGeminiConfig().map_openai_params({"reasoning_effort": sent}, {}, model.split("/", 1)[1], True)
+
+        assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
+
+    def test_auto_summary_leaves_the_gateway_default_in_charge(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking("gemini/gemini-3.1-pro-preview", "gemini", PLAIN_THINKING)
+
+        assert sent == "high"
+
+    def test_a_display_ask_leaves_other_chat_targets_on_the_plain_tier(self, local_model_cost_map: None) -> None:
+        sent = _reasoning_effort_sent_for_thinking(
+            "databricks/databricks-qwen35-122b-a10b", "databricks", {**PLAIN_THINKING, "display": "summarized"}
+        )
+
+        assert sent == "high"
 
 
 class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:

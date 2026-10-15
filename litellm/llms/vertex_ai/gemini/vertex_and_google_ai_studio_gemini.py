@@ -886,6 +886,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - Requires propertyOrdering
                 optional_params["response_schema"] = self._map_response_schema(value=schema)
 
+    @property
+    def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return True
+
     @staticmethod
     def _include_thoughts(requested: bool | None) -> bool:
         return litellm.gemini_include_thoughts_default if requested is None else requested

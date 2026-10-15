@@ -3109,7 +3109,6 @@ class TestToolTransformation:
             ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
             ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
             ("claude-sonnet-5", "vertex_ai"),
-            ("gemini-3.1-pro-preview", "vertex_ai"),
             ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
         ],
     )
@@ -3117,8 +3116,8 @@ class TestToolTransformation:
         """
         A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
         plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
-        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
-        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        object turns reasoning off: Bedrock Converse and Claude on Vertex silently discard a
+        non-string ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
         """
         responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
 
@@ -3130,6 +3129,34 @@ class TestToolTransformation:
         )
 
         assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [("gemini-3.1-pro-preview", "vertex_ai"), ("gemini-2.5-flash", "gemini")],
+    )
+    @pytest.mark.parametrize(
+        "reasoning, sends_thoughts",
+        [({"effort": "medium", "summary": "auto"}, True), ({"effort": "medium"}, False)],
+    )
+    def test_a_summary_ask_turns_gemini_thoughts_on_over_the_gateway_default(
+        self, monkeypatch, model, custom_llm_provider, reasoning, sends_thoughts
+    ):
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        mapped = VertexGeminiConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
+        assert "reasoning_summary" not in bridged
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider",

@@ -56,6 +56,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
+from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -204,7 +205,7 @@ class ResponsesToolChatForm:
 class ResponsesReasoningChatForm:
     """The Responses ``reasoning`` object as the two params Chat Completions takes."""
 
-    effort: str | None
+    effort: str | Reasoning | None
     summary: str | None
 
 
@@ -785,8 +786,9 @@ class LiteLLMCompletionResponsesConfig:
         provider either rejects it or silently drops it, and dropping it turns reasoning off while
         still billing for the turn. ``summary`` has no chat equivalent, so it rides the
         ``reasoning_summary`` alias, which ``litellm.completion`` reassembles into ``{effort,
-        summary}`` when it bridges the model back onto the Responses API, and is sent to nothing
-        else.
+        summary}`` when it bridges the model back onto the Responses API. A chat provider whose
+        config maps a summary ask (Gemini's thought summaries) gets ``{effort, summary}`` as its
+        ``reasoning_effort``, and every other one gets the effort alone.
         """
         if not reasoning_param:
             return ResponsesReasoningChatForm(effort=None, summary=None)
@@ -807,7 +809,11 @@ class LiteLLMCompletionResponsesConfig:
             reasoning_summary=summary,
             api_base=api_base,
         )
-        return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
+        if bridges_back:
+            return ResponsesReasoningChatForm(effort=effort, summary=summary)
+        if isinstance(effort, str) and chat_target_accepts_reasoning_summary(model, custom_llm_provider):
+            return ResponsesReasoningChatForm(effort=Reasoning(effort=effort, summary=summary), summary=None)
+        return ResponsesReasoningChatForm(effort=effort, summary=None)
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
