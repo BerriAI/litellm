@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from litellm.repositories.prisma_protocols import TableActions
 
-_SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
+ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _DETACH_TEAM_SQL: Final = (
     "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
     " WHERE user_id = ANY($2::text[])"
@@ -111,11 +111,11 @@ class _Removal:
     jwt_mapping_cache_keys: tuple[str, ...]
 
 
-def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+def team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return tx.litellm_teamtable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
-def _user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+def user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
     return tx.litellm_usertable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
@@ -205,7 +205,7 @@ async def _add_members(
 ) -> tuple[Member, ...] | MembersMissing:
     if not user_ids:
         return ()
-    rows: Final = await find_many_in(_user_tx_db(tx), "user_id", user_ids)
+    rows: Final = await find_many_in(user_tx_db(tx), "user_id", user_ids)
     email_of: Final = MappingProxyType({row.user_id: row.user_email for row in rows})
     missing: Final = tuple(user_id for user_id in user_ids if user_id not in email_of)
     if missing:
@@ -219,7 +219,7 @@ async def _add_members(
         skip_duplicates=True,
     )
     await update_many_in(
-        _user_tx_db(tx),
+        user_tx_db(tx),
         "user_id",
         user_ids,
         data={"teams": {"push": [team.team_id]}},
@@ -317,9 +317,9 @@ async def sync_team_roster(
     """
     if _changes_nothing(plan):
         return await _unchanged_roster(prisma_client, team_id)
-    async with prisma_client.tx(timeout=_SYNC_TX_TIMEOUT) as tx:
+    async with prisma_client.tx(timeout=ROSTER_TX_TIMEOUT) as tx:
         await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        team_row: Final = await _team_tx_db(tx).find_unique(where={"team_id": team_id})
+        team_row: Final = await team_tx_db(tx).find_unique(where={"team_id": team_id})
         if team_row is None:
             return TeamGone(team_id=team_id)
         team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
@@ -334,7 +334,7 @@ async def sync_team_roster(
             return added
         removal: Final = await _remove_members(tx, prisma_client, team_id, sorted(to_remove), user_api_key_dict)
         after: Final = (*(member for member in roster if member.user_id not in to_remove), *added)
-        written: Final = await _team_tx_db(tx).update(
+        written: Final = await team_tx_db(tx).update(
             where={"team_id": team_id},
             data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
         )

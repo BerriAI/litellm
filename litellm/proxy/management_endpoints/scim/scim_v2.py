@@ -67,11 +67,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
+from litellm.proxy.management_helpers.access_group_team_sync import USER_ROWS_LOCK_SQL
 from litellm.proxy.management_helpers.bulk_user_creation import (
     BULK_NEW_USER_CONCURRENCY,
     _bounded,  # pyright: ignore[reportPrivateUsage]  # the bounded gather /user/bulk_new runs its row writes through
 )
 from litellm.proxy.management_helpers.team_roster_sync import (
+    ROSTER_TX_TIMEOUT,
     MembersMissing,
     RosterDelta,
     RosterPlan,
@@ -80,6 +82,8 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
     sync_team_roster,
+    team_tx_db,
+    user_tx_db,
 )
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
@@ -105,12 +109,10 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
 
-_SET_USER_ROLE_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET user_role = $1, updated_at = (NOW() AT TIME ZONE 'UTC')
-WHERE user_id IN (
-    SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($2::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE
+_SET_USER_ROLE_SQL: Final = (
+    "UPDATE \"LiteLLM_UserTable\" SET user_role = $1, updated_at = (NOW() AT TIME ZONE 'UTC') "
+    "WHERE user_id = ANY($2::text[])"
 )
-"""
 
 
 class _UserTableClient(Protocol):
@@ -499,9 +501,10 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
-    endpoints do, and the role is left untouched when the feature is off. Each role is
-    one statement that locks its rows in the order ``USER_ROWS_LOCK_SQL`` takes them, so
-    it never waits on another group's push in a cycle.
+    endpoints do, and the role is left untouched when the feature is off. The users'
+    rows are locked through ``USER_ROWS_LOCK_SQL`` before their teams are read, the
+    same lock a roster write takes, so a concurrent group push cannot change a
+    member's teams between the read and the role write.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -510,27 +513,28 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     ids: Final = tuple(dict.fromkeys(user_ids))
     if not ids:
         return
-    users: Final = _table(UserRepository(prisma_client))
-    rows: Final = await find_many_in(users, "user_id", ids)
-    team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams or [] for row in rows)))
-    teams: Final = await find_many_in(_table(TeamRepository(prisma_client)), "team_id", team_ids)
-    alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
     default_role: Final = _default_scim_user_role()
-    resolved: Final = tuple(
-        (
-            row.user_id,
-            _resolve_scim_user_role(
-                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams or []],
-                admin_group,
-                default_role,
-            ),
+    async with prisma_client.tx(timeout=ROSTER_TX_TIMEOUT) as tx:
+        await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(ids))
+        rows: Final = await find_many_in(user_tx_db(tx), "user_id", ids)
+        team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams for row in rows)))
+        teams: Final = await find_many_in(team_tx_db(tx), "team_id", team_ids)
+        alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
+        resolved: Final = tuple(
+            (
+                row.user_id,
+                _resolve_scim_user_role(
+                    [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams],
+                    admin_group,
+                    default_role,
+                ),
+            )
+            for row in rows
         )
-        for row in rows
-    )
-    for role in dict.fromkeys(role for _, role in resolved):
-        await prisma_client.db.execute_raw(
-            _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
-        )
+        for role in dict.fromkeys(role for _, role in resolved):
+            await tx.execute_raw(
+                _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
+            )
 
 
 class _ResolvedUserMember(NamedTuple):

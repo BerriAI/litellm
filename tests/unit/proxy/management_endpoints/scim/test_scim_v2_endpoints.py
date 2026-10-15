@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
@@ -2831,8 +2832,9 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
 
 
 def _scim_admin_prisma(mocker, *, user_teams):
-    """Prisma double whose user resolves to user_teams and whose teams expose an
-    alias equal to their id, used by the role-recompute helper tests."""
+    """Prisma double and its one transaction, in which the user resolves to user_teams
+    and teams expose an alias equal to their id. Only the transaction answers reads,
+    so a role written outside it fails the role-recompute helper tests."""
     user = mocker.MagicMock()
     user.user_id = "member-1"
     user.teams = user_teams
@@ -2848,17 +2850,20 @@ def _scim_admin_prisma(mocker, *, user_teams):
     def _users_find_many(where):
         return (user,) if user.user_id in where["user_id"]["in"] else ()
 
+    tx = mocker.MagicMock()
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.execute_raw = AsyncMock(return_value=1)
+    tx.litellm_usertable.find_many = AsyncMock(side_effect=_users_find_many)
+    tx.litellm_usertable.update = AsyncMock(return_value=user)
+    tx.litellm_teamtable.find_many = AsyncMock(side_effect=_teams_find_many)
+
+    @asynccontextmanager
+    async def _tx(timeout=None):
+        yield tx
+
     prisma = mocker.MagicMock()
-    prisma.db = mocker.MagicMock()
-    prisma.db.litellm_usertable = mocker.MagicMock()
-    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
-    prisma.db.litellm_usertable.find_many = AsyncMock(side_effect=_users_find_many)
-    prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
-    prisma.db.execute_raw = AsyncMock(return_value=1)
-    prisma.db.litellm_teamtable = mocker.MagicMock()
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
-    prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=_teams_find_many)
-    return prisma
+    prisma.tx = _tx
+    return prisma, tx
 
 
 @pytest.mark.asyncio
@@ -2873,11 +2878,11 @@ async def test_recompute_scim_member_roles_demotes_when_not_in_admin_group(mocke
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
 
-    prisma = _scim_admin_prisma(mocker, user_teams=["engineering"])
+    prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
+    tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
 
 
 @pytest.mark.asyncio
@@ -2892,11 +2897,11 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
 
-    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    prisma, tx = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.PROXY_ADMIN, ["member-1"])
+    tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.PROXY_ADMIN, ["member-1"])
 
 
 @pytest.mark.asyncio
@@ -2910,12 +2915,12 @@ async def test_recompute_scim_member_roles_noop_when_admin_group_unset(mocker, m
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
 
-    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    prisma, tx = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.execute_raw.assert_not_called()
-    prisma.db.litellm_usertable.update.assert_not_called()
+    tx.execute_raw.assert_not_called()
+    tx.litellm_usertable.update.assert_not_called()
 
 
 @pytest.mark.asyncio
