@@ -42,6 +42,7 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
+from litellm.proxy.utils import LITELLM_CONFIG_CACHE_TTL_SECONDS
 from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
@@ -4168,6 +4169,23 @@ async def test_ProxyConfig_db_env_var_saved_before_a_stale_env_row_read_keeps_th
     await _sync_db_env_row(monkeypatch, pc, stale_row, {})
 
     assert (within_the_hold, os.environ.get("UI_LOGO_PATH")) == (saved_logo, expected_after_the_hold)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_saved_value_survives_a_row_cached_twice_the_config_ttl_from_a_minute_lagged_replica(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+    clock.now = 1
+    _save_db_environment(pc, {"UI_LOGO_PATH": "https://example.com/saved.png"})
+
+    clock.now = 1 + 2 * LITELLM_CONFIG_CACHE_TTL_SECONDS + 59
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert os.environ.get("UI_LOGO_PATH") == "https://example.com/saved.png"
 
 
 @pytest.mark.asyncio

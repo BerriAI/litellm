@@ -9477,6 +9477,64 @@ async def test_rotate_master_key_reencrypts_every_decryptable_environment_variab
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_finishes_past_an_environment_variables_row_that_is_not_an_object(monkeypatch):
+    import json
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        rotate_master_key,
+    )
+
+    for rotator in (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    ):
+        monkeypatch.setattr(key_management_endpoints, rotator, AsyncMock())
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    environment_row: Final = [["LIT_ROTATE_PAIR", "pair-value"]]
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="environment_variables", param_value=environment_row)]
+    )
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                guardrail_id="g-1",
+                updated_at="t1",
+                litellm_params=encrypt_guardrail_litellm_params({"guardrail": "bedrock", "aws_secret_access_key": "aws-secret"}),
+            )
+        ]
+    )
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    stored_guardrail_params: Final = json.loads(
+        prisma_client.db.litellm_guardrailstable.update_many.call_args.kwargs["data"]["litellm_params"]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master-key")
+    assert decrypt_guardrail_litellm_params(stored_guardrail_params)["aws_secret_access_key"] == "aws-secret"
+    assert prisma_client.db.litellm_config.update.await_count == 0
+    assert environment_row == [["LIT_ROTATE_PAIR", "pair-value"]]
+
+
+@pytest.mark.asyncio
 @patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )

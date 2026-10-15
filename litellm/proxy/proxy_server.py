@@ -2161,7 +2161,7 @@ _STORED_SSO_SETTINGS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Map
 
 _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT: Final = frozenset({"role_mappings", "team_mappings", "ui_access_mode"})
 _SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
-_SAVED_ENVIRONMENT_HOLD_SECONDS: Final = LITELLM_CONFIG_CACHE_TTL_SECONDS + 60
+_SAVED_ENVIRONMENT_HOLD_SECONDS: Final = 2 * LITELLM_CONFIG_CACHE_TTL_SECONDS + 60
 
 
 @dataclass(frozen=True, slots=True)

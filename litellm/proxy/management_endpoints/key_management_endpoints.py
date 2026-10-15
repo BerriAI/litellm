@@ -523,11 +523,17 @@ def _model_items(model: BaseModel) -> Iterator[tuple[str, object]]:
 
 class _EnvVarsParam(Protocol):
     @property
-    def param_value(self) -> Mapping[str, str] | None: ...
+    def param_value(self) -> object: ...
 
 
-def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
-    return param.param_value
+_STORED_ENVIRONMENT_VARIABLES: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _stored_environment_variables(param: _EnvVarsParam) -> Mapping[str, object]:
+    stored: Final = param.param_value
+    if not isinstance(stored, Mapping):
+        return MappingProxyType({})
+    return _STORED_ENVIRONMENT_VARIABLES.validate_python(stored)
 
 
 def _environment_variables_reencrypted_for(
@@ -5537,10 +5543,10 @@ async def rotate_master_key(
 
     if config:
         """If environment_variables is found, decrypt it and encrypt it with the new master key"""
-        environment_variables_dict: Mapping[str, str] | None = {}
+        environment_variables_dict: Mapping[str, object] = {}
         for c in config:
             if c.param_name == "environment_variables":
-                environment_variables_dict = _env_vars_param_value(c)
+                environment_variables_dict = _stored_environment_variables(c)
 
         if environment_variables_dict and (current_key := get_salt_key()) is not None:
             await _config_table(prisma_client).update(
