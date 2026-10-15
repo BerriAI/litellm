@@ -134,6 +134,7 @@ from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
+from litellm.native.route_plan import NativeResponses, plan_chat_route
 from litellm.realtime_api.main import realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
@@ -6026,7 +6027,10 @@ def completion(
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if isinstance(
+            plan_chat_route(responses_api_model_info.get("mode") == "responses", skip_responses_api_bridge is True),
+            NativeResponses,
+        ):
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
