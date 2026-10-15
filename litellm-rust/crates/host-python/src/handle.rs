@@ -5,7 +5,7 @@ use pyo3::exceptions::PyBaseException;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 
-pub type PythonLifecycle = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyModule>>;
+pub type StepTypes = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyModule>>;
 
 /// What a suspended execution waits on: an awaitable the caller awaits, or a stream
 /// boundary the caller's stream reads past.
@@ -42,38 +42,14 @@ enum ExecutionState {
 #[pyclass]
 pub struct Execution {
     state: ExecutionState,
-    lifecycle: PythonLifecycle,
+    steps: StepTypes,
 }
 
 impl Execution {
-    pub fn new(body: impl ExecutionBody + 'static, lifecycle: PythonLifecycle) -> Self {
+    pub fn new(body: impl ExecutionBody + 'static, steps: StepTypes) -> Self {
         Self {
             state: ExecutionState::Created(Box::new(body)),
-            lifecycle,
-        }
-    }
-
-    pub fn into_coroutine(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-        let binding = (self.lifecycle)(py)?;
-        let execution = Py::new(py, self)?;
-        binding.getattr("drive")?.call1((execution,))
-    }
-
-    pub(crate) fn into_sync_stream(
-        self,
-        py: Python<'_>,
-        head: Py<PyAny>,
-    ) -> PyResult<Bound<'_, PyAny>> {
-        (self.lifecycle)(py)?
-            .getattr("SyncStream")?
-            .call1((Py::new(py, self)?, head))
-    }
-
-    /// An execution already started elsewhere and now waiting for its next input.
-    pub fn suspended(body: impl ExecutionBody + 'static, lifecycle: PythonLifecycle) -> Self {
-        Self {
-            state: ExecutionState::Suspended(Box::new(body)),
-            lifecycle,
+            steps,
         }
     }
 
@@ -105,7 +81,7 @@ impl Execution {
             Resume::Send(value) => started.then_some(Ok(value)),
             Resume::Throw(error) => Some(Err(error)),
         };
-        let lifecycle = slf.borrow().lifecycle;
+        let steps = slf.borrow().steps;
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
@@ -118,7 +94,7 @@ impl Execution {
                 }
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
-            let step = lifecycle(py)?.getattr(tag)?.call1((value,))?.unbind();
+            let step = steps(py)?.getattr(tag)?.call1((value,))?.unbind();
             Ok((step, suspended))
         }))
         .map_err(panic_to_pyerr)

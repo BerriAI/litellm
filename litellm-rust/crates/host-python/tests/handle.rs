@@ -13,8 +13,8 @@ use pyo3::{
 };
 use rstest::rstest;
 use support::{
-    Interpreter, Log, OpScript, binding, call_options, install_lifecycle_module, interpreter,
-    lifecycle_binding, success_machine,
+    Interpreter, Log, OpScript, binding, call_options, handed, install_lifecycle_module,
+    interpreter, lifecycle_module, success_machine,
 };
 
 struct RetainingHost {
@@ -39,7 +39,7 @@ fn retaining_coroutine(py: Python<'_>, retained: Py<PyAny>) -> PyResult<Py<Execu
             RetainingHost {
                 retained: Some(retained),
             },
-            lifecycle_binding,
+            lifecycle_module,
         ),
     )
 }
@@ -63,7 +63,7 @@ impl ExecutionBody for AwaitBody {
 
 #[pyfunction]
 fn await_execution(awaitable: Py<PyAny>) -> Execution {
-    Execution::new(AwaitBody(Some(awaitable)), lifecycle_binding)
+    Execution::new(AwaitBody(Some(awaitable)), lifecycle_module)
 }
 
 struct CallingBody(Py<PyAny>);
@@ -80,7 +80,7 @@ impl ExecutionBody for CallingBody {
 
 #[pyfunction]
 fn calling_execution(callback: Py<PyAny>) -> Execution {
-    Execution::new(CallingBody(callback), lifecycle_binding)
+    Execution::new(CallingBody(callback), lifecycle_module)
 }
 
 struct ErrorBody(Option<Py<PyBaseException>>);
@@ -101,7 +101,7 @@ impl ExecutionBody for ErrorBody {
 
 #[pyfunction]
 fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
-    Execution::new(ErrorBody(Some(error.unbind())), lifecycle_binding)
+    Execution::new(ErrorBody(Some(error.unbind())), lifecycle_module)
 }
 
 /// Where a paused call keeps the test's object: in its hooks, or selected as the call's
@@ -173,17 +173,21 @@ fn paused_call(
     holder: Holder,
 ) -> PyResult<Py<PyAny>> {
     let machine = success_machine();
-    run_call(
+    handed(
         py,
-        move |_, _, request| Ok(machine(request)),
-        binding(&Log::default(), OpScript::Answer),
-        PausingHooks {
-            retained: Some(retained),
-            pause: Some(pause),
-            holder,
-        },
-        PyDict::new(py).unbind(),
-        call_options(true),
+        run_call(
+            py,
+            move |_, _, request| Ok(machine(request)),
+            binding(&Log::default(), OpScript::Answer),
+            PausingHooks {
+                retained: Some(retained),
+                pause: Some(pause),
+                holder,
+            },
+            PyDict::new(py).unbind(),
+            call_options(true),
+        ),
+        true,
     )
 }
 
