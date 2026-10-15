@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
 import psycopg
@@ -1125,21 +1125,19 @@ _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = (
 )
 
 
+def _prisma(*arguments: str) -> None:
+    subprocess.run((sys.executable, "-I", "-m", "prisma", *arguments), check=True, capture_output=True, text=True)
+
+
+def _push_schema() -> None:
+    _prisma("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate")
+
+
 def _push_schema_with_environment_variables_revision_trigger() -> None:
-    for prisma_arguments in (
-        ("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate"),
-        (
-            "db",
-            "execute",
-            "--schema",
-            "litellm/proxy/schema.prisma",
-            "--file",
-            _ENVIRONMENT_VARIABLES_REVISION_MIGRATION,
-        ),
-    ):
-        subprocess.run(
-            (sys.executable, "-I", "-m", "prisma", *prisma_arguments), check=True, capture_output=True, text=True
-        )
+    _push_schema()
+    _prisma(
+        "db", "execute", "--schema", "litellm/proxy/schema.prisma", "--file", _ENVIRONMENT_VARIABLES_REVISION_MIGRATION
+    )
 
 
 def _provider_echoing_its_key(source: str) -> Callable[[Request], Reply]:
@@ -1149,6 +1147,32 @@ def _provider_echoing_its_key(source: str) -> Callable[[Request], Reply]:
         return _completion_reply(f"{source} {request.headers['authorization']}")
 
     return provider
+
+
+def _environment_variables_proxy_config(
+    directory: Path, gateway: Gateway, alias: str, config_file_provider: Wire
+) -> Path:
+    config: Final = directory / "environment-variables-proxy.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [{"model_name": alias, "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+                "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
+                "environment_variables": {"OPENAI_BASE_URL": config_file_provider.url + "/v1"},
+            }
+        )
+    )
+    return config
+
+
+def _environment_variables_proxy_environment(database_url: str, process_key: str) -> dict[str, str]:
+    return {
+        "DATABASE_URL": database_url,
+        "DISABLE_SCHEMA_UPDATE": "true",
+        "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": "1",
+        "OPENAI_API_KEY": process_key,
+        "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
+    }
 
 
 def _chat_answer(proxy: Gateway, alias: str) -> str:
@@ -1174,23 +1198,8 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
     ):
         monkeypatch.setenv("DATABASE_URL", database_url)
         _push_schema_with_environment_variables_revision_trigger()
-        config: Final = tmp_path / "environment-variables-proxy.yaml"
-        config.write_text(
-            json.dumps(
-                {
-                    "model_list": [{"model_name": alias, "litellm_params": {"model": "openai/gpt-4o-mini"}}],
-                    "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
-                    "environment_variables": {"OPENAI_BASE_URL": config_file_provider.url + "/v1"},
-                }
-            )
-        )
-        environment: Final = {
-            "DATABASE_URL": database_url,
-            "DISABLE_SCHEMA_UPDATE": "true",
-            "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": "1",
-            "OPENAI_API_KEY": process_key,
-            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
-        }
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = _environment_variables_proxy_environment(database_url, process_key)
         removed: Final = ("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL")
         from_process_and_config_file: Final = f"config-file Bearer {process_key}"
         from_database: Final = f"database Bearer {database_key}"
@@ -1232,6 +1241,168 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
                     "OPENAI_BASE_URL": None,
                 }
                 eventually(answers, lambda values: values == (from_process_and_config_file,) * 2, seconds=30)
+
+
+def _environment_variables_row(database_url: str) -> dict[str, JsonValue]:
+    return read_rows(
+        'SELECT param_value, reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )[0]
+
+
+def _load_environment_variables_row(replica_url: str, row: dict[str, JsonValue]) -> None:
+    with psycopg.connect(replica_url, autocommit=True) as replica:
+        replica.execute(
+            'INSERT INTO "LiteLLM_Config" (param_name, param_value, reload_revision) VALUES (%s, %s, %s) '
+            "ON CONFLICT (param_name) DO UPDATE "
+            "SET param_value = EXCLUDED.param_value, reload_revision = EXCLUDED.reload_revision",
+            ("environment_variables", Jsonb(row["param_value"]), row["reload_revision"]),
+        )
+
+
+def test_a_read_replica_back_on_an_older_row_does_not_bring_back_a_removed_db_environment_variable(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-replica-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as writer_url,
+        scratch_database() as replica_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+        wire_server(_provider_echoing_its_key("writer")) as writer_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", replica_url)
+        _push_schema()
+        monkeypatch.setenv("DATABASE_URL", writer_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = {
+            **_environment_variables_proxy_environment(writer_url, process_key),
+            "DATABASE_URL_READ_REPLICA": replica_url,
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "replica-reader",
+            environment,
+            config=config,
+            database_setup=(),
+            remove_environment=("OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            row_holding_the_key: Final = _environment_variables_row(writer_url)
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"database Bearer {database_key}",
+                seconds=30,
+            )
+
+            unset: Final = proxy.request(
+                "POST", "/config/update", {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}}
+            )
+            assert unset.status_code == 200, unset.text
+            _load_environment_variables_row(replica_url, _environment_variables_row(writer_url))
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            _save_environment_variables_as(writer_url, {"OPENAI_BASE_URL": writer_provider.url + "/v1"})
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"writer Bearer {process_key}",
+                seconds=30,
+            )
+
+
+def _sign_in_client_id(proxy: Gateway) -> str | None:
+    response: Final = httpx.get(
+        str(proxy.client.base_url).rstrip("/") + "/sso/key/generate",
+        follow_redirects=False,
+        trust_env=False,
+        timeout=30,
+    )
+    if not response.is_redirect:
+        assert response.status_code == 200, response.text
+        return None
+    return parse_qs(urlsplit(response.headers["location"]).query)["client_id"][0]
+
+
+def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_every_proxy(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    environment_row_client: Final = "environment-row-client-" + marker
+    sso_table_client: Final = "sso-table-client-" + marker
+
+    with scratch_database() as database_url, wire_server(_provider_echoing_its_key("config-file")) as provider:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, "sso-" + marker, provider)
+        environment: Final = _environment_variables_proxy_environment(database_url, "process-key-" + marker)
+        removed: Final = (
+            "DATABASE_URL_READ_REPLICA",
+            "GENERIC_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+            "MICROSOFT_CLIENT_ID",
+            "PROXY_BASE_URL",
+        )
+        with (
+            owned_proxy(
+                gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
+            ) as first,
+            owned_proxy(
+                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
+            ) as peer,
+        ):
+
+            def sign_in_clients() -> tuple[str | None, str | None]:
+                return (_sign_in_client_id(first), _sign_in_client_id(peer))
+
+            def store_environment_row_client(client_id: str | None, secret: str | None) -> None:
+                response: Final = first.request(
+                    "POST",
+                    "/config/update",
+                    {"environment_variables": {"GOOGLE_CLIENT_ID": client_id, "GOOGLE_CLIENT_SECRET": secret}},
+                )
+                assert response.status_code == 200, response.text
+
+            assert sign_in_clients() == (None, None)
+
+            store_environment_row_client(environment_row_client, "environment-row-secret")
+            eventually(sign_in_clients, lambda clients: clients == (environment_row_client,) * 2, seconds=30)
+
+            store_environment_row_client(None, None)
+            eventually(sign_in_clients, lambda clients: clients == (None, None), seconds=30)
+
+            store_environment_row_client(environment_row_client, "environment-row-secret")
+            eventually(sign_in_clients, lambda clients: clients == (environment_row_client,) * 2, seconds=30)
+            moved: Final = first.request(
+                "PATCH",
+                "/update/sso_settings",
+                {"google_client_id": sso_table_client, "google_client_secret": "sso-table-secret"},
+            )
+            assert moved.status_code == 200, moved.text
+            eventually(sign_in_clients, lambda clients: clients == (sso_table_client,) * 2, seconds=30)
 
 
 _TABLE_ONLY_ROLE_PASSWORD: Final = "integration-table-only-password"
