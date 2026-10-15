@@ -532,7 +532,7 @@ pub fn bedrock_model_id_and_region(model: &str) -> (String, Option<String>) {
     (stripped.to_string(), region)
 }
 
-fn is_bedrock_region(value: &str) -> bool {
+pub fn is_bedrock_region(value: &str) -> bool {
     value.len() > 3
         && value.contains('-')
         && value
