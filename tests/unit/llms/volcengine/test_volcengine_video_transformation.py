@@ -182,13 +182,13 @@ def test_an_omitted_duration_and_tier_are_sent_as_five_seconds_at_720p_so_ark_ca
     }
 
 
-@pytest.mark.parametrize("field", ["return_last_frame", "frame_count"])
-def test_a_field_ark_video_generation_does_not_take_is_rejected(field: str):
-    with pytest.raises(UnsupportedParamsError, match=f"does not take {field}"):
+@pytest.mark.parametrize("field", ["return_last_frame", "draft", "frame_count"])
+def test_a_field_litellm_does_not_send_to_ark_is_rejected(field: str):
+    with pytest.raises(UnsupportedParamsError, match=f"does not send {field} to Ark"):
         _ = _create_body({"duration": 4, field: True})
 
 
-def test_a_field_ark_video_generation_does_not_take_is_dropped_under_drop_params():
+def test_a_field_litellm_does_not_send_to_ark_is_dropped_under_drop_params():
     body = _create_body({"duration": 4, "return_last_frame": True, "seed": 7}, drop_params=True)
 
     assert "return_last_frame" not in body
@@ -294,7 +294,10 @@ def test_a_mistyped_ark_field_is_dropped_under_drop_params():
         ("864x496", {"ratio": "16:9", "resolution": "480p"}),
         ("720x1280", {"ratio": "9:16", "resolution": "720p"}),
         ("1024x768", {"ratio": "4:3", "resolution": "720p"}),
-        ("960x960", {"ratio": "1:1", "resolution": "1080p"}),
+        ("640x640", {"ratio": "1:1", "resolution": "480p"}),
+        ("960x960", {"ratio": "1:1", "resolution": "720p"}),
+        ("1440x1440", {"ratio": "1:1", "resolution": "1080p"}),
+        ("1112x834", {"ratio": "4:3", "resolution": "720p"}),
         ("1470x630", {"ratio": "21:9", "resolution": "720p"}),
         ("3840x2160", {"ratio": "16:9", "resolution": "4k"}),
     ],
@@ -331,12 +334,20 @@ def test_a_value_ark_cannot_take_raises_unless_drop_params(params: dict[str, obj
     assert VolcEngineVideoConfig().map_openai_params(params, SEEDANCE_2_5, True) == {}
 
 
-def test_request_metadata_is_not_mapped_into_the_body():
+def test_request_metadata_is_not_mapped_into_the_body_and_user_becomes_the_safety_identifier():
     mapped = VolcEngineVideoConfig().map_openai_params(
         {"user": "u", "extra_headers": {"x": "y"}, "seconds": 4}, SEEDANCE_2_5, False
     )
 
-    assert mapped == {"duration": 4}
+    assert mapped == {"safety_identifier": "u", "duration": 4}
+
+
+def test_an_explicit_safety_identifier_wins_over_user():
+    mapped = VolcEngineVideoConfig().map_openai_params(
+        {"user": "u", "safety_identifier": "s", "seconds": 4}, SEEDANCE_2_5, False
+    )
+
+    assert mapped["safety_identifier"] == "s"
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -621,6 +632,21 @@ def test_the_list_maps_ark_paging_and_filters():
     assert (url, params) == (TASKS_URL, {"page_size": "20", "filter.status": "succeeded"})
 
 
+@pytest.mark.parametrize("paging", [{"after": "video_abc"}, {"order": "asc"}])
+def test_a_list_cursor_or_order_is_rejected_unless_drop_params(paging: dict[str, str]):
+    config = VolcEngineVideoConfig()
+
+    with pytest.raises(UnsupportedParamsError, match="pages by page_num"):
+        _ = config.transform_video_list_request(
+            api_base=API_BASE, litellm_params=GenericLiteLLMParams(), headers={}, **paging
+        )
+    _, params = config.transform_video_list_request(
+        api_base=API_BASE, litellm_params=GenericLiteLLMParams(drop_params=True), headers={}, limit=5, **paging
+    )
+
+    assert params == {"page_size": "5"}
+
+
 def test_the_list_response_is_an_openai_list_body():
     response = VolcEngineVideoConfig().transform_video_list_response(
         raw_response=_response({"total": 1, "items": [_task(status="running")]}),
@@ -649,8 +675,8 @@ def test_an_empty_list_still_carries_the_object_type():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call", ["avideo_edit", "avideo_extension"])
-async def test_edit_and_extension_are_a_bad_request_because_a_video_input_cannot_be_billed_at_create(call: str):
+@pytest.mark.parametrize("call", ["avideo_edit", "avideo_extension", "avideo_remix"])
+async def test_edit_extension_and_remix_are_a_bad_request_because_a_video_input_cannot_be_billed_at_create(call: str):
     with pytest.raises(litellm.BadRequestError, match="Ark bills a task with a video input") as raised:
         _ = await getattr(litellm, call)(
             video_id="https://x/source.mp4",
@@ -681,12 +707,16 @@ def test_any_ark_surface_on_the_shared_credential_normalizes_to_the_host_root(
     api_base: str | None, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
+    monkeypatch.delenv("ARK_API_BASE", raising=False)
 
     assert VolcEngineVideoConfig().get_complete_url("m", api_base, {}) == API_BASE
 
 
-def test_the_volcengine_api_base_env_var_routes_a_deployment_without_api_base(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("VOLCENGINE_API_BASE", "https://ark.ap-southeast.bytepluses.com/api/v3")
+@pytest.mark.parametrize("env_var", ["VOLCENGINE_API_BASE", "ARK_API_BASE"])
+def test_an_api_base_env_var_routes_a_deployment_without_api_base(env_var: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
+    monkeypatch.delenv("ARK_API_BASE", raising=False)
+    monkeypatch.setenv(env_var, "https://ark.ap-southeast.bytepluses.com/api/v3")
 
     assert VolcEngineVideoConfig().get_complete_url("m", None, {}) == "https://ark.ap-southeast.bytepluses.com"
     assert VolcEngineVideoConfig().get_complete_url("m", f"{API_BASE}/api/v3", {}) == API_BASE

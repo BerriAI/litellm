@@ -133,7 +133,6 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
     "watermark",
     "generate_audio",
     "service_tier",
-    "draft",
     "priority",
     "output_format",
     "execution_expires_after",
@@ -158,7 +157,7 @@ _INPUT_VIDEO_TYPE: Final = "video_url"
 
 _RATIO_SET: Final = ("16:9", "9:16", "4:3", "3:4", "1:1", "21:9")
 _RESOLUTION_SHORTEST_SIDE: Final = MappingProxyType({"480p": 480, "720p": 720, "1080p": 1080, "4k": 2160})
-_RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = ((600, "480p"), (900, "720p"), (1500, "1080p"))
+_TIER_FRAME_ASPECT: Final = 16 / 9
 
 
 def _video_error(raw_response: httpx.Response, status_code: int, message: str) -> VolcEngineVideoError:
@@ -222,11 +221,16 @@ def _ratio_from_size(size: str) -> str | None:
 
 
 def _resolution_from_size(size: str) -> str | None:
+    """Ark keeps a tier's pixel count across its ratios (960x960 and 1280x720 are both 720p), so the tier whose 16:9
+    frame has the closest pixel count wins."""
     dimensions: Final = _size_dimensions(size)
     if dimensions is None:
         return None
-    shortest_side: Final = min(dimensions)
-    return next((label for threshold, label in _RESOLUTION_HEIGHT_TIERS if shortest_side < threshold), "4k")
+    width, height = dimensions
+    return min(
+        _RESOLUTION_SHORTEST_SIDE,
+        key=lambda tier: abs(log(width * height / (_RESOLUTION_SHORTEST_SIDE[tier] ** 2 * _TIER_FRAME_ASPECT))),
+    )
 
 
 def _duration_param(seconds: object) -> int | None:
@@ -487,7 +491,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
                 if value is not None and key not in _MAPPED_ELSEWHERE
             }
         )
+        user: Final = video_create_optional_params.get("user")
         return {
+            **({"safety_identifier": user} if isinstance(user, str) and user else {}),
             **_size_fields(video_create_optional_params.get("size"), model, drop_params),
             **_duration_fields(video_create_optional_params.get("seconds"), model, drop_params),
             **passthrough,
@@ -524,7 +530,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
     ) -> str:
-        return _normalized_api_base(get_volcengine_base_url(api_base or get_secret_str("VOLCENGINE_API_BASE")))
+        return _normalized_api_base(
+            get_volcengine_base_url(api_base or get_secret_str("VOLCENGINE_API_BASE") or get_secret_str("ARK_API_BASE"))
+        )
 
     def transform_video_create_request(
         self,
@@ -576,7 +584,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             sorted(key for key, value in params.items() if value is not None and key not in _CREATE_HANDLED_KEYS)
         )
         if unknown_fields and not drop_params:
-            raise _droppable(model, f"Ark video generation does not take {', '.join(unknown_fields)}")
+            raise _droppable(model, f"litellm does not send {', '.join(unknown_fields)} to Ark video generation")
         requested_fields: Final = MappingProxyType(
             {key: params[key] for key in _CREATE_PASSTHROUGH_KEYS if params.get(key) is not None}
         )
@@ -719,7 +727,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
-        raise NotImplementedError("Video remix is not supported by Volcengine.")
+        raise _unsupported("", _VIDEO_INPUT_UNSUPPORTED.format(operation="Video remix"))
 
     def transform_video_remix_response(
         self,
@@ -765,6 +773,11 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         extra_query: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
         """Ark pages by page_num/page_size with filters and has no cursor or order."""
+        unsupported: Final = tuple(name for name, value in (("after", after), ("order", order)) if value is not None)
+        if unsupported and not _drops_params(litellm_params):
+            raise _droppable(
+                "", f"Ark's task list pages by page_num in extra_query and has no {' or '.join(unsupported)}"
+            )
         return f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}", {
             **({"page_size": str(limit)} if limit is not None else {}),
             **(extra_query or {}),
