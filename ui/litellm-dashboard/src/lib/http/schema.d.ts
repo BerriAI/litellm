@@ -44711,6 +44711,8 @@ export interface components {
             api_base?: string | null;
             /** Api Key */
             api_key?: string | null;
+            /** Input Cost Per Query */
+            input_cost_per_query?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /** Search Provider */
