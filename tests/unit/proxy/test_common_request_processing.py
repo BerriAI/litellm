@@ -211,6 +211,7 @@ _ToolRoute = Literal[
     "agenerate_content",
     "agenerate_content_stream",
     "acreate_interaction",
+    "_aresponses_websocket",
 ]
 
 class TestProxyBaseLLMRequestProcessing:
@@ -668,6 +669,21 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert forwarded["tools"] == [weather_tool]
         assert forwarded["tool_choice"] == "required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_type", ["acompletion", "anthropic_messages", "agenerate_content"])
+    async def test_common_processing_pre_call_logic_forwards_a_tool_with_null_vector_store_ids(
+        self, monkeypatch: pytest.MonkeyPatch, route_type: _ToolRoute
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", None)
+        tools: Final = [{"type": "file_search", "vector_store_ids": None}]
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}], "tools": tools}
+        )
+
+        forwarded: Final = await self._run_pre_call(monkeypatch, processing_obj, route_type=route_type)
+
+        assert forwarded["tools"] == tools
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

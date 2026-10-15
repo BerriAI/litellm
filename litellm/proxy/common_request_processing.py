@@ -642,6 +642,7 @@ _ROUTES_WITH_TOOLS: Final = frozenset(
         "agenerate_content",
         "agenerate_content_stream",
         "acreate_interaction",
+        "_aresponses_websocket",
     }
 )
 _TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
@@ -658,7 +659,7 @@ class _ToolEntry(TypedDict, total=False):
     function: ReadOnly[_ToolFunction]
     parameters: ReadOnly[dict[str, object] | None]
     input_schema: ReadOnly[dict[str, object] | None]
-    vector_store_ids: ReadOnly[list[str]]
+    vector_store_ids: ReadOnly[list[str] | None]
 
 
 _TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
@@ -760,30 +761,24 @@ def _malformed_web_search_options(data: Mapping[str, object]) -> _MalformedField
     return None
 
 
-def _first_malformed_field(data: Mapping[str, object]) -> _MalformedField | None:
-    tools: Final = _malformed_tools(data)
-    return tools if tools is not None else _malformed_web_search_options(data)
-
-
-def _apply_drop_policy(malformed: _MalformedField, policy: DropPolicy) -> Mapping[str, object] | ProxyException:
-    if not policy.drops(malformed.field):
-        return ProxyException(
-            message=malformed.message,
-            type="invalid_request_error",
-            param=malformed.field,
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-    remaining: Final = _first_malformed_field(malformed.without_field)
-    return malformed.without_field if remaining is None else _apply_drop_policy(remaining, policy)
-
-
 def resolve_tool_fields(
     data: Mapping[str, object], drop_policy: Callable[[], DropPolicy]
 ) -> Mapping[str, object] | ProxyException:
-    malformed: Final = _first_malformed_field(data)
-    if malformed is None:
+    tools: Final = _malformed_tools(data)
+    web_search_options: Final = _malformed_web_search_options(data if tools is None else tools.without_field)
+    malformed: Final = tuple(field for field in (tools, web_search_options) if field is not None)
+    if not malformed:
         return data
-    return _apply_drop_policy(malformed, drop_policy())
+    policy: Final = drop_policy()
+    rejected: Final = next((field for field in malformed if not policy.drops(field.field)), None)
+    if rejected is not None:
+        return ProxyException(
+            message=rejected.message,
+            type="invalid_request_error",
+            param=rejected.field,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return malformed[-1].without_field
 
 
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:

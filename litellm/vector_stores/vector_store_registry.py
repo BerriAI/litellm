@@ -35,12 +35,22 @@ else:
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-_STORE_IDS: Final = TypeAdapter(list[str], config=ConfigDict(strict=True))
+_STORE_ID_ITEMS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+
+
+def _named_store_ids(store_ids: object) -> tuple[str, ...]:
+    if isinstance(store_ids, str):
+        return (store_ids,)
+    try:
+        items: Final = _STORE_ID_ITEMS.validate_python(store_ids)
+    except ValidationError:
+        return ()
+    return tuple(store_id for store_id in items if isinstance(store_id, str))
 
 
 def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
     try:
-        return tuple(_STORE_IDS.validate_python(_TOOL.validate_python(tool).get("vector_store_ids", [])))
+        return _named_store_ids(_TOOL.validate_python(tool).get("vector_store_ids"))
     except ValidationError:
         return ()
 
