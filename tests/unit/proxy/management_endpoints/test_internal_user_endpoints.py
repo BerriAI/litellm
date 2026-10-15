@@ -2,7 +2,8 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -2829,6 +2830,17 @@ async def test_get_user_daily_activity_rejects_service_account_caller(monkeypatc
     mock_get_daily.assert_not_called()
 
 
+def _serve_locked_user_delete(prisma_client: MagicMock, *users: object) -> None:
+    @asynccontextmanager
+    async def tx(*, timeout: object = None) -> AsyncIterator[MagicMock]:
+        yield prisma_client.db
+
+    prisma_client.tx = tx
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=list(users))
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+
 @pytest.mark.asyncio
 async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     """
@@ -2881,6 +2893,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(
         return_value=1
     )
+    _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -2970,6 +2983,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(mock_prisma_client, user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: substitute the database dependency
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
@@ -4930,6 +4944,7 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(prisma_client, deleted)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     for row in (deleted, survivor):
@@ -5102,6 +5117,7 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.store_audit_logs", True)
