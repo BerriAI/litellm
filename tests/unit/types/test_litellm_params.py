@@ -1,7 +1,9 @@
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
+from itertools import chain
 from operator import attrgetter
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast, get_type_hints
 
@@ -319,8 +321,16 @@ def test_owned_name_is_kept_out_of_provider_params(name: str, classifier_name: s
     assert result[PROVIDER_KNOB] is provider_value
 
 
+BUNDLED_MODEL_MAP: Final = TypeAdapter(dict[str, dict[str, object]]).validate_json(
+    (Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_bytes()
+)
+MODEL_MAP_CAPABILITY_FLAGS: Final = frozenset(
+    key for key in chain.from_iterable(BUNDLED_MODEL_MAP.values()) if key.startswith("supports_")
+)
+
+
 @pytest.mark.parametrize("classifier_name", CLASSIFIERS)
-@pytest.mark.parametrize("name", tuple(ProviderSpecificModelInfo.__annotations__))
+@pytest.mark.parametrize("name", sorted(MODEL_MAP_CAPABILITY_FLAGS | set(ProviderSpecificModelInfo.__annotations__)))
 def test_model_capability_flag_set_on_a_deployment_is_kept_out_of_provider_params(
     name: str, classifier_name: str
 ) -> None:

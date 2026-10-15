@@ -16,7 +16,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, is_model_capability_field
 
 _V = TypeVar("_V")
 
@@ -396,6 +396,20 @@ def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | Non
     except BadRequestError:
         return None
     return inferred
+
+
+def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    flags: Final = sorted(
+        key for key, value in litellm_params.items() if value is not None and is_model_capability_field(key)
+    )
+    if not flags:
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets {flags} under litellm_params, where litellm ignores them and never "
+        "sends them to the provider. Move them under model_info for litellm to use them."
+    )
+    verbose_router_logger.warning(warning)
+    return warning
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

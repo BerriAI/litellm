@@ -846,3 +846,26 @@ class TestWarnOnProviderCredentialMismatch:
 def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
     assert provider_for_generic_call(litellm_params) == expected
+
+
+def test_router_warns_only_for_a_capability_flag_set_under_litellm_params(caplog):
+    bedrock_model: Final = "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "flag-in-litellm-params",
+                    "litellm_params": {"model": bedrock_model, "supports_max_reasoning_effort": False},
+                },
+                {
+                    "model_name": "flag-in-model-info",
+                    "litellm_params": {"model": bedrock_model},
+                    "model_info": {"supports_max_reasoning_effort": False},
+                },
+            ]
+        )
+
+    capability_warnings: Final = [r.getMessage() for r in caplog.records if "model_info" in r.getMessage()]
+    assert len(capability_warnings) == 1, capability_warnings
+    assert "flag-in-litellm-params" in capability_warnings[0]
+    assert "supports_max_reasoning_effort" in capability_warnings[0]

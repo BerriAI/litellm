@@ -201,6 +201,7 @@ from litellm.router_utils.common_utils import (
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
+    warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
     without_router_only_kwargs,
 )
@@ -503,6 +504,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -9490,7 +9492,9 @@ class Router:
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
-            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
+            declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
+            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
+            warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
             deployment = Deployment(
                 **deployment_info,
                 model_name=_model_name,
