@@ -2112,7 +2112,7 @@ class BaseLLMHTTPHandler:
         # str when the caller passes a pre-serialized (unsigned) body to avoid
         # re-dumping; bytes when a provider signed the request (e.g. Bedrock).
         signed_json_body: str | bytes | None,
-        request_body: dict,
+        request_body: dict[str, object],
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseAnthropicMessagesConfig,
@@ -2139,7 +2139,7 @@ class BaseLLMHTTPHandler:
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
-                    e=e, litellm_params=litellm_params_dict
+                    e=e, litellm_params=litellm_params_dict, request_body=request_body
                 )
                 if should_retry and not hit_max_attempt:
                     if logging_obj.baseline_cache_context is not None:

@@ -122,8 +122,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            mapped_params["thinking"] = thinking_with_display
+            mapped_params["thinking"] = {**translated_thinking, "display": "updates"}
 
         return mapped_params
 

@@ -3690,6 +3690,43 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
 
 
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "requested_thinking", "extra_params"),
+    (
+        ("eu.anthropic.claude-opus-5", {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}, {}),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "enabled", "budget_tokens": 24000, "display": "updates", "block_binding": BLOCK_BINDING},
+            {},
+        ),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+        ),
+    ),
+    ids=("adaptive", "legacy", "legacy_clear_thinking"),
+)
+def test_bedrock_messages_keeps_block_binding_with_display_updates(
+    model: str, requested_thinking: dict[str, object], extra_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
 @pytest.mark.parametrize("explicit_beta", (False, True))
