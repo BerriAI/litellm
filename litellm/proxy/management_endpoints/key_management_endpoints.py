@@ -2730,9 +2730,9 @@ async def _write_guarded_project_assignment(
     existing_key_row: LiteLLM_VerificationToken,
     data: Mapping[str, object],
 ) -> "_KeyRowDumpable | None":
-    validated_models: Final[list[str]] = (
+    validated_models: Final[Sequence[str]] = (
         cast(  # cast-ok: LiteLLM_VerificationToken.models is a bare list
-            "list[str] | None", existing_key_row.models
+            "Sequence[str] | None", existing_key_row.models
         )
         or []
     )
