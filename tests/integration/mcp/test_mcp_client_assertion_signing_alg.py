@@ -261,26 +261,35 @@ def _seeded_row_loads_with_fallback_warning(
             connection.execute('DELETE FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (identity,))
 
 
-def test_seeded_hs256_row_loads_with_rs256_fallback_warning(gateway: Gateway, tmp_path: Path) -> None:
+def test_seeded_hs256_row_loads_with_read_side_grace_warning(gateway: Gateway, tmp_path: Path) -> None:
+    """The integration proxy runs with LITELLM_FIPS_MODE unset, so a seeded HS* row is honoured
+    read-side: the shared secret keeps signing, with the rotate-to-approved deprecation warning.
+    (The FIPS-on RS256 fallback with its cannot-sign warning is pinned at the unit level, where
+    LITELLM_FIPS_MODE can be set without the boot-time FIPS runtime checks refusing a non-FIPS
+    OpenSSL.)"""
     _seeded_row_loads_with_fallback_warning(
         gateway,
         tmp_path,
         "HS256",
-        ("not an approved algorithm", "using RS256"),
+        (
+            "symmetric and not FIPS 140-3 approved",
+            "accepted outside FIPS mode",
+            "rotate to an approved",
+        ),
     )
 
 
-def test_seeded_eddsa_row_loads_with_rs256_fallback_warning(gateway: Gateway, tmp_path: Path) -> None:
-    # EdDSA gets the honest wording: an Ed25519 key cannot produce the RS256 fallback at all.
+def test_seeded_eddsa_row_loads_with_read_side_grace_warning(gateway: Gateway, tmp_path: Path) -> None:
+    """EdDSA gets the legacy wording outside FIPS: the stored Ed25519 key keeps signing, with
+    the rotate-to-approved deprecation warning."""
     _seeded_row_loads_with_fallback_warning(
         gateway,
         tmp_path,
         "EdDSA",
         (
-            "legacy and not approved for signing",
-            "cannot sign the RS256 fallback",
-            "token exchange will fail",
-            "rotated to RSA or EC",
+            "legacy and not FIPS 140-3 approved",
+            "accepted outside FIPS mode",
+            "EdDSA support ends in the next major release",
         ),
     )
 
