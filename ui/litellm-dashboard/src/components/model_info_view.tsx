@@ -27,6 +27,7 @@ import { teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import AdeptRouterEditControl from "./edit_adept_router/AdeptRouterEditControl";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import { credentialLabelsByName } from "./shared/credentialOptions";
 import { CredentialIdentity } from "./shared/CredentialIdentity";
@@ -550,6 +551,7 @@ export default function ModelInfoView({
       onModelUpdate(updatedModel);
     }
   };
+
   const isWildcardModel = modelData.litellm_model_name.includes("*");
   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
   const healthCheckModelOptions =
@@ -717,6 +719,13 @@ export default function ModelInfoView({
                       Edit Auto Router
                     </Button>
                   )}
+                  <AdeptRouterEditControl
+                    canEdit={canEditModel}
+                    isEditing={isEditing}
+                    modelData={localModelData || modelData}
+                    accessToken={accessToken || ""}
+                    onUpdated={handleAutoRouterUpdate}
+                  />
                   {canEditModel ? (
                     !isEditing && (
                       <Button onClick={() => setIsEditing(true)} className="flex items-center">

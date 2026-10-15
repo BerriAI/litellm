@@ -17,6 +17,9 @@ HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
     (
         "PATH",
         "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "USERPROFILE",
         "USER",
         "LOGNAME",
         "TMPDIR",

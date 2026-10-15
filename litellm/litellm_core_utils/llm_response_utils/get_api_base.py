@@ -49,10 +49,10 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
     try:
         if isinstance(optional_params, LiteLLM_Params):
             _optional_params = optional_params
-        elif "model" in optional_params:
-            _optional_params = LiteLLM_Params(**optional_params)
-        else:  # prevent needing to copy and pop the dict
-            _optional_params = LiteLLM_Params(model=model, **optional_params)  # convert to pydantic object
+        else:
+            # model_validate, not **unpacking: the dict is untyped, so unpacking it reports one
+            # unknown-argument error per LiteLLM_Params field at this call site.
+            _optional_params = LiteLLM_Params.model_validate({"model": model, **optional_params})
     except Exception:
         return None
     # get llm provider
