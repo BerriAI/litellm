@@ -9739,6 +9739,9 @@ def _restamp_streaming_chunk_model(
     if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
+    # Responses lifecycle events carry the model one level down, in response.model
+    chunk = _restamp_nested_response_model(chunk, target_model)
+
     downstream_model: Final = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     if downstream_model == target_model:
         return chunk, model_mismatch_logged
@@ -9775,6 +9778,28 @@ def _restamp_streaming_chunk_model(
         )
 
     return chunk, model_mismatch_logged
+
+
+def _restamp_nested_response_model(chunk: object, target_model: str) -> object:
+    """
+    Return chunk with a Responses lifecycle event's response.model set to target model.
+
+    response.created, response.in_progress, response.completed and the other lifecycle
+    events carry the whole Response object, whose model a top-level restamp never reaches.
+
+    Returns a copy, so the provider's model stays on the chunk the streaming wrapper prices.
+    """
+    if isinstance(chunk, dict):
+        nested = chunk.get("response")
+        if isinstance(nested, dict) and nested.get("model") not in (None, target_model):
+            return {**chunk, "response": {**nested, "model": target_model}}
+        return chunk
+
+    nested = getattr(chunk, "response", None)
+    if isinstance(nested, BaseModel) and getattr(nested, "model", None) not in (None, target_model):
+        return chunk.model_copy(update={"response": nested.model_copy(update={"model": target_model})})
+
+    return chunk
 
 
 def _fast_serialize_simple_model_response_stream(
