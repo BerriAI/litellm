@@ -82917,7 +82917,7 @@ export interface operations {
                 modelId?: string | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
-                /** @description Field to sort by. Options: model_name, created_at, updated_at, costs, status, blocked */
+                /** @description Field to sort by. Options: model_name, created_at, updated_at, costs, status */
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;

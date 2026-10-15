@@ -15381,7 +15381,6 @@ def _sort_models(
         "updated_at",
         "costs",
         "status",
-        "blocked",
     ]:
         return all_models
 
@@ -15794,7 +15793,7 @@ async def model_info_v2(
     ),
     sortBy: str | None = fastapi.Query(
         None,
-        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status, blocked",
+        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status",
     ),
     sortOrder: str | None = fastapi.Query(
         "asc",
