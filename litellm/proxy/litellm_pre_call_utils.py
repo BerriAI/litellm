@@ -31,6 +31,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -38,6 +39,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -228,6 +230,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
@@ -235,6 +238,8 @@ from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR})
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
@@ -374,6 +379,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
     "litellm_roi_estimator",
     "proxy_server_request",
@@ -976,7 +982,7 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
-        if var == CAPTURE_MESSAGE_CONTENT_VAR:
+        if var in _DESTINATION_ONLY_CALLBACK_VARS:
             continue
         # New Relic routing reads these from the trusted-vars overlay with no
         # callback-name check, so scope them to the newrelic entry: a team that
@@ -1195,7 +1201,7 @@ def resolve_tenant_otel_destinations(
 def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
-    from litellm.integrations.otel.model.config import parse_capture_message_content
+    from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
     from litellm.integrations.otel.presets.destinations import destination_for
 
     callback_vars: Final = MappingProxyType(
@@ -1210,6 +1216,7 @@ def _tenant_destination(
         _tenant_otel_params(callback_vars),
         service_name,
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
+        parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
     )
 
 
@@ -1546,7 +1553,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: dict[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers
@@ -2728,11 +2735,7 @@ def _per_user_oauth_configured() -> bool:
     )
 
     return any(
-        isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         for credential in (litellm.credential_list or ())
     )
 
@@ -2749,12 +2752,8 @@ def _all_per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
         for credential in (litellm.credential_list or ())
-        if getattr(credential, "credential_name", None)
-        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        if credential.credential_name
+        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
@@ -4029,7 +4028,7 @@ _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_F
 
 def add_provider_specific_headers_to_request(
     data: dict,
-    headers: dict,
+    headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4039,12 +4038,18 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    typesafe_danger_zone_headers: Final = {
+        header: value
+        for header, value in headers.items()
+        if header.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
+    }
 
     scoped_headers: Final = [
         ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
         for providers, extra_headers in (
             (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
             (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
+            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
         )
         if extra_headers
     ]

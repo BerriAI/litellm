@@ -24,7 +24,9 @@ from integration._support import responses_vendor as rv
 from integration._support.client import eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.timing import assert_cut_short, timed
 from integration._support.wire import Request
+from litellm.llms.chatgpt.authenticator import DEVICE_CODE_COOLDOWN_SECONDS
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(300)
@@ -713,16 +715,18 @@ def test_a_token_mounted_after_a_refusal_serves_without_a_restart_and_removing_i
 
 
 _COOLDOWN_SECONDS_LEFT: Final = 45
+_REFUSAL_MARGIN_SECONDS: Final = 15
 
 
 def test_a_recent_device_code_request_does_not_hold_the_worker_for_the_rest_of_the_cooldown(scene: _Scene) -> None:
-    dl.write_chatgpt(scene.rig.chatgpt_dir, {"device_code_requested_at": time.time() - (300 - _COOLDOWN_SECONDS_LEFT)})
-    started: Final = time.monotonic()
-    served: Final = _serve(scene.call(_Cell("chatgpt", "chat", False, "httpx")))
-    elapsed: Final = time.monotonic() - started
+    requested_at: Final = time.time() - (DEVICE_CODE_COOLDOWN_SECONDS - _COOLDOWN_SECONDS_LEFT)
+    dl.write_chatgpt(scene.rig.chatgpt_dir, {"device_code_requested_at": requested_at})
+    remaining: Final = requested_at + DEVICE_CODE_COOLDOWN_SECONDS - time.time()
+    refusal: Final = timed(lambda: _serve(scene.call(_Cell("chatgpt", "chat", False, "httpx"))))
+    served: Final = refusal.value
     assert served.status == 400, served.text
     assert dl.CHATGPT_REFUSAL in _error_message(served.text), served.text
-    assert elapsed < _COOLDOWN_SECONDS_LEFT - 15, elapsed
+    assert_cut_short(refusal.seconds, injected_delay=remaining - _REFUSAL_MARGIN_SECONDS)
     assert scene.rig.peers.auth_connections() == ()
 
 

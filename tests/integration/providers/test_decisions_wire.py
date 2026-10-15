@@ -96,8 +96,21 @@ _PROVIDERS: Final = (
     _Provider(
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
     ),
+    _Provider("laya", "laya/english", "/v1/systemone", "english", None, False, "laya/english"),
+    _Provider(
+        "bespoke", "bespoke/nimble-latest", "/v1/systemone", "nimble-latest", None, False, "bespoke/nimble-latest"
+    ),
     _Provider(
         "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
+    ),
+    _Provider(
+        "fireworks_ai",
+        "fireworks_ai/accounts/fireworks/routers/rune",
+        "/v1/systemone",
+        "accounts/fireworks/routers/rune",
+        _API_KEY,
+        False,
+        "fireworks_ai/accounts/fireworks/routers/rune",
     ),
     _Provider(
         "cloudflare",

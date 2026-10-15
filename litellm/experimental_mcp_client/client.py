@@ -5,6 +5,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -41,6 +42,7 @@ class _SessionCallbackMap(TypedDict):
     sampling_callback: ReadOnly[SamplingFnT | None]
     elicitation_callback: ReadOnly[ElicitationFnT | None]
     logging_callback: ReadOnly[LoggingFnT | None]
+    response_hooks: ReadOnly[tuple[Callable[[httpx2.Response], Awaitable[None]], ...]]
 
 
 from mcp.types import (
@@ -96,6 +98,7 @@ from litellm.constants import (
 )
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     age_freshness,
@@ -120,6 +123,20 @@ from litellm.types.mcp import (
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
+
+
+def _mcp_response_hooks() -> tuple[Callable[[httpx2.Response], Awaitable[None]], ...]:
+    if get_active_mcp_request_ctx() is None:
+        return (capture_upstream_error_response,)
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import (
+        get_scope_response,
+        record_upstream_tool_authorization,
+    )
+
+    return (
+        partial(record_upstream_tool_authorization, pending=get_scope_response()),
+        capture_upstream_error_response,
+    )
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -497,6 +514,7 @@ class MCPClient:
             "sampling_callback": self._sampling_callback,
             "elicitation_callback": self._elicitation_callback,
             "logging_callback": self._logging_callback,
+            "response_hooks": _mcp_response_hooks(),
         }
 
     def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool]:
@@ -721,7 +739,9 @@ class MCPClient:
                         write_stream,
                         read_timeout_seconds=self.timeout,
                         message_handler=receive_message,
-                        **session_kwargs,
+                        sampling_callback=session_kwargs["sampling_callback"],
+                        elicitation_callback=session_kwargs["elicitation_callback"],
+                        logging_callback=session_kwargs["logging_callback"],
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -931,7 +951,14 @@ class MCPClient:
                 verify=ssl_config,
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
-                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                    {
+                        "response": list(
+                            self._session_callbacks_override["response_hooks"]
+                            if self._session_callbacks_override is not None
+                            else _mcp_response_hooks()
+                        ),
+                        "request": [guard] if guard else [],
+                    }
                 ),
             )
 
@@ -1068,7 +1095,7 @@ class MCPClient:
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         raise_on_error: bool = False,
         allow_input_required: bool = False,
         persistent_session: "PersistentMCPSession | None" = None,
@@ -1100,7 +1127,12 @@ class MCPClient:
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
-                    await host_progress_callback(progress, total)
+                    try:
+                        inspect.signature(host_progress_callback).bind(progress, total, message)
+                    except (TypeError, ValueError):
+                        await host_progress_callback(progress, total)
+                    else:
+                        await host_progress_callback(progress, total, message)
                 except Exception as e:
                     verbose_logger.warning("Failed to forward to Host: %s", e)
 
@@ -1553,6 +1585,20 @@ def _deliver_persistent_outcome(
     )
 
 
+async def _await_persistent_operation(operation: Awaitable[object], result: asyncio.Future[object]) -> object:
+    running: Final = asyncio.ensure_future(operation)
+
+    def cancel_operation(_: asyncio.Future[object]) -> None:
+        running.cancel()
+
+    result.add_done_callback(cancel_operation)
+    try:
+        (outcome,) = await asyncio.gather(running, return_exceptions=True)
+        return outcome
+    finally:
+        result.remove_done_callback(cancel_operation)
+
+
 class UpstreamSessionClosedError(RuntimeError):
     def __init__(self) -> None:
         super().__init__("upstream MCP session closed")
@@ -1582,6 +1628,7 @@ class PersistentMCPSession:
         self._initial_callbacks: Final[_SessionCallbackMap] = client.session_callbacks()
         self._current_callbacks: _SessionCallbackMap = self._initial_callbacks
         delegated_callbacks: Final[_SessionCallbackMap] = {
+            "response_hooks": (self._record_response,),
             "sampling_callback": (
                 self._delegate("sampling_callback")
                 if self._initial_callbacks["sampling_callback"] is not None
@@ -1598,6 +1645,10 @@ class PersistentMCPSession:
         }
         client.route_session_callbacks(delegated_callbacks)
         self._task: Final = loop.create_task(self._serve())
+
+    async def _record_response(self, response: httpx2.Response) -> None:
+        for hook in self._current_callbacks["response_hooks"]:
+            await hook(response)
 
     @overload
     def _delegate(self, name: Literal["sampling_callback"]) -> SamplingFnT: ...
@@ -1676,12 +1727,14 @@ class PersistentMCPSession:
                     if callbacks is not None:
                         self._current_callbacks = callbacks
                     async with self._admission() if self._admission is not None else nullcontext():
-                        if not future.done():
-                            (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
-                            if _deliver_persistent_outcome(future, outcome, self._stream_error):
-                                self._active = None
-                                self._ended = True
-                                return
+                        if not future.done() and _deliver_persistent_outcome(
+                            future,
+                            await _await_persistent_operation(operation(session), future),
+                            self._stream_error,
+                        ):
+                            self._active = None
+                            self._ended = True
+                            return
                     self._active = None
                 if self._retiring and self._queue.empty():
                     return

@@ -648,6 +648,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -686,6 +700,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -812,6 +843,14 @@
               "title": "Access Model Names",
               "type": "array"
             },
+            "access_skill_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Skill Names",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -866,6 +905,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             },
             "updated_at": {
               "format": "date-time",
@@ -957,6 +1013,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -995,6 +1065,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",
@@ -3616,6 +3703,11 @@
               "title": "Total Prompt Tokens",
               "type": "integer"
             },
+            "total_ptu_hours": {
+              "default": 0.0,
+              "title": "Total Ptu Hours",
+              "type": "number"
+            },
             "total_response_time_ms": {
               "default": 0,
               "title": "Total Response Time Ms",
@@ -4423,6 +4515,11 @@
               "default": 0,
               "title": "Prompt Tokens",
               "type": "integer"
+            },
+            "ptu_hours": {
+              "default": 0.0,
+              "title": "Ptu Hours",
+              "type": "number"
             },
             "spend": {
               "default": 0.0,
@@ -7134,6 +7231,22 @@
               "title": "Id",
               "type": "string"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Installation Preference"
+            },
             "keywords": {
               "anyOf": [
                 {
@@ -7231,6 +7344,23 @@
               "title": "Id",
               "type": "string"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin installation preference",
+              "title": "Installation Preference"
+            },
             "name": {
               "description": "Plugin name",
               "title": "Name",
@@ -7327,6 +7457,23 @@
               ],
               "description": "Plugin homepage URL",
               "title": "Homepage"
+            },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
             },
             "keywords": {
               "anyOf": [
@@ -7478,6 +7625,23 @@
               "description": "Plugin homepage URL",
               "title": "Homepage"
             },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
+            },
             "keywords": {
               "anyOf": [
                 {
@@ -7577,7 +7741,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -7672,7 +7836,7 @@
           ]
         },
         "post": {
-          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).\nClaude Code clones the git source or downloads the archive when users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).\nClaude Code clones the git source or downloads the archive when users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -7807,7 +7971,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -9495,6 +9659,37 @@
   "decisions": {
     "components": {
       "schemas": {
+        "BoxAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "box": {
+              "$ref": "#/components/schemas/DecisionsBox"
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "type": {
+              "const": "box",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "box",
+            "confidence"
+          ],
+          "title": "BoxAnswer",
+          "type": "object"
+        },
         "ChoiceAnswer": {
           "additionalProperties": true,
           "properties": {
@@ -9528,6 +9723,35 @@
           "title": "ChoiceAnswer",
           "type": "object"
         },
+        "DecisionsBox": {
+          "additionalProperties": true,
+          "properties": {
+            "bottom": {
+              "title": "Bottom",
+              "type": "number"
+            },
+            "left": {
+              "title": "Left",
+              "type": "number"
+            },
+            "right": {
+              "title": "Right",
+              "type": "number"
+            },
+            "top": {
+              "title": "Top",
+              "type": "number"
+            }
+          },
+          "required": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ],
+          "title": "DecisionsBox",
+          "type": "object"
+        },
         "DecisionsResponse": {
           "additionalProperties": true,
           "properties": {
@@ -9535,6 +9759,7 @@
               "additionalProperties": {
                 "discriminator": {
                   "mapping": {
+                    "box": "#/components/schemas/BoxAnswer",
                     "choice": "#/components/schemas/ChoiceAnswer",
                     "noul": "#/components/schemas/NoulAnswer",
                     "score": "#/components/schemas/ScoreAnswer"
@@ -9550,6 +9775,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BoxAnswer"
                   }
                 ]
               },
@@ -9619,6 +9847,48 @@
             "noul"
           ],
           "title": "NoulAnswer",
+          "type": "object"
+        },
+        "OpenAIBoxAnswer": {
+          "properties": {
+            "box": {
+              "$ref": "#/components/schemas/DecisionsBox"
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "const": "box",
+              "default": "box",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "box",
+            "confidence"
+          ],
+          "title": "OpenAIBoxAnswer",
           "type": "object"
         },
         "OpenAIChoiceAnswer": {
@@ -9731,6 +10001,7 @@
               "items": {
                 "discriminator": {
                   "mapping": {
+                    "box": "#/components/schemas/OpenAIBoxAnswer",
                     "choice": "#/components/schemas/OpenAIChoiceAnswer",
                     "predicate": "#/components/schemas/OpenAIPredicateAnswer",
                     "refusal": "#/components/schemas/OpenAIRefusalAnswer",
@@ -9747,6 +10018,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/OpenAIScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIBoxAnswer"
                   },
                   {
                     "$ref": "#/components/schemas/OpenAIRefusalAnswer"
@@ -9990,7 +10264,7 @@
     "paths": {
       "/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these\nrules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_decisions_post",
           "requestBody": {
             "content": {
@@ -10040,6 +10314,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "input": {
                       "anyOf": [
                         {
@@ -10326,6 +10638,39 @@
                             ],
                             "title": "OpenAIScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "What to find in the input's image",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIBoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
@@ -10345,6 +10690,44 @@
                       ],
                       "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
                       "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -10384,7 +10767,7 @@
       },
       "/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
           "requestBody": {
             "content": {
@@ -10419,6 +10802,140 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs",
+                      "title": "Assets"
+                    },
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -10619,6 +11136,39 @@
                             ],
                             "title": "ScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  }
+                                ],
+                                "description": "What to find, and in which image, such as 'the coffee mug in `photo`'",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
@@ -10647,6 +11197,44 @@
                       ],
                       "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
                       "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -10686,7 +11274,7 @@
       },
       "/v1/decisions": {
         "post": {
-          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these\nrules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the\n`instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before\nany provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_v1_decisions_post",
           "requestBody": {
             "content": {
@@ -10736,6 +11324,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "input": {
                       "anyOf": [
                         {
@@ -11022,6 +11648,39 @@
                             ],
                             "title": "OpenAIScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "What to find in the input's image",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIBoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
@@ -11041,6 +11700,44 @@
                       ],
                       "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
                       "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -11080,7 +11777,7 @@
       },
       "/v1/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).\nTypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break\nthese rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
           "requestBody": {
             "content": {
@@ -11115,6 +11812,140 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "patternProperties": {
+                            "\\S": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "data_base64": {
+                                  "description": "Base64-encoded image bytes, no data: prefix",
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                                  "title": "Data Base64",
+                                  "type": "string"
+                                },
+                                "format": {
+                                  "description": "The image's format, in lowercase",
+                                  "enum": [
+                                    "png",
+                                    "jpg",
+                                    "jpeg"
+                                  ],
+                                  "title": "Format",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "const": "image",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Type"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "data_base64"
+                              ],
+                              "title": "DecisionsAsset",
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs",
+                      "title": "Assets"
+                    },
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,[A-Za-z0-9+/_-]+={0,2}|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -11315,6 +12146,39 @@
                             ],
                             "title": "ScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  }
+                                ],
+                                "description": "What to find, and in which image, such as 'the coffee mug in `photo`'",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
@@ -11343,6 +12207,44 @@
                       ],
                       "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
                       "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -16943,6 +17845,18 @@
               ],
               "description": "Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
               "title": "Violation Message Template"
+            },
+            "wingback_app_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).",
+              "title": "Wingback App Id"
             },
             "xecguard_model": {
               "anyOf": [
@@ -23812,6 +24726,60 @@
           "title": "OutputTokensDetails",
           "type": "object"
         },
+        "OutputToolSearchCall": {
+          "additionalProperties": true,
+          "properties": {
+            "arguments": {
+              "title": "Arguments"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_search_call",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "arguments",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchCall",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -26178,6 +27146,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OutputToolSearchCall"
                       }
                     ]
                   },
@@ -33537,6 +34508,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -36298,6 +37291,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -37830,6 +38845,22 @@
                   }
                 ],
                 "title": "Resource"
+              }
+            },
+            {
+              "in": "query",
+              "name": "scope",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Scope"
               }
             }
           ],
@@ -39664,6 +40695,28 @@
                 }
               ],
               "title": "Id Jag Resource"
+            },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
             },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
@@ -43705,6 +44758,28 @@
               ],
               "title": "Id Jag Resource"
             },
+            "id_jag_resource_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Id"
+            },
+            "id_jag_resource_client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Client Secret"
+            },
             "id_jag_resource_token_endpoint": {
               "anyOf": [
                 {
@@ -45627,6 +46702,10 @@
               "title": "Data",
               "type": "string"
             },
+            "index": {
+              "title": "Index",
+              "type": "integer"
+            },
             "type": {
               "const": "redacted_thinking",
               "title": "Type",
@@ -45711,6 +46790,10 @@
                 }
               ],
               "title": "Cache Control"
+            },
+            "index": {
+              "title": "Index",
+              "type": "integer"
             },
             "signature": {
               "anyOf": [
@@ -45862,6 +46945,10 @@
             },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "defer_loading": {
+              "title": "Defer Loading",
+              "type": "boolean"
             },
             "eager_input_streaming": {
               "title": "Eager Input Streaming",
@@ -53664,6 +54751,17 @@
                 }
               ],
               "title": "Api Key"
+            },
+            "input_cost_per_query": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Cost Per Query"
             },
             "max_retries": {
               "anyOf": [

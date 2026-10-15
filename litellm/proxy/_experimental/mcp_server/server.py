@@ -72,6 +72,12 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     redact_mcp_resource_url,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.scope_challenge import (
+    SCOPE_RESPONSE_KEY,
+    OAuthScopeResponse,
+    finish_scope_response,
+    is_tool_call_request,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     ActingUser,
     GrantedToolsetIds,
@@ -604,7 +610,7 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
-    server.middleware.append(GatewayVersionPolicy())
+    server.middleware.extend((finish_scope_response, GatewayVersionPolicy()))
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -889,14 +895,10 @@ if MCP_AVAILABLE:
             return None
         host_session: Final = host_ctx.session
 
-        async def forward_progress(progress: float, total: float | None):
+        async def forward_progress(progress: float, total: float | None, message: str | None = None):
             """Forward progress notifications from external MCP to Host"""
             try:
-                await host_session.send_progress_notification(
-                    progress_token=host_token,
-                    progress=progress,
-                    total=total,
-                )
+                await host_session.report_progress(progress=progress, total=total, message=message)
                 verbose_logger.debug("Forwarded progress %s/%s to Host", progress, total)
             except Exception as e:
                 verbose_logger.error("Failed to forward progress to Host: %s", e)
@@ -2351,6 +2353,18 @@ if MCP_AVAILABLE:
                     await rejection(scope, receive, send)
                     return
 
+            scope_response: Final = (
+                OAuthScopeResponse(
+                    send,
+                    get_request_base_url(StarletteRequest(scope)),
+                    get_route_relative_request_path(scope),
+                )
+                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                else None
+            )
+            if scope_response is not None:
+                scope[SCOPE_RESPONSE_KEY] = scope_response
+
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
 
@@ -2431,9 +2445,10 @@ if MCP_AVAILABLE:
                             "top-level key scan, skipping session lock to avoid deadlock"
                         )
 
-            session_lock: asyncio.Lock | None = None
-            if use_stateful and session_id and request_method in ("POST", "DELETE") and not is_jsonrpc_response:
-                session_lock = _stateful_session_locks.setdefault(session_id, asyncio.Lock())
+            is_cancellation: Final = request_method == "POST" and _is_cancellation_notification(body)
+            session_lock: Final = _stateful_request_lock(
+                use_stateful, session_id, request_method, is_jsonrpc_response, is_cancellation
+            )
 
             active_request_session_ids: Final[list[str]] = []
 
@@ -2466,9 +2481,9 @@ if MCP_AVAILABLE:
                     client_ip=_client_ip,
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
-                    copy_existing_session_auth_context=is_initialize,
+                    copy_existing_session_auth_context=is_initialize or is_cancellation,
                 )
-                local_send = send
+                local_send = scope_response or send
                 if use_stateful and is_initialize:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
@@ -2792,6 +2807,29 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
         return auth_user
+
+    def _stateful_request_lock(
+        use_stateful: bool,
+        session_id: str | None,
+        method: str,
+        is_response: bool,
+        is_cancellation: bool,
+    ) -> asyncio.Lock | None:
+        if not use_stateful or not session_id or method not in ("POST", "DELETE") or is_response or is_cancellation:
+            return None
+        return _stateful_session_locks.setdefault(session_id, asyncio.Lock())
+
+    def _is_cancellation_notification(body: bytes) -> bool:
+        try:
+            payload: Final = TypeAdapter(dict[str, object]).validate_json(body)
+            if payload.get("jsonrpc") != "2.0" or payload.get("method") != "notifications/cancelled" or "id" in payload:
+                return False
+            from mcp.types import CancelledNotification
+
+            CancelledNotification.model_validate(payload, strict=True)
+        except (ValueError, TypeError):
+            return False
+        return True
 
     def _set_or_update_auth_context(
         user_api_key_auth: UserAPIKeyAuth | None,
