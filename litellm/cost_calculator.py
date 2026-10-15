@@ -1517,8 +1517,15 @@ def completion_cost(
         if explicit_tier is not None:
             service_tier = explicit_tier
         else:
+            requested_tier: Final[object]
+            if custom_llm_provider == "sail" and optional_params is not None:
+                from litellm.llms.sail.common_utils import billed_service_tier
+
+                requested_tier = billed_service_tier(optional_params)
+            else:
+                requested_tier = optional_params.get("service_tier") if optional_params is not None else None
             service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
-                requested=optional_params.get("service_tier") if optional_params is not None else None,
+                requested=requested_tier,
                 served=_served_service_tier(completion_response, cost_per_token_usage_object),
             )
 

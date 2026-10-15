@@ -9197,6 +9197,10 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         json_provider: Final = JSONProviderRegistry.get(provider.value)
+        if provider == LlmProviders.SAIL and json_provider is not None:
+            from litellm.llms.sail.messages.transformation import SailAnthropicMessagesConfig
+
+            return SailAnthropicMessagesConfig(json_provider)
         if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
             from litellm.llms.openai_like.messages.transformation import (
                 JSONProviderAnthropicMessagesConfig,

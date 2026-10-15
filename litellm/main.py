@@ -161,6 +161,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
+    add_openai_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -5634,6 +5635,10 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
+        requester_metadata: Final = metadata.get("requester_metadata") if isinstance(metadata, dict) else None
+        caller_metadata: Final = (
+            add_openai_metadata(requester_metadata) if isinstance(requester_metadata, dict) else None
+        )
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
@@ -5680,6 +5685,7 @@ def completion(
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            **({"metadata": caller_metadata} if custom_llm_provider == "sail" else {}),
         }
         optional_params = get_optional_params(**optional_param_args, **non_default_params)
         processed_non_default_params: Final = pre_process_non_default_params(

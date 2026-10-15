@@ -5,7 +5,7 @@ from litellm.llms.openai_like.dynamic_config import create_responses_config_clas
 from litellm.llms.sail.common_utils import (
     extra_body_for_sail,
     json_body,
-    responses_params_with_completion_window,
+    params_with_completion_window,
     sail_provider_config,
     without_keys,
 )
@@ -20,7 +20,7 @@ class SailResponsesAPIConfig(create_responses_config_class(sail_provider_config(
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: return type fixed by the base interface
-        params: Final = responses_params_with_completion_window(
+        params: Final = params_with_completion_window(
             super().map_openai_params(
                 response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
             ),

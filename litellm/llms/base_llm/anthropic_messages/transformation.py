@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -19,6 +20,11 @@ else:
 
 
 class BaseAnthropicMessagesConfig(ABC):
+    def request_metadata(self, metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
+        if metadata is None:
+            return None
+        return AnthropicMetadata.model_validate(metadata).model_dump(exclude_none=True)
+
     @abstractmethod
     def validate_anthropic_messages_environment(  # use different name because return type is different from base config's validate_environment
         self,

@@ -16,6 +16,55 @@ from tests.unit.llms.sail.helpers import (
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_forwards_the_callers_window_without_proxy_metadata(
+    sail_env: None, chat_route: respx.Route, spend_capture: SpendCapture
+) -> None:
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={
+            "requester_metadata": {"completion_window": "balanced", "trace_id": "caller-trace"},
+            "user_api_key_hash": "proxy-private",
+        },
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    assert sent_body(chat_route)["metadata"] == {"completion_window": "balanced", "trace_id": "caller-trace"}
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at("_balanced"))
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.asyncio
+async def test_sail_chat_rejects_a_caller_metadata_flex_window(
+    sail_env: None, chat_route: respx.Route, drop_params: bool
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="background=true"):
+        await litellm.acompletion(
+            model=MODEL,
+            messages=MESSAGES,
+            metadata={"requester_metadata": {"completion_window": "flex"}},
+            drop_params=drop_params,
+        )
+
+    assert not chat_route.called
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_rejects_a_conflicting_caller_window_and_tier(sail_env: None, chat_route: respx.Route) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="different completion windows"):
+        await litellm.acompletion(
+            model=MODEL,
+            messages=MESSAGES,
+            service_tier="priority",
+            metadata={"requester_metadata": {"completion_window": "balanced"}},
+        )
+
+    assert not chat_route.called
+
+
 TIER_CASES: Final = [
     pytest.param(None, None, "", id="no-tier"),
     pytest.param("auto", None, "", id="auto"),

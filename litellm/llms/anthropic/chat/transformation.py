@@ -388,7 +388,7 @@ DROP_UNSUPPORTED_SERVICE_TIER_WARNING: Final = (
     "Anthropic only accepts 'auto' and 'standard_only'."
 )
 
-MESSAGES_SERVICE_TIER_PROVIDERS: Final = SERVICE_TIER_PROVIDERS | {"bedrock_mantle"}
+MESSAGES_SERVICE_TIER_PROVIDERS: Final = SERVICE_TIER_PROVIDERS | {"bedrock_mantle", "sail"}
 
 DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
     "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."

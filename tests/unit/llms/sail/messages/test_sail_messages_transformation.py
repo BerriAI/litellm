@@ -21,15 +21,40 @@ from tests.unit.llms.sail.helpers import (
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 
 
+@pytest.mark.asyncio
+async def test_sail_messages_forward_the_callers_window_and_bill_its_price(
+    sail_env: None, messages_route: respx.Route, spend_capture: SpendCapture
+) -> None:
+    await litellm.anthropic_messages(
+        model=MODEL,
+        messages=MESSAGES,
+        max_tokens=16,
+        metadata={"completion_window": "balanced", "trace_id": "caller-trace"},
+        litellm_metadata={"user_api_key_hash": "proxy-private"},
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    assert sent_body(messages_route)["metadata"] == {"completion_window": "balanced", "trace_id": "caller-trace"}
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at("_balanced"))
+
+
 @pytest.fixture
 def messages_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(f"{SAIL_API_BASE}/messages").mock(return_value=httpx.Response(200, json=messages_body()))
 
 
-@pytest.mark.parametrize("service_tier", [None, "auto", "priority", "flex", "balanced", "scale"])
+@pytest.mark.parametrize(
+    ("service_tier", "window", "suffix"),
+    [(None, None, ""), ("auto", None, ""), ("priority", "asap", ""), ("balanced", "balanced", "_balanced")],
+)
 @pytest.mark.asyncio
-async def test_sail_messages_send_no_window_and_bill_asap_whatever_the_tier(
-    sail_env: None, messages_route: respx.Route, spend_capture: SpendCapture, service_tier: str | None
+async def test_sail_messages_send_and_bill_the_selected_window(
+    sail_env: None,
+    messages_route: respx.Route,
+    spend_capture: SpendCapture,
+    service_tier: str | None,
+    window: str | None,
+    suffix: str,
 ) -> None:
     await litellm.anthropic_messages(
         model=MODEL, messages=MESSAGES, max_tokens=16, service_tier=service_tier, litellm_call_id=spend_capture.call_id
@@ -38,8 +63,37 @@ async def test_sail_messages_send_no_window_and_bill_asap_whatever_the_tier(
     body: Final = sent_body(messages_route)
     assert body["messages"] == MESSAGES
     assert "service_tier" not in body
-    assert "completion_window" not in (body.get("metadata") or {})
-    assert await spend_capture.settled_cost() == pytest.approx(cost_at(""))
+    assert body.get("metadata") == ({"completion_window": window} if window else None)
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(suffix))
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("as_metadata", [False, True])
+@pytest.mark.asyncio
+async def test_sail_messages_reject_flex_before_sending(
+    sail_env: None, messages_route: respx.Route, drop_params: bool, as_metadata: bool
+) -> None:
+    params: Final = {"metadata": {"completion_window": "flex"}} if as_metadata else {"service_tier": "flex"}
+    with pytest.raises(litellm.UnsupportedParamsError, match="background=true"):
+        await litellm.anthropic_messages(
+            model=MODEL, messages=MESSAGES, max_tokens=16, drop_params=drop_params, **params
+        )
+
+    assert not messages_route.called
+
+
+@pytest.mark.asyncio
+async def test_sail_messages_reject_conflicting_window_and_tier(sail_env: None, messages_route: respx.Route) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="different completion windows"):
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=MESSAGES,
+            max_tokens=16,
+            service_tier="priority",
+            metadata={"completion_window": "balanced"},
+        )
+
+    assert not messages_route.called
 
 
 @pytest.mark.asyncio
