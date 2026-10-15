@@ -454,7 +454,6 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         # Call the actual method.
@@ -468,7 +467,6 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
-            llm_router=self._router_with_free_and_paid_models(),
         )
 
         mock_proxy_logging_obj.pre_call_hook.assert_called_once()
@@ -572,17 +570,14 @@ class TestProxyBaseLLMRequestProcessing:
             "add_litellm_data_to_request",
             AsyncMock(return_value={**raw_body, metadata_key: {}, "proxy_server_request": {"body": raw_body}}),
         )
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
 
         returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=mock_proxy_config,
+            proxy_config=MagicMock(spec=ProxyConfig),
             route_type=route_type,
-            llm_router=self._router_with_free_and_paid_models(),
         )
 
         proxy_request: Final = returned_data["proxy_server_request"]
@@ -2026,7 +2021,6 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         (
@@ -2039,7 +2033,6 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
-            llm_router=self._router_with_free_and_paid_models(),
         )
 
         # Verify queue_time_seconds is set and non-negative. Ends at start_time
@@ -10940,6 +10933,15 @@ class _ModelRewritingHook(CustomLogger):
         return data
 
 
+class _EmailMaskingHook(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        data["messages"] = [
+            {**message, "content": message["content"].replace("jane@example.com", "[EMAIL]")}
+            for message in data["messages"]
+        ]
+        return data
+
+
 class _RejectingHook(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         raise HTTPException(status_code=403, detail="rejected by hook")
@@ -11201,7 +11203,7 @@ class TestPreCallHooksForUnroutableModel:
         assert looked_up == ["does-not-exist"]
 
     @pytest.mark.asyncio
-    async def test_model_rewritten_by_a_hook_is_read_through_under_its_new_name(self, monkeypatch):
+    async def test_model_rewritten_by_a_hook_is_looked_up_once_under_its_new_name(self, monkeypatch):
         from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
         monkeypatch.setattr(
@@ -11218,7 +11220,38 @@ class TestPreCallHooksForUnroutableModel:
         with pytest.raises(ProxyModelNotFoundError):
             await self._run(monkeypatch, model="unknown-virtual", llm_router=self._router(), model_db_lookup=no_db_row)
 
-        assert looked_up == ["unknown-virtual", "db-only-model"]
+        assert looked_up == ["db-only-model"]
+
+    @pytest.mark.asyncio
+    async def test_virtual_model_a_hook_maps_to_a_loaded_model_needs_no_db_lookup(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook()])
+        looked_up: Final = list[str]()
+
+        async def no_db_row(model_name: str) -> bool:
+            looked_up.append(model_name)
+            return False
+
+        data: Final = await self._run(
+            monkeypatch, model="virtual-model", llm_router=self._router(), model_db_lookup=no_db_row
+        )
+
+        assert data["model"] == "gpt-4o-mini"
+        assert looked_up == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_without_guardrails_logs_the_request_the_hooks_produced(self, monkeypatch):
+        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+        monkeypatch.setattr(litellm, "callbacks", [_EmailMaskingHook()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(ProxyModelNotFoundError):
+            await self._run(monkeypatch, model="does-not-exist", llm_router=self._router(), processor=processor)
+
+        snapshot: Final = processor.data["proxy_server_request"]["body"]
+        assert snapshot["messages"] == [{"role": "user", "content": "email [EMAIL]"}]
+        assert snapshot["litellm_call_id"] == processor.data["litellm_call_id"]
+        assert snapshot["metadata"] is processor.data["metadata"]
 
     @pytest.mark.asyncio
     async def test_no_router_skips_the_routability_check(self, monkeypatch):

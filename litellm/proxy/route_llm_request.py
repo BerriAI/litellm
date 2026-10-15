@@ -1,12 +1,14 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
 
 import httpx
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import Never
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+_T = TypeVar("_T")
 
 
 def _route_user_config_request(data: dict, route_type: str):
@@ -152,143 +156,6 @@ ROUTE_ENDPOINT_MAPPING: Final = {
 
 
 _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
-
-_EVAL_ROUTE_TYPES: Final = frozenset(
-    {
-        "acreate_eval",
-        "alist_evals",
-        "aget_eval",
-        "aupdate_eval",
-        "adelete_eval",
-        "acancel_eval",
-        "acreate_run",
-        "alist_runs",
-        "aget_run",
-        "acancel_run",
-        "adelete_run",
-    }
-)
-
-_CONTAINER_ROUTE_TYPES: Final = frozenset(
-    {
-        "acreate_container",
-        "alist_containers",
-        "aretrieve_container",
-        "adelete_container",
-        "aupload_container_file",
-        "alist_container_files",
-        "aretrieve_container_file",
-        "adelete_container_file",
-        "aretrieve_container_file_content",
-    }
-)
-
-_INTERACTION_ROUTE_TYPES: Final = frozenset(
-    {
-        "acreate_interaction",
-        "aget_interaction",
-        "adelete_interaction",
-        "acancel_interaction",
-    }
-)
-
-_MANAGED_AGENT_ROUTE_TYPES: Final = frozenset(
-    {
-        "acreate_agent",
-        "alist_agents",
-        "aget_agent",
-        "adelete_agent",
-        "alist_agent_versions",
-    }
-)
-
-_MODEL_OPTIONAL_ROUTE_TYPES: Final = frozenset(
-    {
-        "avideo_list",
-        "avideo_status",
-        "avideo_content",
-        "avideo_remix",
-        "avideo_create_character",
-        "avideo_get_character",
-        "avideo_edit",
-        "avideo_extension",
-        "avector_store_file_list",
-        "avector_store_file_retrieve",
-        "avector_store_file_content",
-        "avector_store_file_delete",
-        "acreate_skill",
-        "alist_skills",
-        "aget_skill",
-        "adelete_skill",
-        "aingest",
-    }
-)
-
-_MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES: Final = frozenset(
-    {
-        "amoderation",
-        "aget_responses",
-        "adelete_responses",
-        "acancel_responses",
-        "alist_input_items",
-        "avector_store_create",
-        "avector_store_search",
-        "avector_store_retrieve",
-        "avector_store_list",
-        "avector_store_update",
-        "avector_store_delete",
-        "avector_store_file_create",
-        "avector_store_file_list",
-        "avector_store_file_retrieve",
-        "avector_store_file_content",
-        "avector_store_file_update",
-        "avector_store_file_delete",
-        "asearch",
-        "acreate_container",
-        "alist_containers",
-        "aretrieve_container",
-        "adelete_container",
-        "aupload_container_file",
-        "alist_container_files",
-        "aretrieve_container_file",
-        "adelete_container_file",
-        "aretrieve_container_file_content",
-    }
-)
-
-_VIDEO_FALLBACK_ROUTE_TYPES: Final = frozenset(
-    {
-        "avideo_status",
-        "avideo_content",
-        "avideo_remix",
-        "avideo_create_character",
-        "avideo_get_character",
-        "avideo_edit",
-        "avideo_extension",
-    }
-)
-
-_NO_MODEL_ROUTING_ROUTE_TYPES: Final = frozenset(
-    {
-        "apply_guardrail",
-        "call_mcp_tool",
-        # Files, fine-tuning, batch, and A2A endpoints resolve their own target
-        # (file id, job id, or agent) after pre-call processing and never reach
-        # _route_request_single_attempt.
-        "afile_content",
-        "afile_retrieve",
-        "afile_delete",
-        "acreate_fine_tuning_job",
-        "aretrieve_fine_tuning_job",
-        "alist_fine_tuning_jobs",
-        "acancel_fine_tuning_job",
-        "acreate_batch",
-        "aretrieve_batch",
-        "alist_batches",
-        "acancel_batch",
-        "asend_message",
-    }
-)
 
 
 class ProxyModelNotFoundError(HTTPException):
@@ -743,14 +610,46 @@ async def route_request(
     """
     Common helper to route the request
     """
-    try:
-        return await _route_request_single_attempt(
+    return await _retry_once_after_model_read_through(
+        data,
+        llm_router,
+        lambda router: _route_request_single_attempt(
             data=data,
-            llm_router=llm_router,
+            llm_router=router,
             user_model=user_model,
             route_type=route_type,
             user_api_key_dict=user_api_key_dict,
-        )
+        ),
+    )
+
+
+async def raise_if_model_not_routable(
+    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: str,
+) -> None:
+    """Raise the error route_request would raise before sending this request, without sending it."""
+
+    async def check(router: LitellmRouter | None) -> None:
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+        raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+        if (
+            _decide_dispatch(data=data, llm_router=router, user_model=user_model, route_type=route_type)
+            is _Dispatch.MODEL_NOT_FOUND
+        ):
+            _raise_model_not_found(data=data, route_type=route_type)
+
+    await _retry_once_after_model_read_through(data, llm_router, check)
+
+
+async def _retry_once_after_model_read_through(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    attempt: Callable[[LitellmRouter | None], Awaitable[_T]],
+) -> _T:
+    try:
+        return await attempt(llm_router)
     except (ProxyModelNotFoundError, ProxyMissingParamWithoutLoadedModelError) as e:
         requested_model: Final = data.get("model", "")
         if (
@@ -766,152 +665,234 @@ async def route_request(
 
         if not await model_registry_read_through.attempt(requested_model):
             raise
-        return await _route_request_single_attempt(
-            data=data,
-            llm_router=proxy_server.llm_router,
-            user_model=user_model,
-            route_type=route_type,
-            user_api_key_dict=user_api_key_dict,
-        )
+        return await attempt(proxy_server.llm_router)
 
 
-def _router_can_route(
-    data: Mapping[str, object],
+def _raise_model_not_found(data: Mapping[str, object], route_type: str) -> Never:
+    # if no route found then it's a bad request
+    route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+    raise ProxyModelNotFoundError(
+        route=route_name,
+        model_name=str(data.get("model", "")),
+    )
+
+
+class _Dispatch(Enum):
+    ROUTER = auto()
+    ROUTER_SPECIFIC_DEPLOYMENT = auto()
+    ROUTER_THEN_LITELLM = auto()
+    LITELLM = auto()
+    BATCH_COMPLETION = auto()
+    USER_CONFIG = auto()
+    ROUTER_SETTINGS_OVERRIDE = auto()
+    EVAL = auto()
+    A2A_AGENT = auto()
+    MISSING_MODEL = auto()
+    MODEL_NOT_FOUND = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamModel:
+    name: str
+
+
+def _decide_dispatch(
+    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
-) -> bool:
-    """Pure predicate mirroring the branch structure of _route_request_single_attempt.
+) -> _Dispatch | _TeamModel:
+    """Where route_request sends this request, decided without changing it.
 
-    Returns True when the existing routing tree would dispatch this request
-    somewhere instead of falling through to the final ProxyModelNotFoundError.
+    Raises PermissionDeniedError (403) when every deployment of the requested model is blocked.
     """
-    if route_type in _NO_MODEL_ROUTING_ROUTE_TYPES:
-        return True
-    if "api_key" in data or "api_base" in data:
-        return True
-    model: Final = data.get("model")
-    if route_type == "acompletion" and isinstance(model, str) and "," in model and llm_router is not None:
-        return True
-    if "user_config" in data or "router_settings_override" in data:
-        return True
-    if llm_router is None:
-        return user_model is not None or route_type == "allm_passthrough_route"
-    _raise_if_model_fully_blocked(llm_router=llm_router, model_name=model, team_id=get_team_id_from_data(dict(data)))
-    if (
-        route_type in _EVAL_ROUTE_TYPES
-        or route_type in _CONTAINER_ROUTE_TYPES
-        or route_type in _INTERACTION_ROUTE_TYPES
-        or route_type in _MANAGED_AGENT_ROUTE_TYPES
-    ):
-        return True
-    if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (model is None or model == ""):
-        return True
-    if not isinstance(model, str):
-        return True
-
-    return _router_model_group_routable(model=model, llm_router=llm_router, data=data, route_type=route_type)
-
-
-def _router_model_group_routable(
-    model: str,
-    llm_router: LitellmRouter,
-    data: Mapping[str, object],
-    route_type: str,
-) -> bool:
-    team_id: Final = get_team_id_from_data(dict(data))
-    if team_id is not None and llm_router.map_team_model(model, team_id) is not None:
-        return True
-
+    team_id: Final = get_team_id_from_data(data)
+    router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
-    if (
-        is_proxy_admin_without_team
-        and model not in llm_router.model_names  # pyright: ignore[reportUnknownMemberType]  # bare set
-        and model in llm_router.team_public_model_names
-    ) or llm_router.is_recognized_model(model):
-        return True
 
-    if model in llm_router.model_names:  # pyright: ignore[reportUnknownMemberType]  # bare set
-        return False
-    if llm_router.router_general_settings.pass_through_all_models:
-        return True
-    if llm_router.default_deployment is not None:
-        return True
-    if llm_router.pattern_router.patterns:  # pyright: ignore[reportUnknownMemberType]  # untyped dict
-        return True
-    if model in llm_router.deployment_names:  # pyright: ignore[reportUnknownMemberType]  # bare list
-        return True
-    if route_type in _MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES or route_type in _VIDEO_FALLBACK_ROUTE_TYPES:
-        return True
-    return _is_a2a_agent_model(model)
+    if "api_key" in data or "api_base" in data:
+        if llm_router is not None:
+            return _Dispatch.ROUTER
+        else:
+            return _Dispatch.LITELLM
+
+    elif (
+        route_type == "acompletion"
+        and data.get("model", "") is not None
+        and "," in data.get("model", "")
+        and llm_router is not None
+    ):
+        # Handle batch completions with comma-separated models BEFORE user_config check
+        # This ensures batch completion logic is applied even when user_config is set
+        return _Dispatch.BATCH_COMPLETION
+
+    elif data.get("user_config") is not None:
+        return _Dispatch.USER_CONFIG
+
+    elif "router_settings_override" in data:
+        return _Dispatch.ROUTER_SETTINGS_OVERRIDE
+    elif llm_router is not None:
+        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
+        # Evals API: always route to litellm directly (not through router)
+        # But extract model credentials if a model is provided
+        if route_type in [
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
+        ]:
+            return _Dispatch.EVAL
+        # Skip model-based routing for container operations
+        if route_type in [
+            "acreate_container",
+            "alist_containers",
+            "aretrieve_container",
+            "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
+        ]:
+            return _Dispatch.ROUTER
+        # Interactions API: create with agent, get/delete/cancel don't need model routing
+        if route_type in [
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
+        ]:
+            return _Dispatch.ROUTER
+        # Managed Agents API: these don't need model routing
+        if route_type in [
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
+        ]:
+            return _Dispatch.ROUTER
+        if route_type in [
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_delete",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "aingest",
+        ] and (data.get("model") is None or data.get("model") == ""):
+            # These endpoints don't need a model, use custom_llm_provider directly
+            return _Dispatch.LITELLM
+
+        if "model" not in data:
+            return _Dispatch.MISSING_MODEL
+        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        if team_model_name is not None:
+            return _TeamModel(name=team_model_name)
+
+        elif (
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ) or llm_router.is_recognized_model(data["model"]):
+            return _Dispatch.ROUTER
+
+        elif data["model"] not in router_model_names:
+            # Check wildcards before checking deployment_names
+            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
+            if llm_router.router_general_settings.pass_through_all_models:
+                return _Dispatch.LITELLM
+            elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
+                return _Dispatch.ROUTER
+            elif data["model"] in llm_router.deployment_names:
+                # Only match deployment_names if no wildcard matched
+                return _Dispatch.ROUTER_SPECIFIC_DEPLOYMENT
+            elif route_type in [
+                "amoderation",
+                "aget_responses",
+                "adelete_responses",
+                "acancel_responses",
+                "alist_input_items",
+                "avector_store_create",
+                "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_list",
+                "avector_store_update",
+                "avector_store_delete",
+                "avector_store_file_create",
+                "avector_store_file_list",
+                "avector_store_file_retrieve",
+                "avector_store_file_content",
+                "avector_store_file_update",
+                "avector_store_file_delete",
+                "asearch",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
+                "aupload_container_file",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
+            ]:
+                # These endpoints can work with or without model parameter
+                return _Dispatch.ROUTER
+            elif route_type in [
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+                "avideo_create_character",
+                "avideo_get_character",
+                "avideo_edit",
+                "avideo_extension",
+            ]:
+                # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
+                # try router first to allow for multi-deployment load balancing
+                return _Dispatch.ROUTER_THEN_LITELLM
+            elif _is_a2a_agent_model(data.get("model", "")):
+                return _Dispatch.A2A_AGENT
+
+    elif user_model is not None or route_type == "allm_passthrough_route":
+        return _Dispatch.LITELLM
+
+    return _Dispatch.MODEL_NOT_FOUND
 
 
-def _router_can_route_unless_blocked(
-    data: Mapping[str, object],
+def can_route_with_loaded_models(
+    data: dict,  # mutable-ok: route_request's untyped request body, read here and never changed
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
 ) -> bool:
+    """Whether route_request would send this request somewhere, using only the models this worker has loaded.
+
+    A fully blocked model counts as not routable.
+    """
     try:
-        return _router_can_route(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type)
+        return (
+            _decide_dispatch(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type)
+            is not _Dispatch.MODEL_NOT_FOUND
+        )
     except litellm.PermissionDeniedError:
         return False
-
-
-async def is_model_routable(
-    data: Mapping[str, object],
-    llm_router: LitellmRouter | None,
-    user_model: str | None,
-    route_type: str,
-    read_through: bool = True,
-) -> bool:
-    """Whether route_request would dispatch this request, including its registry read-through retry.
-
-    A fully blocked model counts as not routable. read_through=False skips the registry retry.
-    """
-    if _router_can_route_unless_blocked(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type):
-        return True
-    requested_model: Final = data.get("model")
-    if not read_through or not isinstance(requested_model, str) or not requested_model:
-        return False
-    from litellm.proxy import proxy_server
-    from litellm.proxy.common_utils.registry_read_through import (
-        model_registry_read_through,
-    )
-
-    return await model_registry_read_through.attempt(requested_model) and _router_can_route_unless_blocked(
-        data=data, llm_router=proxy_server.llm_router, user_model=user_model, route_type=route_type
-    )
-
-
-async def raise_if_model_not_routable(
-    data: Mapping[str, object],
-    llm_router: LitellmRouter | None,
-    user_model: str | None,
-    route_type: str,
-    read_through: bool = True,
-) -> None:
-    """Raise the error route_request would raise for a model it cannot dispatch.
-
-    The body checks route_request runs first come first: a missing required param, then
-    disallowed mock testing params. After them, PermissionDeniedError (403) for a fully blocked
-    model and ProxyModelNotFoundError (400) otherwise. read_through=False skips the registry retry.
-    """
-    if await is_model_routable(
-        data=data, llm_router=llm_router, user_model=user_model, route_type=route_type, read_through=read_through
-    ):
-        return
-    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
-    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
-    requested_model: Final = data.get("model")
-    if llm_router is not None:
-        _raise_if_model_fully_blocked(
-            llm_router=llm_router, model_name=requested_model, team_id=get_team_id_from_data(dict(data))
-        )
-    raise ProxyModelNotFoundError(
-        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        model_name=requested_model if isinstance(requested_model, str) else "",
-    )
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
@@ -931,162 +912,103 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     if "user_config" in data and data["user_config"] is None:
         data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
 
-    team_id: Final = get_team_id_from_data(data)
-    router_model_names: Final = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
-
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
         # Map generationConfig to config parameter for Google GenAI compatibility
         if "generationConfig" in data and "config" not in data:
             data["config"] = data.pop("generationConfig")
-    if "api_key" in data or "api_base" in data:
-        if llm_router is not None:
-            return getattr(llm_router, f"{route_type}")(**data)
-        else:
-            return getattr(litellm, f"{route_type}")(**data)
 
-    elif (
-        route_type == "acompletion"
-        and data.get("model", "") is not None
-        and "," in data.get("model", "")
-        and llm_router is not None
-    ):
-        # Handle batch completions with comma-separated models BEFORE user_config check
-        # This ensures batch completion logic is applied even when user_config is set
-        if data.get("fastest_response", False):
-            return llm_router.abatch_completion_fastest_response(**data)
-        else:
+    match _decide_dispatch(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type):
+        case _Dispatch.ROUTER:
+            return getattr(llm_router, f"{route_type}")(**data)
+        case _Dispatch.ROUTER_SPECIFIC_DEPLOYMENT:
+            return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
+        case _Dispatch.ROUTER_THEN_LITELLM:
+            try:
+                return getattr(llm_router, f"{route_type}")(**data)
+            except Exception:
+                # If router fails (e.g., model not found in router), fall back to direct call
+                return getattr(litellm, f"{route_type}")(**data)
+        case _Dispatch.LITELLM:
+            return getattr(litellm, f"{route_type}")(**data)
+        case _Dispatch.BATCH_COMPLETION if llm_router is not None:
+            if data.get("fastest_response", False):
+                return llm_router.abatch_completion_fastest_response(**data)
             models: Final = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
-
-    elif "user_config" in data:
-        return _route_user_config_request(data, route_type)
-
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        for key in per_request_settings:
-            if override_settings.get(key) is not None and key not in data:
-                data[key] = override_settings[key]
-
-        # Use main router with overridden kwargs
-        if llm_router is not None:
-            return getattr(llm_router, f"{route_type}")(**data)
-        else:
+        case _Dispatch.USER_CONFIG:
+            return _route_user_config_request(data, route_type)
+        case _Dispatch.ROUTER_SETTINGS_OVERRIDE:
+            _merge_router_settings_override(data)
+            return getattr(llm_router if llm_router is not None else litellm, f"{route_type}")(**data)
+        case _Dispatch.EVAL:
+            _merge_eval_model_credentials(data, llm_router)
             return getattr(litellm, f"{route_type}")(**data)
-    elif llm_router is not None:
-        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
-        # Evals API: always route to litellm directly (not through router)
-        # But extract model credentials if a model is provided
-        if route_type in _EVAL_ROUTE_TYPES:
-            # If a model is provided, get its credentials from the router
-            model: Final = data.get("model")
-            if model and llm_router:
-                try:
-                    # Try to get deployment credentials for this model
-                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
-                    if not deployment_creds:
-                        # Try by model group name
-                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
-                        if (
-                            deployment
-                            and deployment.litellm_params
-                            and not llm_router.is_deployment_blocked(deployment)
-                        ):
-                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
-
-                    # If we found credentials, merge them into data (but don't override user-provided values)
-                    if deployment_creds:
-                        data.update(deployment_creds)
-                except Exception:
-                    # If we can't get deployment creds, continue without them
-                    pass
-
-            return getattr(litellm, f"{route_type}")(**data)
-        # Skip model-based routing for container operations
-        if route_type in _CONTAINER_ROUTE_TYPES:
+        case _TeamModel(name=team_model_name):
+            data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
-        # Interactions API: create with agent, get/delete/cancel don't need model routing
-        if route_type in _INTERACTION_ROUTE_TYPES:
-            return getattr(llm_router, f"{route_type}")(**data)
-        # Managed Agents API: these don't need model routing
-        if route_type in _MANAGED_AGENT_ROUTE_TYPES:
-            return getattr(llm_router, f"{route_type}")(**data)
-        if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (data.get("model") is None or data.get("model") == ""):
-            # These endpoints don't need a model, use custom_llm_provider directly
-            return getattr(litellm, f"{route_type}")(**data)
-
-        if "model" not in data:
+        case _Dispatch.MISSING_MODEL:
             raise ProxyMissingRequiredParamError(
                 route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
                 param="model",
             )
-        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
-        if team_model_name is not None:
-            data["model"] = team_model_name
-            return getattr(llm_router, f"{route_type}")(**data)
+        case _Dispatch.A2A_AGENT:
+            from litellm.proxy.agent_endpoints.a2a_routing import (
+                route_a2a_agent_request,
+            )
 
-        elif (
-            is_proxy_admin_without_team
-            and data["model"] not in router_model_names
-            and data["model"] in llm_router.team_public_model_names
-        ) or llm_router.is_recognized_model(data["model"]):
-            return getattr(llm_router, f"{route_type}")(**data)
+            result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+            if result is not None:
+                return result
 
-        elif data["model"] not in router_model_names:
-            # Check wildcards before checking deployment_names
-            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
-            if llm_router.router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**data)
-            elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
-                return getattr(llm_router, f"{route_type}")(**data)
-            elif data["model"] in llm_router.deployment_names:
-                # Only match deployment_names if no wildcard matched
-                return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
-            elif route_type in _MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES:
-                # These endpoints can work with or without model parameter
-                return getattr(llm_router, f"{route_type}")(**data)
-            elif route_type in _VIDEO_FALLBACK_ROUTE_TYPES:
-                # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
-                # try router first to allow for multi-deployment load balancing
-                try:
-                    return getattr(llm_router, f"{route_type}")(**data)
-                except Exception:
-                    # If router fails (e.g., model not found in router), fall back to direct call
-                    return getattr(litellm, f"{route_type}")(**data)
-            elif _is_a2a_agent_model(data.get("model", "")):
-                from litellm.proxy.agent_endpoints.a2a_routing import (
-                    route_a2a_agent_request,
-                )
+    _raise_model_not_found(data=data, route_type=route_type)
 
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
-                if result is not None:
-                    return result
-                # Fall through to raise exception below if result is None
 
-    elif user_model is not None or route_type == "allm_passthrough_route":
-        return getattr(litellm, f"{route_type}")(**data)
+def _merge_router_settings_override(
+    data: dict,  # mutable-ok: merges into the request body route_request dispatches
+) -> None:
+    # Apply per-request router settings overrides from key/team config
+    # Instead of creating a new Router (expensive), merge settings into kwargs
+    # The Router already supports per-request overrides for these settings
+    override_settings: Final = data.pop("router_settings_override")
 
-    # if no route found then it's a bad request
-    route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-    raise ProxyModelNotFoundError(
-        route=route_name,
-        model_name=data.get("model", ""),
-    )
+    # Settings that the Router accepts as per-request kwargs
+    # These override the global router settings for this specific request
+    per_request_settings: Final = [
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "num_retries",
+        "timeout",
+        "model_group_retry_policy",
+        "routing_strategy",
+        "enable_tag_filtering",
+    ]
+
+    for key in per_request_settings:
+        if override_settings.get(key) is not None and key not in data:
+            data[key] = override_settings[key]
+
+
+def _merge_eval_model_credentials(
+    data: dict,  # mutable-ok: merges into the request body route_request dispatches
+    llm_router: LitellmRouter | None,
+) -> None:
+    # If a model is provided, get its credentials from the router
+    model: Final = data.get("model")
+    if model and llm_router:
+        try:
+            # Try to get deployment credentials for this model
+            deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+            if not deployment_creds:
+                # Try by model group name
+                deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                if deployment and deployment.litellm_params and not llm_router.is_deployment_blocked(deployment):
+                    deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+
+            # If we found credentials, merge them into data (but don't override user-provided values)
+            if deployment_creds:
+                data.update(deployment_creds)
+        except Exception:
+            # If we can't get deployment creds, continue without them
+            pass

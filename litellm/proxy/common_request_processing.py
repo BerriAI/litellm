@@ -120,7 +120,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
-    is_model_routable,
+    can_route_with_loaded_models,
     raise_if_model_not_routable,
     route_request,
 )
@@ -1813,7 +1813,7 @@ async def _team_member_within_fallback_model_budget(
 
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
-        self.data: dict[str, Any] = data  # mutable-ok: the request body every later step mutates in place
+        self.data = data
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
 
@@ -2335,8 +2335,8 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
-        model_routable: Final = llm_router is None or await is_model_routable(
-            data=self.data,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # loosely typed
+        model_routable: Final = llm_router is None or can_route_with_loaded_models(
+            data=self.data,
             llm_router=llm_router,
             user_model=user_model,
             route_type=route_type,
@@ -2401,9 +2401,8 @@ class ProxyBaseLLMRequestProcessing:
 
         For such a model, hooks other than guardrails and content enforcers run first and may
         rewrite the model. A model that still cannot route raises the routing error before any
-        guardrail runs; otherwise the guardrails run on the rewritten request. A request those
-        hooks or the routing check reject is redacted. The registry read-through is retried only
-        for a model those hooks changed.
+        guardrail runs, otherwise the guardrails run on the rewritten request. A request those
+        hooks or the routing check reject is redacted.
         """
         if model_routable:
             self.data = await proxy_logging_obj.pre_call_hook(
@@ -2413,7 +2412,6 @@ class ProxyBaseLLMRequestProcessing:
                 skip_guardrails=skip_guardrails,
             )
             return
-        model_before_hooks: Final = self.data.get("model")
         try:
             self.data = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2422,12 +2420,12 @@ class ProxyBaseLLMRequestProcessing:
                 skip_guardrails=True,
                 skip_content_enforcers=True,
             )
+            refresh_proxy_server_request_body_snapshot(self.data)
             await raise_if_model_not_routable(
                 data=self.data,
                 llm_router=llm_router,
                 user_model=user_model,
                 route_type=call_type,
-                read_through=self.data.get("model") != model_before_hooks,
             )
         except Exception:
             if not skip_guardrails:
