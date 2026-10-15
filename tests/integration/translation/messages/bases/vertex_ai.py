@@ -379,7 +379,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [
@@ -433,7 +433,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [
@@ -487,7 +487,230 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 99,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 1}],
+            "thoughtsTokenCount": 89,
+        },
+        "modelVersion": "gemini-3.1-pro-preview",
+        "createTime": "2026-10-05T22:55:14.874538Z",
+        "responseId": "0irEaqqwNbCdq8YP3L2mqQ4",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "0irEaqqwNbCdq8YP3L2mqQ4",
+        "type": "message",
+        "role": "assistant",
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 9, "output_tokens": 90},
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn",
+        "stop_details": None,
+    },
+)
+
+
+CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={
+        "model": "vertex_ai/claude-fable-5-1@default",
+        "max_tokens": 64,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-fable-5-1@default:rawPredict",
+    expected_provider_headers={"authorization": "Bearer scripted-token", "content-type": "application/json"},
+    expected_provider_request={
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "max_tokens": 64,
+        "stream": False,
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        "model": "claude-fable-5-1",
+        "id": "msg_vrtx_011Cg33y2uVUY4EWp5v3Eh7T",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello."}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "model": "vertex_ai/claude-fable-5-1@default",
+        "id": "msg_vrtx_011Cg33y2uVUY4EWp5v3Eh7T",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello."}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+)
+
+GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.5-flash",
+        "max_tokens": 1024,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.5-flash:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_5_FLASH_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 95,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 2}],
+            "thoughtsTokenCount": 84,
+        },
+        "modelVersion": "gemini-3.5-flash",
+        "createTime": "2026-10-05T22:54:50.809002Z",
+        "responseId": "uirEaqqwMc-U9LsPjJTYuQU",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "uirEaqqwMc-U9LsPjJTYuQU",
+        "type": "message",
+        "role": "assistant",
+        "model": "vertex_ai/gemini-3.5-flash",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 9, "output_tokens": 86},
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn",
+        "stop_details": None,
+    },
+)
+
+GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.8-flash",
+        "max_tokens": 1024,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_8_FLASH_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 118,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 2}],
+            "thoughtsTokenCount": 107,
+        },
+        "modelVersion": "gemini-3.8-flash",
+        "createTime": "2026-10-05T22:55:12.739855Z",
+        "responseId": "0CrEao-ULbuU9LsPk-mQ2A8",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "0CrEao-ULbuU9LsPk-mQ2A8",
+        "type": "message",
+        "role": "assistant",
+        "model": "vertex_ai/gemini-3.8-flash",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 9, "output_tokens": 109},
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn",
+        "stop_details": None,
+    },
+)
+
+GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "max_tokens": 1024,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [

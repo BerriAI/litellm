@@ -618,23 +618,21 @@ def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Route
     assert response.choices[0].message.content == "ok"
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_blocks = [
-        {
-            "reasoningText": {
-                "text": "This is a test",
-                "signature": "test_signature",
-            }
-        },
-        {
-            "redactedContent": "This is a redacted content",
-        },
+def test_transform_thinking_blocks_unwraps_redacted_content_to_claude_native_data():
+    """Converse returns Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    thinking_blocks: Final = [
+        {"reasoningText": {"text": "This is a test", "signature": "test_signature"}},
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()},
     ]
-    config = AmazonConverseConfig()
-    transformed_thinking_blocks = config._transform_thinking_blocks(thinking_blocks)
-    assert len(transformed_thinking_blocks) == 2
-    assert transformed_thinking_blocks[0]["type"] == "thinking"
-    assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
+
+    transformed_thinking_blocks: Final = AmazonConverseConfig()._transform_thinking_blocks(thinking_blocks)
+
+    assert transformed_thinking_blocks == [
+        {"type": "thinking", "thinking": "This is a test", "signature": "test_signature"},
+        {"type": "redacted_thinking", "data": native_data},
+    ]
 
 
 def test_apply_tool_call_transformation_if_needed():
@@ -1086,6 +1084,63 @@ def test_transform_request_resolves_an_inference_profile_through_its_base_model(
     )
 
     assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+_APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, optional_params, litellm_params, replays_redacted",
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("anthropic.claude-sonnet-4-6", {"model_id": _APPLICATION_PROFILE_ARN}, {}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {}, False),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "us.amazon.nova-pro-v1:0"}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {"base_model": "anthropic.claude-sonnet-4-6"}, False),
+    ],
+)
+async def test_transform_request_replays_redacted_thinking_only_to_claude(
+    use_async: bool,
+    model: str,
+    optional_params: dict[str, str],
+    litellm_params: dict[str, str],
+    replays_redacted: bool,
+):
+    """A model id that names its model decides on its own. An application inference profile ARN hides its model,
+    so the deployment's ``base_model`` is what marks it as Claude, and without one the redacted block is dropped
+    the way it is for every non-Claude target."""
+    redacted_data: Final = base64.b64encode(b"EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP").decode()
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": redacted_data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model, messages=messages, optional_params=dict(optional_params), litellm_params=dict(litellm_params)
+    )
+
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"reasoningContent": {"redactedContent": redacted_data}}, {"text": "hello"}]
+        if replays_redacted
+        else [{"text": "hello"}],
+    }
 
 
 def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
@@ -5347,12 +5402,12 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
     The disable_parallel_tool_use gate must read supports_parallel_tool_use_config,
     not the 1h-TTL pricing field: a model carrying only the former still gets the flag.
     """
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import supports_bedrock_prompt_cache_ttl
 
     config = AmazonConverseConfig()
     model = "anthropic.claude-parallel-tool-use-only"
     monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
-    assert is_claude_4_5_on_bedrock(model) is False
+    assert supports_bedrock_prompt_cache_ttl(model) is False
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
@@ -5924,7 +5979,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monk
     cache_control behavior, instead of always emitting a bare
     {"type": "default"} cachePoint with no ttl.
 
-    Forces the bundled local cost map so `is_claude_4_5_on_bedrock` (which
+    Forces the bundled local cost map so `supports_bedrock_prompt_cache_ttl` (which
     reads `cache_creation_input_token_cost_above_1hr` from litellm.model_cost)
     sees this branch's pricing data rather than the network-fetched `main`
     copy, which lacks it until merge.

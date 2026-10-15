@@ -7,6 +7,7 @@ from integration.translation.chat_completions.bases.azure import (
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
     GPT_6_1_SOL_TEST_CASE,
+    GPT_6_ASTRA_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
 from integration.translation.runner import assert_translation
@@ -20,11 +21,9 @@ from integration.translation.runner import assert_translation
         GPT_5_6_LUNA_TEST_CASE,
         GPT_6_LUNA_TEST_CASE,
         GPT_6_1_SOL_TEST_CASE,
+        GPT_6_ASTRA_TEST_CASE,
     ],
     ids=lambda case: case.id,
 )
 def test_chat_completions_basic_azure(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    pytest.skip(
-        "BUG: LIT-9235 chat completions moves message.refusal into provider_specific_fields and drops null system_fingerprint and logprobs"
-    )
     assert_translation(case, gateway, provider)

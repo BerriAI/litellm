@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_lookaround_regex_patterns,
+    native_redacted_thinking_data,
     parse_content_for_reasoning,
     tool_with_sanitized_parameters,
 )
@@ -110,8 +111,8 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    supports_bedrock_prompt_cache_ttl,
 )
 
 if TYPE_CHECKING:
@@ -136,6 +137,7 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _tools_the_model_accepts(
@@ -1385,7 +1387,7 @@ class AmazonConverseConfig(BaseConfig):
         cache_point: Final = CachePointBlock(type="default")
         if isinstance(control, dict) and "ttl" in control:
             ttl: Final = control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+            if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
                 cache_point["ttl"] = ttl
         return cache_point
 
@@ -2045,6 +2047,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
@@ -2060,6 +2063,11 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
+
+    @staticmethod
+    def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
+        base_model: Final = litellm_params.get("base_model")
+        return base_model if isinstance(base_model, str) else None
 
     def transform_request(
         self,
@@ -2113,6 +2121,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
@@ -2186,7 +2195,7 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_thinking_block)
             elif "redactedContent" in block:
                 _redacted_block = ChatCompletionRedactedThinkingBlock(
-                    type="redacted_thinking", data=block["redactedContent"]
+                    type="redacted_thinking", data=native_redacted_thinking_data(block["redactedContent"])
                 )
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
