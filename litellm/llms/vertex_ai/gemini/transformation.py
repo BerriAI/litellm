@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -71,6 +71,7 @@ _GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
+_TOOL_CONFIG_ADAPTER: Final = TypeAdapter(ToolConfig)
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -1162,7 +1163,8 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    # output_config is not supported by Vertex AI
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k != "output_config"}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1175,11 +1177,9 @@ def transform_request_body(
             )
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        tool_config: Final[ToolConfig | None] = optional_params.pop("toolConfig", None)
+        tool_config: Final = _TOOL_CONFIG_ADAPTER.validate_python(optional_params.pop("toolConfig", {}))
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
-        # Drop output_config as it's not supported by Vertex AI
-        optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
@@ -1208,15 +1208,10 @@ def transform_request_body(
                 data["system_instruction"] = system_instructions
             if tools is not None:
                 data["tools"] = tools
-            merged_tool_config: Final[ToolConfig | None] = (
-                {**tool_config, **tool_choice}
-                if tool_config is not None and tool_choice is not None
-                else tool_config
-                if tool_config is not None
-                else tool_choice
-            )
-            if merged_tool_config is not None:
-                data["toolConfig"] = merged_tool_config
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if tool_config:
+                data["toolConfig"] = {**tool_config, **data.get("toolConfig", {})}
             if include_server_side_tool_invocations:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
