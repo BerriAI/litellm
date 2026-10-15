@@ -395,3 +395,47 @@ def test_bedrock_mantle_connection_defaults_ignore_the_global_settings(monkeypat
     monkeypatch.setattr(litellm, "api_key", "global")
     monkeypatch.setattr(litellm, "api_base", "https://global.invalid")
     assert connection_defaults("bedrock_mantle") == (None, None)
+
+
+_STREAMING_MODEL_COST: Final = MappingProxyType(
+    {
+        "gpt-batch-only": {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "supports_native_streaming": False,
+        },
+        "gpt-streams": {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+        },
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "stream", "expected"),
+    [
+        pytest.param("openai/gpt-streams", True, None, id="native_stream"),
+        pytest.param(
+            "openai/gpt-batch-only", True, "native Responses does not implement faked streams", id="faked_stream"
+        ),
+        pytest.param("openai/gpt-batch-only", False, None, id="faked_stream_model_without_stream"),
+    ],
+)
+def test_streams_python_fakes_stay_on_python(
+    monkeypatch: pytest.MonkeyPatch, model: str, stream: bool, expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", dict(_STREAMING_MODEL_COST))
+    assert decline_reason({"model": model, "input": "hi", "api_key": "sk-test", "stream": stream}) == expected
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected"), [(True, "native Responses streaming does not implement caching"), (False, None)]
+)
+def test_cached_streams_stay_on_python(monkeypatch: pytest.MonkeyPatch, stream: bool, expected: str | None) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache())
+    assert decline_reason({"model": "gpt-4.1", "input": "hi", "api_key": "sk-test", "stream": stream}) == expected
