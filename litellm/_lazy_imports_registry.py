@@ -31,6 +31,7 @@ UTILS_NAMES: Final = (
     "create_tokenizer",
     "supports_function_calling",
     "supports_web_search",
+    "supports_tool_search",
     "supports_url_context",
     "supports_response_schema",
     "supports_parallel_function_calling",
@@ -477,6 +478,7 @@ _UTILS_IMPORT_MAP: Final = {
     "create_tokenizer": (".utils", "create_tokenizer"),
     "supports_function_calling": (".utils", "supports_function_calling"),
     "supports_web_search": (".utils", "supports_web_search"),
+    "supports_tool_search": (".utils", "supports_tool_search"),
     "supports_url_context": (".utils", "supports_url_context"),
     "supports_response_schema": (".utils", "supports_response_schema"),
     "supports_parallel_function_calling": (

@@ -1611,6 +1611,19 @@ def test_defer_loading_preserved_in_transformation():
     assert mcp_server is None
 
 
+def test_defer_loading_rejects_non_boolean_values():
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": "true",
+    }
+
+    with pytest.raises(ValueError, match="defer_loading must be a boolean"):
+        config.map_tool_helper(tool)
+
+
 def test_tool_search_complete_response_parsing():
     """Test parsing a complete tool search response with server_tool_use and tool_search_tool_result blocks"""
     config = AnthropicConfig()
