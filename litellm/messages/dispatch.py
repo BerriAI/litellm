@@ -21,6 +21,7 @@ from litellm.rust_bridge.public_call import (
     bind,
     native_call,
     native_call_hook,
+    optional_mapping,
     optional_sequence,
     optional_str,
     signature,
@@ -93,9 +94,9 @@ def _intercepted(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools"))
     if not tools:
         return False
-    tool_dicts: Final[list[dict[str, object]]] = [tool for tool in tools if isinstance(tool, dict)]
+    mappings: Final = tuple(mapping for mapping in map(optional_mapping, tools) if mapping is not None)
     provider: Final = _resolved(request)[1]
-    return any(interceptor.can_handle(tool_dicts, provider) for interceptor in get_messages_interceptors())
+    return any(interceptor.can_handle(mappings, provider) for interceptor in get_messages_interceptors())
 
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
