@@ -388,14 +388,10 @@ class OllamaChatConfig(BaseConfig):
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
-        setattr(
-            model_response,
-            "usage",
-            litellm.Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
+        model_response.usage = litellm.Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
         )
         return model_response
 
@@ -481,7 +477,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
-                        if is_function_call_complete:
+                        if is_function_call_complete and not tool_call.get("id"):
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT

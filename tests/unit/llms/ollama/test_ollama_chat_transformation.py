@@ -7,9 +7,7 @@ from typing import Final, cast
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.ollama.chat.transformation import (
     OllamaChatConfig,
@@ -47,9 +45,9 @@ class TestOllamaChatConfigResponseFormat:
         expected_schema_structure = TestEvent.model_json_schema()
         transformed_format.pop("additionalProperties")
 
-        assert (
-            transformed_format == expected_schema_structure
-        ), f"Transformed schema does not match expected. Got: {transformed_format}, Expected: {expected_schema_structure}"
+        assert transformed_format == expected_schema_structure, (
+            f"Transformed schema does not match expected. Got: {transformed_format}, Expected: {expected_schema_structure}"
+        )
 
     def test_map_openai_params_with_dict_json_schema(self):
         config = OllamaChatConfig()
@@ -69,9 +67,9 @@ class TestOllamaChatConfigResponseFormat:
         )
 
         assert "format" in optional_params
-        assert (
-            optional_params["format"] == direct_schema
-        ), f"Schema from dict did not pass through correctly. Got: {optional_params['format']}, Expected: {direct_schema}"
+        assert optional_params["format"] == direct_schema, (
+            f"Schema from dict did not pass through correctly. Got: {optional_params['format']}, Expected: {direct_schema}"
+        )
 
     def test_map_openai_params_with_json_object(self):
         optional_params = get_optional_params(
@@ -81,9 +79,9 @@ class TestOllamaChatConfigResponseFormat:
         )
 
         assert "format" in optional_params
-        assert (
-            optional_params["format"] == "json"
-        ), f"Expected 'json' for type 'json_object', got: {optional_params['format']}"
+        assert optional_params["format"] == "json", (
+            f"Expected 'json' for type 'json_object', got: {optional_params['format']}"
+        )
 
     def test_transform_request_loads_config_parameters(self):
         """Test that transform_request loads config parameters without overriding existing optional_params"""
@@ -151,9 +149,7 @@ class TestOllamaChatConfigResponseFormat:
         config = OllamaChatConfig()
 
         # Test message with content as string
-        messages = cast(
-            list[AllMessageValues], [{"role": "user", "content": "Hello world!"}]
-        )
+        messages = cast(list[AllMessageValues], [{"role": "user", "content": "Hello world!"}])
 
         result = config.transform_request(
             model="llama2",
@@ -202,9 +198,7 @@ class TestOllamaChatConfigResponseFormat:
                         {"type": "text", "text": "What's in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."},
                         },
                     ],
                 }
@@ -244,9 +238,7 @@ class TestOllamaChatConfigResponseFormat:
                         {"type": "text", "text": "Compare these images:"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,image1data..."
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64,image1data..."},
                         },
                         {"type": "text", "text": " and "},
                         {
@@ -371,9 +363,7 @@ class TestOllamaToolCalling:
         assert optional_params["tools"] == tools
         # Should NOT trigger the broken fallback
         assert "functions_unsupported_model" not in optional_params
-        assert (
-            "format" not in optional_params or optional_params.get("format") != "json"
-        )
+        assert "format" not in optional_params or optional_params.get("format") != "json"
 
     def test_finish_reason_tool_calls_non_streaming(self):
         """Test that finish_reason is set to 'tool_calls' when tool_calls present.
@@ -529,9 +519,9 @@ class TestOllamaFinishReasonLength:
             json_mode=False,
         )
 
-        assert (
-            result.choices[0].finish_reason == "length"
-        ), f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        assert result.choices[0].finish_reason == "length", (
+            f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        )
 
     def test_finish_reason_stop_non_streaming(self):
         """Non-streaming: done_reason='stop' (natural finish) must stay 'stop'."""
@@ -570,9 +560,9 @@ class TestOllamaFinishReasonLength:
             json_mode=False,
         )
 
-        assert (
-            result.choices[0].finish_reason == "stop"
-        ), f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        assert result.choices[0].finish_reason == "stop", (
+            f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        )
 
     def test_finish_reason_length_streaming(self):
         """Streaming: done_reason='length' in final chunk must produce finish_reason='length'."""
@@ -593,9 +583,9 @@ class TestOllamaFinishReasonLength:
 
         result = iterator.chunk_parser(done_chunk)
 
-        assert (
-            result.choices[0].finish_reason == "length"
-        ), f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        assert result.choices[0].finish_reason == "length", (
+            f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        )
 
     def test_finish_reason_stop_streaming(self):
         """Streaming: done_reason='stop' in final chunk must produce finish_reason='stop'."""
@@ -613,9 +603,9 @@ class TestOllamaFinishReasonLength:
 
         result = iterator.chunk_parser(done_chunk)
 
-        assert (
-            result.choices[0].finish_reason == "stop"
-        ), f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        assert result.choices[0].finish_reason == "stop", (
+            f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        )
 
     def test_finish_reason_tool_calls_streamed_before_done_chunk(self):
         """Streaming: tool_calls arriving mid-stream (not on the done chunk) must
@@ -636,9 +626,7 @@ class TestOllamaFinishReasonLength:
             "message": {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"function": {"name": "get_weather", "arguments": {"city": "San Francisco"}}}
-                ],
+                "tool_calls": [{"function": {"name": "get_weather", "arguments": {"city": "San Francisco"}}}],
             },
             "done": False,
         }
@@ -653,9 +641,9 @@ class TestOllamaFinishReasonLength:
         assert tool_result.choices[0].delta.tool_calls is not None
 
         done_result = iterator.chunk_parser(done_chunk)
-        assert (
-            done_result.choices[0].finish_reason == "tool_calls"
-        ), f"Expected 'tool_calls' when tool_calls were streamed earlier, got '{done_result.choices[0].finish_reason}'"
+        assert done_result.choices[0].finish_reason == "tool_calls", (
+            f"Expected 'tool_calls' when tool_calls were streamed earlier, got '{done_result.choices[0].finish_reason}'"
+        )
 
 
 class TestOllamaReasoningContentStreaming:
@@ -700,7 +688,7 @@ class TestOllamaReasoningContentStreaming:
 
         # Verify none of them are None
         for i, rc in enumerate(reasoning_contents):
-            assert rc is not None, f"Chunk {i+1} reasoning_content should not be None"
+            assert rc is not None, f"Chunk {i + 1} reasoning_content should not be None"
 
     def test_thinking_to_content_transition(self):
         """
@@ -718,9 +706,7 @@ class TestOllamaReasoningContentStreaming:
             "done": False,
         }
         result1 = iterator.chunk_parser(thinking_chunk)
-        assert (
-            result1.choices[0].delta.reasoning_content == "Let me think about this..."
-        )
+        assert result1.choices[0].delta.reasoning_content == "Let me think about this..."
         assert result1.choices[0].delta.content is None
 
         # Then: regular content chunk
@@ -947,6 +933,68 @@ class TestOllamaToolCallTransformation:
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
 
+    def test_streaming_preserves_existing_tool_call_id(self):
+        """Streaming: if a tool_call in a chunk already has an id, OllamaChatCompletionResponseIterator
+        must preserve that id instead of generating a new uuid.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_chunk = {
+            "model": "qwen3:8b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_pre_existing_id_123",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "San Francisco"},
+                        },
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(tool_chunk)
+        assert result.choices[0].delta.tool_calls is not None
+        assert result.choices[0].delta.tool_calls[0]["id"] == "call_pre_existing_id_123"
+
+    def test_streaming_generates_id_when_missing(self):
+        """Streaming: if a tool_call in a chunk lacks an id, OllamaChatCompletionResponseIterator
+        generates an id when function arguments are complete.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_chunk = {
+            "model": "qwen3:8b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "San Francisco"},
+                        },
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(tool_chunk)
+        assert result.choices[0].delta.tool_calls is not None
+        assert "id" in result.choices[0].delta.tool_calls[0]
+        assert result.choices[0].delta.tool_calls[0]["id"] is not None
+
 
 class TestOllamaStreamingUsage:
     @staticmethod
@@ -1009,9 +1057,7 @@ def test_get_ollama_params():
         }
         print("Converted params", converted_params)
         for key in expected_params.keys():
-            assert (
-                expected_params[key] == converted_params[key]
-            ), f"{converted_params} != {expected_params}"
+            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1052,9 +1098,7 @@ mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-tex
 def test_ollama_embeddings(mock_embeddings):
     # assert that ollama_embeddings is called with the right parameters
     try:
-        embeddings = litellm.embedding(
-            model="ollama/nomic-embed-text", input=["hello world"]
-        )
+        embeddings = litellm.embedding(model="ollama/nomic-embed-text", input=["hello world"])
         print(embeddings)
         mock_embeddings.assert_called_once_with(
             api_base="http://localhost:11434",
@@ -1076,9 +1120,7 @@ def test_ollama_embeddings(mock_embeddings):
 def test_ollama_aembeddings(mock_aembeddings):
     # assert that ollama_aembeddings is called with the right parameters
     try:
-        embeddings = asyncio.run(
-            litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"])
-        )
+        embeddings = asyncio.run(litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"]))
         print(embeddings)
         mock_aembeddings.assert_called_once_with(
             api_base="http://localhost:11434",
