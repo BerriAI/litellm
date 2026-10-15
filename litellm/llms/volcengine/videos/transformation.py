@@ -339,13 +339,12 @@ def _size_from_geometry(resolution: str | None, ratio: str | None, model: str | 
 
 
 def _content_items(prompt: str, params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    """A caller-supplied ``content`` array wins, since its roles are the only way to express reference-to-video. The
-    prompt is prepended unless the array already has a text item."""
+    """A caller-supplied ``content`` array wins over ``input_reference``, since its roles are the only way to express
+    reference-to-video. The prompt always leads, as it is the only text the input guardrails scan."""
     supplied: Final = params.get("content")
     text_item: Final = MappingProxyType({"type": "text", "text": prompt})
     if supplied is not None:
-        items: Final = _CONTENT_ITEMS_ADAPTER.validate_python(supplied)
-        return items if any(item.get("type") == "text" for item in items) else (text_item, *items)
+        return (text_item, *_CONTENT_ITEMS_ADAPTER.validate_python(supplied))
     reference: Final = params.get("input_reference")
     if reference is None:
         return (text_item,)
@@ -542,6 +541,12 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             content: Final = _content_items(prompt, params)
         except ValidationError:
             raise _unsupported(model, "content must be an array of Ark content items") from None
+        if any(item.get("type") == "text" for item in content[1:]):
+            raise _unsupported(
+                model,
+                "A text item in content is not supported, put the text in prompt: it is the only text input "
+                "guardrails scan before the request reaches Ark.",
+            )
         if _has_input_video(content):
             raise _unsupported(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
         if params.get("frames") is not None:

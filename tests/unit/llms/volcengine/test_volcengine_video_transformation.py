@@ -122,27 +122,28 @@ def test_a_url_input_reference_is_passed_as_is_and_never_opened_as_a_path():
     ]
 
 
-@pytest.mark.parametrize(
-    "content,expected",
-    [
-        (
-            [{"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"}],
-            [
-                {"type": "text", "text": "a cat on a roof"},
-                {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"},
-            ],
-        ),
-        (
-            [{"type": "text", "text": "own prompt"}, {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}}],
-            [{"type": "text", "text": "own prompt"}, {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}}],
-        ),
-    ],
-    ids=["prompt-prepended", "own-text-item-kept"],
-)
-def test_a_caller_content_array_wins_over_input_reference(content: list[object], expected: list[object]):
-    body = _create_body({"content": content, "input_reference": "https://x/ignored.png", "duration": 4})
+def test_a_caller_content_array_wins_over_input_reference_and_the_prompt_leads():
+    body = _create_body(
+        {
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"}],
+            "input_reference": "https://x/ignored.png",
+            "duration": 4,
+        }
+    )
 
-    assert body["content"] == expected
+    assert body["content"] == [
+        {"type": "text", "text": "a cat on a roof"},
+        {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"},
+    ]
+
+
+@pytest.mark.parametrize("drop_params", [None, True])
+def test_a_text_item_in_content_is_rejected_because_input_guardrails_only_scan_the_prompt(drop_params: bool | None):
+    with pytest.raises(UnsupportedParamsError, match="put the text in prompt"):
+        _ = _create_body(
+            {"content": [{"type": "text", "text": "text the guardrail never saw"}], "duration": 4},
+            drop_params=drop_params,
+        )
 
 
 @pytest.mark.parametrize(
