@@ -25,6 +25,15 @@ def accepts_gzip(accept_encoding: str) -> bool:
     return weights.get("gzip", weights.get("x-gzip", weights.get("*", 0.0))) > 0
 
 
+def _start_is_streaming(start: Message) -> bool:
+    return any(
+        name.lower() == b"content-type" and b"text/event-stream" in value.lower()
+        for name, value in start.get("headers", [])
+    ) or not any(
+        name.lower() == b"content-length" for name, _ in start.get("headers", [])
+    )
+
+
 async def _compress(body: bytes) -> bytes:
     if len(body) < OFF_LOOP_SIZE_BYTES:
         return gzip.compress(body, compresslevel=COMPRESS_LEVEL)
@@ -45,6 +54,10 @@ class _BufferedBodyGzipResponder:
             await self.send(message)
             return
         if message["type"] == "http.response.start":
+            if _start_is_streaming(message):
+                self.decided = True
+                await self.send(message)
+                return
             self.held_start = message
             return
         self.decided = True

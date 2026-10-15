@@ -1,5 +1,7 @@
 import asyncio
 import gzip
+import time
+import anyio
 import json
 import threading
 from typing import Final
@@ -259,3 +261,31 @@ def test_proxy_app_gzips_large_responses_for_clients_that_accept_it():
     assert compressed.headers["content-encoding"] == "gzip"
     assert int(compressed.headers["content-length"]) < int(identity.headers["content-length"])
     assert compressed.json() == identity.json()
+
+
+@pytest.mark.asyncio
+async def test_stream_response_start_is_sent_before_the_first_body_chunk():
+    started_at: float | None = None
+    sent_at: list[float] = []
+
+    async def delayed_stream(scope: Scope, receive: Receive, send: Send) -> None:
+        nonlocal started_at
+        started_at = time.monotonic()
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
+        await anyio.sleep(0.5)
+        await send({"type": "http.response.body", "body": b": ping\n\n", "more_body": True})
+
+    async def record_send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            sent_at.append(time.monotonic())
+
+    scope = {"type": "http", "method": "GET", "path": "/stream", "query_string": b"", "headers": []}
+    requests: Final = iter(({"type": "http.request", "body": b"", "more_body": False},))
+
+    async def receive() -> Message:
+        return next(requests, {"type": "http.disconnect"})
+
+    await GZipBufferedResponseMiddleware(delayed_stream)(scope, receive, record_send)
+
+    assert sent_at
+    assert sent_at[0] - started_at < 0.1
