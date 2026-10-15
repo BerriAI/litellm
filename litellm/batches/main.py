@@ -127,7 +127,7 @@ async def acreate_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -191,9 +191,9 @@ def create_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Creates and executes a batch from an uploaded file of request
 
@@ -246,7 +246,7 @@ def create_batch(
             extra_body=extra_body,
         )
         if output_expires_after is not None:
-            _create_batch_request["output_expires_after"] = cast(FileExpiresAfter, output_expires_after)
+            _create_batch_request["output_expires_after"] = output_expires_after
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
@@ -570,7 +570,7 @@ def retrieve_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Retrieves a batch.
 
@@ -944,7 +944,7 @@ def cancel_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Cancels a batch.
 

@@ -48,6 +48,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
@@ -111,6 +112,7 @@ _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -415,7 +417,7 @@ def _sanitized_anthropic_error(response: httpx.Response, detail: str | None = No
     if detail is not None:
         return f"HTTP {response.status_code}: {detail}"
     try:
-        body: Final = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         return f"HTTP {response.status_code}"
     error: Final = body.get("error") if isinstance(body, dict) else None
@@ -1700,7 +1702,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
-    data: dict[str, Any],
+    data: dict[str, object],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
@@ -1931,8 +1933,15 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
 def tool_call_is_rebuilt_as_server_tool_use(
     tool_call_id: object, provider_specific_fields: object, answered_tool_ids: Container[str] = frozenset()
 ) -> bool:
+    if (
+        not isinstance(tool_call_id, str)
+        or not tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        or tool_call_id in answered_tool_ids
+        or provider_specific_fields is None
+    ):
+        return False
     fields: Final = validated_object_mapping(provider_specific_fields)
-    if not isinstance(tool_call_id, str) or tool_call_id in answered_tool_ids or fields is None:
+    if fields is None:
         return False
     return (
         find_anthropic_server_tool_result(

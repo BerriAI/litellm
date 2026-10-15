@@ -78,14 +78,14 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
-        config_attrs: Final[Mapping[str, object]] = cls.__dict__
+        config_attrs: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
             for k, v in config_attrs.items()
@@ -171,7 +171,7 @@ class OpenAIConfig(BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -920,7 +920,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             error_body: Final = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
@@ -1043,7 +1043,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
                 # e.message
             except Exception as e:
-                exception_response = getattr(e, "response", None)
+                exception_response: object = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
                 exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
@@ -1203,7 +1203,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
-                error_response = getattr(e, "response", None)
+                error_response: object = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
@@ -1350,7 +1350,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -1440,7 +1440,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)

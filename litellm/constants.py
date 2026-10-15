@@ -17,7 +17,7 @@ OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
-RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
@@ -106,6 +106,7 @@ DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIV
 S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+MAX_S3_OBJECT_KEY_FILENAME_BYTES: Final = 255
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
@@ -844,6 +845,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
         "chatgpt",
     }
 )
+
+A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",

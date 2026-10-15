@@ -833,10 +833,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 key_remaining_tpm_limit = user_api_key_dict.tpm_limit - current["current_tpm"]
                 key_tpm_limit = user_api_key_dict.tpm_limit
 
-        if hasattr(response, "_hidden_params"):
-            _hidden_params = getattr(response, "_hidden_params")
-        else:
-            _hidden_params = None
+        _hidden_params = getattr(response, "_hidden_params", None)
         if _hidden_params is not None and (isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)):
             if isinstance(_hidden_params, BaseModel):
                 _hidden_params = _hidden_params.model_dump()

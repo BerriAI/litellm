@@ -285,7 +285,7 @@ async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: dict[str, Any] | None = None,
+    session: dict[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
