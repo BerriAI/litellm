@@ -10320,10 +10320,9 @@ class Router:
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
 
-        warn_on_provider_credential_mismatch(
-            model_name=deployment.model_name,
-            litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
-        )
+        declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
+        warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
+        warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)

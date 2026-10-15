@@ -16,7 +16,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
-from litellm.types.utils import LlmProviders, is_model_capability_field
+from litellm.types.utils import LlmProviders, all_litellm_params, is_model_capability_field
 
 _V = TypeVar("_V")
 
@@ -400,7 +400,9 @@ def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | Non
 
 def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
     flags: Final = sorted(
-        key for key, value in litellm_params.items() if value is not None and is_model_capability_field(key)
+        key
+        for key, value in litellm_params.items()
+        if value is not None and is_model_capability_field(key) and key not in all_litellm_params
     )
     if not flags:
         return None
