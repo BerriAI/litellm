@@ -1371,7 +1371,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
         patch_kwargs: Final = dict[str, object](request_patch.kwargs)
-        response: AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: (
+            AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]
+        ) = await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,

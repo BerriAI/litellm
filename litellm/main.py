@@ -6194,7 +6194,9 @@ async def aresponses_with_retries(*args, **kwargs):
 
 ### EMBEDDING ENDPOINTS ####################
 @client
-async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # kwargs-ok: forwards the embedding keyword contract unchanged
+async def aembedding(
+    *args: object, **kwargs: object
+) -> EmbeddingResponse:  # kwargs-ok: forwards the embedding keyword contract unchanged
     """
     Asynchronously calls the `embedding` function with the given arguments and keyword arguments.
 

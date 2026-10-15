@@ -1329,7 +1329,9 @@ class Router:
         self.content_policy_fallbacks = _content_policy_fallbacks
         self.total_calls: defaultdict[object, int] = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict[object, int] = defaultdict(int)  # dict to store fail_calls made to each model
-        self.success_calls: defaultdict[object, int] = defaultdict(int)  # dict to store success_calls  made to each model
+        self.success_calls: defaultdict[object, int] = defaultdict(
+            int
+        )  # dict to store success_calls  made to each model
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -8197,9 +8199,9 @@ class Router:
                 # kwargs.get("model") at this point is the deployment model, not the model_group
                 _kwargs_model: Final[object] = kwargs.get("model")
                 _model_group_for_retry_policy: Final[str | None] = (
-                    model_group if isinstance(model_group, str) else None
-                ) or (_metadata_model_group if isinstance(_metadata_model_group, str) else None) or (
-                    _kwargs_model if isinstance(_kwargs_model, str) else None
+                    (model_group if isinstance(model_group, str) else None)
+                    or (_metadata_model_group if isinstance(_metadata_model_group, str) else None)
+                    or (_kwargs_model if isinstance(_kwargs_model, str) else None)
                 )
                 # Use per-request model_group_retry_policy if provided, otherwise use self
                 _retry_policy_retries: Final = _get_num_retries_from_retry_policy(
@@ -10556,7 +10558,9 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict[str, object]] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        model_info: Final[dict[str, object]] = deployment.model_info.model_dump(
+            exclude_none=True
+        )  # mutable-ok: built in place
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:

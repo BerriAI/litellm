@@ -90,7 +90,9 @@ async def anthropic_messages_with_mcp(
     )
 
     mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
-    anthropic_messages_fn: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.anthropic_messages)
+    anthropic_messages_fn: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(
+        litellm.anthropic_messages
+    )
 
     if not mcp_references:
         return await _AnthropicMessagesCall(fn=anthropic_messages_fn).fn(
