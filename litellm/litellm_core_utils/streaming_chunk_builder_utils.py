@@ -1,9 +1,10 @@
 import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import groupby
+from dataclasses import dataclass, replace
+from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
 
 from pydantic import BaseModel
 from typing_extensions import ReadOnly, Required
@@ -152,6 +153,15 @@ class _ToolCallChoice(TypedDict, total=False):
 
 
 _ToolCallKey: TypeAlias = tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallAccumulator:
+    id: str | None = None
+    name: str | None = None
+    type: str | None = None
+    custom_name: str | None = None
+    provider_specific_fields: Mapping[str, object] | None = None
 
 
 class _ToolCallChunk(TypedDict):
@@ -503,7 +513,7 @@ class ChunkProcessor:
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
     ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
         tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
-        tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
+        tool_call_map: Final[dict[_ToolCallKey, _ToolCallAccumulator]] = {}
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -537,49 +547,43 @@ class ChunkProcessor:
                         index = (choice_index, getattr(tool_call, "index", 0))
 
                     if index not in tool_call_map:
-                        tool_call_map[index] = {
-                            "id": None,
-                            "name": None,
-                            "type": None,
-                            "custom_name": None,
-                            "provider_specific_fields": None,
-                        }
+                        tool_call_map[index] = _ToolCallAccumulator()
 
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
                         if fragment_id := tool_call.get("id"):
-                            tool_call_map[index]["id"] = fragment_id
+                            tool_call_map[index] = replace(tool_call_map[index], id=fragment_id)
                         if fragment_type := tool_call.get("type"):
-                            tool_call_map[index]["type"] = fragment_type
+                            tool_call_map[index] = replace(tool_call_map[index], type=fragment_type)
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
                             if fragment_name := function.get("name"):
-                                tool_call_map[index]["name"] = fragment_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=fragment_name)
                         else:
                             # function is an object
                             if function_name := getattr(function, "name", None):
-                                tool_call_map[index]["name"] = function_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=function_name)
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom_name := custom.get("name"):
-                                tool_call_map[index]["custom_name"] = custom_name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=custom_name)
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
-                            tool_call_map[index]["id"] = tool_call.id
+                            tool_call_map[index] = replace(tool_call_map[index], id=tool_call.id)
                         if hasattr(tool_call, "type") and tool_call.type:
-                            tool_call_map[index]["type"] = tool_call.type
+                            tool_call_map[index] = replace(tool_call_map[index], type=tool_call.type)
                         if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
-                            tool_call_map[index]["name"] = object_function_name
+                            tool_call_map[index] = replace(tool_call_map[index], name=object_function_name)
 
                         object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
                             tool_call, "custom", None
                         )
                         if object_custom is not None:
                             if getattr(object_custom, "name", None):
-                                tool_call_map[index]["custom_name"] = object_custom.name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=object_custom.name)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields: object = None
@@ -602,12 +606,14 @@ class ChunkProcessor:
 
                     if provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
-                        merged_provider_fields = tool_call_map[index]["provider_specific_fields"]
-                        if merged_provider_fields is None:
-                            merged_provider_fields = {}
-                            tool_call_map[index]["provider_specific_fields"] = merged_provider_fields
-                        if isinstance(provider_fields, dict):
-                            merged_provider_fields.update(provider_fields)
+                        tool_call_map[index] = replace(
+                            tool_call_map[index],
+                            provider_specific_fields=(
+                                {**(tool_call_map[index].provider_specific_fields or {}), **provider_fields}
+                                if isinstance(provider_fields, dict)
+                                else dict(tool_call_map[index].provider_specific_fields or {})
+                            ),
+                        )
 
         joined_fragments: Final = self._join_fragments_by_key_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)
@@ -616,37 +622,37 @@ class ChunkProcessor:
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
-            if tool_call_data["id"] and tool_call_data["custom_name"]:
+            if tool_call_data.id and tool_call_data.custom_name:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
-                        id=tool_call_data["id"],
+                        id=tool_call_data.id,
                         custom=ChatCompletionCustomToolCallPayload(
-                            name=tool_call_data["custom_name"],
+                            name=tool_call_data.custom_name,
                             input=joined_fragments.get((index, "custom_input"), ""),
                         ),
                     )
                 )
-            elif tool_call_data["id"] and tool_call_data["name"]:
+            elif tool_call_data.id and tool_call_data.name:
                 combined_arguments = joined_fragments.get((index, "arguments"), "") or "{}"
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
-                    name=tool_call_data["name"],
+                    name=tool_call_data.name,
                 )
 
                 # Prepare params for ChatCompletionMessageToolCall
-                tool_call_params = {
-                    "id": tool_call_data["id"],
-                    "function": function,
-                    "type": tool_call_data["type"] or "function",
-                }
-
                 # Add provider_specific_fields if present (for thought signatures in Gemini 3)
-                if tool_call_data.get("provider_specific_fields"):
-                    tool_call_params["provider_specific_fields"] = tool_call_data["provider_specific_fields"]
-
-                tool_call = ChatCompletionMessageToolCall(**tool_call_params)
+                tool_call = ChatCompletionMessageToolCall(
+                    id=tool_call_data.id,
+                    function=function,
+                    type=tool_call_data.type or "function",
+                    **(
+                        {"provider_specific_fields": dict(tool_call_data.provider_specific_fields)}
+                        if tool_call_data.provider_specific_fields
+                        else {}
+                    ),
+                )
                 tool_calls_list.append(tool_call)
 
         return tool_calls_list
@@ -1300,12 +1306,16 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
         return None
 
 
+def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> None:
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
     if response_cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
-    hidden_params["response_cost"] = response_cost
+    _set_hidden_response_cost(response, response_cost)
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
@@ -1314,14 +1324,35 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
-        setattr(usage, "cost", computed_cost)
+    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+        return
+    setattr(usage, "cost", computed_cost)
+    _set_hidden_response_cost(response, float(computed_cost))
+
+
+def _field_of(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
+def _delta_reasoning_items(delta: object) -> Sequence[object]:
+    items: Final = _field_of(delta, "reasoning_items")
+    return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    choices: Final = _field_of(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
     "reasoning_content",
+    "reasoning_items",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1497,6 +1528,11 @@ def stream_chunk_builder(
             response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
                 reasoning_chunks
             )
+
+        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+        if reasoning_items:
+            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 
         annotation_chunks: Final = [
             chunk

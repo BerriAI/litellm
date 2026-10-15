@@ -2,6 +2,7 @@
 
 import asyncio
 import contextvars
+import threading
 import time
 from base64 import b64encode
 from collections.abc import Mapping
@@ -36,6 +37,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
     is_otel_v2_enabled,
+    parse_excluded_services,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.payloads import (
@@ -579,6 +581,101 @@ class TestFanOut:
             "batch_write_to_db _PROXY_track_cost_callback",
             "chat gpt-4",
         }
+
+    def test_team_exclusions_replace_empty_global_and_operator_keeps_all_database_spans(self):
+        team, inherited, operator = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
+        exporters: Final = {"http://team.local": team, "http://inherited.local": inherited}
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(exporters[destination.endpoint])
+            )
+        )
+        tracer: Final = get_tracer(provider, "litellm")
+
+        def run():
+            set_request_destinations(
+                (
+                    OtelDestination(
+                        endpoint="http://team.local", excluded_db_systems=frozenset({"redis", "postgresql"})
+                    ),
+                    OtelDestination(endpoint="http://inherited.local"),
+                )
+            )
+            with tracer.start_as_current_span("redis read") as span:
+                span.set_attribute("db.system.name", "redis")
+            with tracer.start_as_current_span("postgres write") as span:
+                span.set_attribute("db.system", "postgresql")
+            with tracer.start_as_current_span("chat gpt-4"):
+                pass
+
+        in_fresh_context(run)
+
+        assert {span.name for span in team.get_finished_spans()} == {"chat gpt-4"}
+        assert {span.name for span in inherited.get_finished_spans()} == {
+            "redis read",
+            "postgres write",
+            "chat gpt-4",
+        }
+        assert {span.name for span in operator.get_finished_spans()} == {
+            "redis read",
+            "postgres write",
+            "chat gpt-4",
+        }
+
+    def test_none_and_partial_team_exclusions_replace_the_global_set(self):
+        none, redis_only, inherited, operator = (InMemorySpanExporter() for _ in range(4))
+        exporters: Final = {
+            "http://none.local": none,
+            "http://redis.local": redis_only,
+            "http://inherited.local": inherited,
+        }
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(exporters[destination.endpoint]),
+                excluded_db_systems=frozenset({"redis", "postgresql"}),
+            )
+        )
+        tracer: Final = get_tracer(provider, "litellm")
+
+        def run():
+            set_request_destinations(
+                (
+                    OtelDestination(endpoint="http://none.local", excluded_db_systems=frozenset()),
+                    OtelDestination(endpoint="http://redis.local", excluded_db_systems=frozenset({"redis"})),
+                    OtelDestination(endpoint="http://inherited.local"),
+                )
+            )
+            with tracer.start_as_current_span("redis read") as span:
+                span.set_attribute("db.system.name", "redis")
+            with tracer.start_as_current_span("postgres write") as span:
+                span.set_attribute("db.system", "postgresql")
+            with tracer.start_as_current_span("chat gpt-4"):
+                pass
+
+        in_fresh_context(run)
+
+        assert {span.name for span in none.get_finished_spans()} == {
+            "redis read",
+            "postgres write",
+            "chat gpt-4",
+        }
+        assert {span.name for span in redis_only.get_finished_spans()} == {"postgres write", "chat gpt-4"}
+        assert {span.name for span in inherited.get_finished_spans()} == {"chat gpt-4"}
+        assert {span.name for span in operator.get_finished_spans()} == {
+            "redis read",
+            "postgres write",
+            "chat gpt-4",
+        }
+
+    def test_excluded_system_policy_does_not_change_exporter_cache_identity(self):
+        inherited: Final = OtelDestination(endpoint="http://same.local")
+        overridden: Final = OtelDestination(endpoint="http://same.local", excluded_db_systems=frozenset())
+
+        assert inherited.cache_key() == overridden.cache_key()
 
     def test_a_team_naming_two_backends_gets_the_trace_at_both(self):
         """The fan-out rides one provider, so it cannot skip a destination on the
@@ -3400,9 +3497,11 @@ class TestEvictionSafety:
         def __init__(self):
             super().__init__(InMemorySpanExporter())
             self.shutdown_calls = 0
+            self.closed = threading.Event()
 
         def shutdown(self):
             self.shutdown_calls += 1
+            self.closed.set()
 
     def _fan_out(self):
         built = []
@@ -3444,7 +3543,7 @@ class TestEvictionSafety:
         assert id(held) in fan_out._retired
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 
@@ -3458,7 +3557,7 @@ class TestEvictionSafety:
             fan_out._release(fan_out._acquire(self._dest(index)))
         fan_out._release(fan_out._acquire(self._dest(0)))
         fan_out._release(fan_out._acquire(self._dest(_MAX_CACHED_DESTINATION_PROCESSORS)))
-        self._settle(fan_out, built[1])
+        assert built[1].closed.wait(timeout=5)
 
         assert built[1].shutdown_calls == 1
         assert built[0].shutdown_calls == 0, "the destination used most recently was the one shed"
@@ -3470,7 +3569,7 @@ class TestEvictionSafety:
         for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
             fan_out._acquire(self._dest(index))
             fan_out._release(built[-1])
-        self._settle(fan_out, built[0])
+        assert built[0].closed.wait(timeout=5)
 
         assert built[0].shutdown_calls == 1
         assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
@@ -3481,9 +3580,11 @@ class TestEvictionSafety:
         every other tenant's spans."""
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
+        release = threading.Event()
+
         class Slow(self.Recording):
             def shutdown(self):
-                time.sleep(3)
+                release.wait(timeout=10)
                 super().shutdown()
 
         built = []
@@ -3493,12 +3594,14 @@ class TestEvictionSafety:
             return built[-1]
 
         fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
-        started = time.monotonic()
-        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
-            fan_out._acquire(self._dest(index))
-            fan_out._release(built[-1])
+        try:
+            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
+                fan_out._acquire(self._dest(index))
+                fan_out._release(built[-1])
 
-        assert time.monotonic() - started < 2
+            assert not built[0].closed.is_set(), "the shed processor was closed inline on the export path"
+        finally:
+            release.set()
 
     def test_shedding_many_processors_does_not_spawn_a_thread_each(self):
         """A tenant that cycles its destination config sheds a processor per request,
@@ -3874,11 +3977,7 @@ class TestEvictionSafety:
         fan_out.shutdown()
         fan_out._drain.submit(stray)
 
-        for _ in range(500):
-            if stray.shutdown_calls:
-                break
-            time.sleep(0.02)
-
+        assert stray.closed.wait(timeout=5)
         assert stray.shutdown_calls == 1
 
     def test_releasing_a_straggler_after_shutdown_does_not_block_the_span_thread(self):
@@ -3940,7 +4039,7 @@ class TestEvictionSafety:
         assert held.shutdown_calls == 0
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 
@@ -4057,10 +4156,7 @@ class TestEvictionSafety:
         close_returned.set()
         submitter.join(timeout=5)
         closer.join(timeout=5)
-        for _ in range(250):
-            if submitted.shutdown_calls:
-                break
-            time.sleep(0.02)
+        assert submitted.closed.wait(timeout=5), "a processor was queued behind the sentinels and never closed"
 
         assert submitted.shutdown_calls == 1, "a processor was queued behind the sentinels and never closed"
 
@@ -4079,7 +4175,7 @@ class TestEvictionSafety:
         assert held.shutdown_calls == 0
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 
@@ -4728,6 +4824,83 @@ class TestCaptureMessageContent:
         assert destinations["arize"].capture_message_content is None, "the setting stays on its own callback"
 
     @pytest.mark.usefixtures("allow_test_hosts")
+    @pytest.mark.parametrize(
+        ("setting", "expected"),
+        [
+            ("redis,postgres", frozenset({"redis", "postgresql"})),
+            ("none", frozenset()),
+            (None, None),
+        ],
+    )
+    def test_excluded_services_stays_on_its_destination_and_normalizes_aliases(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str | None, expected: frozenset[str] | None
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        callback_vars: Final = {
+            "langfuse_public_key": "pk-team",
+            "langfuse_secret_key": "sk-team",
+            "langfuse_host": "http://team.local",
+            **({"excluded_services": setting} if setting is not None else {}),
+        }
+        auth: Final = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": callback_vars},
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_api_key": "k", "arize_space_id": "s"},
+                    },
+                ]
+            }
+        )
+
+        destinations: Final = {d.callback_name: d for d in resolve_tenant_otel_destinations(auth)}
+
+        assert destinations["langfuse_otel"].excluded_db_systems == expected
+        assert destinations["arize"].excluded_db_systems is None
+
+    @pytest.mark.usefixtures("allow_test_hosts")
+    def test_key_excluded_services_is_parsed_onto_its_destination(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-key",
+                            "langfuse_secret_key": "sk-key",
+                            "langfuse_host": "http://key.local",
+                            "excluded_services": "redis,postgres",
+                        },
+                    }
+                ]
+            }
+        )
+
+        (destination,) = resolve_tenant_otel_destinations(auth)
+
+        assert destination.excluded_db_systems == frozenset({"redis", "postgresql"})
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, None),
+            (17, None),
+            ("none", frozenset()),
+            ("redis,postgres", frozenset({"redis", "postgresql"})),
+        ],
+    )
+    def test_parse_excluded_services_returns_only_valid_string_overrides(
+        self, value: object, expected: frozenset[str] | None
+    ) -> None:
+        assert parse_excluded_services(value) == expected
+
+    @pytest.mark.usefixtures("allow_test_hosts")
     @pytest.mark.parametrize("setting", ["event_only", "span_and_event"])
     def test_a_stored_event_mode_is_skipped_like_any_invalid_entry(
         self, monkeypatch: pytest.MonkeyPatch, setting: str
@@ -4799,6 +4972,24 @@ class TestCaptureMessageContent:
                 callback_name="langfuse_otel",
                 callback_type="success",
                 callback_vars={"langfuse_public_key": "pk", "capture_message_content": "span_only"},
+            ),
+            None,
+        )
+
+        assert flattened.callback_vars == {"langfuse_public_key": "pk"}
+
+    def test_a_team_wide_callback_vars_map_cannot_carry_excluded_services(self) -> None:
+        with pytest.raises(ValueError, match="Invalid callback variable: excluded_services"):
+            TeamCallbackMetadata(
+                success_callback=["langfuse_otel", "signoz"], callback_vars={"excluded_services": "redis"}
+            )
+
+    def test_flattening_excluded_services_leaves_it_on_its_own_entry(self) -> None:
+        flattened: Final = convert_key_logging_metadata_to_callback(
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk", "excluded_services": "redis"},
             ),
             None,
         )

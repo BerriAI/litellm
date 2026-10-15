@@ -741,6 +741,8 @@ class TestMCPServerManager:
                 "client_id": "gateway-client",
                 "client_secret": "SECRET-CLIENT-SECRET",
                 "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "id_jag_resource_client_id": "resource-client-id",
+                "id_jag_resource_client_secret": "SECRET-RESOURCE-CLIENT-SECRET",
                 "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
                 "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
                 "authentication_token": "SECRET-STATIC-TOKEN",
@@ -750,11 +752,16 @@ class TestMCPServerManager:
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
             await manager.load_servers_from_config(config)
 
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        assert server.id_jag_resource_client_id == "resource-client-id"
+        assert server.id_jag_resource_client_secret == "SECRET-RESOURCE-CLIENT-SECRET"
         dump = next(m for m in caplog.messages if "Loaded MCP Servers" in m)
         assert "SECRET-PEM" not in dump
         assert "SECRET-CLIENT-SECRET" not in dump
+        assert "SECRET-RESOURCE-CLIENT-SECRET" not in dump
         assert "SECRET-STATIC-TOKEN" not in dump
         assert "gateway-client" in dump
+        assert "resource-client-id" in dump
         assert "https://org-idp.example/oauth2/token" in dump
 
     async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
@@ -2210,6 +2217,31 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 401
         assert exc_info.value.www_authenticate == challenge
         assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is True
+
+    @pytest.mark.asyncio
+    async def test_managed_scope_challenge_requires_reauthorization_without_retry(self):
+        server = MCPServer(
+            server_id="managed-scope", name="managed-scope", alias="managed-scope",
+            url="https://up.example.com/mcp", transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+        )
+        upstream_error = self._upstream_status_error(
+            403, 'Bearer error="insufficient_scope", scope="tools.write", resource_metadata="https://untrusted.test/metadata"'
+        )
+        manager = MCPServerManager()
+        client = AsyncMock()
+        client.call_tool = AsyncMock(side_effect=upstream_error)
+        manager.create_mcp_client = AsyncMock(return_value=client)
+
+        with pytest.raises(MCPUpstreamAuthError) as raised:
+            await self._run_call_regular(manager, server)
+
+        response = raised.value.to_http_exception("https://gateway.test", "/managed-scope/mcp")
+        assert response.status_code == 403
+        assert response.headers == {
+            "www-authenticate": 'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource/managed-scope/mcp", error="insufficient_scope", scope="tools.write"'
+        }
+        assert client.call_tool.await_count == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("is_error", [False, True])
@@ -4533,6 +4565,7 @@ class TestMCPServerManager:
             f"{issuer}/.well-known/oauth-authorization-server",
             {
                 "issuer": issuer,
+                "response_types_supported": ["code"],
                 "authorization_endpoint": "https://idp.example.com/authorize",
                 "token_endpoint": "https://idp.example.com/token",
                 "scopes_supported": ["read", "write"],
@@ -4553,6 +4586,11 @@ class TestMCPServerManager:
         assert result.scopes == ["read", "write"]
 
         assert result.client_id_metadata_document_supported is True
+
+        assert result.authorization_server_metadata is not None
+        assert result.authorization_server_metadata["scopes_supported"] == ["read", "write"]
+        merged = manager._merge_discovered_oauth_metadata(self._passthrough_call_server(MCPAuth.oauth2), result)
+        assert merged.authorization_server_metadata == result.authorization_server_metadata
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_rejects_issuer_mismatch(self):
@@ -7256,6 +7294,47 @@ class TestMCPServerManager:
         return UserAPIKeyAuth(api_key="sk-test")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("managed", [False, True])
+    async def test_tool_response_waits_only_for_managed_user_oauth_authorization(self, managed):
+        import asyncio
+
+        from mcp.server.context import ServerRequestContext
+        from starlette.requests import Request
+
+        from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+        from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+        auth = self._unrestricted_auth()
+        manager, logging = self._manager_ready_for_call_tool(
+            [MCPTool(name="test_tool", inputSchema={"type": "object"})],
+            caller=ListedToolsCaller(user_api_key_auth=auth),
+        )
+        if managed:
+            manager.registry["test-server"] = manager.registry["test-server"].model_copy(update={
+                "auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code",
+            })
+        send = AsyncMock()
+        gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/test-server")
+        context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+        token = active_mcp_request_ctx_var.set(context)
+        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
+
+        async def upstream_call(*args, **kwargs):
+            await asyncio.sleep(0)
+            assert send.await_count == (0 if managed else 2)
+            return CallToolResult(content=[], is_error=False)
+
+        manager.create_mcp_client.return_value.call_tool.side_effect = upstream_call
+        try:
+            result = await manager.call_tool(server_name="test-server", name="test_tool", arguments={}, user_api_key_auth=auth, proxy_logging_obj=logging)
+            assert not result.is_error
+        finally:
+            gate.allow()
+            await asyncio.wait_for(progress, 1)
+            active_mcp_request_ctx_var.reset(token)
+
+    @pytest.mark.asyncio
     async def test_call_tool_hands_listed_tool_description_and_schema_to_pre_call_hooks(self):
         schema = {"type": "object", "properties": {"param": {"type": "string"}}, "required": ["param"]}
         listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
@@ -9725,6 +9804,30 @@ class TestMCPServerTokenExchangeColumns:
         mcp_server = await manager.build_mcp_server_from_table(table_record)
 
         assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_id_jag_resource_client_credentials(self):
+        resource_secret: Final = "resource-secret"
+        manager: Final = MCPServerManager()
+        table_record: Final = LiteLLM_MCPServerTable(
+            server_id="id-jag-resource-client",
+            server_name="id_jag_resource_client",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            credentials={
+                "id_jag_resource_client_id": "resource-client",
+                "id_jag_resource_client_secret": resource_secret,
+            },
+        )
+
+        mcp_server: Final = await manager.build_mcp_server_from_table(
+            table_record,
+            credentials_are_encrypted=False,
+        )
+
+        assert mcp_server.id_jag_resource_client_id == "resource-client"
+        assert mcp_server.id_jag_resource_client_secret == resource_secret
 
     @pytest.mark.asyncio
     async def test_round_trip_token_exchange_columns_preserved(self):
@@ -18051,7 +18154,10 @@ async def test_unreusable_upstream_session_is_replaced_before_cleanup_finishes(
 
 @pytest.fixture
 def _active_mcp_request_context() -> Iterator[None]:
-    token: Final = active_mcp_request_ctx_var.set(cast(ServerRequestContext, object()))
+    context: Final = ServerRequestContext(
+        session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=None
+    )
+    token: Final = active_mcp_request_ctx_var.set(context)
     try:
         yield
     finally:
@@ -19973,17 +20079,23 @@ def test_oauth_rebuild_retains_only_corroborated_cimd_capability(capability: boo
         transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
         authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
         client_id_metadata_document_supported=capability,
+        authorization_server_metadata={"issuer": "https://idp.example.com", "response_types_supported": ["code"], "scopes_supported": ["offline_access"]},
     )
     rebuilt: Final = previous.model_copy(update={
         "client_id_metadata_document_supported": not capability if rebuild == "fresh_discovery" else None,
         "authorization_url": "https://changed.example.com/authorize" if rebuild == "repointed" else previous.authorization_url,
         "token_url": None,
+        "authorization_server_metadata": {"scopes_supported": []} if rebuild == "fresh_discovery" else None,
         "issuer": "https://idp.example.com" if rebuild == "anchored" else None,
         "issuer_is_anchored": rebuild == "anchored",
     })
     carry_forward_resolved_oauth_endpoints(rebuilt, previous)
     expected: Final = not capability if rebuild == "fresh_discovery" else None if rebuild in ("repointed", "anchored") else capability
     assert rebuilt.client_id_metadata_document_supported is expected
+    assert rebuilt.authorization_server_metadata == (
+        {"scopes_supported": []} if rebuild == "fresh_discovery"
+        else previous.authorization_server_metadata if rebuild == "same" else None
+    )
 
 
 @pytest.mark.asyncio
