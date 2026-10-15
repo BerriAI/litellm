@@ -2857,7 +2857,6 @@ class TestResponsesWebSocketCredentials:
             ("https://upstream.invalid/v1", "deployment-key", None, "deployment-key"),
             ("https://upstream.invalid/v1", "deployment-key", "global-key", "deployment-key"),
             ("https://upstream.invalid/v1", None, "global-key", "global-key"),
-            ("https://api.groq.com/openai/v1", "deployment-key", None, "deployment-key"),
         ],
     )
     async def test_openai_websocket_authorization(
@@ -2873,7 +2872,6 @@ class TestResponsesWebSocketCredentials:
         monkeypatch.setattr(litellm, "api_key", global_key)
         monkeypatch.setattr(litellm, "openai_key", None)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setenv("GROQ_API_KEY", "groq-env-key")
         monkeypatch.setenv("LITELLM_RUST", "false")
 
         headers: Final = await self._upstream_handshake_headers(
@@ -2909,13 +2907,21 @@ class TestResponsesWebSocketCredentials:
         assert "openai-global-key" not in " ".join(headers.values())
 
     @pytest.mark.asyncio
-    async def test_explicit_key_beats_the_env_key_of_a_provider_guessed_from_api_base(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "custom_llm_provider,api_base",
+        [
+            (None, "https://api.deepseek.com/v1"),
+            ("openai", "https://api.deepseek.com/v1"),
+            ("openai", "https://api.groq.com/openai/v1"),
+        ],
+    )
+    async def test_deployment_on_a_known_provider_host_streams_over_http_with_its_own_key(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str | None, api_base: str
     ) -> None:
         import json
         from asyncio import Future, get_running_loop
         from collections.abc import AsyncIterator
-        from unittest.mock import AsyncMock
+        from unittest.mock import AsyncMock, patch
 
         import litellm
         from litellm.responses import main as responses_main
@@ -2930,23 +2936,30 @@ class TestResponsesWebSocketCredentials:
             upstream_key.set_result(kwargs.get("api_key"))
             return no_events()
 
+        def refuse_native_socket(*_args: object, **_kwargs: object) -> None:
+            raise ConnectionRefusedError("this host has no Responses WebSocket")
+
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
+        monkeypatch.setenv("GROQ_API_KEY", "groq-env-key")
         monkeypatch.setenv("LITELLM_RUST", "false")
         websocket: Final = MagicMock()
         websocket.send_text = AsyncMock()
+        websocket.close = AsyncMock()
         websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
 
-        await responses_main._aresponses_websocket.__wrapped__(
-            model="deepseek-astra",
-            api_base="https://api.deepseek.com/v1",
-            api_key="deployment-key",
-            first_message=json.dumps({"type": "response.create", "model": "deepseek-astra", "input": "Reply OK"}),
-            websocket=websocket,
-            litellm_logging_obj=MagicMock(),
-        )
+        with patch("websockets.connect", refuse_native_socket):
+            await responses_main._aresponses_websocket.__wrapped__(
+                model="astra-chat",
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key="deployment-key",
+                first_message=json.dumps({"type": "response.create", "model": "astra-chat", "input": "Reply OK"}),
+                websocket=websocket,
+                litellm_logging_obj=MagicMock(),
+            )
 
-        assert upstream_key.done(), "the request never reached the upstream provider"
+        assert upstream_key.done(), "the request never reached the provider over HTTP"
         assert upstream_key.result() == "deployment-key"
 
 

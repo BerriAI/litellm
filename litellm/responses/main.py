@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
@@ -2462,6 +2463,10 @@ def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) ->
     )
 
 
+def _is_openai_deployment_on_another_providers_host(custom_llm_provider: str, api_base: str | None) -> bool:
+    return custom_llm_provider == "openai" and api_base is not None and is_openai_compatible_endpoint(api_base)
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2514,13 +2519,16 @@ async def _aresponses_websocket(
     )
 
     resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
-    responses_api_provider_config: BaseResponsesAPIConfig | None = None
-    if _custom_llm_provider is not None:
-        responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
+    responses_api_provider_config: Final = (
+        None
+        if _custom_llm_provider is None
+        or _is_openai_deployment_on_another_providers_host(_custom_llm_provider, resolved_api_base)
+        else ProviderConfigManager.get_provider_responses_api_config(
             model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
             api_base=resolved_api_base,
         )
+    )
 
     resolved_api_key: Final = api_key or dynamic_api_key
 
