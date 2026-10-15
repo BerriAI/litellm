@@ -91,7 +91,7 @@ describe("DashboardHeader breadcrumb", () => {
   it("styles Docs with the shared product-link class instead of a muted toolbar button", () => {
     renderDashboardHeader();
 
-    const docs = screen.getByRole("link", { name: "Docs" });
+    const docs = screen.getByRole("button", { name: "Docs" });
     for (const cls of NAV_PRODUCT_LINK_CLASS.trim().split(/\s+/)) {
       expect(docs).toHaveClass(cls);
     }
@@ -111,7 +111,7 @@ describe("DashboardHeader breadcrumb", () => {
     renderDashboardHeader();
 
     const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "LiteAdmin" });
-    expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
+    expect(liteAdmin.compareDocumentPosition(screen.getByRole("button", { name: "Docs" }))).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
@@ -121,7 +121,7 @@ describe("DashboardHeader breadcrumb", () => {
     fireEvent.click(screen.getByRole("button", { name: "More options" }));
     const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
     expect(within(tools).getByRole("button", { name: "AI Gateway" })).toBeInTheDocument();
-    expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
+    expect(within(tools).getByRole("button", { name: "Docs" })).toBeInTheDocument();
     expect(within(tools).getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
   });
 

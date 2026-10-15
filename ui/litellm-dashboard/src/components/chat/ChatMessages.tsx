@@ -84,6 +84,7 @@ const markdownComponents: Components = {
 const markdownWithoutImages: Components = {
   ...markdownComponents,
   img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
+  a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
 };
 
 interface UserBubbleProps {
