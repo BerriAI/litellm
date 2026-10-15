@@ -1,9 +1,8 @@
 import asyncio
 import threading
-from collections.abc import Callable, Coroutine, Generator, Mapping
+from collections.abc import Callable, Coroutine, Generator
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, TypeAlias
 from urllib.parse import urlparse
 
 import fakeredis
@@ -29,12 +28,8 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import CALL_ID
 
-Engine: TypeAlias = Literal["python", "native"]
 Call: TypeAlias = Callable[..., Coroutine[object, object, object]]
-
-_ENGINE: Final = TypeAdapter(Engine)
 
 
 class CallerCache(BaseCache):
@@ -85,45 +80,14 @@ def cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
     return use_cache(monkeypatch, Cache())
 
 
-@pytest.fixture(params=("python", "native"))
-def engine(request: pytest.FixtureRequest) -> Engine:
-    return _ENGINE.validate_python(request.param)
-
-
-def public_call(acreate: Call, request: Mapping[str, object], server: RecordingServer) -> Call:
-    async def send(**kwargs: object) -> object:
-        return await acreate(
-            **{**request, "api_key": "test-key", "api_base": server.base_url, "litellm_call_id": CALL_ID, **kwargs}
-        )
-
-    return send
-
-
 @pytest.fixture
-def calls(python_call: Call, native_call: Call, monkeypatch: pytest.MonkeyPatch) -> Mapping[Engine, Call]:
-    async def python(**kwargs: object) -> object:
-        with monkeypatch.context() as patched:
-            patched.setenv("LITELLM_RUST", "0")
-            return await python_call(**kwargs)
-
-    return MappingProxyType({"python": python, "native": native_call})
-
-
-@pytest.fixture
-def call(calls: Mapping[Engine, Call], engine: Engine) -> Call:
+def call(native_call: Call) -> Call:
     async def send(**kwargs: object) -> object:
-        response: Final = await calls[engine](**kwargs)
+        response: Final = await native_call(**kwargs)
         await settle_cache_writes()
         return response
 
     return send
-
-
-def other(engine: Engine) -> Engine:
-    return "native" if engine == "python" else "python"
-
-
-native_only: Final = pytest.mark.parametrize("engine", ("native",), indirect=True)
 
 
 @dataclass(frozen=True, slots=True)

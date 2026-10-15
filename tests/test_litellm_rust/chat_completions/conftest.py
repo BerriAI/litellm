@@ -2,10 +2,9 @@ from functools import partial
 
 import pytest
 
-import litellm
-from tests.test_litellm_rust.chat_completions.data import REQUEST, call
+from tests.test_litellm_rust.chat_completions.data import call
 from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE
-from tests.test_litellm_rust.support.caching import Call, public_call
+from tests.test_litellm_rust.support.caching import Call
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 
@@ -13,11 +12,6 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 def server(recording_server: RecordingServer) -> RecordingServer:
     recording_server.serve(ResponseSpec(body=MESSAGES_RESPONSE))
     return recording_server
-
-
-@pytest.fixture
-def python_call(server: RecordingServer) -> Call:
-    return public_call(litellm.acompletion, REQUEST, server)
 
 
 @pytest.fixture

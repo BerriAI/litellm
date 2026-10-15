@@ -13,13 +13,10 @@ from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE, RESPONSES
 from tests.test_litellm_rust.support.caching import (
     Call,
     CallerCache,
-    Engine,
     FailingLookupCache,
     FakeRedis,
     HeldWriteCache,
     assert_cache_hit_keeps_budget_spend_and_counts_usage,
-    native_only,
-    other,
     settle_cache_writes,
     use_cache,
 )
@@ -40,7 +37,6 @@ def output_text(response: object) -> str:
     return response.output_text
 
 
-@native_only
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.usefixtures("cache")
 async def test_a_repeated_native_call_is_answered_from_the_python_cache(
@@ -55,19 +51,6 @@ async def test_a_repeated_native_call_is_answered_from_the_python_cache(
     assert output_text(second) == output_text(first) == RESPONSES_TEXT
 
 
-@pytest.mark.usefixtures("cache")
-async def test_native_and_python_calls_share_python_cache_entries(
-    calls: Mapping[Engine, Call], engine: Engine, server: RecordingServer
-) -> None:
-    first: Final = await calls[engine]()
-    await settle_cache_writes()
-    second: Final = await calls[other(engine)]()
-
-    assert len(server.requests) == 1
-    assert output_text(second) == output_text(first) == RESPONSES_TEXT
-
-
-@native_only
 @pytest.mark.parametrize(
     ("first", "second"),
     (
@@ -109,9 +92,9 @@ async def test_caching_off_skips_the_read_but_still_writes(call: Call, server: R
 
     assert len(server.requests) == 1
     assert output_text(hit) == RESPONSES_TEXT
+    assert_served_natively(server, count=1)
 
 
-@native_only
 @pytest.mark.usefixtures("cache")
 async def test_each_namespace_keeps_its_own_entry(call: Call, server: RecordingServer) -> None:
     server.expect(2)
@@ -122,9 +105,9 @@ async def test_each_namespace_keeps_its_own_entry(call: Call, server: RecordingS
 
     assert len(server.requests) == 2
     assert isinstance(cache_key(hit), str)
+    assert_served_natively(server, count=2)
 
 
-@native_only
 @pytest.mark.usefixtures("cache")
 async def test_the_key_is_built_from_the_call_arguments_not_the_wire_body(call: Call, server: RecordingServer) -> None:
     class Rewrite(RecordingLogger):
@@ -143,9 +126,9 @@ async def test_the_key_is_built_from_the_call_arguments_not_the_wire_body(call: 
     assert len(server.requests) == 1
     assert _OBJECT.validate_python(server.requests[0].body)["temperature"] == 0.1
     assert isinstance(cache_key(hit), str)
+    assert_served_natively(server, count=1)
 
 
-@native_only
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize(
     ("supported", "expected_requests"), ((["embedding"], 2), (OWN_CALL_TYPES, 1)), ids=("other-type", "own-type")
@@ -166,9 +149,9 @@ async def test_supported_call_types_gate_native_reads_and_writes(
 
     assert len(server.requests) == expected_requests
     assert isinstance(cache_key(second), str) == (expected_requests == 1)
+    assert_served_natively(server, count=expected_requests)
 
 
-@native_only
 @pytest.mark.parametrize(
     ("options", "expected_requests"), (({}, 2), ({"cache": {"use-cache": True}}, 1)), ids=("plain", "opt-in")
 )
@@ -187,9 +170,9 @@ async def test_default_off_mode_caches_only_calls_that_opt_in(
 
     assert len(server.requests) == expected_requests
     assert isinstance(cache_key(second), str) == (expected_requests == 1)
+    assert_served_natively(server, count=expected_requests)
 
 
-@native_only
 @pytest.mark.usefixtures("cache")
 async def test_a_native_hit_is_logged_as_a_free_cache_hit(call: Call, server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
@@ -205,9 +188,9 @@ async def test_a_native_hit_is_logged_as_a_free_cache_hit(call: Call, server: Re
     assert TypeAdapter(float).validate_python(miss["response_cost"]) > 0
     assert hit["cache_hit"] is True
     assert hit["response_cost"] == 0
+    assert_served_natively(server, count=1)
 
 
-@native_only
 async def test_python_cache_lookups_run_in_the_callers_task(
     call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -220,9 +203,9 @@ async def test_python_cache_lookups_run_in_the_callers_task(
     assert len(server.requests) == 1
     assert isinstance(cache_key(hit), str)
     assert backend.lookup_tasks == [asyncio.current_task(), asyncio.current_task()]
+    assert_served_natively(server, count=1)
 
 
-@native_only
 async def test_cancelling_a_pending_lookup_sends_and_stores_nothing(
     call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,6 +225,7 @@ async def test_cancelling_a_pending_lookup_sends_and_stores_nothing(
 
     assert server.requests == []
     assert backend.storage.cache_dict == {}
+    assert_served_natively(server, count=0)
 
 
 @pytest.mark.usefixtures("cache")
@@ -249,6 +233,7 @@ async def test_a_cache_hit_keeps_budget_spend_and_counts_usage(call: Call, serve
     usage: Final = TypeAdapter(dict[str, int]).validate_python(RESPONSES_RESPONSE["usage"])
 
     await assert_cache_hit_keeps_budget_spend_and_counts_usage(call, server, usage["total_tokens"])
+    assert_served_natively(server, count=1)
 
 
 @pytest.mark.usefixtures("cache")
@@ -260,9 +245,9 @@ async def test_a_response_without_output_is_not_stored(call: Call, server: Recor
     await call()
 
     assert len(server.requests) == 2
+    assert_served_natively(server, count=2)
 
 
-@native_only
 async def test_a_stored_response_without_output_is_a_miss(
     call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -277,6 +262,7 @@ async def test_a_stored_response_without_output_is_a_miss(
 
     assert len(server.requests) == 2
     assert output_text(response) == RESPONSES_TEXT
+    assert_served_natively(server, count=2)
 
 
 async def test_a_failing_cache_lookup_runs_the_call_uncached(
@@ -290,22 +276,24 @@ async def test_a_failing_cache_lookup_runs_the_call_uncached(
 
     assert output_text(first) == RESPONSES_TEXT
     assert len(server.requests) == 2
+    assert_served_natively(server, count=2)
 
 
 async def test_the_response_returns_before_the_cache_write_lands(
-    calls: Mapping[Engine, Call], engine: Engine, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+    call: Call, native_call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     backend: Final = HeldWriteCache()
     use_cache(monkeypatch, Cache(_backend=backend))
 
-    first: Final = await asyncio.wait_for(calls[engine](), timeout=5)
+    first: Final = await asyncio.wait_for(native_call(), timeout=5)
     backend.release.set()
     await settle_cache_writes()
-    hit: Final = await calls[engine]()
+    hit: Final = await call()
 
     assert output_text(first) == RESPONSES_TEXT
     assert len(server.requests) == 1
     assert output_text(hit) == RESPONSES_TEXT
+    assert_served_natively(server, count=1)
 
 
 async def test_a_redis_hit_fills_the_worker_memory_tier(
@@ -320,6 +308,7 @@ async def test_a_redis_hit_fills_the_worker_memory_tier(
 
     assert len(server.requests) == 1
     assert output_text(hit) == RESPONSES_TEXT
+    assert_served_natively(server, count=1)
 
 
 async def test_a_stored_response_lands_in_the_worker_memory_tier(
@@ -333,6 +322,7 @@ async def test_a_stored_response_lands_in_the_worker_memory_tier(
 
     assert len(server.requests) == 1
     assert output_text(hit) == output_text(first)
+    assert_served_natively(server, count=1)
 
 
 async def test_a_hit_reports_the_key_the_entry_is_stored_under(
@@ -347,3 +337,4 @@ async def test_a_hit_reports_the_key_the_entry_is_stored_under(
     (stored,) = backend.cache_dict
     assert len(server.requests) == 1
     assert stored_cache_key(hit) == stored
+    assert_served_natively(server, count=1)
