@@ -3561,12 +3561,10 @@ def _mock_prisma_for_delete_user(mocker, team):
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.delete = AsyncMock()
     return mock_prisma_client
 
 
-def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user):
+def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user) -> AsyncMock:
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
@@ -3579,9 +3577,9 @@ def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user):
         "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
         AsyncMock(),
     )
-    mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._delete_rows_referencing_user",
-        AsyncMock(),
+    return mocker.patch(  # test-quality-ok: the locked user row delete is module-level, not injectable into the endpoint
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_users_from_current_teams",
+        AsyncMock(return_value=1),
     )
 
 
@@ -3603,7 +3601,7 @@ async def test_delete_user_prunes_members_with_roles(mocker):
     )
 
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
-    _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
+    delete_rows_mock = _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     team_member_delete_mock = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
         AsyncMock(),
@@ -3616,7 +3614,7 @@ async def test_delete_user_prunes_members_with_roles(mocker):
     assert call.kwargs["data"].team_id == "team-1"
     assert call.kwargs["data"].user_id == user_id
     assert call.kwargs["user_api_key_dict"].user_role == LitellmUserRoles.PROXY_ADMIN
-    mock_prisma_client.db.litellm_usertable.delete.assert_awaited_once()
+    assert delete_rows_mock.await_args.kwargs["user_ids"] == (user_id,)
 
 
 @pytest.mark.asyncio
@@ -3637,7 +3635,7 @@ async def test_delete_user_surfaces_prune_failure_and_keeps_user(mocker):
     )
 
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
-    _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
+    delete_rows_mock = _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
         AsyncMock(side_effect=Exception("database connection lost")),
@@ -3646,7 +3644,7 @@ async def test_delete_user_surfaces_prune_failure_and_keeps_user(mocker):
     with pytest.raises(ProxyException):
         await delete_user(user_id=user_id)
 
-    mock_prisma_client.db.litellm_usertable.delete.assert_not_awaited()
+    delete_rows_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3666,7 +3664,7 @@ async def test_delete_user_skips_teams_where_not_a_member(mocker):
     )
 
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
-    _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
+    delete_rows_mock = _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     team_member_delete_mock = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
         AsyncMock(),
@@ -3675,7 +3673,25 @@ async def test_delete_user_skips_teams_where_not_a_member(mocker):
     await delete_user(user_id=user_id)
 
     team_member_delete_mock.assert_not_awaited()
-    mock_prisma_client.db.litellm_usertable.delete.assert_awaited_once()
+    delete_rows_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_answers_500_so_the_idp_retries_when_pushes_keep_moving_the_user(mocker):
+    """When group pushes keep adding the user to new teams while the delete waits on their row,
+    the locked delete gives up without deleting anything, and the endpoint must say so with a 5xx
+    rather than a 204 the IdP would never retry."""
+    existing_user = mocker.MagicMock()
+    existing_user.teams = []
+    mock_prisma_client = _mock_prisma_for_delete_user(mocker, None)
+    delete_rows_mock = _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
+    delete_rows_mock.return_value = "the users' teams kept changing while they were being deleted, try again"
+
+    with pytest.raises(ProxyException) as exc_info:
+        await delete_user(user_id="scim-del-user")
+
+    assert int(exc_info.value.code) == 500
+    assert "kept changing" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -6296,6 +6312,15 @@ def _shadow_tenant_prisma(
     prisma_client.db.litellm_invitationlink = mocker.MagicMock(delete_many=AsyncMock(return_value=0))
     prisma_client.db.litellm_organizationmembership = mocker.MagicMock(delete_many=AsyncMock(return_value=0))
     prisma_client.db.litellm_teammembership = mocker.MagicMock(delete_many=AsyncMock(return_value=0))
+
+    async def locked_user_delete(*, user_ids: Sequence[str], **_: object) -> int:
+        deleted: Final = [await prisma_client.db.litellm_usertable.delete(where={"user_id": uid}) for uid in user_ids]
+        return sum(row is not None for row in deleted)
+
+    mocker.patch(  # test-quality-ok: the locked user row delete runs in a transaction this fake does not model
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_users_from_current_teams",
+        AsyncMock(side_effect=locked_user_delete),
+    )
     return prisma_client
 
 
@@ -6346,9 +6371,6 @@ async def test_merge_placeholder_hands_the_group_to_the_shadowed_account(mocker,
     assert (added.team_id, added.member.user_id) == (_SHADOWED_GROUP, _SHADOWED_ACCOUNT)
     dropped: Final = team_member_delete_mock.call_args.kwargs["data"]
     assert (dropped.team_id, dropped.user_id) == (_SHADOWED_GROUP, _SHADOW_MEMBER_VALUE)
-    shadowed_tenant.db.litellm_teammembership.delete_many.assert_awaited_once_with(
-        where={"user_id": _SHADOW_MEMBER_VALUE}
-    )
     shadowed_tenant.db.litellm_usertable.delete.assert_awaited_once_with(where={"user_id": _SHADOW_MEMBER_VALUE})
 
     after: Final = await _push_shadow_member(shadowed_tenant)

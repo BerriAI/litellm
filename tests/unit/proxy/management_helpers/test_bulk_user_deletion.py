@@ -13,7 +13,11 @@ from litellm.proxy._types import LiteLLM_TeamTable, LitellmTableNames, LitellmUs
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem
-from litellm.proxy.management_helpers.bulk_user_deletion import bulk_delete_users, bulk_remove_team_members
+from litellm.proxy.management_helpers.bulk_user_deletion import (
+    bulk_delete_users,
+    bulk_remove_team_members,
+    delete_users_from_current_teams,
+)
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkDeleteUserRequest
 from litellm.types.proxy.management_endpoints.team_endpoints import BulkTeamMemberDeleteRequest, TeamMemberRef
 
@@ -439,6 +443,48 @@ async def test_bulk_delete_removes_users_from_a_team_a_push_added_them_to_while_
     assert _roster(prisma, "side") == ["keep"]
     assert prisma.db.litellm_teammembership.rows == []
     assert "u1" not in prisma.db.litellm_usertable.rows
+
+
+@pytest.mark.asyncio
+async def test_user_delete_takes_the_user_off_a_team_a_push_added_them_to_and_leaves_their_keys():
+    pushed = itertools.count()
+
+    def push_commits_before_the_row_lock(db: _Db) -> None:
+        if next(pushed):
+            return
+        db.litellm_usertable.rows["u1"] = db.litellm_usertable.rows["u1"].model_copy(update={"teams": ["g1"]})
+        db.litellm_teamtable.rows["g1"].members_with_roles.append(Member(user_id="u1", role="user"))
+        db.litellm_teammembership.rows.append({"team_id": "g1", "user_id": "u1"})
+
+    prisma = _FakePrisma(
+        users=[_user("u1"), _user("keep", "g1")],
+        teams=[_team("g1", "keep")],
+        memberships=[("g1", "keep")],
+        tokens=[{"token": "k1", "user_id": "u1"}],
+        invitations=[{"id": "i1", "user_id": "keep", "created_by": "u1", "updated_by": "admin"}],
+        org_memberships=[{"user_id": "u1", "organization_id": "o1", "user_role": "internal_user"}],
+        on_user_lock=push_commits_before_the_row_lock,
+    )
+    cache = UserApiKeyCache()
+    cache.set_cache(key="u1", value={"user_id": "u1"})
+
+    deleted = await delete_users_from_current_teams(
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+        user_ids=("u1",),
+        user_api_key_dict=ADMIN,
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+        litellm_changed_by=None,
+    )
+
+    assert deleted == 1
+    assert _roster(prisma, "g1") == ["keep"]
+    assert prisma.db.litellm_teammembership.rows == [{"team_id": "g1", "user_id": "keep"}]
+    assert sorted(prisma.db.litellm_usertable.rows) == ["keep"]
+    assert prisma.db.litellm_invitationlink.rows == []
+    assert prisma.db.litellm_organizationmembership.rows == []
+    assert prisma.db.litellm_verificationtoken.rows == [{"token": "k1", "user_id": "u1"}]
+    assert cache.get_cache(key="u1") is None
 
 
 @pytest.mark.asyncio

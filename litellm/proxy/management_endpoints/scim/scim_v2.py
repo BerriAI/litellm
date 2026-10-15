@@ -72,6 +72,7 @@ from litellm.proxy.management_helpers.bulk_user_creation import (
     BULK_NEW_USER_CONCURRENCY,
     _bounded,  # pyright: ignore[reportPrivateUsage]  # the bounded gather /user/bulk_new runs its row writes through
 )
+from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.team_roster_sync import (
     ROSTER_TX_TIMEOUT,
     MembersMissing,
@@ -92,11 +93,6 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     premium_user_check,
 )
 from litellm.repositories.chunked_in import find_many_in
-from litellm.repositories.table_repositories import (
-    InvitationLinkRepository,
-    OrganizationMembershipRepository,
-    TeamMembershipRepository,
-)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -132,8 +128,6 @@ class _UserTableClient(Protocol):
 
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
-    async def delete(self, where: Mapping[str, object]) -> LiteLLM_UserTable | None: ...
-
     async def count(self, where: Mapping[str, object] | None = None) -> int: ...
 
 
@@ -163,10 +157,6 @@ class _VerificationTokenTableClient(Protocol):
     ) -> "PrismaVerificationToken | None": ...
 
 
-class _UserReferencingTableClient(Protocol):
-    async def delete_many(self, where: Mapping[str, object]) -> int: ...
-
-
 @overload
 def _table(repository: UserRepository) -> _UserTableClient: ...
 
@@ -179,19 +169,8 @@ def _table(repository: TeamRepository) -> _TeamTableClient: ...
 def _table(repository: VerificationTokenRepository) -> _VerificationTokenTableClient: ...
 
 
-@overload
 def _table(
-    repository: InvitationLinkRepository | OrganizationMembershipRepository | TeamMembershipRepository,
-) -> _UserReferencingTableClient: ...
-
-
-def _table(
-    repository: UserRepository
-    | TeamRepository
-    | VerificationTokenRepository
-    | InvitationLinkRepository
-    | OrganizationMembershipRepository
-    | TeamMembershipRepository,
+    repository: UserRepository | TeamRepository | VerificationTokenRepository,
 ) -> object:
     return repository.table
 
@@ -1240,26 +1219,6 @@ async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
     return len(affected_keys)
 
 
-async def _delete_rows_referencing_user(prisma_client: PrismaClient, *, user_id: str) -> None:
-    """Drop rows whose foreign keys reference ``LiteLLM_UserTable.user_id``.
-
-    Required before deleting the user row itself, otherwise Postgres rejects
-    the user delete with an FK constraint violation (e.g.
-    ``LiteLLM_InvitationLink_user_id_fkey``).
-    """
-    await _table(InvitationLinkRepository(prisma_client)).delete_many(
-        where={
-            "OR": [
-                {"user_id": user_id},
-                {"created_by": user_id},
-                {"updated_by": user_id},
-            ]
-        }
-    )
-    await _table(OrganizationMembershipRepository(prisma_client)).delete_many(where={"user_id": user_id})
-    await _table(TeamMembershipRepository(prisma_client)).delete_many(where={"user_id": user_id})
-
-
 def _scim_active_value(metadata: Mapping[str, object] | None) -> bool | None:
     """Read the SCIM active flag from a user's metadata dict, if present."""
     if not metadata:
@@ -2047,14 +2006,18 @@ async def delete_user(
 
         await _set_user_keys_blocked(user_id=user_id, blocked=True)
 
-        await _delete_rows_referencing_user(prisma_client, user_id=user_id)
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-        # Delete user
-        await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
-
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
+        deleted: Final = await delete_users_from_current_teams(
+            prisma_client=prisma_client,
+            user_ids=(user_id,),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            litellm_changed_by=None,
+        )
+        if isinstance(deleted, str):
+            raise HTTPException(status_code=500, detail={"error": deleted})
 
         return Response(status_code=204)
     except Exception as e:
