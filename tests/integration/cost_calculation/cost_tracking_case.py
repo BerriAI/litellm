@@ -532,6 +532,7 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "cohere": "cohere",
         "vertex_ai-language-models": "vertex_ai",
         "vertex_ai-image-models": "vertex_ai",
+        "vertex_ai-anthropic_models": "vertex_ai",
         "vertex_ai-embedding-models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
@@ -584,6 +585,9 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "vertex_ai-image-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
+        "vertex_ai-anthropic_models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
         "vertex_ai-embedding-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
@@ -629,3 +633,34 @@ def with_usage(
             "expected": expected,
         }
     )
+
+
+def with_response_usage(
+    base: CostTrackingTestCase,
+    name: str,
+    usage: Mapping[str, JsonValue],
+    expected: Expected,
+    choice_updates: Mapping[str, JsonValue] | None = None,
+) -> CostTrackingTestCase:
+    if not isinstance(base.response, JsonResponse):
+        raise TypeError(f"{base.name}: with_response_usage needs a JsonResponse base")
+    body: Final = {**base.response.body, "usage": dict(usage)}
+    response_body: Final = (
+        _with_choice_updates(body, choice_updates) if choice_updates is not None else body
+    )
+    return base.model_copy(
+        update={
+            "name": name,
+            "response": base.response.model_copy(update={"body": response_body}),
+            "expected": expected,
+        }
+    )
+
+
+def _with_choice_updates(
+    body: Mapping[str, JsonValue], choice_updates: Mapping[str, JsonValue]
+) -> dict[str, JsonValue]:
+    choices: Final = body.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise TypeError("stored body has no choice object")
+    return {**body, "choices": [{**choices[0], **choice_updates}, *choices[1:]]}

@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
     with_usage,
     COST_MAP,
     BinaryResponse,
@@ -11104,6 +11105,39 @@ GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
     ExactExpected(spend=2.41648, input_cost=2.4, output_cost=0.01648, prompt_tokens=300000, completion_tokens=412),
 )
 
+_GPT_6_CACHE_WRITE_USAGE: Final = {
+    "prompt_tokens": 12928,
+    "completion_tokens": 380,
+    "total_tokens": 13308,
+    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+    "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+
+GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_1_SOL_CACHE_READ,
+    "gpt-6.1-sol-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.0358, input_cost=0.032, output_cost=0.0038, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.00179, input_cost=0.0016, output_cost=0.00019, prompt_tokens=12928, completion_tokens=380),
+)
+GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_ASTRA_CACHE_READ,
+    "gpt-6-astra-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(spend=0.2148, input_cost=0.192, output_cost=0.0228, prompt_tokens=12928, completion_tokens=380),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
@@ -11309,6 +11343,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_SOL_CACHE_READ,
     GPT_6_LUNA_CACHE_READ,
     GPT_6_ASTRA_CACHE_READ,
+    GPT_6_1_SOL_CACHE_WRITE_5M,
+    GPT_6_LUNA_CACHE_WRITE_5M,
+    GPT_6_ASTRA_CACHE_WRITE_5M,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (

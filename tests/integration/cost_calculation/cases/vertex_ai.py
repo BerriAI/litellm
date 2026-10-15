@@ -4,6 +4,14 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 
 from typing import Final
 
+from integration.cost_calculation.cases.anthropic import (
+    CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_STREAM,
+)
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     ExactExpected,
@@ -13,6 +21,76 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+
+
+def _vertex_claude_stream_response(model: str, stop_reason: str, text_deltas: tuple[str, ...]) -> SseResponse:
+    text_frames: Final = (
+        (
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+            *(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": text},
+                }
+                for text in text_deltas
+            ),
+            {"type": "content_block_stop", "index": 1},
+        )
+        if text_deltas
+        else ()
+    )
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            *(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "container": None,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "usage": {
+                            "input_tokens": 1840,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                            "output_tokens": 0,
+                        },
+                    },
+                },
+                {"type": "ping"},
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "scripted signature"}},
+                {"type": "content_block_stop", "index": 0},
+                *text_frames,
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": stop_reason,
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "container": None,
+                    },
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 412,
+                        "output_tokens_details": {"thinking_tokens": 0},
+                    },
+                },
+                {"type": "message_stop"},
+            )
+        ),
+    )
 
 
 # gemini-3.1-pro
@@ -2877,6 +2955,132 @@ VERTEX_EMBEDDINGS_TEXT_006: Final = CostTrackingTestCase(
 )
 
 
+VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CLAUDE_SONNET_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-sonnet-5-5-input_text",
+        "model": "vertex_ai/claude-sonnet-5-5",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-sonnet-5-5",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"}],
+                "container": None,
+                "stop_reason": "max_tokens",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.01326, input_cost=0.006256, output_cost=0.007004, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_STREAM: Final = CLAUDE_SONNET_5_5_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-sonnet-5-5-stream",
+        "model": "vertex_ai/claude-sonnet-5-5",
+        "response": _vertex_claude_stream_response("claude-sonnet-5-5", "max_tokens", ()),
+        "expected": VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-opus-5-5-input_text",
+        "model": "vertex_ai/claude-opus-5-5",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-opus-5-5",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+                    {"type": "text", "text": "scripted answer for cost fixtures"},
+                ],
+                "container": None,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.02808, input_cost=0.013248, output_cost=0.014832, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+VERTEX_AI_CLAUDE_OPUS_5_5_STREAM: Final = CLAUDE_OPUS_5_5_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-opus-5-5-stream",
+        "model": "vertex_ai/claude-opus-5-5",
+        "response": _vertex_claude_stream_response(
+            "claude-opus-5-5",
+            "end_turn",
+            ("scripted ", "answer ", "for ", "cost ", "fixtures", "", "", "", ""),
+        ),
+        "expected": VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.expected,
+    }
+)
+VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-1-input_text",
+        "model": "vertex_ai/claude-fable-5-1",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-fable-5-1",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"}],
+                "container": None,
+                "stop_reason": "max_tokens",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0741, input_cost=0.03496, output_cost=0.03914, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+VERTEX_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-1-stream",
+        "model": "vertex_ai/claude-fable-5-1",
+        "response": _vertex_claude_stream_response("claude-fable-5-1", "max_tokens", ()),
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
+    }
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_INPUT_TEXT,
     GEMINI_3_1_PRO_CACHE_READ,
@@ -2926,6 +3130,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     IMAGEN_NEXT_IMAGES_ONE,
     VERTEX_EMBEDDINGS_TEXT_006,
     GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_VERTEX_KEY,
+    VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_SONNET_5_5_STREAM,
+    VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_OPUS_5_5_STREAM,
+    VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_FABLE_5_1_STREAM,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -2941,4 +3151,9 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         plain=GEMINI_3_8_FLASH_RESPONSE_MODEL_OVERRIDE, streamed=GEMINI_3_8_FLASH_STREAM_RESPONSE_MODEL_OVERRIDE
     ),
     StreamParityTestCase(plain=GEMINI_3_8_FLASH_TOOL_CALL, streamed=GEMINI_3_8_FLASH_STREAM_TOOL_CALL),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_SONNET_5_5_STREAM
+    ),
+    StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
+    StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
 )
