@@ -10,7 +10,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout
@@ -37,8 +36,6 @@ from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
     from litellm.router import Router
-
-_LOCAL_VARIABLES_ADAPTER: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -310,11 +307,7 @@ async def asearch(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {
-        key: value
-        for key, value in _LOCAL_VARIABLES_ADAPTER.validate_python(locals()).items()
-        if key != "embedding_executor"
-    }
+    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -398,11 +391,7 @@ def search(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {
-        key: value
-        for key, value in _LOCAL_VARIABLES_ADAPTER.validate_python(locals()).items()
-        if key != "embedding_executor"
-    }
+    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
