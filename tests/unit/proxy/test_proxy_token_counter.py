@@ -2,6 +2,8 @@
 # 1. Generate a Key, and use it to make a call
 
 
+from functools import partial
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,7 +28,9 @@ from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.proxy.proxy_server import token_counter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.common_utils.token_count_settings import TokenCountSettings
+from litellm.proxy.proxy_server import _provider_or_fallback_token_count, _try_provider_token_count, token_counter
 from litellm.types.utils import TokenCountResponse
 
 
@@ -1237,3 +1241,167 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+class _ScriptedCounter(BaseTokenCounter):
+    def __init__(self, replies: dict[str, TokenCountResponse]) -> None:
+        self._replies = replies
+        self.calls: list[tuple[str, object, object, object]] = []
+
+    def should_use_token_counting_api(self, custom_llm_provider: str | None = None) -> bool:
+        return True
+
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages,
+        contents,
+        deployment=None,
+        request_model: str = "",
+        tools=None,
+        system=None,
+    ) -> TokenCountResponse | None:
+        self.calls.append((model_to_use, messages, tools, system))
+        return self._replies[model_to_use]
+
+
+def _provider_reply(model: str, total_tokens: int = 0, status_code: int | None = None) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=total_tokens,
+        request_model="sonnet-5-5",
+        model_used=model,
+        tokenizer_type="bedrock_api",
+        error=status_code is not None,
+        error_message=None if status_code is None else f"scripted {status_code} for {model}",
+        status_code=status_code,
+    )
+
+
+_COUNT_REQUEST = TokenCountRequest(
+    model="sonnet-5-5",
+    messages=[{"role": "user", "content": "hello"}],
+    tools=[{"name": "get_quote", "input_schema": {"type": "object"}}],
+    system="be brief",
+)
+
+
+async def _ladder(counter: _ScriptedCounter, settings: TokenCountSettings) -> TokenCountResponse | None:
+    return await _provider_or_fallback_token_count(
+        count_with=partial(
+            _try_provider_token_count,
+            counter,
+            "bedrock",
+            messages=_COUNT_REQUEST.messages,
+            contents=_COUNT_REQUEST.contents,
+            deployment=None,
+            request_model=_COUNT_REQUEST.model,
+            tools=_COUNT_REQUEST.tools,
+            system=_COUNT_REQUEST.system,
+        ),
+        model_to_use="us.anthropic.claude-sonnet-5-5",
+        settings=settings,
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_count_is_tagged_provider_and_never_tries_the_fallback():
+    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=447)})
+
+    result = await _ladder(counter, TokenCountSettings(framing=10, fallback_model="opus"))
+
+    assert result is not None
+    assert (result.total_tokens, result.count_source) == (447, "provider")
+    assert [call[0] for call in counter.calls] == ["us.anthropic.claude-sonnet-5-5"]
+
+
+@pytest.mark.parametrize("status_code", [400, 404])
+@pytest.mark.asyncio
+async def test_uncountable_model_is_counted_with_the_fallback_model_on_the_same_request(status_code: int):
+    counter = _ScriptedCounter(
+        {
+            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447),
+        }
+    )
+
+    result = await _ladder(counter, TokenCountSettings(framing=None, fallback_model="us.anthropic.claude-opus-5-5"))
+
+    assert result is not None
+    assert (result.total_tokens, result.count_source, result.model_used) == (
+        447,
+        "fallback_model",
+        "us.anthropic.claude-opus-5-5",
+    )
+    assert [call[0] for call in counter.calls] == ["us.anthropic.claude-sonnet-5-5", "us.anthropic.claude-opus-5-5"]
+    assert counter.calls[0][1:] == counter.calls[1][1:]
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 429, 500])
+@pytest.mark.asyncio
+async def test_errors_other_than_cannot_count_raise_without_a_fallback(status_code: int):
+    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code)})
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=10, fallback_model="us.anthropic.claude-opus-5-5"))
+
+    assert raised.value.code == str(status_code)
+    assert len(counter.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_fallback_raises_the_requested_model_error():
+    counter = _ScriptedCounter(
+        {
+            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
+        }
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=None, fallback_model="us.anthropic.claude-opus-5-5"))
+
+    assert raised.value.code == "404"
+    assert "sonnet" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_uncountable_model_without_fallback_or_framing_raises():
+    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=None, fallback_model=None))
+
+    assert raised.value.code == "404"
+
+
+@pytest.mark.asyncio
+async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate():
+    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
+
+    assert await _ladder(counter, TokenCountSettings(framing=0, fallback_model=None)) is None
+
+
+@pytest.mark.asyncio
+async def test_local_estimate_adds_the_configured_framing_once_per_request(monkeypatch: pytest.MonkeyPatch):
+    def deployment(name: str, model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": f"sk-unused-{name}"},
+            "model_info": model_info,
+        }
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[deployment("framed", {"token_count_framing": 100}), deployment("plain", {})]),
+    )
+    messages: Final = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello there"}]
+
+    plain: Final = await token_counter(request=TokenCountRequest(model="plain", messages=messages))
+    framed: Final = await token_counter(request=TokenCountRequest(model="framed", messages=messages))
+    framed_prompt: Final = await token_counter(request=TokenCountRequest(model="framed", prompt="hello there"))
+
+    assert plain.total_tokens == litellm.token_counter(model="gpt-5.4-mini", messages=messages)
+    assert framed.total_tokens == plain.total_tokens + 100
+    assert (plain.count_source, framed.count_source) == ("local_estimate", "local_estimate")
+    assert framed_prompt.total_tokens == litellm.token_counter(model="gpt-5.4-mini", text="hello there")

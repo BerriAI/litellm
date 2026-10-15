@@ -41,7 +41,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 
 router: Final = APIRouter()
 
@@ -350,14 +350,7 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
         )
-        _token_response_dict: dict = {}
-        if isinstance(token_response, TokenCountResponse):
-            _token_response_dict = token_response.model_dump()
-        elif isinstance(token_response, dict):
-            _token_response_dict = token_response
-
-        # Convert the internal response to Anthropic API format
-        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
+        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
     except HTTPException:
         raise

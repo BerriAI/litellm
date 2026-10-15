@@ -143,6 +143,12 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
+from litellm.proxy.common_utils.token_count_settings import (
+    ProviderCountFailure,
+    TokenCountSettings,
+    cost_map_entry,
+    resolve_token_count_settings,
+)
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -14391,12 +14397,12 @@ async def _try_provider_token_count(
     model_to_use: str,
     messages: list | None,
     contents: list | None,
-    deployment: dict[str, object] | None,
+    deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
-) -> Optional["TokenCountResponse"]:
-    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
     try:
@@ -14404,28 +14410,60 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=deployment,
+            deployment=None if deployment is None else dict(deployment),
             request_model=request_model,
             tools=tools,
             system=system,
         )
     except httpx.HTTPStatusError as e:
-        error_message: Final = getattr(e, "message", None) or str(e)
-        status_code: Final = getattr(e, "status_code", None) or e.response.status_code
-        raise ProxyException(
-            message=error_message,
-            type="token_counting_error",
-            param="model",
-            code=status_code,
+        return ProviderCountFailure(
+            status_code=getattr(e, "status_code", None) or e.response.status_code,
+            message=getattr(e, "message", None) or str(e),
         )
     if result is not None and result.error is True:
-        raise ProxyException(
+        return ProviderCountFailure(
+            status_code=result.status_code or 500,
             message=result.error_message or "Token counting failed",
-            type="token_counting_error",
-            param="model",
-            code=result.status_code or 500,
         )
     return result
+
+
+async def _provider_or_fallback_token_count(
+    count_with: Callable[[str], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    model_to_use: str,
+    settings: TokenCountSettings,
+) -> Optional["TokenCountResponse"]:
+    """Count with the provider, then the configured fallback model when the provider cannot count this one.
+
+    Returns None when the count should be estimated locally."""
+    primary: Final = await count_with(model_to_use)
+    if not isinstance(primary, ProviderCountFailure):
+        return None if primary is None else primary.model_copy(update={"count_source": "provider"})
+    if not primary.cannot_count_model:
+        raise primary.to_proxy_exception()
+    if settings.fallback_model is not None:
+        fallback: Final = await count_with(settings.fallback_model)
+        if isinstance(fallback, TokenCountResponse):
+            return fallback.model_copy(update={"count_source": "fallback_model", "model_used": settings.fallback_model})
+        raise primary.to_proxy_exception()
+    if settings.framing is not None:
+        return None
+    raise primary.to_proxy_exception()
+
+
+class _TokenCountDeployment(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+_TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+
+
+def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> str:
+    model_info: Final = deployment.get("model_info", {})
+    params: Final = deployment.get("litellm_params", {})
+    candidates: Final = (model_info.get("base_model"), params.get("base_model"), params.get("model"))
+    return next((c for c in candidates if isinstance(c, str) and c), request_model)
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -14489,6 +14527,11 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     model_to_use: str = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
+    deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(deployment or {})
+    settings: Final = resolve_token_count_settings(
+        configured=deployment_view.get("model_info", {}),
+        default=cost_map_entry(_token_count_settings_model(deployment_view, request.model)),
+    )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
@@ -14500,16 +14543,20 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             model_to_use = _model
 
     if provider_counter is not None:
-        result: Final = await _try_provider_token_count(
-            provider_counter=provider_counter,
-            custom_llm_provider=custom_llm_provider,
+        result: Final = await _provider_or_fallback_token_count(
+            count_with=partial(
+                _try_provider_token_count,
+                provider_counter,
+                custom_llm_provider,
+                messages=messages,
+                contents=contents,
+                deployment=deployment,
+                request_model=request.model,
+                tools=tools,
+                system=system,
+            ),
             model_to_use=model_to_use,
-            messages=messages,
-            contents=contents,
-            deployment=deployment,
-            request_model=request.model,
-            tools=tools,
-            system=system,
+            settings=settings,
         )
         if result is not None:
             return result
@@ -14552,11 +14599,13 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         tools=counted_tools,
         custom_tokenizer=_tokenizer_used,
     )
+    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     return TokenCountResponse(
-        total_tokens=total_tokens,
+        total_tokens=total_tokens + framing,
         request_model=request.model,
         model_used=model_to_use,
         tokenizer_type=tokenizer_used,
+        count_source="local_estimate",
     )
 
 

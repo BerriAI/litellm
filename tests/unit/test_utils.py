@@ -1138,6 +1138,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "token_count_framing": {"type": "integer"},
+                "token_count_fallback_model": {"type": "string"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},

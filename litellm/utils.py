@@ -6498,6 +6498,8 @@ def get_model_info_helper(
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),
+                token_count_framing=_model_info.get("token_count_framing", None),
+                token_count_fallback_model=_model_info.get("token_count_fallback_model", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
             for cost_key, cost_value in _model_info.items():
