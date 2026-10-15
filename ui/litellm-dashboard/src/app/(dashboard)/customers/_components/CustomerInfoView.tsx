@@ -4,8 +4,8 @@ import { ArrowLeft, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
-import ObjectPermissionsView from "@/components/object_permissions_view";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
+import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
 import CopyButton from "@/components/shared/CopyButton";
 import { PageHeader, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { ModelsCell, MoneyCell } from "@/components/shared/table_cells";
@@ -107,12 +107,26 @@ function CustomerOverview({ customer, accessToken }: Pick<CustomerInfoViewProps,
           </CardContent>
         </Card>
       </div>
-      <ObjectPermissionsView
-        objectPermission={customer.object_permission}
-        accessToken={accessToken}
-        entityType="customer"
-      />
+      <Card>
+        <CardContent>
+          <CustomerMcpAccess customer={customer} accessToken={accessToken} />
+        </CardContent>
+      </Card>
     </div>
+  );
+}
+
+function CustomerMcpAccess({ customer, accessToken }: Pick<CustomerInfoViewProps, "customer" | "accessToken">) {
+  const permission = customer.object_permission;
+  return (
+    <MCPServerPermissions
+      mcpServers={permission?.mcp_servers ?? []}
+      mcpAccessGroups={permission?.mcp_access_groups ?? []}
+      mcpToolPermissions={permission?.mcp_tool_permissions ?? {}}
+      mcpToolsets={permission?.mcp_toolsets ?? []}
+      entityType="customer"
+      accessToken={accessToken}
+    />
   );
 }
 
@@ -133,13 +147,9 @@ function CustomerSettings({ customer, accessToken }: Pick<CustomerInfoViewProps,
         <OverviewField label="RPM">{budget?.rpm_limit ?? "Unlimited"}</OverviewField>
         <CustomerModelFields customer={customer} />
       </dl>
-      <ObjectPermissionsView
-        objectPermission={customer.object_permission}
-        entityType="customer"
-        variant="inline"
-        className="border-t pt-4"
-        accessToken={accessToken}
-      />
+      <div className="border-t pt-4">
+        <CustomerMcpAccess customer={customer} accessToken={accessToken} />
+      </div>
     </div>
   );
 }
