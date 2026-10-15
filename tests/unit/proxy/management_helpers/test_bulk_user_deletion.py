@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -129,7 +130,15 @@ class _Db:
 
 
 class _Tx:
-    def __init__(self, db: _Db, on_lock: Callable[[str], None], fail_locks: frozenset[str]) -> None:
+    def __init__(
+        self,
+        db: _Db,
+        on_lock: Callable[[str], None],
+        fail_locks: frozenset[str],
+        on_user_lock: Callable[[_Db], None],
+    ) -> None:
+        self._db = db
+        self._on_user_lock = on_user_lock
         self.litellm_teamtable = db.litellm_teamtable
         self.litellm_usertable = db.litellm_usertable
         self.litellm_teammembership = db.litellm_teammembership
@@ -145,6 +154,7 @@ class _Tx:
 
     async def query_raw(self, sql: str, *args: object) -> list[dict[str, object]]:
         if 'ORDER BY user_id COLLATE "C" FOR UPDATE' in sql:
+            self._on_user_lock(self._db)
             user_ids = [str(user_id) for user_id in cast(Sequence[object], args[0])]
             rows = self.litellm_usertable.rows
             self.user_locks.append({user_id: list(rows[user_id].teams) for user_id in user_ids if user_id in rows})
@@ -178,9 +188,11 @@ class _FakePrisma:
         on_lock: Callable[[str], None] = lambda _: None,
         fail_locks: frozenset[str] = frozenset(),
         fail_commit: bool = False,
+        on_user_lock: Callable[[_Db], None] = lambda _: None,
     ) -> None:
         self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings)
         self._on_lock = on_lock
+        self._on_user_lock = on_user_lock
         self._fail_locks = fail_locks
         self._fail_commit = fail_commit
         self.locks: list[str] = []
@@ -190,7 +202,7 @@ class _FakePrisma:
     @asynccontextmanager
     async def tx(self, *, timeout: object = None):
         snapshot = copy.deepcopy(self.db)
-        tx = _Tx(self.db, self._on_lock, self._fail_locks)
+        tx = _Tx(self.db, self._on_lock, self._fail_locks, self._on_user_lock)
         try:
             yield tx
             if self._fail_commit:
@@ -399,6 +411,52 @@ async def test_bulk_delete_takes_every_team_lock_before_writing_a_user_row():
 
     assert results[0].success is True
     assert teams_when_locked == {"t1": ["t1", "t2"], "t2": ["t1", "t2"]}
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_removes_users_from_a_team_a_push_added_them_to_while_it_waited_on_their_rows():
+    pushed = itertools.count()
+
+    def push_commits_before_the_row_lock(db: _Db) -> None:
+        if next(pushed):
+            return
+        db.litellm_usertable.rows["u1"] = db.litellm_usertable.rows["u1"].model_copy(update={"teams": ["side", "g1"]})
+        db.litellm_teamtable.rows["g1"].members_with_roles.append(Member(user_id="u1", role="user"))
+        db.litellm_teammembership.rows.append({"team_id": "g1", "user_id": "u1"})
+
+    prisma = _FakePrisma(
+        users=[_user("u1", "side")],
+        teams=[_team("side", "u1", "keep"), _team("g1", "keep")],
+        memberships=[("side", "u1")],
+        on_user_lock=push_commits_before_the_row_lock,
+    )
+
+    results = await _delete(prisma, ["u1"])
+
+    assert results[0].success is True
+    assert sorted(results[0].teams_removed) == ["g1", "side"]
+    assert _roster(prisma, "g1") == ["keep"]
+    assert _roster(prisma, "side") == ["keep"]
+    assert prisma.db.litellm_teammembership.rows == []
+    assert "u1" not in prisma.db.litellm_usertable.rows
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_deletes_nothing_when_pushes_keep_adding_the_user_to_new_teams():
+    team_numbers = itertools.count()
+
+    def push_adds_another_team(db: _Db) -> None:
+        team_id = f"g{next(team_numbers)}"
+        db.litellm_teamtable.rows[team_id] = _team(team_id, "u1")
+        db.litellm_teammembership.rows.append({"team_id": team_id, "user_id": "u1"})
+
+    prisma = _FakePrisma(users=[_user("u1")], on_user_lock=push_adds_another_team)
+
+    results = await _delete(prisma, ["u1"])
+
+    assert results[0].success is False
+    assert "u1" in prisma.db.litellm_usertable.rows
+    assert all(_roster(prisma, team_id) == ["u1"] for team_id in prisma.db.litellm_teamtable.rows)
 
 
 @pytest.mark.asyncio

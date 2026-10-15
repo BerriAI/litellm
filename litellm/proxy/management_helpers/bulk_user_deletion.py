@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 
 _AUDIT_LOG_CONCURRENCY: Final = 10
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
+_USER_DELETE_ATTEMPTS: Final = 3
 
 
 class _OrgAdminFilter(TypedDict):
@@ -110,6 +111,11 @@ class _UserBatchDeletion:
     @property
     def deleted_key_tokens(self) -> tuple[str, ...]:
         return tuple(k.token for k in self.deleted_keys)
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamsChanged:
+    teams_of: Mapping[str, frozenset[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,27 +426,50 @@ async def _delete_user_rows(
     return _DeletedKeys(keys=tuple(keys), jwt_mapping_cache_keys=jwt_mapping_cache_keys)
 
 
+def _teams_of(
+    users: Iterable["prisma_models.LiteLLM_UserTable"],
+    memberships: Sequence["prisma_models.LiteLLM_TeamMembership"],
+) -> Mapping[str, frozenset[str]]:
+    return MappingProxyType(
+        {
+            u.user_id: frozenset(u.teams) | frozenset(m.team_id for m in memberships if m.user_id == u.user_id)
+            for u in users
+        }
+    )
+
+
+def _all_teams(teams_of: Mapping[str, frozenset[str]]) -> frozenset[str]:
+    return frozenset(t for teams in teams_of.values() for t in teams)
+
+
 async def _delete_users_tx(
     prisma_client: PrismaClient,
     users: Sequence["prisma_models.LiteLLM_UserTable"],
     teams_of: Mapping[str, frozenset[str]],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
-) -> _UserBatchDeletion:
+) -> _UserBatchDeletion | _TeamsChanged:
     """Rewrites every team the users belong to and deletes their rows in one transaction, so a
     failure anywhere rolls back the whole batch. Teams a user still names but which no longer exist
     are skipped; the user row goes away regardless. Every team lock is taken before the first user
     row write: a SCIM group push holds its team's lock while it waits on its members' rows, so
     taking one team's lock after writing a member it shares would deadlock against that push. The
-    user rows are then locked through ``USER_ROWS_LOCK_SQL``, before the per-team rewrites touch them."""
+    user rows are then locked through ``USER_ROWS_LOCK_SQL``, before the per-team rewrites touch them.
+    A push that committed while this waited on those rows can have added a user to a team ``teams_of``
+    missed, so the teams are read again under the row locks and an unlocked one returns them for a retry."""
+    user_ids: Final = frozenset(u.user_id for u in users)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
-        team_rows: Final = await _team_tx_db(tx).find_many(
-            where=_in_filter("team_id", frozenset(t for teams in teams_of.values() for t in teams))
-        )
+        team_rows: Final = await _team_tx_db(tx).find_many(where=_in_filter("team_id", _all_teams(teams_of)))
         team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
         for team_id in team_ids:
             _ = await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        _ = await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(u.user_id for u in users))
+        _ = await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(user_ids))
+        current_teams_of: Final = _teams_of(
+            await _user_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),
+            await _membership_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),
+        )
+        if not _all_teams(current_teams_of) <= _all_teams(teams_of):
+            return _TeamsChanged(teams_of=current_teams_of)
         removals: Final = MappingProxyType(
             {
                 tid: await _remove_members_from_team(
@@ -450,7 +479,7 @@ async def _delete_users_tx(
                     tuple(
                         MemberDeleteRequest(user_id=u.user_id, user_email=u.user_email)
                         for u in users
-                        if tid in teams_of[u.user_id]
+                        if tid in teams_of[u.user_id] | current_teams_of.get(u.user_id, frozenset())
                     ),
                     user_api_key_dict,
                 )
@@ -458,13 +487,36 @@ async def _delete_users_tx(
             }
         )
         deleted_keys: Final = await _delete_user_rows(
-            prisma_client, tx, frozenset(u.user_id for u in users), user_api_key_dict, litellm_changed_by
+            prisma_client, tx, user_ids, user_api_key_dict, litellm_changed_by
         )
     return _UserBatchDeletion(
         removals=removals,
         deleted_keys=deleted_keys.keys + tuple(k for r in removals.values() for k in r.deleted_keys),
         jwt_mapping_cache_keys=deleted_keys.jwt_mapping_cache_keys
         + tuple(k for r in removals.values() for k in r.jwt_mapping_cache_keys),
+    )
+
+
+async def _delete_users_on_current_teams(
+    prisma_client: PrismaClient,
+    users: Sequence["prisma_models.LiteLLM_UserTable"],
+    teams_of: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+    attempts_left: int = _USER_DELETE_ATTEMPTS,
+) -> _UserBatchDeletion | str:
+    outcome: Final = await _delete_users_tx(prisma_client, users, teams_of, user_api_key_dict, litellm_changed_by)
+    if isinstance(outcome, _UserBatchDeletion):
+        return outcome
+    if attempts_left <= 1:
+        return "the users' teams kept changing while they were being deleted, try again"
+    return await _delete_users_on_current_teams(
+        prisma_client,
+        users,
+        MappingProxyType({uid: teams_of[uid] | outcome.teams_of.get(uid, frozenset()) for uid in teams_of}),
+        user_api_key_dict,
+        litellm_changed_by,
+        attempts_left - 1,
     )
 
 
@@ -481,10 +533,15 @@ async def _delete_users(
     """Returns the error message when the transaction rolled back, in which case no row was touched."""
     user_ids: Final = frozenset(u.user_id for u in users)
     try:
-        deletion: Final = await _delete_users_tx(prisma_client, users, teams_of, user_api_key_dict, litellm_changed_by)
+        deletion: Final = await _delete_users_on_current_teams(
+            prisma_client, users, teams_of, user_api_key_dict, litellm_changed_by
+        )
     except Exception as e:  # noqa: BLE001  # the rolled-back batch is reported per row, not as a request failure
         verbose_proxy_logger.error("users/bulk_delete: failed to delete users %s: %s", sorted(user_ids), e)
         return _error_message(e)
+    if isinstance(deletion, str):
+        verbose_proxy_logger.error("users/bulk_delete: failed to delete users %s: %s", sorted(user_ids), deletion)
+        return deletion
     if deletion.deleted_keys:
         KeyManagementEventHooks.create_key_deleted_audit_logs(
             keys_being_deleted=deletion.deleted_keys,
@@ -559,12 +616,7 @@ async def bulk_delete_users(
     memberships: Final = await TeamMembershipRepository(prisma_client).table.find_many(
         where=_in_filter("user_id", candidate_ids)
     )
-    teams_of: Final = MappingProxyType(
-        {
-            u.user_id: frozenset(u.teams) | frozenset(m.team_id for m in memberships if m.user_id == u.user_id)
-            for u in candidates
-        }
-    )
+    teams_of: Final = _teams_of(candidates, memberships)
     deletion: Final = (
         await _delete_users(
             prisma_client,
