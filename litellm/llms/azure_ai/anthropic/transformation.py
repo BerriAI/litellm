@@ -6,8 +6,13 @@ from typing import Final
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+
+_AZURE_ANTHROPIC_NON_BODY_PARAMS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset(
+    {"api_key", "azure_ad_token_provider", "extra_body", "max_retries", "stream_options"}
+)
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -128,9 +133,4 @@ class AzureAnthropicConfig(AnthropicConfig):
             headers=headers,
         )
 
-        # Remove unsupported parameters for Azure AI Anthropic
-        data.pop("extra_body", None)
-        data.pop("max_retries", None)
-        data.pop("stream_options", None)
-
-        return data
+        return {key: value for key, value in data.items() if key not in _AZURE_ANTHROPIC_NON_BODY_PARAMS}

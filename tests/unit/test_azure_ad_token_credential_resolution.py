@@ -28,9 +28,7 @@ Tests below pin two things:
    ``azure_ad_token`` from a deployment's ``litellm_params``.
 """
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from typing import Final
 
 
 class TestCredentialLiteLLMParamsAzureAdToken:
@@ -211,3 +209,39 @@ class TestRouterCredentialResolutionS3OutputBucket:
         assert credentials is not None
         assert credentials.get("s3_bucket_name") == "in-bucket"
         assert "s3_output_bucket_name" not in credentials
+
+
+def test_azure_anthropic_request_body_does_not_include_azure_credentials() -> None:
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+
+    credential_params: Final = {
+        "api_key": "test-api-key",
+        "azure_ad_token": "test-access-token",
+        "azure_ad_token_provider": "test-token-provider",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        "tenant_id": "test-tenant-id",
+        "azure_scope": "test-scope",
+        "azure_username": "test-username",
+        "azure_password": "test-password",
+    }
+    output_config: Final = {"format": {"type": "json_object"}}
+    extra_body_params: Final = {
+        key: value
+        for key, value in credential_params.items()
+        if key not in {"api_key", "azure_ad_token"}
+    }
+    body: Final = AzureAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "api_key": credential_params["api_key"],
+            "azure_ad_token": credential_params["azure_ad_token"],
+            "extra_body": {**extra_body_params, "output_config": output_config},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert set(credential_params).isdisjoint(body)
+    assert body["output_config"] == output_config
