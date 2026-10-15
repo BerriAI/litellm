@@ -1547,7 +1547,7 @@ describe("UsagePage", () => {
     });
 
     it("should not be visible for non-proxy-admin users", () => {
-      mockUseAuthorized.mockReturnValue({
+      const nonAdminAuthState = {
         isLoading: false,
         isAuthorized: true,
         token: "mock-token",
@@ -1558,7 +1558,8 @@ describe("UsagePage", () => {
         premiumUser: true,
         disabledPersonalKeyCreation: false,
         showSSOBanner: false,
-      });
+      };
+      mockUseAuthorized.mockReturnValue(nonAdminAuthState);
       renderWithProviders(<UsagePage {...defaultProps} />);
       expect(screen.queryByRole("button", { name: /email summary/i })).not.toBeInTheDocument();
     });

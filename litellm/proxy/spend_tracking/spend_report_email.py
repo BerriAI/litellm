@@ -950,9 +950,7 @@ async def send_email_spend_reports_for_frequency(
         return
 
     fallback_recipients: Final = (
-        os.getenv("TEST_EMAIL_ADDRESS")
-        or os.getenv("SMTP_SENDER_EMAIL")
-        or os.getenv("SENDGRID_SENDER_EMAIL")
+        os.getenv("TEST_EMAIL_ADDRESS") or os.getenv("SMTP_SENDER_EMAIL") or os.getenv("SENDGRID_SENDER_EMAIL")
     )
     if fallback_recipients:
         recipients_tuple: Final = tuple(r.strip() for r in fallback_recipients.split(",") if r.strip())

@@ -42,7 +42,7 @@ describe("SpendReportEmailSettings", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Automatically send daily, weekly, and/or monthly spend reports to configured email addresses. Includes cumulative breakdowns by team, API keys, and models.",
+          "Automatically send scheduled spend reports to configured email addresses. Reports run on LiteLLM's spend report schedule (weekly and monthly) with cumulative breakdowns by team, API keys, and models.",
         ),
       ).toBeInTheDocument();
       expect(screen.getAllByDisplayValue("finance@example.com").length).toBeGreaterThan(0);
@@ -186,7 +186,7 @@ describe("SpendReportEmailSettings", () => {
       expect(screen.getByDisplayValue("exec@example.com")).toBeInTheDocument();
       expect(screen.getByDisplayValue("alpha-lead@example.com")).toBeInTheDocument();
       expect(screen.getByText("Team: Team Alpha")).toBeInTheDocument();
-      expect(screen.getByText("Daily (Previous Day)")).toBeInTheDocument();
+      expect(screen.getByText("Daily")).toBeInTheDocument();
       expect(screen.getByText("Monthly (1st of Month)")).toBeInTheDocument();
       expect(screen.getByText("Team Alpha")).toBeInTheDocument();
     });
@@ -354,7 +354,7 @@ describe("SpendReportEmailSettings", () => {
     expect(testButton).toBeDisabled();
   });
 
-  it("displays server timezone in the Send Time label", async () => {
+  it("displays server timezone in the trigger schedule description", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
         alerts: [
@@ -362,7 +362,7 @@ describe("SpendReportEmailSettings", () => {
             id: "alert-tz",
             name: "Timezone Alert",
             enabled: true,
-            frequency: "daily",
+            frequency: "weekly",
             send_time: "09:00",
             recipient_emails: ["ops@example.com"],
             group_by: ["team"],
@@ -382,11 +382,11 @@ describe("SpendReportEmailSettings", () => {
     renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
 
     await waitFor(() => {
-      expect(screen.getByText("Send Time (CEST)")).toBeInTheDocument();
+      expect(screen.getByText(/CEST/)).toBeInTheDocument();
     });
   });
 
-  it("renders weekly alerts with day of week selector and tooltip", async () => {
+  it("renders weekly alerts with trigger schedule info", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
         alerts: [
@@ -410,9 +410,8 @@ describe("SpendReportEmailSettings", () => {
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Weekly Friday Spend")).toBeInTheDocument();
-      expect(screen.getByText("Day of Week")).toBeInTheDocument();
-      expect(screen.getByText("Friday")).toBeInTheDocument();
-      expect(screen.getAllByText("Weekly").length).toBeGreaterThan(0);
+      expect(screen.getByText(/Dispatched on the proxy weekly spend report schedule/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Weekly/i).length).toBeGreaterThan(0);
     });
   });
 
@@ -489,9 +488,6 @@ describe("SpendReportEmailSettings", () => {
     const nameInput = screen.getByDisplayValue("Original Name");
     fireEvent.change(nameInput, { target: { value: "Updated Name" } });
 
-    const timeInput = screen.getByDisplayValue("09:00");
-    fireEvent.change(timeInput, { target: { value: "10:30" } });
-
     const recipientsInput = screen.getByDisplayValue("original@example.com");
     fireEvent.change(recipientsInput, { target: { value: "updated@example.com, second@example.com" } });
 
@@ -503,7 +499,7 @@ describe("SpendReportEmailSettings", () => {
 
     const expectedAlert = {
       name: "Updated Name",
-      send_time: "10:30",
+      send_time: "09:00",
       recipient_emails: ["updated@example.com", "second@example.com"],
       enabled: false,
     };
