@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
@@ -19,6 +21,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
+from integration._support.otlp_sink import AuditConfigWriter, SpanSinks, recorded_spans
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -26,6 +29,7 @@ AWS_KEY: Final = "AKIA" + "SYNTHETIC0000000"
 GITHUB_TOKEN: Final = "ghp_" + "a1" * 18
 FORBIDDEN_WORD: Final = "synthetic-forbidden-word"
 LEAK_MARK: Final = "SYNTHETIC-LEAK-TOKEN"
+OUTAGE_MARK: Final = "SYNTHETIC-PROVIDER-OUTAGE"
 OBSERVE_BLOCK: Final = "cf-observe-block"
 OBSERVE_MASK: Final = "cf-observe-mask"
 ENFORCE_BLOCK: Final = "cf-enforce-block"
@@ -122,6 +126,8 @@ def _responses_reply(answer: str) -> Reply:
 
 
 def _provider(request: Request) -> Reply:
+    if OUTAGE_MARK.encode() in request.body:
+        return Reply(status=503, body=b'{"error": {"message": "synthetic provider outage", "type": "server_error"}}')
     answer: Final = _provider_answer(request.body)
     if request.target.endswith("/v1/messages"):
         return _messages_reply(answer)
@@ -454,3 +460,154 @@ def test_a_logging_only_content_filter_created_through_the_api_records_every_mat
         )
     finally:
         rig.proxy.client.delete(f"/guardrails/{guardrail_id}", headers={"Authorization": f"Bearer {rig.proxy.key}"})
+
+
+def test_guardrails_monitor_counts_observe_only_matches_as_flagged_not_blocked(rig: Rig) -> None:
+    name: Final = "cf-observe-usage-" + uuid.uuid4().hex[:8]
+    headers: Final = {"Authorization": f"Bearer {rig.proxy.key}"}
+    created: Final = rig.proxy.client.post(
+        "/guardrails",
+        json={"guardrail": {"guardrail_name": name, **_content_filter(name, "logging_only", "BLOCK", default_on=True)}},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    guardrail_id: Final = str(object_value(created.json())["guardrail_id"])
+    try:
+        eventually(
+            lambda: _sync_chat(rig, f"{_marker()} {SECRETS}")[0],
+            lambda identity: bool(rig.entries(identity, name)),
+            seconds=70,
+        )
+        today: Final = datetime.now(timezone.utc).date().isoformat()
+        detail: Final = eventually(
+            lambda: object_value(
+                rig.proxy.client.get(
+                    f"/guardrails/usage/detail/{guardrail_id}",
+                    params={"start_date": today, "end_date": today},
+                    headers=headers,
+                ).json()
+            ),
+            lambda body: int(str(body.get("requestsEvaluated", 0))) >= 1,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert (detail["failRate"], detail["status"]) == (0.0, "healthy"), detail
+    finally:
+        rig.proxy.client.delete(f"/guardrails/{guardrail_id}", headers=headers)
+
+
+@pytest.mark.parametrize(
+    ("environment", "name_key", "status_key"),
+    (
+        pytest.param({}, "guardrail_name", "guardrail_status", id="otel-v1"),
+        pytest.param({"LITELLM_OTEL_V2": "1"}, "litellm.guardrail.name", "litellm.guardrail.status", id="otel-v2"),
+    ),
+)
+def test_otel_guardrail_spans_carry_the_flagged_status_without_an_error(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+    environment: dict[str, str],
+    name_key: str,
+    status_key: str,
+) -> None:
+    config_path: Final = otel_audit_config(tmp_path, {"cache": False})
+    config: Final = yaml.safe_load(config_path.read_text())
+    config["guardrails"] = [_content_filter(OBSERVE_BLOCK, "logging_only", "BLOCK", default_on=True)]
+    config_path.write_text(yaml.safe_dump(config))
+    overrides: Final = {"OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": audit_sinks.operator, **environment}
+    with (
+        wire_server(_provider) as provider,
+        owned_proxy_process(gateway, tmp_path, overrides, config=config_path, workers=2) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/gpt-5.4-mini", api_base=provider.url + "/v1", api_key="synthetic-openai-key"
+        )
+        start, _ = recorded_spans(audit_sinks.operator)
+        marker: Final = _marker()
+        client: Final = openai.OpenAI(
+            base_url=str(owned.gateway.client.base_url).rstrip("/") + "/v1", api_key=owned.gateway.key, max_retries=0
+        )
+        completion: Final = client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": f"{marker} {SECRETS}"}]
+        )
+        assert completion.choices[0].message.content == _answer(marker)
+
+        spans: Final = eventually(
+            lambda: tuple(
+                span
+                for span in recorded_spans(audit_sinks.operator, start)[1]
+                if span["attributes"].get(name_key) == OBSERVE_BLOCK
+            ),
+            lambda found: len(found) >= 2,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert sorted(
+            (str(span["attributes"].get(status_key)), "error.type" in span["attributes"]) for span in spans
+        ) == [("guardrail_flagged", False), ("success", False)], spans
+
+
+def _burst_call(rig: Rig, index: int) -> tuple[str, int, str, str]:
+    marker: Final = _marker()
+    if index % 4 == 0:
+        enforced: Final = rig.proxy.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": rig.chat_model,
+                "messages": [{"role": "user", "content": f"{marker} {SECRETS}"}],
+                "guardrails": [ENFORCE_BLOCK],
+            },
+            headers={"Authorization": f"Bearer {rig.proxy.key}"},
+        )
+        return "enforce", enforced.status_code, marker, ""
+    if index % 4 == 1:
+        failed: Final = rig.proxy.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": rig.chat_model,
+                "messages": [{"role": "user", "content": f"{marker} {OUTAGE_MARK} {SECRETS}"}],
+            },
+            headers={"Authorization": f"Bearer {rig.proxy.key}"},
+        )
+        return "outage", failed.status_code, marker, ""
+    endpoint: Final = list(SYNC_CALLS)[index % len(SYNC_CALLS)]
+    response_id, answer = SYNC_CALLS[endpoint](rig, f"{marker} {SECRETS}\n{FORBIDDEN_WORD}")
+    assert answer == _answer(marker), (endpoint, answer)
+    return "observe:" + endpoint, 200, marker, response_id
+
+
+def test_concurrent_burst_with_a_provider_outage_records_every_observed_call_once(rig: Rig) -> None:
+    def call(index: int) -> tuple[str, int, str, str]:
+        return _burst_call(rig, index)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results: Final = tuple(pool.map(call, range(32)))
+
+    assert sorted({(kind.split(":")[0], status) for kind, status, _, _ in results}) == [
+        ("enforce", 400),
+        ("observe", 200),
+        ("outage", 503),
+    ], results
+    sent: Final = rig.provider_bodies("mark-")
+    for kind, _, marker, _ in results:
+        if kind == "enforce":
+            assert not any(marker in body for body in sent), marker
+    observed: Final = tuple((kind, response_id) for kind, _, _, response_id in results if kind.startswith("observe"))
+    assert len(observed) == 16
+    for kind, response_id in observed:
+        assert _verdicts(rig.entries(response_id, OBSERVE_BLOCK)) == [
+            ("logging_only", "guardrail_flagged", EVERY_FINDING),
+            ("logging_only", "success", ()),
+        ], (kind, response_id)
+
+    marker: Final = _marker()
+    response_id, answer = _sync_chat(rig, f"{marker} {SECRETS}")
+    assert answer == _answer(marker)
+    assert _verdicts(rig.entries(response_id, OBSERVE_BLOCK))[0] == (
+        "logging_only",
+        "guardrail_flagged",
+        ("aws_access_key", "github_pat"),
+    )
