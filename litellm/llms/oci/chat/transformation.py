@@ -581,7 +581,7 @@ class OCIChatConfig(BaseConfig):
             # When a user message follows the tool results, the turn is a normal
             # one and the request keeps the previous shape (tool results stay in
             # ``chatHistory``).
-            is_tool_result_turn: Final = bool(messages) and messages[-1].get("role") == "tool"
+            is_tool_result_turn: Final = bool(messages) and messages[-1]["role"] == "tool"
             remaining_history, trailing_tool_results = (
                 split_trailing_tool_results(cohere_history) if is_tool_result_turn else (cohere_history, [])
             )
