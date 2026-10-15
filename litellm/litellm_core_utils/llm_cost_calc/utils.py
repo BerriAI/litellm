@@ -2104,6 +2104,8 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                     model_info=pricing,
+                    data_residency=data_residency,
+                    optional_params=optional_params,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
