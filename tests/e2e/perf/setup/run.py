@@ -51,7 +51,7 @@ def wire_request(item: PlannedRequest, setup: CaseSetup) -> WireRequest:
         model=item.model_group,
         shape=WireShape(
             name=item.shape.name,
-            input_tokens=item.shape.input_tokens,
+            input_tokens=item.input_tokens,
             tools=item.shape.tools,
             output_tokens=item.shape.output_tokens,
         ),

@@ -9,9 +9,8 @@ from __future__ import annotations
 from typing import Final
 
 from setup.performance_test_case import (
-    LONG_CONTEXT,
-    SHORT_CHAT,
-    TOOL_CALL,
+    LONG,
+    SHORT,
     Guardrail,
     Limit,
     PerformanceTestCase,
@@ -53,7 +52,7 @@ CASE: Final = PerformanceTestCase(
         rps=50.0,
         total_requests=15000,
         endpoints={"chat_completions": 0.5, "responses": 0.25, "messages": 0.25},
-        shapes={SHORT_CHAT: 0.6, LONG_CONTEXT: 0.2, TOOL_CALL: 0.2},
+        shapes={SHORT: 0.75, LONG: 0.25},
         stream_share=0.5,
         intervene_share=0.1,
         block_share=0.02,
