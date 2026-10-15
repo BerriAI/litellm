@@ -1,6 +1,6 @@
 {
   "baseline": "b22a0bd9e5531d443da2945951f99573c0a02413",
-  "head": "a6fc509ce42290666d3a5e9c1753e39b98775e77",
+  "head": "40e7edbd8204cce921ecbeb8d6c075877b99a065",
   "date": "2026-10-14",
   "observations": {
     "baseline": "Both decisions routes return HTTP 400, Nace provider search has no result",
