@@ -1,7 +1,8 @@
-"""Small bodies at a high rate on the small gateway: the shape of github issue #46276 (short chat
-requests, master key and virtual keys, no JWT, no guardrails, a few hundred rps on one 4-worker
-pod), where the gateway's own per-request overhead is the whole number and a slower middleware
-chain or an extra Redis round trip per request shows up directly."""
+"""Small bodies at a low rate on the small gateway: the shape of github issue #46276 (short chat
+requests, master key and virtual keys, no JWT, no guardrails) at 5 rps on one 4-worker pod, far
+under what the pod sustains, so nothing queues and gateway_added_seconds is the gateway's own
+per-request overhead. A slower middleware chain or an extra Redis round trip per request shows up
+directly instead of hiding behind queue wait."""
 
 from __future__ import annotations
 
@@ -19,8 +20,8 @@ from setup.performance_test_case import (
 TINY: Final = RequestShape("tiny", input_tokens=(2_500, 4_000))
 
 CASE: Final = PerformanceTestCase(
-    name="small_bodies_high_rate",
-    teams=(Team("team-a", models=("gpt-6-luna", "claude-sonnet-5", "claude-sonnet-5-bedrock"), max_budget=5000.0),),
+    name="small_bodies_5rps",
+    teams=(Team("team-a", models=("gpt-6-luna", "claude-sonnet-5", "claude-sonnet-5-bedrock")),),
     users=(),
     virtual_keys=(
         VirtualKey("key-a1", team="team-a"),
@@ -31,14 +32,14 @@ CASE: Final = PerformanceTestCase(
     guardrails=(),
     traffic=Traffic(
         seed=11,
-        rps=200.0,
-        total_requests=60000,
+        rps=5.0,
+        total_requests=3000,
         endpoints={"chat_completions": 0.6, "responses": 0.2, "messages": 0.2},
         shapes={TINY: 1.0},
         stream_share=0.5,
         intervene_share=0.0,
         block_share=0.0,
-        concurrency=400,
+        concurrency=20,
     ),
     limits=(
         Limit("unexpected_status_count", max=0),
