@@ -14,6 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+from tests.unit.conftest import AsyncOnlyImageFetch
 
 _STATE: Final = "Customer asked for a refund"
 _SYSTEMONE_QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
@@ -158,3 +159,124 @@ async def test_router_asystemone_logs_the_systemone_call_type(
     assert isinstance(response, DecisionsResponse)
     assert recorder.call_types == ["asystemone"]
     assert not isinstance(response, OpenAIDecisionResponse)
+
+
+_BOX_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "jev-1.14.0",
+    "answers": {
+        "has_mug": {"type": "noul", "noul": 0.97},
+        "mug": {"type": "box", "box": {"top": 0.1, "bottom": 0.5, "left": 0.2, "right": 0.6}, "confidence": 0.84},
+    },
+    "usage": {"input_tokens": 299, "output_tokens": 37},
+}
+_MUG_BOX: Final[Mapping[str, float]] = MappingProxyType({"top": 0.1, "bottom": 0.5, "left": 0.2, "right": 0.6})
+
+
+@pytest.mark.asyncio
+async def test_systemone_sends_assets_and_box_questions_to_typesafe(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_BOX_RESPONSE)
+    questions: Final[Mapping[str, object]] = {
+        "has_mug": {"type": "noul", "instructions": "Is there a mug in `photo-1`?"},
+        "mug": {"type": "box", "instructions": "the mug in `photo-1`"},
+    }
+
+    response: Final = await litellm.asystemone(
+        model="typesafe/jev-1.14.0",
+        state={"photo": "photo-1"},
+        assets={"photo-1": {"type": "image", "format": "png", "data_base64": "AA=="}},
+        questions=questions,
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "jev-1.14.0",
+        "state": {"photo": "photo-1"},
+        "questions": questions,
+        "assets": {"photo-1": {"type": "image", "format": "png", "data_base64": "AA=="}},
+    }
+    assert isinstance(response, DecisionsResponse)
+    assert response.answers["mug"].model_dump(mode="json") == {"type": "box", "box": _MUG_BOX, "confidence": 0.84}
+
+
+@pytest.mark.asyncio
+async def test_decisions_input_images_reach_typesafe_as_assets_referenced_in_the_state(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_BOX_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.14.0",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Desk photo:"},
+                    {"type": "input_image", "image_url": _PNG_DATA_URL},
+                ],
+            }
+        ],
+        questions=[
+            {"type": "predicate", "name": "has_mug", "instructions": "Is there a mug on the desk?"},
+            {"type": "box", "name": "mug", "instructions": "the mug on the desk"},
+        ],
+        api_key="caller-key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    (reference,) = sent["assets"]
+    assert sent["state"] == f"Desk photo:\n\n{reference}"
+    assert sent["assets"][reference] == {"type": "image", "format": "png", "data_base64": "AA=="}
+    assert sent["questions"]["mug"] == {"type": "box", "instructions": "the mug on the desk"}
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "has_mug", "probability": 0.97},
+        {"type": "box", "name": "mug", "box": _MUG_BOX, "confidence": 0.84},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_decisions_remote_images_reach_typesafe_inlined_as_assets(
+    respx_mock: respx.MockRouter, async_only_image_fetch: AsyncOnlyImageFetch
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_BOX_RESPONSE)
+
+    await litellm.adecisions(
+        model="typesafe/jev-1.14.0",
+        input=[{"role": "user", "content": [{"type": "input_image", "image_url": "https://images.example/desk.png"}]}],
+        questions=[{"type": "predicate", "name": "has_mug", "instructions": "Is there a mug on the desk?"}],
+        api_key="caller-key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert async_only_image_fetch.fetched == ["https://images.example/desk.png"]
+    assert sent["assets"] == {
+        sent["state"]: {"type": "image", "format": "png", "data_base64": async_only_image_fetch.base64_png}
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scoped_provider", "expected_headers"),
+    (("typesafe", {"typesafe-danger-zone-long-context": "true"}), ("perplexity", {})),
+    ids=("typesafe", "another_provider"),
+)
+async def test_provider_specific_headers_reach_typesafe_only_when_scoped_to_it(
+    scoped_provider: str, expected_headers: Mapping[str, str], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
+
+    await litellm.asystemone(
+        model="typesafe/jev-1.14.0",
+        state=_STATE,
+        questions=_SYSTEMONE_QUESTIONS,
+        api_key="caller-key",
+        provider_specific_header={
+            "custom_llm_provider": scoped_provider,
+            "extra_headers": {"TypeSafe-Danger-Zone-Long-Context": "true"},
+        },
+    )
+
+    sent_headers: Final = route.calls.last.request.headers
+    assert {
+        name: value for name, value in sent_headers.items() if name.startswith("typesafe-danger-zone-")
+    } == expected_headers

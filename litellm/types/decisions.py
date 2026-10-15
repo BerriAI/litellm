@@ -56,8 +56,17 @@ class ScoreQuestion(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class BoxQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    instructions: Annotated[
+        DecisionsJSON, Field(description="What to find, and in which image, such as 'the coffee mug in `photo`'")
+    ]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 DecisionQuestion: TypeAlias = Annotated[
-    NoulQuestion | ChoiceQuestion | ScoreQuestion,
+    NoulQuestion | ChoiceQuestion | ScoreQuestion | BoxQuestion,
     Field(discriminator="type"),
 ]
 
@@ -78,6 +87,17 @@ DecisionsImage: TypeAlias = (
     Annotated[str, Field(pattern=r"^(?i:data:image/[^;,\s]+(?:;[^;,\s]+)*;base64,.+|https?://\S+)$")]
     | DecisionsBase64Image
 )
+
+
+class DecisionsAsset(LiteLLMPydanticObjectBase):
+    type: Literal["image"] | None = None
+    format: Annotated[Literal["png", "jpg", "jpeg"], Field(description="The image's format, in lowercase")]
+    data_base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes, no data: prefix")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsAssets: TypeAlias = Mapping[Annotated[str, Field(min_length=1)], DecisionsAsset]
 
 
 class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
@@ -135,6 +155,15 @@ class DecisionsRequestBody(DecisionsMediaBody):
         Sequence[DecisionsImage] | None,
         Field(description="Images as data URLs or content_type plus base64, for providers that look at images"),
     ] = None
+    assets: Annotated[
+        DecisionsAssets | None,
+        Field(
+            description=(
+                "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions "
+                "or criteria where the image belongs"
+            )
+        ),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -149,6 +178,7 @@ class DecisionsCallParams(TypedDict, total=False):
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
     images: ReadOnly[Sequence[DecisionsImage] | None]
+    assets: ReadOnly[DecisionsAssets | None]
     audio: ReadOnly[Sequence[DecisionsAudio]]
     videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
@@ -184,8 +214,25 @@ class ScoreAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class DecisionsBox(LiteLLMPydanticObjectBase):
+    top: float
+    bottom: float
+    left: float
+    right: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class BoxAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    box: DecisionsBox
+    confidence: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 DecisionAnswer: TypeAlias = Annotated[
-    NoulAnswer | ChoiceAnswer | ScoreAnswer,
+    NoulAnswer | ChoiceAnswer | ScoreAnswer | BoxAnswer,
     Field(discriminator="type"),
 ]
 
@@ -311,8 +358,16 @@ class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class OpenAIBoxQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="What to find in the input's image")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 OpenAIDecisionQuestion: TypeAlias = Annotated[
-    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion,
+    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion | OpenAIBoxQuestion,
     Field(discriminator="type"),
 ]
 
@@ -394,8 +449,17 @@ class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
 
+class OpenAIBoxAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["box"] = "box"
+    name: str | None
+    box: DecisionsBox
+    confidence: float
+
+    model_config = ConfigDict(frozen=True)
+
+
 OpenAIDecisionAnswer: TypeAlias = Annotated[
-    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer,
+    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIBoxAnswer | OpenAIRefusalAnswer,
     Field(discriminator="type"),
 ]
 
@@ -432,6 +496,7 @@ class OpenAIDecisionResponse(_HiddenParamsResponse):
 
 
 _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_ASSETS: Final[Mapping[str, DecisionsAsset]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +546,16 @@ class DecisionsIRScoreQuestion:
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
-DecisionsIRQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
+@dataclass(frozen=True, slots=True)
+class DecisionsIRBoxQuestion:
+    name: str | None
+    instructions: DecisionsJSON
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+DecisionsIRQuestion: TypeAlias = (
+    DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion | DecisionsIRBoxQuestion
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,6 +563,7 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
 
@@ -529,12 +604,23 @@ class DecisionsIRScoreAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionsIRBoxAnswer:
+    box: DecisionsBox
+    confidence: float
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionsIRRefusal:
     pass
 
 
 DecisionsIRAnswer: TypeAlias = (
-    DecisionsIRPredicateAnswer | DecisionsIRChoiceAnswer | DecisionsIRScoreAnswer | DecisionsIRRefusal
+    DecisionsIRPredicateAnswer
+    | DecisionsIRChoiceAnswer
+    | DecisionsIRScoreAnswer
+    | DecisionsIRBoxAnswer
+    | DecisionsIRRefusal
 )
 
 
