@@ -5,6 +5,9 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    ALWAYS_OPEN_OFF_PEAK_WINDOW,
+    Deployment,
+    OffPeakPricing,
     CostTrackingTestCase,
     ExactExpected,
     JsonResponse,
@@ -1375,6 +1378,199 @@ FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE: Final = CostTrac
         ),
     ),
     expected=RecountExpected(recount=RecountRates(input_cost_per_token=6e-07, output_cost_per_token=2.5e-06)),
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_TOOL_HISTORY: Final = CostTrackingTestCase(
+    name="fireworks_ai-accounts-fireworks-models-kimi-k3-stream_no_usage_tool_history",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+            },
+            {"role": "user", "content": "d41a7c2e9f55 what is the weather in Berlin this week"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_hist_01",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Berlin", "days": 7, "units": "metric"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_hist_01",
+                "content": '{"city": "Berlin", "temperature_c": 18, "conditions": "cloudy", "forecast": ["rain", "rain", "sun", "sun", "cloudy", "cloudy", "sun"]}',
+            },
+            {"role": "user", "content": "summarize that in one line"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "stream": True,
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "content": "Berlin is 18 degrees and cloudy with light rain tomorrow.",
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            done=True,
+        ),
+    ),
+    expected=RecountExpected(
+        recount=RecountRates(input_cost_per_token=6e-07, output_cost_per_token=2.5e-06), prompt_tokens=133
+    ),
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_NO_USAGE_TOOL_HISTORY: Final = CostTrackingTestCase(
+    name="fireworks_ai-accounts-fireworks-models-kimi-k3-messages_stream_no_usage_tool_history",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 64,
+        "system": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+        "messages": [
+            {"role": "user", "content": "8be0f3a1c7d2 what is the weather in Berlin this week"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_hist_01",
+                        "name": "get_weather",
+                        "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_hist_01",
+                        "content": '{"city": "Berlin", "temperature_c": 18, "conditions": "cloudy", "forecast": ["rain", "rain", "sun", "sun", "cloudy", "cloudy", "sun"]}',
+                    }
+                ],
+            },
+            {"role": "user", "content": "summarize that in one line"},
+        ],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Get the current weather and a short forecast for a city.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string", "description": "City name"},
+                        "days": {"type": "integer", "description": "Forecast horizon in days"},
+                        "units": {"type": "string", "enum": ["metric", "imperial"]},
+                    },
+                    "required": ["city"],
+                },
+            }
+        ],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "content": "Berlin is 18 degrees and cloudy with light rain tomorrow.",
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1789788231,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": None,
+            },
+            done=True,
+        ),
+    ),
+    expected=RecountExpected(
+        recount=RecountRates(input_cost_per_token=6e-07, output_cost_per_token=2.5e-06), prompt_tokens=111
+    ),
 )
 
 FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_TOOL_CALL: Final = CostTrackingTestCase(
@@ -3089,7 +3285,39 @@ FIREWORKS_EMBEDDINGS_V1: Final = CostTrackingTestCase(
 )
 
 
+_DEEPSEEK_V4P1_FLASH_OFF_PEAK: Final = Deployment(
+    off_peak_pricing=OffPeakPricing(
+        hours_utc=ALWAYS_OPEN_OFF_PEAK_WINDOW, input_cost_per_token=3e-07, output_cost_per_token=1.2e-06
+    )
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK: Final = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_INPUT_TEXT.model_copy(
+        update={
+            "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-off_peak",
+            "deployment": _DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+            "expected": ExactExpected(
+                spend=0.0010464, input_cost=0.000552, output_cost=0.0004944, prompt_tokens=1840, completion_tokens=412
+            ),
+        }
+    )
+)
+
+FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK_STREAM: Final = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_STREAM.model_copy(
+        update={
+            "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-off_peak_stream",
+            "deployment": _DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+            "expected": ExactExpected(
+                spend=0.0010464, input_cost=0.000552, output_cost=0.0004944, prompt_tokens=1840, completion_tokens=412
+            ),
+        }
+    )
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_OFF_PEAK_STREAM,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_INPUT_TEXT,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_FALLBACK_CACHE_READ_AT_HALF_INPUT_RATE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_DEEPSEEK_V4P1_FLASH_STREAM,
@@ -3108,6 +3336,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_TOOL_CALL,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_TOOL_HISTORY,
+    FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_MESSAGES_STREAM_NO_USAGE_TOOL_HISTORY,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_NO_USAGE_IMAGE_INPUT,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_RESPONSE_MODEL_OVERRIDE,
     FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_KIMI_K3_STREAM_RESPONSE_MODEL_OVERRIDE,

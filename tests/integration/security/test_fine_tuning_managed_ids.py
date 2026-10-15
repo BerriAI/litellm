@@ -329,10 +329,6 @@ def test_another_key_cannot_cancel_the_owners_managed_job_by_default(default_rig
 
 
 def test_another_key_cannot_create_with_the_owners_managed_file_by_default(default_rig: Rig) -> None:
-    pytest.skip(
-        "BUG: another key can create a fine-tuning job with the owner's managed training_file"
-        " when require_managed_files is off"
-    )
     created: Final = default_rig.proxy.request(
         "POST",
         "/v1/fine_tuning/jobs",

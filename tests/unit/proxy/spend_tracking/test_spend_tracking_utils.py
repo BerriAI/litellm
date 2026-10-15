@@ -15,6 +15,7 @@ import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -48,6 +49,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import hash_token
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -4448,7 +4450,10 @@ def test_user_traffic_carries_no_internal_call_origin():
 
 
 def _spend_log_for_call_type(
-    call_type: str, internal_call_origin: str | None = None, background: bool | None = None
+    call_type: str,
+    internal_call_origin: str | None = None,
+    background: bool | None = None,
+    managed_read: bool = False,
 ) -> dict:
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -4463,6 +4468,7 @@ def _spend_log_for_call_type(
                     "metadata": {
                         "user_api_key": "test-key",
                         "internal_call_origin": internal_call_origin,
+                        **({"_managed_background_response": True} if managed_read else {}),
                     }
                 },
             },
@@ -4506,6 +4512,15 @@ def test_spend_log_for_background_response_retrieval_counts_tokens():
     payload = _spend_log_for_call_type("aget_responses", background=True)
 
     assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_managed_background_response_read_counts_nothing():
+    """A proxy that tracks a background response bills it once through the cost poll, so a client
+    read the managed files hook marked must not count the job's tokens a second time."""
+    payload = _spend_log_for_call_type("aget_responses", background=True, managed_read=True)
+
+    assert payload["total_tokens"] == 0
+    assert payload["spend"] == 0.0
 
 
 def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
@@ -4619,6 +4634,34 @@ def test_get_spend_logs_id_separates_distinct_batches_whose_bodies_were_both_red
     ]
 
     assert ids == ["batch_first_batch_cost", "batch_second_batch_cost"]
+
+
+def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_that_fetched_it():
+    """The one billing event of a background response logs the body a read just fetched, so both
+    carry the same response id. Spend logs keep one row per request id, so the billing event must
+    key its row apart from the read's, or the charge reaches the key and no row ever shows it."""
+    response: Final = {"id": "resp_shared", "object": "response", "status": "completed", "background": True}
+    read_metadata: Final = {"user_api_key": "test-key", MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True}
+    billing_metadata: Final = {
+        "user_api_key": "test-key",
+        INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    }
+    request_ids: Final = tuple(
+        get_logging_payload(
+            kwargs={
+                "call_type": "aget_responses",
+                "model": "gpt-5.6",
+                "litellm_call_id": call_id,
+                "litellm_params": {"metadata": metadata},
+            },
+            response_obj=dict(response),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )["request_id"]
+        for call_id, metadata in (("call-read", read_metadata), ("call-bill", billing_metadata))
+    )
+
+    assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
 def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
