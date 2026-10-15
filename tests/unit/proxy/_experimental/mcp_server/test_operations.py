@@ -1943,3 +1943,56 @@ async def test_guardrail_context_never_recovers_a_previous_request_bearer(
         assert capture.data["incoming_bearer_token"] is None
     finally:
         auth_context_var.reset(previous)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delay", ["target", "probe", "exhausted"])
+async def test_discovery_optional_probes_use_remaining_listing_budget(delay, monkeypatch):
+    from types import SimpleNamespace
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult, ToolsCapability, Tool,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import subscriptions
+
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def blocked(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    async def tools(*args, **kwargs):
+        if delay == "exhausted":
+            await asyncio.sleep(0.08)
+        return ListToolsResult(tools=[Tool(name="usable", input_schema={"type": "object"})])
+
+    target = SimpleNamespace(
+        server=SimpleNamespace(protocol_version="2026-07-28", transport="http"),
+        client=SimpleNamespace(run_with_session=blocked),
+    )
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2026-07-28"])
+    # The existing listing budget includes optional target preparation and handshakes.
+    monkeypatch.setattr(operations, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
+        patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
+        patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
+        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
+        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+    ):
+        context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
+        result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)
+    assert result.capabilities.tools == ToolsCapability()
+    assert result.capabilities.resources is None
+    if delay == "exhausted":
+        targets.assert_not_awaited()
+        assert not entered.is_set()
+    else:
+        assert entered.is_set()
+        assert cleaned.is_set()

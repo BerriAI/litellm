@@ -87,14 +87,14 @@ async def test_legacy_listener_rejected_before_upstream_work(revision: str) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["multiple-resources", "denied"])
+@pytest.mark.parametrize("mode", ["stdio", "multiple-resources", "denied"])
 async def test_unsupported_targets_do_not_open_upstream_listeners(mode: str) -> None:
     client: Final = MCPClient(server_url="http://127.0.0.1:1/mcp", transport_type=MCPTransport.http)
     server: Final = MCPServer(
         server_id="upstream",
         name="upstream",
         url="http://localhost/mcp",
-        transport="http",
+        transport="stdio" if mode == "stdio" else "http",
         protocol_version="2025-11-25" if mode == "legacy" else "2026-07-28",
     )
     target: Final = subscriptions.SubscriptionTarget(server, client, "synthetic-fingerprint")
@@ -109,6 +109,7 @@ async def test_unsupported_targets_do_not_open_upstream_listeners(mode: str) -> 
     )
     error: Final = HTTPException if mode == "denied" else MCPError
     expected: Final = {
+        "stdio": "Modern upstream subscriptions require HTTP",
         "multiple-resources": "exactly one allowed server",
         "denied": "No authorized MCP subscription targets",
     }[mode]
