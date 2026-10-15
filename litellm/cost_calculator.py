@@ -146,6 +146,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
+    is_generalized_model_info,
     token_counter,
 )
 
@@ -1549,12 +1550,29 @@ def completion_cost(
         )
 
         requested_model: Final = model
-        potential_model_names: Final = [
+        raw_candidate_names: Final = (
             selected_model,
             _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
+            *((model,) if model is not None else ()),
+        )
+        candidate_model_info: Final = tuple(
+            _cost_map_model_info(candidate, custom_llm_provider) if candidate is not None else None
+            for candidate in raw_candidate_names
+        )
+        candidate_is_generalized: Final = tuple(
+            info is not None and is_generalized_model_info(info) for info in candidate_model_info
+        )
+        exact_model_names: Final = tuple(
+            candidate
+            for candidate, is_generalized in zip(raw_candidate_names, candidate_is_generalized, strict=True)
+            if not is_generalized
+        )
+        generalized_model_names: Final = tuple(
+            candidate
+            for candidate, is_generalized in zip(raw_candidate_names, candidate_is_generalized, strict=True)
+            if is_generalized
+        )
+        potential_model_names: Final = (*exact_model_names, *generalized_model_names)
 
         for idx, model in enumerate(potential_model_names):
             try:

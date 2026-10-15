@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Final, LiteralString
 
 import httpx
-import psutil
 import psycopg
 import pytest
 from integration._support.budget import case_timeout_seconds
@@ -54,9 +53,6 @@ LOCK_USER_ROW_SQL: Final = 'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_i
 LOCK_KEY_ROW_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s FOR UPDATE'
 SESSIONS_BLOCKED_BY_SQL: Final = (
     "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
-)
-CLIENT_PORTS_BLOCKED_BY_SQL: Final = (
-    "SELECT client_port FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid)) AND client_port > 0"
 )
 TRANSACTIONS_OPEN_SINCE_SQL: Final = """
 SELECT count(*)::int AS open FROM pg_stat_activity
@@ -296,22 +292,6 @@ def _transactions_open_since(moment: str) -> int:
     return _int_value(read_rows(TRANSACTIONS_OPEN_SINCE_SQL, (moment,)), "open")
 
 
-def _client_ports_blocked_by(backend_pid: int) -> frozenset[int]:
-    rows: Final = read_rows(CLIENT_PORTS_BLOCKED_BY_SQL, (str(backend_pid),))
-    return frozenset(_int_value((row,), "client_port") for row in rows)
-
-
-def _local_tcp_ports(pid: int) -> Iterator[int]:
-    worker: Final = psutil.Process(pid)
-    for process in (worker, *worker.children(recursive=True)):
-        yield from (connection.laddr.port for connection in process.net_connections(kind="tcp"))
-
-
-def _worker_holding(owned: OwnedProxy, client_ports: frozenset[int]) -> int:
-    (worker,) = tuple(pid for pid in owned.worker_pids() if client_ports & frozenset(_local_tcp_ports(pid)))
-    return worker
-
-
 def _roster_ids(team: str) -> tuple[str, ...]:
     rows: Final = read_rows(TEAM_ROW_SQL, (team,))
     assert len(rows) == 1, rows
@@ -508,11 +488,16 @@ def test_a_worker_killed_mid_push_leaves_the_old_roster_and_a_retry_lands_the_ne
         pinned_key: Final = _team_key_for(scenario, team, max(leaving))
         with _holding_row_lock(LOCK_KEY_ROW_SQL, sha256(pinned_key.encode()).hexdigest()) as holder_pid:
             push: Final = pool.submit(_push_outcome, candidate, team, arriving)
-            blocked_ports: Final = eventually(
-                lambda: _client_ports_blocked_by(holder_pid), bool, seconds=UNFIXED_PUSH_SECONDS
+            _ = eventually(
+                lambda: _sessions_blocked_by(holder_pid),
+                lambda waiting: waiting > 0,
+                seconds=UNFIXED_PUSH_SECONDS,
             )
             killed_at: Final = _database_now()
-            _ = owned.kill_worker(_worker_holding(owned, blocked_ports))
+            victims: Final = tuple(sorted(owned.worker_pids()))
+            assert victims, "expected at least one serving worker"
+            for pid in victims:
+                _ = owned.kill_worker(pid)
         record_property("interrupted_push", push.result())
         _ = eventually(lambda: _transactions_open_since(killed_at), lambda open: open == 0, seconds=ROLLBACK_SECONDS)
         settled: Final = frozenset(_roster_ids(team))
