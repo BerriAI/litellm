@@ -374,6 +374,64 @@ class ModelMetadata(LiteLLMBaseModel):
         return value if levels is None or isinstance(levels, (list, tuple)) and value in levels else None
 
 
+def guaranteed_token_limit(
+    sources: tuple[ModelMetadata, ...], field: Literal["context_window", "max_input_tokens", "max_output_tokens"]
+) -> int | None:
+    values: Final = tuple(
+        source.context_window
+        if field == "context_window"
+        else source.max_input_tokens
+        if field == "max_input_tokens"
+        else source.max_output_tokens
+        for source in sources
+    )
+    if not values or any(value is None for value in values):
+        return None
+    return min(value for value in values if value is not None)
+
+
+def _common_metadata_list(values: tuple[Sequence[str] | None, ...]) -> Sequence[str] | None:
+    if not values or any(value is None for value in values):
+        return None
+    first: Final = values[0]
+    if first is None:
+        return None
+    return tuple(item for item in first if all(value is not None and item in value for value in values))
+
+
+def _common_metadata_boolean(values: tuple[bool | None, ...]) -> bool | None:
+    return all(values) if values and all(value is not None for value in values) else None
+
+
+def common_model_metadata(sources: tuple[ModelMetadata, ...]) -> ModelMetadata:
+    efforts: Final = _common_metadata_list(tuple(source.reasoning_effort_levels for source in sources))
+    defaults: Final = tuple(source.default_reasoning_effort for source in sources)
+    default: Final = defaults[0] if defaults and all(value == defaults[0] for value in defaults) else None
+    request_defaults: Final = tuple(source.request_defaults for source in sources)
+    return ModelMetadata(
+        context_window=guaranteed_token_limit(sources, "context_window"),
+        max_input_tokens=guaranteed_token_limit(sources, "max_input_tokens"),
+        max_output_tokens=guaranteed_token_limit(sources, "max_output_tokens"),
+        supports_function_calling=_common_metadata_boolean(
+            tuple(source.supports_function_calling for source in sources)
+        ),
+        supports_parallel_function_calling=_common_metadata_boolean(
+            tuple(source.supports_parallel_function_calling for source in sources)
+        ),
+        supports_reasoning=_common_metadata_boolean(tuple(source.supports_reasoning for source in sources)),
+        reasoning_effort_levels=efforts,
+        default_reasoning_effort=default if efforts is None or default in efforts else None,
+        supported_endpoints=_common_metadata_list(tuple(source.supported_endpoints for source in sources)),
+        supported_modalities=_common_metadata_list(tuple(source.supported_modalities for source in sources)),
+        supported_output_modalities=_common_metadata_list(
+            tuple(source.supported_output_modalities for source in sources)
+        ),
+        request_defaults=request_defaults[0]
+        if request_defaults and all(value == request_defaults[0] for value in request_defaults)
+        else None,
+    )
+
+
 def resolve_model_metadata(catalog: Mapping[str, object], configured: Mapping[str, object]) -> ModelMetadata:
     values: Final = {
         field: configured[field] if configured.get(field) is not None else catalog.get(field)

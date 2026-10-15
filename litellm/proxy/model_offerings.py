@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.chatgpt.authenticator import prevent_device_login
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.model_inventory import (
+    get_inventory_model_metadata,
     get_provider_model_inventory,
     model_inventory_api_base,
     model_inventory_identity,
@@ -159,12 +160,27 @@ def _deployment_id(offering: ModelOffering, connection: _ResolvedConnection) -> 
     )
 
 
+def _endpoint_models(config: ModelOfferingsConfig | None, provider: str) -> tuple[str, ...]:
+    if config is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            offering.upstream_model
+            for offering in config.offerings
+            if offering.provider == provider
+            and offering.enabled
+            and offering.source == "auto"
+            and offering.provider_policy is not None
+        )
+    )
+
+
 def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, object]:
     connection: Final = state.connection
     reason: Final = _unavailable_reason(offering, state)
     supplier_info: Final[Mapping[str, object]] = (
-        state.inventory.models.get(offering.upstream_model, {})
-        if offering.source == "auto" and state.inventory is not None and offering.provider_policy is None
+        get_inventory_model_metadata(state.inventory, offering.upstream_model, offering.provider_policy)
+        if offering.source == "auto" and state.inventory is not None
         else {}
     )
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
@@ -238,7 +254,7 @@ class ModelOfferingsManager:
             if isinstance(callback, EncryptedContentAffinityCheck) and callback.router is template:
                 callback.router = self.router
 
-    async def _fetch_provider(self, state: _ProviderState) -> _ProviderState:
+    async def _fetch_provider(self, state: _ProviderState, endpoint_models: tuple[str, ...]) -> _ProviderState:
         connection: Final = state.connection
         try:
             fetched: Final = await get_provider_model_inventory(
@@ -248,6 +264,8 @@ class ModelOfferingsManager:
                 client=self.client or get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelInventory),
                 cache=self.cache,
                 force_refresh=True,
+                endpoint_models=endpoint_models,
+                previous=state.inventory,
             )
         except Exception:  # noqa: BLE001  # supplier failures cannot replace a successful inventory with absence
             return state
@@ -258,13 +276,17 @@ class ModelOfferingsManager:
             )
         return _provider_after_fetch(state, fetched)
 
-    async def _bounded_fetch_provider(self, state: _ProviderState) -> _ProviderState:
+    async def _bounded_fetch_provider(self, state: _ProviderState, endpoint_models: tuple[str, ...]) -> _ProviderState:
         async with self.inventory_semaphore:
-            return await self._fetch_provider(state)
+            return await self._fetch_provider(state, endpoint_models)
 
-    async def _refresh_providers(self, providers: Mapping[str, _ProviderState]) -> Mapping[str, _ProviderState]:
+    async def _refresh_providers(
+        self, providers: Mapping[str, _ProviderState], config: ModelOfferingsConfig
+    ) -> Mapping[str, _ProviderState]:
         names: Final = tuple(providers)
-        results: Final = await asyncio.gather(*(self._bounded_fetch_provider(providers[name]) for name in names))
+        results: Final = await asyncio.gather(
+            *(self._bounded_fetch_provider(providers[name], _endpoint_models(config, name)) for name in names)
+        )
         return MappingProxyType(dict(zip(names, results)))
 
     def _apply(self, loaded: _LoadedConfig, providers: Mapping[str, _ProviderState]) -> bool:
@@ -361,9 +383,12 @@ class ModelOfferingsManager:
                 or force_inventory
                 or connection_changed
                 or interval_changed
+                or any(
+                    _endpoint_models(loaded.config, name) != _endpoint_models(self.config, name) for name in providers
+                )
                 or now >= self.next_inventory_refresh
             )
-            refreshed: Final = await self._refresh_providers(providers) if refresh_due else providers
+            refreshed: Final = await self._refresh_providers(providers, loaded.config) if refresh_due else providers
             if not self._apply(loaded, refreshed):
                 return False
             if refresh_due:

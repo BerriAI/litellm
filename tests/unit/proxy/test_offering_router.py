@@ -278,6 +278,8 @@ async def test_body_model_override_cannot_bypass_offering_authority() -> None:
         {"provider_policy": {"provider": "openrouter", "only": ["other"]}},
         {"extra_body": {"provider_policy": {"provider": "openrouter", "only": ["other"]}}},
         {"provider": {"only": ["other"]}},
+        {"service_tier": "priority"},
+        {"extra_body": {"service_tier": "flex"}},
         {"extra_body": {"provider": {"allow_fallbacks": True}}},
         {"extra_body": {"extra_body": {"provider": {"only": ["other"]}}}},
         {"models": ["other"]},

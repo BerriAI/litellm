@@ -81,11 +81,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     with_litellm_call_id,
 )
-from litellm.proxy.model_discovery import discover_model_metadata, guaranteed_token_limit
+from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.router import resolve_model_metadata
+from litellm.types.router import guaranteed_token_limit, resolve_model_metadata
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -809,10 +810,12 @@ async def test_shared_inventory_client_is_reacquired_after_cache_eviction(
         await second.close()
 
 
-@pytest.mark.parametrize("surface", ("chat", "responses", "responses_chat", "messages"))
+@pytest.mark.parametrize("surface", ("chat", "chat_unified", "responses", "responses_chat", "messages"))
 @pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("effort", (None, "high", "max"))
+@pytest.mark.parametrize("source", ("manual", "auto"))
 async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, stream: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, stream: bool, effort: str | None, source: str
 ) -> None:
     path: Final = tmp_path / "offerings.yaml"
     policy: Final = {"only": ["synthetic/fp8"], "allow_fallbacks": False}
@@ -830,7 +833,7 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
                 "offerings": [
                     {
                         "model_name": "selected",
-                        "source": "manual",
+                        "source": source,
                         "provider": "supplier",
                         "upstream_model": "org/backend",
                         "model_info": {"mode": "chat"},
@@ -844,12 +847,43 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
 
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": []})
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "org/backend",
+                            "reasoning": {
+                                "supported_efforts": ["max", "high", "low"],
+                                "default_effort": "high",
+                            },
+                        }
+                    ]
+                },
+            )
+        if request.url.path.endswith("/endpoints"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": "org/backend",
+                        "endpoints": [
+                            {
+                                "tag": "synthetic/fp8",
+                                "context_length": 1200,
+                                "max_completion_tokens": 300,
+                                "supported_parameters": ["reasoning", "reasoning_effort"],
+                            }
+                        ],
+                    }
+                },
+            )
         requests.append(request)
         body: Final = json.loads(request.content)
         assert body["model"] == "org/backend"
         assert body["provider"] == policy
         assert body["temperature"] == 0.5
+        assert (body.get("reasoning") or {}).get("effort", body.get("reasoning_effort")) == effort
         if request.url.path.endswith("/responses"):
             response: Final = {
                 "id": "resp_fixture",
@@ -934,10 +968,19 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
             path=path, template=Router(model_list=[], num_retries=0), client=handler, clock=lambda: 0.0
         )
         assert await manager.reload(initial=True)
+        if source == "auto":
+            advertised: Final = manager.router.get_deployment_by_model_group_name("selected")
+            assert advertised is not None
+            assert advertised.model_info.reasoning_effort_levels == ("max", "high", "low")
+            assert advertised.model_info.default_reasoning_effort == "high"
         guard: Final = OfferingAccessGuard(manager.router)
         monkeypatch.setattr(litellm, "callbacks", [guard])
         call_type: Final[CallTypesLiteral] = (
-            "acompletion" if surface == "chat" else "anthropic_messages" if surface == "messages" else "aresponses"
+            "acompletion"
+            if surface in ("chat", "chat_unified")
+            else "anthropic_messages"
+            if surface == "messages"
+            else "aresponses"
         )
         response_cache: Final = Cache(
             type="local", supported_call_types=["acompletion", "aresponses", "anthropic_messages"]
@@ -949,11 +992,27 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
             data={
                 "model": "selected",
                 "stream": stream,
-                "extra_body": {"temperature": 0.5},
+                "extra_body": {
+                    "temperature": 0.5,
+                    **({"reasoning": {"effort": effort}} if surface == "chat_unified" and effort is not None else {}),
+                },
                 "caching": True,
                 "preset_cache_key": "shared-fixture-key",
                 "cache": {"no-cache": False, "no-store": False},
                 **({"use_chat_completions_api": True} if surface == "responses_chat" else {}),
+                **(
+                    (
+                        {"reasoning": {"effort": effort}}
+                        if surface in ("responses", "responses_chat")
+                        else {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+                        if surface == "messages"
+                        else {}
+                        if surface == "chat_unified"
+                        else {"reasoning_effort": effort}
+                    )
+                    if effort is not None
+                    else {}
+                ),
             },
             call_type=call_type,
         )
@@ -976,6 +1035,8 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
         assert requests[0].url.path.endswith("/responses" if surface == "responses" else "/chat/completions")
         assert response_cache.cache.get_cache("shared-fixture-key") == {"response": "unrelated endpoint output"}
         for control in (
+            {"service_tier": "priority"},
+            {"extra_body": {"service_tier": "priority"}},
             {"additional_drop_params": ["provider"]},
             {"additional_drop_params": ["extra_body"]},
             {"additional_drop_params": ["extra_body.provider"]},
@@ -1188,3 +1249,174 @@ async def test_endpoint_failure_never_uses_gateway_fallback_and_tampering_never_
                     disable_fallbacks=True,
                 )
         assert len(forwarded) == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {},
+        {"context_window": 900, "max_output_tokens": 150, "max_input_tokens": 500},
+        {"default_reasoning_effort": "max"},
+        {"supports_reasoning": False, "supports_function_calling": False},
+        {"reasoning_effort_levels": []},
+    ),
+)
+async def test_auto_pinned_catalog_preserves_overrides_scope_and_endpoint_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: Mapping[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    path: Final = tmp_path / "offerings.yaml"
+    selected: Final = {
+        "model_name": "openrouter/org/selected",
+        "source": "auto",
+        "provider": "supplier",
+        "upstream_model": "org/backend",
+        "model_info": {"mode": "chat", **overrides},
+        "provider_policy": {"provider": "openrouter", "only": ["supplier/fp8"], "allow_fallbacks": False},
+    }
+    config: Final = {
+        "version": 1,
+        "providers": {
+            "supplier": {"provider": "openrouter", "api_base": "https://supplier.test/v1", "api_key": "fixture-key"}
+        },
+        "offerings": [
+            selected,
+            {**selected, "model_name": "ordinary", "provider_policy": None},
+            {**selected, "model_name": "manual", "source": "manual"},
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    generations: Final = iter((1200, 700, None, None))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] in ("Bearer fixture-key", "Bearer changed-key")
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "org/backend",
+                            "context_length": 9000,
+                            "top_provider": {"max_completion_tokens": 6000},
+                            "supported_parameters": ["tools", "reasoning_effort"],
+                            "reasoning": {"supported_efforts": ["max", "high", "low"], "default_effort": "high"},
+                        },
+                        {"id": "org/unselected"},
+                    ]
+                },
+            )
+        assert request.url.path == "/v1/models/org/backend/endpoints"
+        context: Final = next(generations)
+        return (
+            httpx.Response(503)
+            if context is None
+            else httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": "org/backend",
+                        "endpoints": [
+                            {
+                                "tag": "supplier/fp8",
+                                "context_length": context,
+                                "max_completion_tokens": 300,
+                                "max_prompt_tokens": None,
+                                "supported_parameters": ["tools", "reasoning", "reasoning_effort"],
+                            },
+                            {"tag": "foreign", "context_length": 9000, "max_completion_tokens": 6000},
+                        ],
+                    }
+                },
+            )
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        monkeypatch.setattr(proxy_server, "llm_router", manager.router)
+        monkeypatch.setattr(proxy_server, "llm_model_list", manager.router.model_list)
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        monkeypatch.setattr(proxy_server, "user_model", None)
+        monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+        application: Final = FastAPI()
+        application.include_router(proxy_server.router)
+        application.add_middleware(OfferingSnapshotMiddleware, router_getter=lambda: manager.router)
+
+        async def scoped_auth(request: Request) -> UserAPIKeyAuth:
+            if request.headers.get("x-fixture-refresh"):
+                assert await manager.reload(force_inventory=True)
+            return UserAPIKeyAuth(
+                api_key="fixture-client",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                models=["openrouter/*"] if request.headers.get("authorization") == "allowed" else ["denied/*"],
+            )
+
+        application.dependency_overrides[proxy_server.user_api_key_auth] = scoped_auth
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://gateway.test"
+        ) as gateway:
+            denied: Final = await gateway.get("/v1/models", headers={"authorization": "denied"})
+            assert denied.status_code == 200 and denied.json()["data"] == []
+            first: Final = await gateway.get("/v1/models", headers={"authorization": "allowed"})
+            assert first.status_code == 200
+            row: Final = first.json()["data"][0]
+            assert row["id"] == selected["model_name"]
+            assert row["context_window"] == overrides.get("context_window", 1200)
+            assert row["max_output_tokens"] == overrides.get("max_output_tokens", 300)
+            assert row.get("max_input_tokens") == overrides.get("max_input_tokens")
+            assert row["supports_function_calling"] == overrides.get("supports_function_calling", True)
+            if overrides.get("supports_reasoning") is False:
+                assert row["supports_reasoning"] is False
+                assert "reasoning_effort_levels" not in row and "default_reasoning_effort" not in row
+            else:
+                assert row["reasoning_effort_levels"] == overrides.get(
+                    "reasoning_effort_levels", ["max", "high", "low"]
+                )
+                assert row.get("default_reasoning_effort") == (
+                    None
+                    if overrides.get("reasoning_effort_levels") == []
+                    else overrides.get("default_reasoning_effort", "high")
+                )
+            assert all(value is not None for value in row.values())
+            assert "supplier/fp8" not in first.text and "fixture-key" not in first.text
+            ordinary: Final = manager.router.get_deployment_by_model_group_name("ordinary")
+            manual: Final = manager.router.get_deployment_by_model_group_name("manual")
+            assert ordinary is not None and ordinary.model_info.context_window == overrides.get("context_window", 9000)
+            assert manual is not None and manual.model_info.context_window == overrides.get("context_window")
+            first_ids: Final = manager.router.get_model_ids(selected["model_name"])
+            pinned: Final = await gateway.get(
+                "/v1/models", headers={"authorization": "allowed", "x-fixture-refresh": "1"}
+            )
+            assert pinned.json() == first.json()
+            changed: Final = await gateway.get("/v1/models", headers={"authorization": "allowed"})
+            assert changed.json()["data"][0]["context_window"] == overrides.get("context_window", 700)
+            assert manager.router.get_model_ids(selected["model_name"]) == first_ids
+            assert await manager.reload(force_inventory=True)
+            retained: Final = await gateway.get("/v1/models", headers={"authorization": "allowed"})
+            assert retained.json() == changed.json()
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        **config,
+                        "providers": {
+                            "supplier": {
+                                **config["providers"]["supplier"],
+                                "api_key": "changed-key",
+                            }
+                        },
+                    }
+                )
+            )
+            assert await manager.reload()
+            rotated: Final = await gateway.get("/v1/models", headers={"authorization": "allowed"})
+            assert rotated.json()["data"][0].get("context_window") == overrides.get("context_window")
+            assert rotated.json()["data"][0].get("reasoning_effort_levels") == overrides.get("reasoning_effort_levels")
+            assert manager.router.get_model_ids(selected["model_name"]) != first_ids

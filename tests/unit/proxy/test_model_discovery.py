@@ -2,8 +2,8 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.model_discovery import discover_model_metadata, guaranteed_token_limit
-from litellm.types.router import ModelMetadata, resolve_model_metadata
+from litellm.proxy.model_discovery import discover_model_metadata
+from litellm.types.router import ModelMetadata, guaranteed_token_limit, resolve_model_metadata
 
 
 def test_configured_overrides_preserve_false_empty_and_independent_limits():

@@ -42,6 +42,7 @@ _ROUTING_OVERRIDES: Final = (
             "provider",
             "models",
             "route",
+            "service_tier",
             "fallbacks",
             "default_fallbacks",
             "context_window_fallbacks",
@@ -323,11 +324,11 @@ class OfferingAccessGuard(CustomLogger):
             call_type is None
             or call_type.value not in _POLICY_CALLS
             or any(kwargs.get(name) is not None for name in _PARAMETER_CONTROLS)
-            or any(kwargs.get(name) is not None for name in ("provider", "models", "route"))
+            or any(kwargs.get(name) is not None for name in ("provider", "models", "route", "service_tier"))
             or not isinstance(extra_body, Mapping)
             or extra_body.get("provider") != policy.request_body()
             or any(name in extra_body for name in _PARAMETER_CONTROLS)
-            or any(name in extra_body for name in ("model", "models", "route", "extra_body"))
+            or any(name in extra_body for name in ("model", "models", "route", "extra_body", "service_tier"))
         ):
             raise litellm.BadRequestError(
                 message="The request does not preserve the configured offering provider policy",

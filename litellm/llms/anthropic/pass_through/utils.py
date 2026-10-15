@@ -82,6 +82,8 @@ def normalize_reasoning_effort_value(
     handled where the thinking block is built. A deployment accepting no tier at all keeps the
     chain's floor, which is what every deployment degraded to before there was anything to ask.
     """
+    if custom_llm_provider == "openrouter" or custom_llm_provider is None and model.startswith("openrouter/"):
+        return effort
     chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
     if chain is None:
         return effort

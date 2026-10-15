@@ -11,6 +11,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openrouter import OPENROUTER_REASONING_EFFORTS
 from litellm.types.proxy.model_inventory import (
     ModelInventoryCache,
     ModelInventoryHTTPClient,
@@ -26,6 +27,15 @@ MODEL_INFO_DISCOVERY_PROVIDERS: Final = frozenset(
     {"hosted_vllm", "openai", "text-completion-openai", "openai_like", "openrouter", "vercel_ai_gateway"}
 )
 _EMPTY_LIMITS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def model_inventory_cache_key(provider: str, url: str, headers: Mapping[str, str]) -> str:
+    return (
+        "upstream_model_info:"
+        + hashlib.sha256(
+            json.dumps((provider, url, sorted((key.lower(), value) for key, value in headers.items()))).encode()
+        ).hexdigest()
+    )
 
 
 def _positive_limit(value: object) -> int | None:
@@ -66,6 +76,21 @@ class _Reasoning(LiteLLMBaseModel):
 
     supported_efforts: Sequence[str] | None = None
     default_effort: str | None = None
+    default_enabled: bool | None = None
+    mandatory: bool | None = None
+
+    def effort_levels(self) -> Sequence[str] | None:
+        """Explicit null accepts the gateway enum; omission does not declare an effort selector."""
+        levels: Final = (
+            OPENROUTER_REASONING_EFFORTS
+            if self.supported_efforts is None and "supported_efforts" in self.model_fields_set
+            else self.supported_efforts
+        )
+        return (
+            tuple(level for level in levels if level != "none" or self.mandatory is not True)
+            if levels is not None
+            else None
+        )
 
 
 class _ReasoningOption(LiteLLMBaseModel):
@@ -126,7 +151,7 @@ class _ModelCard(ModelMetadata):
                 self.reasoning_effort_levels
                 if self.reasoning_effort_levels is not None
                 else (
-                    self.reasoning.supported_efforts
+                    self.reasoning.effort_levels()
                     if provider == "openrouter" and self.reasoning is not None
                     else next((option.values for option in self.reasoning_options if option.type == "effort"), None)
                     if provider == "vercel_ai_gateway"
@@ -134,7 +159,13 @@ class _ModelCard(ModelMetadata):
                 )
             ),
             default_reasoning_effort=self.default_reasoning_effort
-            or (self.reasoning.default_effort if provider == "openrouter" and self.reasoning is not None else None),
+            or (
+                self.reasoning.default_effort
+                if provider == "openrouter"
+                and self.reasoning is not None
+                and (self.reasoning.default_enabled is not False or self.reasoning.default_effort == "none")
+                else None
+            ),
             supported_endpoints=self.supported_endpoints,
             request_defaults=self.request_defaults,
             supported_modalities=self.supported_modalities
@@ -208,10 +239,7 @@ async def get_openai_compatible_model_inventory(
     inventory_cache: Final = cast(ModelInventoryCache, cache)  # cast-ok: native cache implements this protocol
     inventory_client: Final = cast(ModelInventoryHTTPClient, client)  # cast-ok: native HTTP handler implements get
     url: Final = add_path_to_api_base(api_base, "/v1/models")
-    cache_key: Final = (
-        "upstream_model_info:"
-        + hashlib.sha256(json.dumps((provider, url, sorted(headers.items()))).encode()).hexdigest()
-    )
+    cache_key: Final = model_inventory_cache_key(provider, url, headers)
     cached: Final[object] = inventory_cache.get_cache(cache_key)
     if not force_refresh and isinstance(cached, (SupplierModelInventory, SupplierInventoryUnavailable)):
         return cached
@@ -249,7 +277,7 @@ async def get_openai_compatible_model_inventory(
         return transport
 
     inventory: Final = SupplierModelInventory(
-        MappingProxyType({card.id: card.token_limits(provider) for card in models.data})
+        MappingProxyType({card.id: card.token_limits(provider) for card in models.data}), credential_scope=cache_key
     )
     inventory_cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
     return inventory

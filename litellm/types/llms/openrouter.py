@@ -1,11 +1,13 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+OPENROUTER_REASONING_EFFORTS: Final = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
 
 
 class OpenRouterErrorMessage(TypedDict):
@@ -40,3 +42,11 @@ class OpenRouterProviderPolicy(LiteLLMBaseModel):
 
     def request_body(self) -> Mapping[str, object]:
         return MappingProxyType({"only": list(self.only), "allow_fallbacks": self.allow_fallbacks})
+
+    def allows_endpoint(self, tag: str) -> bool:
+        return any(
+            tag == slug
+            or tag.startswith(slug + "/")
+            and not {"fast", "flex"}.intersection(tag[len(slug) + 1 :].split("/"))
+            for slug in self.only
+        )

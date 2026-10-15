@@ -1,14 +1,25 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Literal, Protocol
 
 import httpx
+
+from litellm.types.router import ModelMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierModelEndpoint:
+    tag: str
+    metadata: ModelMetadata
+    supported_parameters: tuple[str, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
 class SupplierModelInventory:
     models: Mapping[str, Mapping[str, object]]
     credential_scope: str | None = None
+    endpoints: Mapping[str, tuple[SupplierModelEndpoint, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)

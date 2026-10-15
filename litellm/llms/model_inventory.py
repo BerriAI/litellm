@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # native HTTP/cache protocol boundary
 
 from pydantic import TypeAdapter
 
@@ -15,7 +15,14 @@ from litellm.llms.chatgpt.model_info import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_DISCOVERY_PROVIDERS, get_openai_compatible_model_inventory
-from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
+from litellm.llms.openrouter.model_info import get_openrouter_endpoint_inventory, openrouter_endpoint_metadata
+from litellm.types.llms.openrouter import OpenRouterProviderPolicy
+from litellm.types.proxy.model_inventory import (
+    ModelInventoryCache,
+    ModelInventoryHTTPClient,
+    SupplierInventoryUnavailable,
+    SupplierModelInventory,
+)
 from litellm.types.router import LiteLLM_Params
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
@@ -44,6 +51,8 @@ async def get_provider_model_inventory(
     client: AsyncHTTPHandler,
     cache: InMemoryCache,
     force_refresh: bool = False,
+    endpoint_models: tuple[str, ...] = (),
+    previous: SupplierModelInventory | None = None,
 ) -> SupplierModelInventory | SupplierInventoryUnavailable:
     if provider == "chatgpt":
         return await get_chatgpt_model_inventory(
@@ -55,7 +64,7 @@ async def get_provider_model_inventory(
     resolved_base: Final = model_inventory_api_base(provider, api_base)
     if resolved_base is None:
         return SupplierInventoryUnavailable("malformed")
-    return await get_openai_compatible_model_inventory(
+    inventory: Final = await get_openai_compatible_model_inventory(
         provider=provider,
         api_base=resolved_base,
         headers=headers,
@@ -63,6 +72,25 @@ async def get_provider_model_inventory(
         cache=cache,
         force_refresh=force_refresh,
     )
+    if provider != "openrouter" or not isinstance(inventory, SupplierModelInventory) or not endpoint_models:
+        return inventory
+    return await get_openrouter_endpoint_inventory(
+        inventory=inventory,
+        models=endpoint_models,
+        previous=previous,
+        api_base=resolved_base,
+        headers=headers,
+        client=cast(ModelInventoryHTTPClient, client),  # cast-ok: native handler implements bounded inventory GET
+        cache=cast(ModelInventoryCache, cache),  # cast-ok: native in-memory cache implements inventory protocol
+        force_refresh=force_refresh,
+    )
+
+
+def get_inventory_model_metadata(
+    inventory: SupplierModelInventory, model: str, policy: OpenRouterProviderPolicy | None = None
+) -> Mapping[str, object]:
+    metadata: Final = inventory.models.get(model, _EMPTY_METADATA)
+    return openrouter_endpoint_metadata(metadata, inventory.endpoints.get(model, ()), policy) if policy else metadata
 
 
 async def get_deployment_model_metadata(
