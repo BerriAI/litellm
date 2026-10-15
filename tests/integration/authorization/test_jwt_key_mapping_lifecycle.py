@@ -1131,3 +1131,29 @@ def test_a_mapped_jwt_end_user_claim_is_budget_checked_instead_of_an_over_budget
 
         assert refused.status_code == 422, refused.text
         assert _billed_end_user(served) == _EndUserSpendRow(api_key=client.key_hash, end_user=end_user)
+
+
+@pytest.mark.parametrize("spelling", ("body", "header"))
+def test_a_mapped_jwt_without_an_end_user_claim_budget_checks_the_caller_supplied_end_user(
+    end_user_claims: _EndUserClaimRuntime, spelling: str
+) -> None:
+    gateway: Final = end_user_claims.gateway
+    over_budget: Final = "integration-over-budget-" + uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        client: Final = _mapped_client(end_user_claims, scenario)
+        created: Final = gateway.request(
+            "POST", "/customer/new", {"user_id": over_budget, "max_budget": 0.05, "spend": 1.0}
+        )
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(_delete_customer_if_present, gateway, over_budget)
+        token: Final = _signed_jwt(end_user_claims.private_key, client.client_id)
+
+        refused: Final = _end_user_chat(
+            end_user_claims,
+            token,
+            body_user=over_budget if spelling == "body" else None,
+            header_user=over_budget if spelling == "header" else None,
+        )
+
+        assert refused.status_code == 422, refused.text
+        assert object_value(object_value(refused.json())["error"])["type"] == "budget_exceeded", refused.text
