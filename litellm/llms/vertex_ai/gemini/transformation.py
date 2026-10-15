@@ -1233,6 +1233,9 @@ def transform_request_body(
             else:
                 data["serviceTier"] = service_tier
 
+        if continuation_token := optional_params.pop("continuation_token", None):
+            data["continuationToken"] = continuation_token
+
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels

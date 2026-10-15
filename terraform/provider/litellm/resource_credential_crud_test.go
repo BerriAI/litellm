@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -592,5 +593,154 @@ func TestResourceLiteLLMCredentialUpdate_TogglingAdoptExistingSendsNoPatch(t *te
 	}
 	if got := atomic.LoadInt32(&patchCalls); got != 1 {
 		t.Fatalf("a real value change must still PATCH; got %d PATCH calls", got)
+	}
+}
+
+// credentialDataWithRawConfig builds ResourceData the way a real apply does for a
+// write-only attribute: the value is only in the raw config, never in the diff.
+func credentialDataWithRawConfig(t *testing.T, id string, rawConfig map[string]cty.Value) *schema.ResourceData {
+	t.Helper()
+	r := resourceLiteLLMCredential()
+	d := r.Data(&terraform.InstanceState{
+		ID:         id,
+		Attributes: map[string]string{"id": id, "credential_name": id, "credential_values_wo_version": "1"},
+		RawConfig:  cty.ObjectVal(rawConfig),
+	})
+	return d
+}
+
+func TestCredentialCreateSendsWriteOnlyValuesFromRawConfig(t *testing.T) {
+	var created CredentialRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/credentials":
+			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+				t.Errorf("decode create payload: %v", err)
+			}
+			w.Write([]byte(`{"message":"ok"}`))
+		case r.Method == http.MethodGet:
+			w.Write([]byte(`{"credential_name":"wo-cred","credential_info":{}}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	d := credentialDataWithRawConfig(t, "wo-cred", map[string]cty.Value{
+		"credential_name":      cty.StringVal("wo-cred"),
+		"credential_values_wo": cty.StringVal(`{"api_key":"sk-only-in-config","org_id":"org-1"}`),
+	})
+
+	if err := resourceLiteLLMCredentialCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if created.CredentialValues["api_key"] != "sk-only-in-config" || created.CredentialValues["org_id"] != "org-1" {
+		t.Fatalf("credential_values_wo not sent to the proxy, got %v", created.CredentialValues)
+	}
+	if got := d.Get("credential_values").(map[string]interface{}); len(got) != 0 {
+		t.Fatalf("in-state credential_values should stay empty when credential_values_wo is used, got %v", got)
+	}
+}
+
+func TestCredentialUpdateSendsWriteOnlyValues(t *testing.T) {
+	var patched CredentialRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			if err := json.NewDecoder(r.Body).Decode(&patched); err != nil {
+				t.Errorf("decode patch payload: %v", err)
+			}
+			w.Write([]byte(`{"message":"ok"}`))
+		case http.MethodGet:
+			w.Write([]byte(`{"credential_name":"wo-cred","credential_info":{}}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMCredential().Schema, map[string]interface{}{
+		"credential_name":              "wo-cred",
+		"credential_values_wo":         `{"api_key":"sk-rotated"}`,
+		"credential_values_wo_version": 2,
+	})
+	d.SetId("wo-cred")
+
+	if err := resourceLiteLLMCredentialUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if patched.CredentialValues["api_key"] != "sk-rotated" {
+		t.Fatalf("rotated credential_values_wo not sent on update, got %v", patched.CredentialValues)
+	}
+}
+
+func TestCredentialCreateRejectsNonObjectWriteOnlyValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("proxy must not be called with an invalid credential_values_wo: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	cases := map[string]struct{ raw, want string }{
+		"array":         {`["not","an","object"]`, "credential_values_wo must be a JSON object"},
+		"null":          {`null`, "credential_values_wo must be a JSON object"},
+		"nested object": {`{"vertex_credentials":{"type":"service_account","private_key":"-----BEGIN"}}`, `credential_values_wo["vertex_credentials"] must be a string`},
+		"number":        {`{"api_key":12345}`, `credential_values_wo["api_key"] must be a string`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMCredential().Schema, map[string]interface{}{
+				"credential_name":              "wo-cred",
+				"credential_values_wo":         tc.raw,
+				"credential_values_wo_version": 1,
+			})
+
+			err := resourceLiteLLMCredentialCreate(d, NewClient(srv.URL, "test-key", true))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestCredentialSchemaRequiresExactlyOneValuesSource(t *testing.T) {
+	cases := map[string]struct {
+		raw     map[string]interface{}
+		wantErr bool
+	}{
+		"in-state map only": {
+			raw:     map[string]interface{}{"credential_name": "c", "credential_values": map[string]interface{}{"api_key": "k"}},
+			wantErr: false,
+		},
+		"write-only only": {
+			raw:     map[string]interface{}{"credential_name": "c", "credential_values_wo": `{"api_key":"k"}`, "credential_values_wo_version": 1},
+			wantErr: false,
+		},
+		"neither": {
+			raw:     map[string]interface{}{"credential_name": "c"},
+			wantErr: true,
+		},
+		"both": {
+			raw: map[string]interface{}{
+				"credential_name":              "c",
+				"credential_values":            map[string]interface{}{"api_key": "k"},
+				"credential_values_wo":         `{"api_key":"k"}`,
+				"credential_values_wo_version": 1,
+			},
+			wantErr: true,
+		},
+		"write-only without version": {
+			raw:     map[string]interface{}{"credential_name": "c", "credential_values_wo": `{"api_key":"k"}`},
+			wantErr: true,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			diags := resourceLiteLLMCredential().Validate(terraform.NewResourceConfigRaw(tc.raw))
+			if diags.HasError() != tc.wantErr {
+				t.Fatalf("wantErr=%v, got diags %v", tc.wantErr, diags)
+			}
+		})
 	}
 }

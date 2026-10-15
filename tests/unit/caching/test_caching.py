@@ -414,6 +414,24 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
+def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-4-argon",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16000,
+    }
+
+    first_segment_key: Final = cache.get_cache_key(**request)
+    resumed_key: Final = cache.get_cache_key(**request, continuation_token="dG9rLTE=")
+
+    assert resumed_key != first_segment_key
+    assert cache.get_cache_key(**request, continuation_token="dG9rLTI=") not in (first_segment_key, resumed_key)
+    assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
+    assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
+    assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 
