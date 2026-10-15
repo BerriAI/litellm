@@ -89,3 +89,44 @@ def test_redacted_thinking_is_accepted_like_other_replayed_thinking() -> None:
 def test_messages_that_are_not_json_are_left_to_the_count() -> None:
     messages: Final = [{"role": "user", "content": [{"type": "search_result", "source": object()}]}]
     assert unconvertible_anthropic_blocks(messages) == ()
+
+
+def _tool_result(*inner: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "tool_result", "tool_use_id": "toolu_01", "content": list(inner)}
+
+
+_KEPT_INSIDE_TOOL_RESULT: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "text", "text": "42"},
+    {"type": "image", "source": _PNG},
+    {"type": "document", "source": _PDF},
+    {"type": "tool_reference", "tool_name": "lookup"},
+)
+
+_DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
+    (
+        {"type": "search_result", "source": "https://example.com", "title": "t", "content": [{"type": "text", "text": "x"}]},
+        "search_result inside a tool_result",
+    ),
+    ({"type": "document", "source": {"type": "text", "data": "notes"}}, "document with a text source inside a tool_result"),
+)
+
+
+@pytest.mark.parametrize("inner", _KEPT_INSIDE_TOOL_RESULT)
+def test_tool_result_content_the_conversions_keep_is_accepted(inner: Mapping[str, object]) -> None:
+    assert unconvertible_anthropic_blocks([{"role": "user", "content": [_tool_result(inner)]}]) == ()
+
+
+@pytest.mark.parametrize(("inner", "label"), _DROPPED_INSIDE_TOOL_RESULT)
+def test_tool_result_content_both_conversions_drop_is_named(inner: Mapping[str, object], label: str) -> None:
+    block: Final = _tool_result(inner)
+    chat: Final = _JSON_OBJECTS.validate_python(
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+            messages=_adapter_messages("user", block)
+        )
+    )
+    responses: Final = _JSON_OBJECTS.validate_python(
+        LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(_adapter_messages("user", block))
+    )
+    assert [message.get("content") for message in chat] == [""]
+    assert [item.get("output") for item in responses] == [""]
+    assert unconvertible_anthropic_blocks([{"role": "user", "content": [block]}]) == (label,)

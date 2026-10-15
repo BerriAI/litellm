@@ -15,6 +15,7 @@ _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
     }
 )
 _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document", "tool_reference"})
 
 
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -54,13 +55,31 @@ def _block_label(block: JsonValue, convertible: frozenset[str]) -> str | None:
     return _source_label(block_type, block.get("source")) if block_type in _SOURCED_BLOCK_TYPES else None
 
 
+def _tool_result_labels(block: JsonValue) -> Iterator[str]:
+    if not isinstance(block, dict) or block.get("type") != "tool_result":
+        return iter(())
+    inner: Final = block.get("content")
+    if not isinstance(inner, list):
+        return iter(())
+    return (
+        f"{label} inside a tool_result"
+        for item in inner
+        if (label := _block_label(item, _TOOL_RESULT_BLOCK_TYPES)) is not None
+    )
+
+
+def _content_labels(block: JsonValue, convertible: frozenset[str]) -> Iterator[str]:
+    label: Final = _block_label(block, convertible)
+    return chain(() if label is None else (label,), _tool_result_labels(block))
+
+
 def _message_labels(message: Mapping[str, JsonValue]) -> Iterator[str]:
     role: Final = message.get("role")
     convertible: Final = _CONVERTIBLE_BLOCK_TYPES.get(role) if isinstance(role, str) else None
     content: Final = message.get("content")
     if convertible is None or not isinstance(content, list):
         return iter(())
-    return (label for block in content if (label := _block_label(block, convertible)) is not None)
+    return chain.from_iterable(_content_labels(block, convertible) for block in content)
 
 
 def unconvertible_anthropic_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:

@@ -280,7 +280,25 @@ _UNCONVERTIBLE_BODY: Final[Mapping[str, JsonValue]] = {
                 {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}},
                 {"type": "search_result", "source": "https://example.com/notes", "title": "Notes", "content": []},
             ],
-        }
+        },
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "search", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "search_result",
+                            "source": "https://example.com/hits",
+                            "title": "Hits",
+                            "content": [{"type": "text", "text": "hit"}],
+                        }
+                    ],
+                }
+            ],
+        },
     ],
 }
 
@@ -291,5 +309,5 @@ def test_messages_count_tokens_rejects_blocks_it_cannot_convert(counting_proxy: 
         model: Final = _deployment(scenario, wire.url)
         response: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, **_UNCONVERTIBLE_BODY})
         assert response.status_code == 400, response.text
-        assert "document with a text source, search_result" in response.text
+        assert "document with a text source, search_result, search_result inside a tool_result" in response.text
         assert wire.drain() == ()
