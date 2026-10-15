@@ -1,7 +1,11 @@
 from dataclasses import dataclass
-from typing import Final
+from collections.abc import Sequence
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, Literal
 
-from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, ExactExpected
+from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, Deployment, ExactExpected
+from pydantic import JsonValue
 
 ROW_FIELDS: Final = frozenset({"spend", "prompt_tokens", "completion_tokens"})
 _EXPECTED_FIELDS: Final = frozenset(ExactExpected.model_fields)
@@ -32,6 +36,7 @@ class BridgeCostParityTestCase:
     native: CostTrackingTestCase
     bridged: CostTrackingTestCase
     quirk: ProviderCostQuirk | None = None
+    known_bug: str | None = None
 
     def __post_init__(self) -> None:
         if self.native.endpoint == self.bridged.endpoint:
@@ -61,3 +66,75 @@ class BridgeCostParityTestCase:
     @property
     def id(self) -> str:
         return self.bridged.name
+
+
+BridgeEndpoint = Literal["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+
+_ENDPOINT_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
+    {"/v1/chat/completions": "chat_bridged", "/v1/responses": "responses_bridged", "/v1/messages": "messages_bridged"}
+)
+
+
+def _prompt_text(request: Mapping[str, JsonValue]) -> str:
+    """The user prompt of a plain base request, whichever client shape it was written in."""
+    prompt: Final = request.get("input")
+    if isinstance(prompt, str):
+        return prompt
+    messages: Final = request.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError("a bridge base request needs a string input or a messages list")
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(str(part["text"]) for part in content if isinstance(part, dict) and "text" in part)
+    raise ValueError("a bridge base request needs a user message")
+
+
+def _bridged_request(base: CostTrackingTestCase, endpoint: BridgeEndpoint) -> dict[str, JsonValue]:
+    streamed: Final = base.request.get("stream") is True
+    text: Final = _prompt_text(base.request)
+    if endpoint == "/v1/responses":
+        return {"model": "$MODEL", "input": text, **({"stream": True} if streamed else {})}
+    messages: Final[list[JsonValue]] = [{"role": "user", "content": text}]
+    if endpoint == "/v1/messages":
+        return {"model": "$MODEL", "max_tokens": 412, "messages": messages, **({"stream": True} if streamed else {})}
+    return {
+        "model": "$MODEL",
+        "messages": messages,
+        **({"stream": True, "stream_options": {"include_usage": True}} if streamed else {}),
+    }
+
+
+def bridge_pairs(
+    bases: Sequence[CostTrackingTestCase],
+    endpoints: Sequence[BridgeEndpoint],
+    *,
+    deployment: Deployment | None = None,
+    known_bug: str | None = None,
+) -> tuple[BridgeCostParityTestCase, ...]:
+    """One parity pair per base and bridged endpoint: the same stored provider response and deployment, billed through
+    the base's own endpoint and through each client endpoint LiteLLM bridges into it. `deployment` pins both legs to a
+    deployment the base does not carry (an `openai/responses/` deployment for the chat -> Responses bridge)."""
+    pinned: Final = tuple(
+        base if deployment is None else base.model_copy(update={"deployment": deployment}) for base in bases
+    )
+    return tuple(
+        BridgeCostParityTestCase(
+            native=base,
+            bridged=base.model_copy(
+                update={
+                    "name": f"{base.name}-{_ENDPOINT_SUFFIX[endpoint]}",
+                    "endpoint": endpoint,
+                    "request": _bridged_request(base, endpoint),
+                }
+            ),
+            known_bug=known_bug,
+        )
+        for base in pinned
+        for endpoint in endpoints
+        if endpoint != base.endpoint
+    )

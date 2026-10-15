@@ -1,51 +1,61 @@
-import json
 import threading
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
-from integration._support.client import Gateway
+import pytest
+from integration._support.anthropic_sse import CONTENT_TAIL, message_start, sse
+from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import JsonValue
 
-_MODEL: Final = "claude-sonnet-4-5-20250929"
+_MODEL: Final = "claude-sonnet-5-5"
 _API_KEY: Final = "synthetic-anthropic-key"
 
 
-def _sse(event: str, payload: dict[str, object]) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
-
-
-def test_messages_stream_message_start_reaches_client_before_content_without_fallback(
+@pytest.mark.parametrize("block_type", ("text", "thinking"))
+def test_messages_stream_lifecycle_reaches_client_before_content_without_fallback(
     gateway: Gateway,
+    block_type: str,
 ) -> None:
-    """With no fallback able to take over, the proxy must not hold lifecycle
-    frames back for a retry that cannot happen: message_start reaches the
-    client while the upstream is still thinking."""
     gate: Final = threading.Event()
-    head: Final = _sse("message_start", {"type": "message_start", "message": {"id": "msg_live_1"}}) + _sse(
-        "content_block_start",
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    block_start: Final[Mapping[str, JsonValue]] = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": block_type, block_type: ""},
+    }
+    head: Final = (
+        message_start("msg_live_1", _MODEL)
+        + sse(
+            "content_block_start",
+            block_start,
+        )
+        + sse("ping", {"type": "ping"})
     )
+    delta: Final[Mapping[str, JsonValue]] = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": f"{block_type}_delta", block_type: "Hello"},
+    }
     tail: Final = (
-        _sse(
+        sse(
             "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+            delta,
         )
-        + _sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-        + _sse(
-            "message_delta",
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
-        )
-        + _sse("message_stop", {"type": "message_stop"})
+        + CONTENT_TAIL
     )
     prompt: Final = "live-lifecycle-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages"
         assert request.headers["x-api-key"] == _API_KEY
-        body: Final = json.loads(request.body)
-        assert body["model"] == _MODEL
-        assert body["stream"] is True
-        assert body["messages"] == [{"role": "user", "content": prompt}]
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        assert body == {
+            "model": _MODEL,
+            "stream": True,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": prompt}],
+        }
         return Reply(content_type="text/event-stream", chunks=(head, tail), gate_after_first=gate)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -60,23 +70,27 @@ def test_messages_stream_message_start_reaches_client_before_content_without_fal
                 "messages": [{"role": "user", "content": prompt}],
             },
             headers={"Authorization": f"Bearer {gateway.key}"},
+            timeout=10,
         ) as response:
             assert response.status_code == 200, response.read().decode()
-            lines = response.iter_lines()
-            first_event: Final = next(
-                json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")
+            events: Final = (
+                JSON_OBJECT.validate_json(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
             )
-            assert first_event["type"] == "message_start"
-            gate.set()
-            events: Final = (first_event,) + tuple(
-                json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")
-            )
-    assert tuple(event["type"] for event in events) == (
-        "message_start",
-        "content_block_start",
+            try:
+                start: Final = next(events)
+                assert start["type"] == "message_start"
+                assert next(events) == block_start
+                assert next(events) == {"type": "ping"}
+            finally:
+                gate.set()
+            remaining: Final = tuple(events)
+    assert tuple(event["type"] for event in remaining) == (
         "content_block_delta",
         "content_block_stop",
         "message_delta",
         "message_stop",
-    ), f"observed events: {events!r}"
+    ), f"observed events: {remaining!r}"
+    assert remaining[0] == delta
     assert [request.target for request in wire.drain()] == ["/v1/messages"]

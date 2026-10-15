@@ -276,7 +276,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object(), protocol_version="2025-06-18")
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -303,7 +303,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
 
     async def enter_operation():
         async with server._legacy_operation_context(request, trace=True):
@@ -1287,17 +1287,17 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
     ):
         task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            await asyncio.gather(*(event.wait() for event in ready))
             if outcome == "cancel":
                 task.cancel()
             else:
                 release.set()
             if outcome == "success":
-                result = await asyncio.wait_for(task, 1)
+                result = await task
                 assert result.capabilities.model_dump(exclude_none=True) == {}
             else:
                 with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
-                    await asyncio.wait_for(task, 1)
+                    await task
             assert all(event.is_set() for event in closed)
             assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
         finally:

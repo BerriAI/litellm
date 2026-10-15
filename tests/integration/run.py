@@ -39,7 +39,7 @@ GITHUB_FILES: Final = frozenset(
 )
 
 
-PEER_GROUPS: Final = frozenset({"management", "mcp"})
+PEER_GROUPS: Final = frozenset({"management", "mcp", "accounting"})
 COST_MAP_GROUPS: Final = frozenset({"cost"})
 
 
@@ -64,6 +64,10 @@ def select(requested: tuple[str, ...], group_files: tuple[str, ...]) -> Selectio
 def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str, ...]:
     collected_files: Final = frozenset(file_of(node) for node in collected)
     return tuple(node for node in nodes if file_of(node) not in collected_files)
+
+
+def _without_provider_api_keys(environment: Mapping[str, str]) -> dict[str, str]:
+    return {name: value for name, value in environment.items() if not name.endswith("_API_KEY")}
 
 
 def worker_settings(group: str, workers: int) -> Mapping[str, str]:
@@ -119,7 +123,7 @@ def main() -> int:
     output: Final = options.results.resolve()
     output.mkdir(parents=True, exist_ok=True)
     environment: Final = {
-        **os.environ,
+        **_without_provider_api_keys(os.environ),
         "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
         "INTEGRATION_RESULTS_DIR": str(output),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
