@@ -6874,7 +6874,7 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
     payload: Final = get_logging_payload(
         kwargs={
             "model": "gpt-4o-mini",
-            "litellm_params": {"metadata": {"user_api_key": "test-key", "user_api_key_end_user_id": "session-abc123"}},
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
             "standard_logging_object": cast(
                 StandardLoggingPayload,
                 {**_TRACE_ONLY_STANDARD_LOGGING, "metadata": {"user_api_key_end_user_id": "session-abc123"}},

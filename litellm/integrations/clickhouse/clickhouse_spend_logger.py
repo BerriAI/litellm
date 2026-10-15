@@ -171,7 +171,11 @@ def spend_log_row_from_payload(
         team_alias=metadata.get("user_api_key_team_alias") or metadata.get("team_alias") or "",
         organization_id=metadata.get("user_api_key_org_id") or "",
         user=metadata.get("user_api_key_user_id") or "",
-        end_user=payload.get("end_user") or metadata.get("user_api_key_end_user_id") or "",
+        end_user=(
+            ""
+            if litellm.disable_end_user_cost_tracking
+            else payload.get("end_user") or metadata.get("user_api_key_end_user_id") or ""
+        ),
         model=payload.get("model") or "",
         model_group=payload.get("model_group") or "",
         model_id=payload.get("model_id") or "",
