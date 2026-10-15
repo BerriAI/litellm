@@ -33,7 +33,6 @@ from collections.abc import Mapping, Sequence
 from typing import (
     Any,
     Callable,
-    cast,
     Dict,
     Final,
     get_args,
@@ -697,7 +696,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 v0_models: Set = set()
-vispark_models: Set = set()
+vispark_models: Set[str] = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
 inception_models: Set = set()
@@ -969,8 +968,7 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "vispark":
-            # cast keeps the basedpyright reportUnknownArgumentType budget flat (keys are model-name strings)
-            vispark_models.add(cast(str, key))  # cast-ok: model keys are strings
+            vispark_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":

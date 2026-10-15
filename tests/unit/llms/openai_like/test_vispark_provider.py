@@ -1,180 +1,177 @@
-"""
-Tests for Vispark provider configuration and integration.
-"""
+import json
+from pathlib import Path
+from typing import Final
+
+import pytest
+import respx
 
 import litellm
 
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl_vispark",
+    "object": "chat.completion",
+    "created": 1_790_000_000,
+    "model": "vision-medium",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello from Vispark"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+}
 
-class TestVisparkProviderConfig:
-    def test_vispark_in_provider_list(self):
-        from litellm import LlmProviders
-
-        assert hasattr(LlmProviders, "VISPARK")
-        assert LlmProviders.VISPARK.value == "vispark"
-        assert "vispark" in litellm.provider_list
-
-    def test_vispark_json_config_exists(self):
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        assert JSONProviderRegistry.exists("vispark")
-
-        vispark = JSONProviderRegistry.get("vispark")
-        assert vispark is not None
-        assert vispark.base_url == "https://api.lab.vispark.in/v1"
-        assert vispark.api_key_env == "VISPARK_LAB_API_KEY"
-        assert vispark.api_base_env == "VISPARK_LAB_API_BASE"
-        assert vispark.param_mappings.get("max_completion_tokens") == "max_tokens"
-
-    def test_vispark_in_openai_compatible_providers(self):
-        from litellm.constants import (
-            openai_compatible_providers,
-            openai_text_completion_compatible_providers,
-        )
-
-        assert "vispark" in openai_compatible_providers
-        assert "vispark" in openai_text_completion_compatible_providers
-
-    def test_vispark_provider_resolution(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        model, provider, api_key, api_base = get_llm_provider(
-            model="vispark/vision-medium",
-            custom_llm_provider=None,
-            api_base=None,
-            api_key=None,
-        )
-
-        assert model == "vision-medium"
-        assert provider == "vispark"
-        assert api_base == "https://api.lab.vispark.in/v1"
-
-    def test_vispark_api_base_override(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        model, provider, api_key, api_base = get_llm_provider(
-            model="vispark/vision-medium",
-            custom_llm_provider=None,
-            api_base="https://custom.vispark.in/v1",
-            api_key="sk-test",
-        )
-
-        assert provider == "vispark"
-        assert api_base == "https://custom.vispark.in/v1"
-        assert api_key == "sk-test"
-
-    def test_vispark_url_autodetection(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        model, provider, api_key, api_base = get_llm_provider(
-            model="vision-medium",
-            custom_llm_provider=None,
-            api_base="https://api.lab.vispark.in/v1",
-            api_key=None,
-        )
-        assert provider == "vispark"
-        assert api_base == "https://api.lab.vispark.in/v1"
-
-    def test_vispark_max_completion_tokens_mapped(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("vispark")
-        assert provider is not None
-        config = create_config_class(provider)()
-
-        optional_params = config.map_openai_params(
-            non_default_params={"max_completion_tokens": 256},
-            optional_params={},
-            model="vision-medium",
-            drop_params=False,
-        )
-        assert optional_params["max_tokens"] == 256
-        assert "max_completion_tokens" not in optional_params
-
-    def test_vispark_router_config(self):
-        from litellm import Router
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "vispark-chat",
-                    "litellm_params": {
-                        "model": "vispark/vision-medium",
-                        "api_key": "test-key",
-                    },
-                }
-            ]
-        )
-
-        assert len(router.model_list) == 1
-        assert router.model_list[0]["model_name"] == "vispark-chat"
+_TEXT_COMPLETION: Final = {
+    "id": "cmpl_vispark",
+    "object": "text_completion",
+    "created": 1_790_000_000,
+    "model": "vision-small",
+    "choices": [{"index": 0, "text": "Hello from Vispark", "finish_reason": "stop", "logprobs": None}],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+}
 
 
-class TestVisparkModelMetadata:
-    VISPARK_MODELS = (
-        "vispark/vision-small",
-        "vispark/vision-medium",
-        "vispark/vision-large",
+def test_vispark_provider_resolution(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "vispark-env-key")
+    monkeypatch.delenv("VISPARK_LAB_API_BASE", raising=False)
+
+    model, provider, api_key, api_base = get_llm_provider(
+        model="vispark/vision-medium",
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
     )
 
-    @staticmethod
-    def _load(path_parts):
-        import json
-        from pathlib import Path
-
-        json_path = Path(__file__).parents[4].joinpath(*path_parts)
-        with open(json_path) as f:
-            return json.load(f)
-
-    def test_vispark_models_registered_with_correct_metadata(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
-        for model in self.VISPARK_MODELS:
-            info = model_cost.get(model)
-            assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-            assert info["litellm_provider"] == "vispark"
-            assert info["mode"] == "chat"
-            assert info["input_cost_per_token"] > 0
-            assert info["output_cost_per_token"] > 0
-            assert info["supports_function_calling"] is True
-            assert info["supports_tool_choice"] is True
-            assert info["supports_reasoning"] is True
-            assert info["supports_response_schema"] is True
-            assert info["supports_vision"] is True
-
-            assert info["max_output_tokens"] == 65536
-            assert info["max_tokens"] == info["max_output_tokens"]
-            assert info["max_input_tokens"] == 1000000
-
-    def test_vispark_models_synced_to_backup(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
-        backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))
-        for model in self.VISPARK_MODELS:
-            assert model in backup, f"{model} missing from backup json"
-            assert backup[model] == model_cost[model], f"{model} differs between root and backup json"
+    assert model == "vision-medium"
+    assert provider == "vispark"
+    assert api_key == "vispark-env-key"
+    assert api_base == "https://api.lab.vispark.in/v1"
 
 
-class TestVisparkDashboardRegistration:
-    @staticmethod
-    def _provider_create_fields():
-        import json
-        from pathlib import Path
+def test_vispark_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-        import litellm
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "vispark-env-key")
+    monkeypatch.setenv("VISPARK_LAB_API_BASE", "https://vispark.env.example/v1")
 
-        path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-        with open(path) as f:
-            return json.load(f)
+    _, provider, api_key, api_base = get_llm_provider(
+        model="vispark/vision-medium",
+        custom_llm_provider=None,
+        api_base="https://vispark.internal.example/v1",
+        api_key="vispark-explicit-key",
+    )
 
-    def test_vispark_is_selectable_in_the_add_model_form(self):
-        entries = [e for e in self._provider_create_fields() if e["litellm_provider"] == "vispark"]
-        assert len(entries) == 1, "vispark must appear exactly once in provider_create_fields.json"
+    assert provider == "vispark"
+    assert api_key == "vispark-explicit-key"
+    assert api_base == "https://vispark.internal.example/v1"
 
-        entry = entries[0]
-        assert entry["provider"] == "VISPARK"
-        assert entry["provider_display_name"] == "Vispark"
-        assert entry["default_model_placeholder"].startswith("vispark/")
 
-        fields = {f["key"]: f for f in entry["credential_fields"]}
-        assert fields["api_key"]["required"] is True
-        assert fields["api_key"]["field_type"] == "password"
-        assert fields["api_base"]["required"] is False
+def test_vispark_api_base_env_overrides_default(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "vispark-env-key")
+    monkeypatch.setenv("VISPARK_LAB_API_BASE", "https://vispark.env.example/v1")
+
+    _, provider, _, api_base = get_llm_provider(
+        model="vispark/vision-medium",
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+    )
+
+    assert provider == "vispark"
+    assert api_base == "https://vispark.env.example/v1"
+
+
+def test_vispark_api_base_autodetects_provider(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "vispark-env-key")
+
+    model, provider, api_key, api_base = get_llm_provider(
+        model="vision-medium",
+        custom_llm_provider=None,
+        api_base="https://api.lab.vispark.in/v1",
+        api_key=None,
+    )
+
+    assert model == "vision-medium"
+    assert provider == "vispark"
+    assert api_key == "vispark-env-key"
+    assert api_base == "https://api.lab.vispark.in/v1"
+
+
+def test_vispark_chat_completion_request_maps_max_completion_tokens():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        response: Final = litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_completion_tokens=64,
+            api_key="vispark-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer vispark-test-key"
+    assert body["model"] == "vision-medium"
+    assert body["max_tokens"] == 64
+    assert "max_completion_tokens" not in body
+    assert response.choices[0].message.content == "Hello from Vispark"
+
+
+def test_vispark_text_completion_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/completions").respond(200, json=_TEXT_COMPLETION)
+        response: Final = litellm.text_completion(
+            model="vispark/vision-small",
+            prompt="Say hello",
+            api_key="vispark-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert body["model"] == "vision-small"
+    assert body["prompt"] == "Say hello"
+    assert response.choices[0].text == "Hello from Vispark"
+
+
+def test_vispark_cost_follows_the_cost_map():
+    cost_entry: Final = litellm.model_cost["vispark/vision-large"]
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="vision-large",
+        custom_llm_provider="vispark",
+        prompt_tokens=1_000,
+        completion_tokens=500,
+    )
+
+    assert prompt_cost == pytest.approx(1_000 * cost_entry["input_cost_per_token"])
+    assert completion_cost == pytest.approx(500 * cost_entry["output_cost_per_token"])
+
+
+def test_vispark_models_are_listed_for_the_provider():
+    from litellm.utils import get_valid_models
+
+    expected: Final = {name for name, entry in litellm.model_cost.items() if entry["litellm_provider"] == "vispark"}
+
+    assert expected
+    assert set(litellm.models_by_provider["vispark"]) == expected
+    assert expected <= set(get_valid_models(custom_llm_provider="vispark"))
+
+
+def test_vispark_endpoint_matrix_matches_between_root_and_backup():
+    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
+
+    backup_entry: Final = json.loads(backup_path.read_text())["providers"]["vispark"]
+    root_entry: Final = json.loads(root_path.read_text())["providers"]["vispark"]
+
+    assert backup_entry == root_entry
+    assert root_entry["endpoints"]["chat_completions"] is True

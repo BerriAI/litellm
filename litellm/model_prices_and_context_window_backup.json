@@ -48651,7 +48651,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 3.16e-06,
-        "source": "https://lab.vispark.in/#vision",
+        "source": "https://api.lab.vispark.in/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions"
@@ -48683,7 +48683,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1.263e-05,
-        "source": "https://lab.vispark.in/#vision",
+        "source": "https://api.lab.vispark.in/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions"
@@ -48715,7 +48715,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 2.211e-05,
-        "source": "https://lab.vispark.in/#vision",
+        "source": "https://api.lab.vispark.in/v1/models",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions"
