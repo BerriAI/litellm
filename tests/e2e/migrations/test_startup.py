@@ -14,7 +14,7 @@ from .checks import (
     start_replicas,
 )
 from .containers import Containers, failed, ready, until, waiting
-from .database import GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
+from .database import COORDINATOR_LOCK, GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
 from .startup_models import Migration
 from e2e_metadata import Domain, Subject, meta
 
@@ -97,8 +97,11 @@ class TestMigrationStartup:
             with containers.start(
                 database, (COMPLETE,), environment={"LITELLM_MIGRATION_LOCK_TIMEOUT": "12"}
             ) as replica:
-                until("Prisma lock contention", lambda: bool(database.blocked(PRISMA_LOCK)))
-                failed((replica,), "Timed out waiting for")
+                until(
+                    "a replica holding the coordinator lock while Prisma's lock is held",
+                    lambda: bool(database.holders(COORDINATOR_LOCK)),
+                )
+                failed((replica,), "Timed out waiting for Prisma's lock")
                 assert database.history() == history
                 assert not database.exists("migration_effect")
         with containers.start(database, (COMPLETE,)) as restarted:
