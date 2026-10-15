@@ -60,16 +60,16 @@ def _unsupported_chat_values(non_default_params: Mapping[str, object]) -> tuple[
     )
 
 
-def _chat_servable_params(non_default_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
-    unsupported: Final = _unsupported_chat_values(non_default_params)
-    if unsupported and not (drop_params or litellm.drop_params):
+def _chat_request_params(optional_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    unsupported: Final = _unsupported_chat_values(optional_params)
+    if unsupported and not drop_params:
         raise UnsupportedParamsError(
             message=f"Bedrock Mantle Chat Completions does not support {', '.join(unsupported)}. To drop unsupported "
             "openai params from the call, set `litellm.drop_params = True`",
             llm_provider="bedrock_mantle",
             status_code=400,
         )
-    servable: Final = _with_chat_reasoning_effort(non_default_params)
+    servable: Final = _with_chat_reasoning_effort(optional_params)
     n: Final = servable.get("n")
     return MappingProxyType(
         {key: value for key, value in servable.items() if not (key == "n" and isinstance(n, int) and n > 1)}
@@ -181,7 +181,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
         mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
-            dict(_chat_servable_params(non_default_params, drop_params)),
+            non_default_params,
             optional_params,
             model,
             drop_params,
@@ -194,6 +194,18 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
             if param != "max_tokens"
         }
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        request_params: Final = dict(_chat_request_params(optional_params, drop_params))
+        return super().transform_request(model, messages, request_params, litellm_params, headers)
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

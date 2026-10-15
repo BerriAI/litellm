@@ -42,6 +42,38 @@ def local_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+_RESPONSES_API_REPLY: Final = {
+    "id": "resp_test",
+    "object": "response",
+    "created_at": 1733529600,
+    "status": "completed",
+    "model": "openai.gpt-5.6-terra",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_test",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+def _mantle_chat_request(drop_params: bool, **params: object) -> dict[str, object]:
+    optional_params: Final = litellm.get_optional_params(
+        model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=drop_params, **params
+    )
+    return BedrockMantleChatConfig().transform_request(
+        model="openai.gpt-5.6-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+
 class TestBedrockMantleProviderRegistration:
     def test_provider_enum_exists(self):
         assert LlmProviders.BEDROCK_MANTLE == "bedrock_mantle"
@@ -279,27 +311,52 @@ class TestBedrockMantleConfig:
     )
     def test_chat_completions_gets_reasoning_effort_as_a_level(self, reasoning_effort, expected) -> None:
         """Mantle chat answers a Responses-shaped ``{"effort", "summary"}`` with ``invalid_type``."""
-        optional_params = litellm.get_optional_params(
-            model="openai.gpt-5.6-terra",
-            custom_llm_provider="bedrock_mantle",
-            drop_params=True,
-            reasoning_effort=reasoning_effort,
-        )
-        assert optional_params.get("reasoning_effort") == expected
+        request = _mantle_chat_request(drop_params=True, reasoning_effort=reasoning_effort)
+        assert request.get("reasoning_effort") == expected
 
     @pytest.mark.parametrize("params", [{"n": 2}, {"reasoning_effort": {"effort": "low", "summary": "auto"}}])
     def test_chat_completions_answers_400_for_what_mantle_chat_cannot_serve_without_drop_params(self, params) -> None:
         with pytest.raises(litellm.UnsupportedParamsError):
-            litellm.get_optional_params(
-                model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=False, **params
-            )
+            _mantle_chat_request(drop_params=False, **params)
 
     @pytest.mark.parametrize("n, drop_params, expected", [(1, False, 1), (2, True, None)])
     def test_chat_completions_sends_n_only_where_mantle_chat_serves_it(self, n, drop_params, expected) -> None:
-        optional_params = litellm.get_optional_params(
-            model="openai.gpt-5.6-terra", custom_llm_provider="bedrock_mantle", drop_params=drop_params, n=n
+        assert _mantle_chat_request(drop_params=drop_params, n=n).get("n") == expected
+
+    @pytest.mark.parametrize(
+        "params, model_info",
+        [
+            ({"n": 2}, None),
+            ({"reasoning_effort": {"effort": "low", "summary": "auto"}}, {"mode": "chat"}),
+            ({"web_search_options": {"search_context_size": "low"}}, {"mode": "chat"}),
+        ],
+    )
+    def test_what_mantle_chat_cannot_serve_reaches_the_responses_api(
+        self, monkeypatch, local_cost_map, params, model_info
+    ) -> None:
+        for var in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "BEDROCK_MANTLE_REGION"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "test-key")
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            requests.append({"url": url, "body": json.loads(data) if data is not None else kwargs.get("json")})
+            return httpx.Response(status_code=200, json=_RESPONSES_API_REPLY, request=httpx.Request("POST", url))
+
+        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+            response = litellm.completion(
+                model="bedrock_mantle/openai.gpt-5.6-terra",
+                messages=[{"role": "user", "content": "hello"}],
+                aws_region_name="us-east-1",
+                model_info=model_info,
+                **params,
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert [request["url"].rsplit("/", 1)[-1] for request in requests] == ["responses"]
+        assert requests[0]["body"].get("reasoning", {}).get("summary") == params.get("reasoning_effort", {}).get(
+            "summary"
         )
-        assert optional_params.get("n") == expected
 
     def test_non_gpt_reasoning_models_keep_the_openai_compatible_max_tokens(self):
         optional_params = litellm.get_optional_params(
