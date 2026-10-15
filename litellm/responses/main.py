@@ -37,6 +37,8 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.native.responses import execute_responses
+from litellm.native.route_plan import NativeChat, plan_responses_route
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -432,13 +434,6 @@ async def aresponses_api_with_mcp(
     return response
 
 
-def _bridges_to_chat_completions(
-    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
-) -> bool:
-    """Whether the request reaches its provider as a chat completion, not a Responses call."""
-    return responses_api_provider_config is None or use_chat_completions_api is True
-
-
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
@@ -471,7 +466,7 @@ def _encrypted_task_support_failure(
 ) -> _ResponsesCompatibilityFailure | None:
     if (
         responses_api_provider_config is None
-        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or isinstance(plan_responses_route(responses_api_provider_config, use_chat_completions_api), NativeChat)
         or not responses_api_provider_config.supports_encrypted_agent_messages()
     ):
         return "encrypted_task_unsupported"
@@ -545,7 +540,7 @@ def _will_bridge_to_chat_completions(
     model_info: object,
     api_base: str | None,
 ) -> bool:
-    """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
+    """``plan_responses_route`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
     asks rather than restating its condition, with the model name the dispatch hands the
@@ -558,14 +553,17 @@ def _will_bridge_to_chat_completions(
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
-    return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
-            custom_llm_provider,
-            model_info,
-            api_base,
+    return isinstance(
+        plan_responses_route(
+            _resolve_responses_api_provider_config(
+                _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+                custom_llm_provider,
+                model_info,
+                api_base,
+            ),
+            use_chat_completions_api or normalized_model[1],
         ),
-        use_chat_completions_api or normalized_model[1],
+        NativeChat,
     )
 
 
@@ -1277,7 +1275,6 @@ def responses(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
         require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
@@ -1480,7 +1477,7 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
-        if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
+        if isinstance(plan_responses_route(responses_api_provider_config, use_chat_completions_api), NativeChat):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
@@ -1496,72 +1493,30 @@ def responses(
                 **bridge_kwargs,
             )
 
-        # Get optional parameters for the responses API
-        request_drop_params: Final = kwargs.get("drop_params")
-        responses_api_request_params: Final[dict] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-            allowed_openai_params=allowed_openai_params,
-            drop_params=normalize_drop_params(request_drop_params),
-        )
-
-        litellm_logging_obj.update_from_kwargs(
-            kwargs=kwargs,
-            model=model,
-            user=user,
-            optional_params=dict(responses_api_request_params),
-            litellm_params={
-                **responses_api_request_params,
-                "aresponses": _is_async,
-                "litellm_call_id": litellm_call_id,
-                "model_info": kwargs.get("model_info"),
-                "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
-                "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
-                "provider_affinity_header": litellm_params.provider_affinity_header,
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
-
-        # Call the handler with _is_async flag instead of directly calling the async handler
-        if custom_llm_provider is None:
+        if custom_llm_provider is None or responses_api_provider_config is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        response = base_llm_http_handler.response_api_handler(
+        return execute_responses(
+            http_handler=base_llm_http_handler,
             model=model,
             input=input,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_request_params=responses_api_request_params,
+            provider_config=responses_api_provider_config,
+            requested_params=response_api_optional_params,
+            allowed_openai_params=allowed_openai_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
+            user=user,
             extra_headers=effective_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            _is_async=_is_async,
+            is_async=_is_async,
+            stream=stream,
             client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
+            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            request_kwargs=kwargs,
         )
-
-        # Update the responses_api_response_id with the model_id
-        if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-            # Stamp custom_llm_provider so callbacks can identify the provider
-            # (mirrors litellm/main.py:1371 for chat completions)
-            response.hidden_params["custom_llm_provider"] = custom_llm_provider
-
-        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
