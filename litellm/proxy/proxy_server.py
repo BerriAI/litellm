@@ -347,6 +347,7 @@ from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operat
 from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -357,6 +358,7 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     get_team_object,
     log_db_metrics,
+    personal_key_team_model_access_applies,
 )
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
@@ -16493,18 +16495,26 @@ def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
-def _v1_model_info_lists_every_deployment(user_api_key_dict: UserAPIKeyAuth, llm_router: Router) -> bool:
+async def _v1_model_info_lists_every_deployment(
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+    resolve_agent_ceiling: CeilingResolver,
+) -> bool:
     model_access_groups: Final = llm_router.get_model_access_groups()
     proxy_model_list: Final = llm_router.get_model_names()
-    return not get_key_models(
+    if get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
-    ) and not get_team_models(
+    ) or get_team_models(
         team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
-    )
+    ):
+        return False
+    if personal_key_team_model_access_applies(user_api_key_dict):
+        return False
+    return not user_api_key_dict.agent_id or await resolve_agent_ceiling(user_api_key_dict.agent_id) is None
 
 
 async def _get_v1_model_info_allowed_model_names_with_access_groups(
@@ -16513,8 +16523,13 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache | None,
     proxy_logging_obj: ProxyLogging | None,
+    resolve_agent_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> frozenset[str] | None:
-    if _v1_model_info_lists_every_deployment(user_api_key_dict=user_api_key_dict, llm_router=llm_router):
+    if await _v1_model_info_lists_every_deployment(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        resolve_agent_ceiling=resolve_agent_ceiling,
+    ):
         return None
 
     from litellm.proxy.utils import (
@@ -16530,6 +16545,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
+            resolve_agent_ceiling=resolve_agent_ceiling,
         )
     )
 

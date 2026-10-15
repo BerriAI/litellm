@@ -683,6 +683,84 @@ def test_model_listing_routes_list_team_access_group_models_the_key_can_call(
     assert sorted(model[name_field] for model in response.json()["data"]) == expected_names
 
 
+def test_v1_model_info_unrestricted_admin_key_still_lists_team_byok_rows(
+    client, auth_as, byok_team_router, mock_prisma, monkeypatch
+):
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    with auth_as():
+        response: Final = client.get("/v1/model/info")
+
+    assert response.status_code == 200, response.text
+    assert [model["model_name"] for model in response.json()["data"]] == [_BYOK_PUBLIC_NAME]
+
+
+@pytest.mark.parametrize(
+    ("key_models", "expected_names"),
+    [([], ["model-direct"]), (["model-direct", "model-other"], ["model-direct"])],
+    ids=["no-key-list", "own-key-list"],
+)
+def test_v1_model_info_scopes_a_personal_key_to_its_owner_teams(
+    client, auth_as, access_group_team, monkeypatch, key_models, expected_names
+):
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, LitellmUserRoles
+    from litellm.proxy.auth import auth_checks
+
+    async def owner(**_: object) -> LiteLLM_UserTable:
+        return LiteLLM_UserTable(user_id="owner", teams=[_ACCESS_GROUP_TEAM_ID])
+
+    async def owner_team(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
+        return LiteLLM_TeamTableCachedObj(team_id=team_id, models=["model-direct"])
+
+    async def no_membership(**_: object) -> None:
+        return None
+
+    access_group_team(["model-direct"])
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(auth_checks, "get_user_object", owner)
+    monkeypatch.setattr(auth_checks, "get_team_object", owner_team)
+    monkeypatch.setattr(auth_checks, "get_team_membership", no_membership)
+    with auth_as(role=LitellmUserRoles.INTERNAL_USER, user_id="owner", models=key_models):
+        response: Final = client.get("/v1/model/info")
+
+    assert response.status_code == 200, response.text
+    assert sorted(model["model_name"] for model in response.json()["data"]) == expected_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ceiling_models", "expected"),
+    [(frozenset({"model-direct"}), frozenset({"model-direct"})), (None, None)],
+    ids=["capped-agent", "agent-without-access-groups"],
+)
+async def test_v1_model_info_caps_an_agent_key_with_no_model_list_to_its_access_groups(
+    access_group_team, ceiling_models, expected
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+
+    async def ceiling(agent_id: str) -> AgentAccessGroupCeiling | None:
+        assert agent_id == "agent-1"
+        if ceiling_models is None:
+            return None
+        return AgentAccessGroupCeiling(
+            access_group_ids=("agent-group",),
+            models=ceiling_models,
+            mcp_server_ids=frozenset(),
+            agent_ids=frozenset(),
+        )
+
+    allowed: Final = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-agent", agent_id="agent-1", models=[]),
+        llm_router=proxy_server.llm_router,
+        prisma_client=None,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
+        resolve_agent_ceiling=ceiling,
+    )
+
+    assert allowed == expected
+
+
 # ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------
