@@ -1698,6 +1698,26 @@ def test_s3_object_key_file_segment_limit_counts_utf8_bytes():
     assert "\ufffd" not in file_segment
 
 
+def test_s3_object_key_at_the_full_key_byte_limit_is_left_alone():
+    """A key of exactly 1024 bytes whose segments all fit is left byte-identical."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    file_name = "x" * 200
+    fixed_len = len(f"/2026-08-24/{file_name}.json")
+    s3_path = "/".join(["p" * 200] * 4) + "/" + "q" * (MAX_S3_OBJECT_KEY_BYTES - fixed_len - 804)
+
+    key = get_s3_object_key(
+        s3_path=s3_path,
+        prefix="",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=file_name,
+    )
+
+    assert key == f"{s3_path}/2026-08-24/{file_name}.json"
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+
+
 def test_s3_object_key_is_bounded_for_oversized_response_id():
     """An oversized Responses API id is shortened to a readable head plus a digest."""
     import hashlib
