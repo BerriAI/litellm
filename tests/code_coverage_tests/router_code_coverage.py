@@ -114,6 +114,8 @@ ignored_function_names = [
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
 ]
 
 
