@@ -2,7 +2,6 @@ import asyncio
 import itertools
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -28,6 +27,7 @@ from integration._support.openai_wire import answering_model_discovery
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _CLAUDE: Final = cc.OPUS
@@ -339,12 +339,6 @@ def _assert_each_lands_once(
         assert by_status[match] == "success", rows
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _health_counts(gateway: Gateway, model: str) -> tuple[int, int]:
     response: Final = gateway.request("GET", f"/health?model={model}", None)
     assert response.status_code in (200, 503), response.text
@@ -382,7 +376,7 @@ async def test_mixed_burst_carries_the_search_call_on_every_endpoint_and_lands_e
 async def test_vendor_outage_fails_each_call_cleanly_and_the_recovered_vendor_gets_the_tool_search(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("responses", "chat", "messages"))
     after: Final = _calls(15, ("responses", "chat", "messages"))
     with gateway.scenario() as scenario:
