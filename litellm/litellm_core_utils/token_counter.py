@@ -12,6 +12,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -21,6 +22,8 @@ from litellm.constants import (
     ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
     ANTHROPIC_IMAGE_MAX_PIXELS,
     ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
+    AUDIO_BYTES_PER_TOKEN,
+    DEFAULT_AUDIO_TOKEN_ESTIMATE,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -942,6 +945,69 @@ def _count_anthropic_content(
     return tokens
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    try:
+        return _OBJECT_LIST.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _count_input_audio_content_block(c: Mapping[str, object]) -> int:
+    """
+    Estimate tokens for an OpenAI ``input_audio`` content block (audio
+    understanding), e.g. {"type": "input_audio", "input_audio": {"data":
+    "<base64>", "format": "wav"}}. The real token cost is the provider's
+    server-side audio tokenization and cannot be derived exactly client-side;
+    when the block carries a base64 payload, derive the estimate from the
+    decoded byte count at a conservative low bitrate, otherwise use the flat
+    per-block floor -- the same numbers ``parallel_request_limiter_v3``
+    already uses for its audio reservations (issue #38459).
+    """
+    input_audio: Final = _object_mapping(c.get("input_audio"))
+    b64_data: Final = input_audio.get("data") if input_audio is not None else None
+    if isinstance(b64_data, str) and b64_data:
+        decoded_bytes: Final = len(b64_data) * 3 // 4
+        return max(decoded_bytes // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    return DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+
+def messages_contain_input_audio_content_blocks(messages: object) -> bool:
+    """
+    True when any message carries an OpenAI ``input_audio`` content block.
+
+    Callers that use ``token_counter`` for reservations or rate limits must
+    check this first: an audio block's contribution is a size-derived
+    ESTIMATE at a deliberately low assumed bitrate (see
+    ``_count_input_audio_content_block``), not a measurement, so the count
+    for such a message must not be trusted as an upper bound.
+    """
+    for message in _object_list(messages) or ():
+        message_mapping = _object_mapping(message)
+        content = _object_list(message_mapping.get("content")) if message_mapping is not None else None
+        for content_item in content or ():
+            item_mapping = _object_mapping(content_item)
+            if item_mapping is not None and item_mapping.get("type") == "input_audio":
+                return True
+    return False
+
+
+def batch_entry_contains_input_audio_content_blocks(entry: Mapping[str, object]) -> bool:
+    """True when a batch input row's ``body.messages`` carries an ``input_audio`` block."""
+    body: Final = _object_mapping(entry.get("body"))
+    return body is not None and messages_contain_input_audio_content_blocks(body.get("messages"))
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -997,8 +1063,7 @@ def _count_content_list(
                 # Claude extended thinking content block
                 # Count the thinking text and skip the opaque blobs (signature, redacted data)
                 thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
+                num_tokens += count_function(thinking_text) if thinking_text else 0
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -1010,13 +1075,15 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] == "input_audio":
+                num_tokens += _count_input_audio_content_block(c)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"tool_reference, input_audio)."
                 )
         return num_tokens
     except Exception as e:
