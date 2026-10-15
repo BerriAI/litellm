@@ -71,7 +71,7 @@ def _file_content(file_obj: object) -> object:
     if not isinstance(file_obj, tuple):
         return file_obj
     file_tuple: Final = _FILE_TUPLE_ADAPTER.validate_python(file_obj)
-    return file_tuple[1] if len(file_tuple) >= 2 else None
+    return _file_content(file_tuple[1]) if len(file_tuple) >= 2 else None
 
 
 def input_reference_bytes(file_obj: object) -> bytes:
@@ -96,10 +96,21 @@ def input_reference_bytes(file_obj: object) -> bytes:
     raise ValueError("input_reference must be a URL string, bytes, a path, a file object, or a file tuple")
 
 
+def _reference_object_url(reference: Mapping[str, object]) -> str:
+    image_url: Final = reference.get("image_url")
+    if isinstance(image_url, str) and image_url:
+        return image_url
+    raise ValueError("input_reference as an object must carry an image_url, a file_id is not supported")
+
+
 def input_reference_url(image: object) -> str:
-    """A string is a URL the provider fetches itself and is never opened as a local path."""
+    """A string is a URL the provider fetches itself and is never opened as a local path. OpenAI's object form
+    carries that URL, or a data URL, in ``image_url``."""
     if isinstance(image, str):
         return image
+    reference: Final = _fields(image)
+    if reference is not None:
+        return _reference_object_url(reference)
     content: Final = input_reference_bytes(image)
     content_type: Final = ImageEditRequestUtils.get_image_content_type(content)
     encoded: Final = base64.b64encode(content).decode("utf-8")

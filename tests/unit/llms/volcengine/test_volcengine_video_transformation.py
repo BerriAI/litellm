@@ -123,6 +123,24 @@ def test_a_url_input_reference_is_passed_as_is_and_never_opened_as_a_path():
     ]
 
 
+def test_openais_object_input_reference_sends_its_image_url():
+    body = _create_body({"input_reference": {"image_url": "https://x/first.png"}, "duration": 4})
+
+    assert body["content"] == [
+        {"type": "text", "text": "a cat on a roof"},
+        {"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"},
+    ]
+
+
+def test_a_file_id_input_reference_is_a_bad_request_unless_drop_params():
+    with pytest.raises(UnsupportedParamsError, match="file_id is not supported"):
+        _ = _create_body({"input_reference": {"file_id": "file-abc"}, "duration": 4})
+
+    body = _create_body({"input_reference": {"file_id": "file-abc"}, "duration": 4}, drop_params=True)
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}]
+
+
 def test_a_caller_content_array_wins_over_input_reference_and_the_prompt_leads():
     body = _create_body(
         {
@@ -138,13 +156,21 @@ def test_a_caller_content_array_wins_over_input_reference_and_the_prompt_leads()
     ]
 
 
-@pytest.mark.parametrize("drop_params", [None, True])
-def test_a_text_item_in_content_is_rejected_because_input_guardrails_only_scan_the_prompt(drop_params: bool | None):
+IMAGE_ITEM: Final = {"type": "image_url", "image_url": {"url": "https://x/a.png"}, "role": "reference_image"}
+
+
+def test_a_text_item_in_content_is_rejected_because_input_guardrails_only_scan_the_prompt():
     with pytest.raises(UnsupportedParamsError, match="put the text in prompt"):
-        _ = _create_body(
-            {"content": [{"type": "text", "text": "text the guardrail never saw"}], "duration": 4},
-            drop_params=drop_params,
-        )
+        _ = _create_body({"content": [{"type": "text", "text": "text the guardrail never saw"}], "duration": 4})
+
+
+def test_a_text_item_in_content_is_dropped_under_drop_params_so_ark_never_sees_unscanned_text():
+    body = _create_body(
+        {"content": [{"type": "text", "text": "text the guardrail never saw"}, IMAGE_ITEM], "duration": 4},
+        drop_params=True,
+    )
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, IMAGE_ITEM]
 
 
 @pytest.mark.parametrize(
@@ -158,7 +184,11 @@ def test_a_text_item_in_content_is_rejected_because_input_guardrails_only_scan_t
 )
 def test_a_video_input_is_rejected_because_its_cost_is_not_known_at_create(item: dict[str, object]):
     with pytest.raises(UnsupportedParamsError, match="Video input"):
-        _ = _create_body({"content": [item], "duration": 4}, drop_params=True)
+        _ = _create_body({"content": [item], "duration": 4})
+
+    body = _create_body({"content": [item, IMAGE_ITEM], "duration": 4}, drop_params=True)
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, IMAGE_ITEM]
 
 
 @pytest.mark.parametrize(
@@ -166,20 +196,38 @@ def test_a_video_input_is_rejected_because_its_cost_is_not_known_at_create(item:
     ["a string", [{"type": "image_url", "role": 7}], [{"type": 7}]],
     ids=["not-an-array", "non-string-role", "non-string-type"],
 )
-def test_a_content_value_that_is_not_an_array_of_items_is_rejected(content: object):
+def test_a_content_value_that_is_not_an_array_of_items_is_rejected_unless_drop_params(content: object):
     with pytest.raises(UnsupportedParamsError, match="content must be an array"):
         _ = _create_body({"content": content, "duration": 4})
 
+    body = _create_body({"content": content, "duration": 4}, drop_params=True)
 
-def test_an_omitted_duration_and_tier_are_sent_as_five_seconds_at_720p_so_ark_cannot_pick_what_is_billed():
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}]
+
+
+def test_an_omitted_duration_and_tier_are_sent_as_openais_four_seconds_at_720p_so_ark_cannot_pick_what_is_billed():
     body = _create_body({})
 
     assert body == {
         "model": SEEDANCE_2_5,
         "content": [{"type": "text", "text": "a cat on a roof"}],
         "resolution": "720p",
-        "duration": 5,
+        "duration": 4,
     }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_an_endpoint_id_priced_through_base_model_gets_the_base_models_default_tier():
+    body, _, _ = VolcEngineVideoConfig().transform_video_create_request(
+        model="ep-20261015-abc",
+        prompt="a cat on a roof",
+        api_base=API_BASE,
+        video_create_optional_request_params={"duration": 4},
+        litellm_params=GenericLiteLLMParams(model_info={"base_model": f"volcengine/{SEEDANCE_2_5}"}),
+        headers={},
+    )
+
+    assert (body["model"], body["resolution"]) == ("ep-20261015-abc", "720p")
 
 
 @pytest.mark.parametrize("field", ["return_last_frame", "draft", "frame_count"])
@@ -198,12 +246,18 @@ def test_a_field_litellm_does_not_send_to_ark_is_dropped_under_drop_params():
 @pytest.mark.parametrize("duration", [-1, "-1", 0, "abc", 4.5])
 def test_a_duration_ark_would_pick_or_that_is_not_whole_seconds_is_rejected(duration: object):
     with pytest.raises(UnsupportedParamsError, match="duration must be a positive whole number"):
-        _ = _create_body({"duration": duration}, drop_params=True)
+        _ = _create_body({"duration": duration})
+
+    assert _create_body({"duration": duration}, drop_params=True)["duration"] == 4
 
 
 def test_frames_is_rejected_because_it_bypasses_the_billed_duration():
     with pytest.raises(UnsupportedParamsError, match="frames"):
-        _ = _create_body({"frames": 121, "duration": 4})
+        _ = _create_body({"frames": 121, "duration": 6})
+
+    body = _create_body({"frames": 121, "duration": 6}, drop_params=True)
+
+    assert ("frames" not in body, body["duration"]) == (True, 6)
 
 
 def test_ark_fields_reach_the_body_and_false_flags_are_kept():
@@ -357,18 +411,18 @@ def test_an_explicit_safety_identifier_wins_over_user():
         (
             SEEDANCE_2_5,
             {"duration": 4, "resolution": "480p", "ratio": "16:9"},
-            "4.0",
+            "4",
             "854x480",
             {"duration_seconds": 4.0, "video_resolution": "480p"},
         ),
         (
             SEEDANCE_2_0,
             {"duration": 5, "resolution": "480p", "ratio": "16:9"},
-            "5.0",
+            "5",
             "864x496",
             {"duration_seconds": 5.0, "video_resolution": "480p"},
         ),
-        (SEEDANCE_2_5, {"duration": 5}, "5.0", None, {"duration_seconds": 5.0}),
+        (SEEDANCE_2_5, {"duration": 5}, "5", None, {"duration_seconds": 5.0}),
     ],
     ids=["2.5-480p", "2.0-480p-renders-its-own-frame", "no-geometry"],
 )
@@ -501,7 +555,7 @@ def test_a_completed_task_reports_its_delivered_geometry_duration_and_tokens():
         "error": None,
         "progress": None,
         "remixed_from_video_id": None,
-        "seconds": "4.0",
+        "seconds": "4",
         "size": "864x496",
         "model": SEEDANCE_2_0,
         "usage": {"duration_seconds": 4.0, "video_resolution": "480p", "total_tokens": 40594},

@@ -95,7 +95,7 @@ class _KnownFields(BaseModel, frozen=True):
 
 
 VOLCENGINE_VIDEO_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
-VOLCENGINE_VIDEO_DEFAULT_DURATION_SECONDS: Final = 5
+VOLCENGINE_VIDEO_DEFAULT_DURATION_SECONDS: Final = 4
 VOLCENGINE_VIDEO_DEFAULT_RESOLUTION: Final = "720p"
 _VOLCENGINE_API_MARKER: Final = "/api/"
 _VOLCENGINE_COMPAT_SUFFIXES: Final = ("/api", "/v1")
@@ -150,7 +150,7 @@ _MAPPED_ELSEWHERE: Final = frozenset({*_REQUEST_METADATA, *_UNSUPPORTED_BY_VOLCE
 
 _VIDEO_INPUT_UNSUPPORTED: Final = (
     "{operation} is not supported through litellm: Ark bills a task with a video input at a different rate per "
-    "token, and litellm bills the video when the task is created, before that cost is known."
+    "token, and litellm bills the video when the task is created, before that cost is known"
 )
 _INPUT_VIDEO_ROLE: Final = "reference_video"
 _INPUT_VIDEO_TYPE: Final = "video_url"
@@ -302,6 +302,14 @@ def _model_info(model: str) -> ModelInfo | None:
         return None
 
 
+def _pricing_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+    """A deployment priced through ``model_info.base_model``, like an ``ep-`` endpoint id, bills at that model's
+    tiers."""
+    model_info: Final = _FIELDS_ADAPTER.validate_python(litellm_params["model_info"] or _EMPTY_PARAMS)
+    base_model: Final = model_info.get("base_model")
+    return base_model if isinstance(base_model, str) and base_model else model
+
+
 def _priced_tiers(model: str) -> tuple[str, ...] | None:
     """A tier the model has no price for is one Ark does not offer it at, and litellm would bill it at the base rate.
     A model with no tier price listed, missing from the cost map or registered unpriced by the router, has nothing
@@ -347,25 +355,59 @@ def _size_from_geometry(resolution: str | None, ratio: str | None, model: str | 
     return f"{-(-shortest_side * ratio_width // shortest_ratio_side)}x{-(-shortest_side * ratio_height // shortest_ratio_side)}"
 
 
-def _content_items(prompt: str, params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+def _is_input_video(item: _ContentItem) -> bool:
+    return item.type == _INPUT_VIDEO_TYPE or item.role == _INPUT_VIDEO_ROLE
+
+
+def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
+    try:
+        items: Final = _CONTENT_ITEMS_ADAPTER.validate_python(supplied)
+        entries: Final = tuple(_ContentItem.model_validate(item) for item in items)
+    except ValidationError:
+        if drop_params:
+            return ()
+        raise _droppable(model, "content must be an array of Ark content items") from None
+    if any(entry.type == "text" for entry in entries) and not drop_params:
+        raise _droppable(
+            model,
+            "A text item in content is not supported, put the text in prompt since it is the only text input "
+            "guardrails scan before the request reaches Ark",
+        )
+    if any(_is_input_video(entry) for entry in entries) and not drop_params:
+        raise _droppable(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
+    kept: Final = (item for item, entry in zip(items, entries) if entry.type != "text" and not _is_input_video(entry))
+    return tuple(MappingProxyType(item) for item in kept)
+
+
+def _reference_items(params: Mapping[str, object], model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
     """A caller-supplied ``content`` array wins over ``input_reference``, since its roles are the only way to express
-    reference-to-video. The prompt always leads, as it is the only text the input guardrails scan."""
+    reference-to-video."""
     supplied: Final = params.get("content")
-    text_item: Final = MappingProxyType({"type": "text", "text": prompt})
     if supplied is not None:
-        return (text_item, *_CONTENT_ITEMS_ADAPTER.validate_python(supplied))
+        return _supplied_items(supplied, model, drop_params)
     reference: Final = params.get("input_reference")
     if reference is None:
-        return (text_item,)
-    first_frame: Final = MappingProxyType(
-        {"type": "image_url", "image_url": {"url": input_reference_url(reference)}, "role": "first_frame"}
-    )
-    return (text_item, first_frame)
+        return ()
+    try:
+        url: Final = input_reference_url(reference)
+    except ValueError as e:
+        if drop_params:
+            return ()
+        raise _droppable(model, str(e)) from None
+    return (MappingProxyType({"type": "image_url", "image_url": {"url": url}, "role": "first_frame"}),)
 
 
-def _has_input_video(items: tuple[Mapping[str, object], ...]) -> bool:
-    entries: Final = tuple(_ContentItem.model_validate(dict(item)) for item in items)
-    return any(entry.type == _INPUT_VIDEO_TYPE or entry.role == _INPUT_VIDEO_ROLE for entry in entries)
+def _sent_content(
+    prompt: str, params: Mapping[str, object], model: str, drop_params: bool
+) -> tuple[Mapping[str, object], ...]:
+    """The prompt always leads, as it is the only text the input guardrails scan."""
+    return (MappingProxyType({"type": "text", "text": prompt}), *_reference_items(params, model, drop_params))
+
+
+def _seconds_label(seconds: object) -> str | None:
+    if isinstance(seconds, float) and seconds.is_integer():
+        return str(int(seconds))
+    return None if seconds is None else str(seconds)
 
 
 def _requested_usage(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -423,7 +465,7 @@ def _video_object_from_task(task: _Task, raw_response: httpx.Response, model: st
         created_at=task.created_at,
         completed_at=task.updated_at if status in _TERMINAL_STATUSES else None,
         error=error,
-        seconds=str(seconds) if seconds is not None else None,
+        seconds=_seconds_label(seconds),
         size=_size_from_geometry(task.resolution, task.ratio, task.model),
         model=model or task.model,
         usage=dict(usage) if usage else None,
@@ -547,39 +589,29 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         Ark bills a video when the task finishes, while litellm bills it here at create, so every request has to
         carry a length and a tier whose cost is known now. Ark-picked length (``duration: -1``) and a video input
         (edits, extensions and reference videos, billed at a different rate per token) are rejected for that reason,
-        and an omitted length is sent explicitly, since the 2.5 family's own default is ``-1``.
+        and an omitted length is sent as OpenAI's documented default of 4 seconds, since the 2.5 family's own default
+        is ``-1``.
         """
         params: Final = video_create_optional_request_params
-        try:
-            content: Final = _content_items(prompt, params)
-            sends_input_video: Final = _has_input_video(content)
-        except ValidationError:
-            raise _unsupported(model, "content must be an array of Ark content items") from None
-        if any(item.get("type") == "text" for item in content[1:]):
-            raise _unsupported(
-                model,
-                "A text item in content is not supported, put the text in prompt: it is the only text input "
-                "guardrails scan before the request reaches Ark.",
-            )
-        if sends_input_video:
-            raise _unsupported(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
-        if params.get("frames") is not None:
-            raise _unsupported(model, "frames is not supported through litellm, pass seconds instead")
+        drop_params: Final = _drops_params(litellm_params)
+        content: Final = _sent_content(prompt, params, model, drop_params)
+        if params.get("frames") is not None and not drop_params:
+            raise _droppable(model, "frames is not supported through litellm, pass seconds instead")
         requested_duration: Final = params.get("duration")
-        duration: Final = (
-            VOLCENGINE_VIDEO_DEFAULT_DURATION_SECONDS
-            if requested_duration is None
-            else _duration_param(requested_duration)
-        )
-        if duration is None or duration <= 0:
-            raise _unsupported(
+        parsed_duration: Final = None if requested_duration is None else _duration_param(requested_duration)
+        if requested_duration is not None and (parsed_duration is None or parsed_duration <= 0) and not drop_params:
+            raise _droppable(
                 model,
                 f"duration must be a positive whole number of seconds, got {requested_duration!r}. Ark-picked length "
-                "(-1) is not supported through litellm: the video is billed when the task is created, before Ark has "
-                "picked its length.",
+                "(-1) is not supported through litellm, since the video is billed when the task is created, before "
+                "Ark has picked its length",
             )
+        duration: Final = (
+            parsed_duration
+            if parsed_duration is not None and parsed_duration > 0
+            else VOLCENGINE_VIDEO_DEFAULT_DURATION_SECONDS
+        )
 
-        drop_params: Final = _drops_params(litellm_params)
         unknown_fields: Final = tuple(
             sorted(key for key, value in params.items() if value is not None and key not in _CREATE_HANDLED_KEYS)
         )
@@ -592,7 +624,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         if malformed and not drop_params:
             raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
         resolution: Final = requested_fields.get("resolution")
-        priced_tiers: Final = _priced_tiers(model)
+        priced_tiers: Final = _priced_tiers(_pricing_model(model, litellm_params))
         drops_resolution: Final = (
             priced_tiers is not None and isinstance(resolution, str) and resolution.strip().lower() not in priced_tiers
         )
@@ -646,7 +678,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             object="video",
             status="queued",
             model=model,
-            seconds=str(seconds) if seconds is not None else None,
+            seconds=_seconds_label(seconds),
             size=_size_from_geometry(
                 resolution if isinstance(resolution, str) else None, ratio if isinstance(ratio, str) else None, model
             ),
