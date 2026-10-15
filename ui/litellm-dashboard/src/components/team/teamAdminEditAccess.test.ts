@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  type TeamAdminMetadataContext,
+  teamAdminDeclaredFields,
+  teamAdminMetadataChange,
+  teamAdminMetadataPairIssue,
+  teamAdminMetadataPairs,
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
   parseTeamEditAccess,
@@ -14,6 +19,7 @@ describe("teamAdminFieldLabel", () => {
     ["rpm_limit", "Requests per minute Limit (RPM)"],
     ["max_budget", "Max Budget (USD)"],
     ["soft_budget", "Soft Budget (USD)"],
+    ["metadata", "Team Metadata"],
     ["raise_max_budget", "Raise the team's max budget"],
     ["projects", "Create and update projects"],
     ["team_member_budget", "Member Default Budget (USD)"],
@@ -213,11 +219,14 @@ describe("parseTeamEditAccess", () => {
   });
 
   it("hands a team admin the fields the proxy enabled", () => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["tpm_limit"]),
       mayRaiseMaxBudget: false,
-    });
+      proxyControlledMetadataKeys: new Set(),
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual(expected);
   });
 
   it.each([
@@ -226,10 +235,26 @@ describe("parseTeamEditAccess", () => {
     ["an older proxy omits the flag", {}, false],
     ["the flag is not a boolean", { may_raise_max_budget: "yes" }, false],
   ])("lets a team admin raise the max budget only when %s", (_label, flag, mayRaiseMaxBudget) => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["max_budget"]),
       mayRaiseMaxBudget,
+      proxyControlledMetadataKeys: new Set(),
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual(expected);
+  });
+
+  it("hands a team admin the metadata keys the proxy keeps for proxy admins", () => {
+    const access = parseTeamEditAccess({
+      kind: "team_admin",
+      editable_fields: ["metadata"],
+      proxy_controlled_metadata_keys: ["guardrails", "priority"],
+    });
+
+    expect(access).toMatchObject({
+      kind: "team_admin",
+      proxyControlledMetadataKeys: new Set(["guardrails", "priority"]),
     });
   });
 
@@ -240,5 +265,103 @@ describe("parseTeamEditAccess", () => {
     ["the field list holds a non-string", { kind: "team_admin", editable_fields: [7] }],
   ])("fails closed to no access when %s", (_label, value) => {
     expect(parseTeamEditAccess(value)).toEqual({ kind: "none" });
+  });
+});
+
+describe("teamAdminMetadataChange", () => {
+  const context: TeamAdminMetadataContext = {
+    storedMetadata: { cost_center: "eng", region: "eu", priority: "high", team_member_budget_id: "budget-1" },
+    proxyControlledKeys: new Set(["priority", "team_member_budget_id", "guardrails"]),
+    declaredKeys: new Set(["cost_center", "department"]),
+  };
+  const storedPairs = [
+    { key: "cost_center", value: "eng" },
+    { key: "region", value: "eu" },
+  ];
+
+  it("sends nothing when the editable keys are unchanged", () => {
+    expect(teamAdminMetadataChange(storedPairs, context)).toStrictEqual({});
+  });
+
+  it("sends the full metadata with the proxy settings carried over when a key is added", () => {
+    expect(teamAdminMetadataChange([...storedPairs, { key: "project", value: "atlas" }], context)).toStrictEqual({
+      metadata: {
+        cost_center: "eng",
+        region: "eu",
+        project: "atlas",
+        priority: "high",
+        team_member_budget_id: "budget-1",
+      },
+    });
+  });
+
+  it("sends the full metadata without a deleted key", () => {
+    expect(teamAdminMetadataChange([{ key: "cost_center", value: "eng" }], context)).toStrictEqual({
+      metadata: { cost_center: "eng", priority: "high", team_member_budget_id: "budget-1" },
+    });
+  });
+
+  it("leaves out an empty declared field the team never set", () => {
+    expect(teamAdminMetadataChange([...storedPairs, { key: "department", value: "" }], context)).toStrictEqual({});
+  });
+});
+
+describe("teamAdminMetadataPairIssue", () => {
+  const context: TeamAdminMetadataContext = {
+    storedMetadata: { cost_center: "eng" },
+    proxyControlledKeys: new Set(["priority"]),
+    declaredKeys: new Set(["cost_center", "department"]),
+  };
+
+  it("flags a key the proxy keeps for proxy admins", () => {
+    expect(teamAdminMetadataPairIssue({ key: "priority", value: "low" }, context)?.path).toBe("key");
+  });
+
+  it("flags emptying a declared field the team has set", () => {
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value: "" }, context)?.path).toBe("value");
+  });
+
+  it.each([
+    ["JSON null", "null"],
+    ["a JSON empty string", '""'],
+    ["only spaces", "   "],
+  ])("flags a declared field the team has set changed to %s", (_label, value) => {
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value }, context)?.path).toBe("value");
+  });
+
+  it("accepts a declared field the proxy admin stored empty, resent as it is", () => {
+    const storedEmpty = { ...context, storedMetadata: { cost_center: "" } };
+
+    expect(teamAdminMetadataPairIssue({ key: "cost_center", value: "" }, storedEmpty)).toBeNull();
+  });
+
+  it.each([
+    ["an ordinary key", { key: "project", value: "" }],
+    ["a declared field the team never set", { key: "department", value: "" }],
+    ["a declared field with a new value", { key: "cost_center", value: "sales" }],
+  ])("accepts %s", (_label, pair) => {
+    expect(teamAdminMetadataPairIssue(pair, context)).toBeNull();
+  });
+});
+
+describe("teamAdminMetadataPairs", () => {
+  it("lists declared fields first in schema order, then the team's own keys, without the proxy's keys", () => {
+    const metadata = { region: "eu", priority: "high", department: "r&d", cost_center: "eng" };
+    const pairs = teamAdminMetadataPairs(metadata, new Set(["priority"]), ["cost_center", "department"]);
+
+    expect(pairs.map((pair) => pair.key)).toStrictEqual(["cost_center", "department", "region"]);
+  });
+});
+
+describe("teamAdminDeclaredFields", () => {
+  it("leaves out declared fields that are also proxy settings", () => {
+    const fields = [
+      { key: "cost_center", label: "Cost Center" },
+      { key: "priority", label: "Priority" },
+    ];
+
+    expect(teamAdminDeclaredFields(fields, new Set(["priority"]))).toStrictEqual([
+      { key: "cost_center", label: "Cost Center" },
+    ]);
   });
 });

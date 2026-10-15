@@ -963,6 +963,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | str | httpx.Timeout | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):

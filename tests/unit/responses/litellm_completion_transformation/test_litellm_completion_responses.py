@@ -6032,6 +6032,35 @@ def test_replayed_session_turns_yield_their_cache_control_to_the_newest_markers(
     assert messages[-1] == {"role": "user", "content": "newest", "cache_control": _EPHEMERAL}
 
 
+def test_a_replayed_claude_search_call_is_dropped_off_anthropic_while_the_turns_keep_their_cache_marks():
+    search_call: Final = {
+        "id": "srvtoolu_search",
+        "type": "function",
+        "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+    }
+    weather_call: Final = {
+        "id": "toolu_weather",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+    }
+    replayed_turns: Final = [
+        {"role": "user", "content": "turn 0", "cache_control": _EPHEMERAL},
+        {"role": "assistant", "content": None, "tool_calls": [search_call, weather_call]},
+        {"role": "tool", "tool_call_id": "srvtoolu_search", "content": "get_weather"},
+        {"role": "tool", "tool_call_id": "toolu_weather", "content": "18C"},
+        *({"role": "user", "content": f"turn {index}", "cache_control": _EPHEMERAL} for index in range(1, 4)),
+    ]
+
+    messages: Final = _replayed_messages_from(
+        replayed_turns, {"role": "user", "content": "newest", "cache_control": _EPHEMERAL}
+    )
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool", "user", "user", "user", "user"]
+    assert messages[1]["tool_calls"] == [weather_call]
+    assert messages[2]["tool_call_id"] == "toolu_weather"
+    assert ["cache_control" in message for message in messages] == [False, False, False, True, True, True, True]
+
+
 def test_a_marked_tool_takes_a_slot_from_the_replayed_turns():
     replayed_turns: Final = [
         {"role": "user", "content": f"turn {index}", "cache_control": _EPHEMERAL} for index in range(3)

@@ -7,16 +7,19 @@ above the organization's budget, never removing the cap), the ``projects`` permi
 user and the key is confined to LLM API routes: the team admin who holds its secret gains no management
 authority through it."""
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -28,6 +31,10 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UpdateTeamRequest,
 )
+from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_MANAGED_TEAM_METADATA_KEY,
+    SCIM_TEAM_DATA_METADATA_KEY,
+)
 
 TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_fields"
 
@@ -38,6 +45,7 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
         "rpm_limit",
         "max_budget",
         "soft_budget",
+        "metadata",
         "team_member_budget",
         "team_member_budget_duration",
         "team_member_tpm_limit",
@@ -66,12 +74,40 @@ _KEY_REQUEST_IDENTITY: Final[frozenset[str]] = frozenset({"key", "token", "metad
 
 _FIELD_LIST: Final = TypeAdapter(list[str])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_COMPARABLE_JSON: Final[TypeAdapter[object]] = TypeAdapter(object)
 _WINDOW_LIST: Final = TypeAdapter(list[dict[str, object]])
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _METADATA_FOLDED_FIELDS: Final[frozenset[str]] = frozenset(
     (*LiteLLM_ManagementEndpoint_MetadataFields, *LiteLLM_ManagementEndpoint_MetadataFields_Premium)
 )
 _SYSTEM_MANAGED_METADATA_KEYS: Final[frozenset[str]] = frozenset({"team_member_budget_id"})
+PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    (
+        *_METADATA_FOLDED_FIELDS,
+        *_SYSTEM_MANAGED_METADATA_KEYS,
+        *OTEL_SERVICE_NAME_METADATA_KEYS,
+        *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+        SCIM_MANAGED_TEAM_METADATA_KEY,
+        SCIM_TEAM_DATA_METADATA_KEY,
+        "opted_out_global_guardrails",
+        "spend_logs_metadata",
+        "model_config",
+        "callback_settings",
+        "priority",
+        "zguard_policy_id",
+        "allowed_tools",
+        "allow_client_mock_response",
+        "allow_client_message_redaction_opt_out",
+        "allow_client_pricing_override",
+        "allow_litellm_changed_by_header",
+        "soft_budget_alerting_emails",
+        "team_member_max_budget_alert_emails",
+        "phoenix_project_name_override",
+        "phoenix_project_name",
+        "opik",
+    )
+)
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})
 _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 
@@ -106,7 +142,25 @@ class TeamAdminFieldNotPermitted:
     kind: Literal["field_not_permitted"] = "field_not_permitted"
 
 
-TeamAdminEditVerdict: TypeAlias = TeamAdminEditAllowed | TeamAdminEditingDisabled | TeamAdminFieldNotPermitted
+@dataclass(frozen=True, slots=True)
+class TeamAdminMetadataKeyProxyControlled:
+    key: str
+    kind: Literal["metadata_key_proxy_controlled"] = "metadata_key_proxy_controlled"
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAdminDeclaredMetadataKeyCleared:
+    key: str
+    kind: Literal["declared_metadata_key_cleared"] = "declared_metadata_key_cleared"
+
+
+TeamAdminEditVerdict: TypeAlias = (
+    TeamAdminEditAllowed
+    | TeamAdminEditingDisabled
+    | TeamAdminFieldNotPermitted
+    | TeamAdminMetadataKeyProxyControlled
+    | TeamAdminDeclaredMetadataKeyCleared
+)
 
 
 def resolve_team_admin_editable_fields(
@@ -347,6 +401,47 @@ def changed_team_fields(
     return column_changes | _metadata_changes(data, submitted, existing)
 
 
+def _json_number(text: str) -> tuple[str, Decimal]:
+    return ("number", Decimal(text))
+
+
+def _comparable_json(value: JsonValue) -> object:
+    return _COMPARABLE_JSON.validate_python(
+        json.loads(json.dumps(value), parse_int=_json_number, parse_float=_json_number)
+    )
+
+
+def _metadata_value_changed(new: object, old: object) -> bool:
+    return _comparable_json(_JSON_VALUE.validate_python(new)) != _comparable_json(_JSON_VALUE.validate_python(old))
+
+
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def changed_team_metadata(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTable) -> Mapping[str, object]:
+    """Metadata keys the request would change, mapped to the value each would be left with (None when removed).
+
+    A system-managed key left out of a metadata dict is not a change, since update_team restores it then.
+    """
+    submitted: Final = _JSON_OBJECT.validate_json(data.model_dump_json(exclude_unset=True))
+    existing: Final = _JSON_OBJECT.validate_json(existing_row.model_dump_json())
+    merged: Final = _submitted_metadata(data, submitted, existing)
+    stored: Final = _stored_metadata(existing)
+    sent: Final = submitted.get("metadata")
+    sent_metadata: Final = _as_object(sent)
+    restored: Final = (
+        _SYSTEM_MANAGED_METADATA_KEYS - sent_metadata.keys() if isinstance(sent, dict) else frozenset[str]()
+    )
+    return MappingProxyType(
+        {
+            key: merged.get(key)
+            for key in (merged.keys() | stored.keys()) - restored
+            if (key in merged) != (key in stored) or _metadata_value_changed(merged.get(key), stored.get(key))
+        }
+    )
+
+
 def _only_changes(data: UpdateTeamRequest, changed: frozenset[str]) -> UpdateTeamRequest:
     """The request without the values it resends unchanged, which would otherwise still trigger derived writes
     such as a resent budget_duration pushing budget_reset_at back."""
@@ -361,13 +456,24 @@ def team_admin_edit_verdict(
     existing: LiteLLM_TeamTable,
     permitted: frozenset[str],
     member_defaults: TeamMemberDefaults | None = None,
+    proxy_controlled_metadata_keys: frozenset[str] = PROXY_CONTROLLED_TEAM_METADATA_KEYS,
+    declared_metadata_keys: frozenset[str] = frozenset(),
 ) -> TeamAdminEditVerdict:
     if not permitted:
         return TeamAdminEditingDisabled()
+    metadata_changes: Final = changed_team_metadata(data, existing)
+    controlled: Final = sorted(metadata_changes.keys() & proxy_controlled_metadata_keys)
+    if controlled:
+        return TeamAdminMetadataKeyProxyControlled(key=controlled[0])
     changed: Final = changed_team_fields(data, existing, member_defaults)
     blocked: Final = sorted(changed - permitted)
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
+    cleared: Final = sorted(
+        key for key in metadata_changes.keys() & declared_metadata_keys if _is_blank(metadata_changes[key])
+    )
+    if cleared:
+        return TeamAdminDeclaredMetadataKeyCleared(key=cleared[0])
     creates_member_budget: Final = member_defaults is None and bool(changed & TEAM_MEMBER_DEFAULT_FIELDS)
     sent_for_new_member_budget: Final = (
         frozenset(data.model_fields_set) & TEAM_MEMBER_DEFAULT_FIELDS & permitted
@@ -395,6 +501,22 @@ def team_admin_request_or_raise(verdict: TeamAdminEditVerdict) -> UpdateTeamRequ
                 detail=(
                     f"Team admins on this proxy do not have permission to update '{field}'. "
                     f"Ask a proxy admin to add it under {_SETTINGS_LOCATION}."
+                ),
+            )
+        case TeamAdminMetadataKeyProxyControlled(key=key):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Team metadata key '{key}' is a proxy setting that team admins cannot add, change or remove "
+                    "in team settings. Ask a proxy admin to change it."
+                ),
+            )
+        case TeamAdminDeclaredMetadataKeyCleared(key=key):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Team metadata key '{key}' is declared in the proxy's team metadata schema, so team admins "
+                    "can change its value but cannot remove it or leave it empty. Ask a proxy admin to remove it."
                 ),
             )
         case _:
