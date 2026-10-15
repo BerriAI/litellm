@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.rust_bridge import catalog, runtime
@@ -117,47 +116,3 @@ class PublicDispatch(Generic[RequestT]):
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
-
-    def defer(
-        self,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-        *,
-        flag: str,
-        python: Callable[..., ResultT | Coroutine[object, object, ResultT]] | runtime.NoPythonImplementation,
-        binding: NativeBinding[NativeT],
-        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]],
-        rules: Rules | None = None,
-    ) -> ResultT | Coroutine[object, object, ResultT]:
-        selected_rules: Final = catalog.RULES if rules is None else rules
-        native_kwargs: Final = MappingProxyType({name: value for name, value in kwargs.items() if name != flag})
-        if isinstance(python, runtime.NoPythonImplementation):
-            native_request: Final = self._native_request(args, native_kwargs)
-            return runtime.arun(
-                self.context(native_request),
-                binding=binding,
-                native=lambda hook: native(hook, native_request, args, native_kwargs),
-                python=python,
-                rules=selected_rules,
-            )
-        if not self._requires_projection(selected_rules):
-            return python(*args, **kwargs)
-        request: Final = self.request(args, native_kwargs)
-        if request is None:
-            return python(*args, **kwargs)
-        context: Final = self.context(request)
-        if catalog.decision(context, selected_rules) is Decision.PYTHON:
-            return python(*args, **kwargs)
-        return runtime.arun(
-            context,
-            binding=binding,
-            native=lambda hook: native(hook, request, args, native_kwargs),
-            python=lambda: _settled(python(*args, **kwargs)),
-            rules=selected_rules,
-        )
-
-
-async def _settled(value: ResultT | Coroutine[object, object, ResultT]) -> ResultT:
-    if isinstance(value, Coroutine):
-        return await value  # pyright: ignore[reportUnknownVariableType]  # isinstance cannot split a bare TypeVar from Coroutine
-    return value

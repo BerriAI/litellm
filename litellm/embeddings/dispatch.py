@@ -9,7 +9,15 @@ from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
 )
-from litellm.rust_bridge.public_call import NativeCall, bind, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import (
+    NativeCall,
+    bind,
+    keyword_arguments,
+    native_call,
+    native_call_hook,
+    optional_str,
+    signature,
+)
 from litellm.types.utils import EmbeddingResponse
 
 __all__ = ("aembedding", "embedding")
@@ -64,14 +72,7 @@ def embedding(
     **kwargs: object,  # kwargs-ok: preserve the public embedding call shape
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     if kwargs.get("aembedding") is True:
-        return _DISPATCH.defer(
-            args,
-            kwargs,
-            flag="aembedding",
-            python=_PYTHON_EMBEDDING,
-            binding=NATIVE_AEMBEDDING,
-            native=native_call_hook,
-        )
+        return aembedding(**keyword_arguments(_EMBEDDING_SIGNATURE, args, kwargs, without="aembedding"))
     return _DISPATCH.run(
         args,
         kwargs,

@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.public_call import native_call, signature
+from litellm.rust_bridge.public_call import keyword_arguments, native_call, signature
 
 
 def _messages(
@@ -62,3 +62,18 @@ def test_resolved_lays_the_keywords_over_the_base_and_equals_the_full_binding() 
     }
     assert call.resolved["metadata"] is metadata
     assert supplied == {"model": "keyword-model", "metadata": metadata}
+
+
+def test_keyword_arguments_names_positionals_and_drops_only_the_flag() -> None:
+    messages: Final[Sequence[object]] = [{"role": "user", "content": "hello"}]
+
+    keywords: Final = keyword_arguments(
+        _SIGNATURE, (128, messages), {"model": "m", "stream": True, "aflag": True}, without="aflag"
+    )
+
+    assert keywords == {"max_tokens": 128, "messages": messages, "model": "m", "stream": True}
+
+
+def test_keyword_arguments_rejects_a_parameter_given_twice() -> None:
+    with pytest.raises(TypeError):
+        keyword_arguments(_SIGNATURE, (128,), {"max_tokens": 64}, without="aflag")

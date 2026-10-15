@@ -12,6 +12,7 @@ from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
+    keyword_arguments,
     native_call,
     native_call_hook,
     optional_sequence,
@@ -88,9 +89,7 @@ def completion(
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
     python: Final = _PYTHON_COMPLETION
     if kwargs.get("acompletion") is True:
-        return _DISPATCH.defer(
-            args, kwargs, flag="acompletion", python=python, binding=NATIVE_ACOMPLETION, native=native_call_hook
-        )
+        return acompletion(**keyword_arguments(_COMPLETION, args, kwargs, without="acompletion"))
     return _DISPATCH.run(
         args,
         kwargs,
