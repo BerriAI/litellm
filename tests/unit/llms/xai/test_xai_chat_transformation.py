@@ -199,7 +199,7 @@ def test_completion_strips_message_names_from_request(respx_mock: respx.MockRout
             {"role": "assistant", "content": "OK", "name": "responder"},
             {"role": "user", "content": "Again", "name": "caller"},
         ],
-        api_key="xai-test-key",
+        api_key="fake-key",
         api_base=XAI_API_BASE,
     )
 
@@ -274,7 +274,7 @@ def test_streaming_include_usage_surfaces_xai_final_usage_chunk(
             messages=[{"role": "user", "content": "Say OK"}],
             stream=True,
             stream_options={"include_usage": True},
-            api_key="xai-test-key",
+            api_key="fake-key",
             api_base=XAI_API_BASE,
         )
     )

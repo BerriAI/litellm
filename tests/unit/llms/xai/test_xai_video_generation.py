@@ -40,6 +40,46 @@ def test_map_seconds_nine_is_not_clamped_to_six():
     assert "seconds" not in mapped
 
 
+def test_map_non_numeric_seconds_falls_back_to_the_default_duration():
+    config = XAIVideoConfig()
+    defaulted = config.map_openai_params(
+        video_create_optional_params={"seconds": "ten"},
+        model="grok-imagine-video-1.5",
+        drop_params=True,
+    )
+    request_body, _, _ = config.transform_video_create_request(
+        model="grok-imagine-video-1.5",
+        prompt="a cat walking",
+        api_base="https://api.x.ai/v1/videos/generations",
+        video_create_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert defaulted["duration"] == request_body["duration"]
+
+
+def test_get_complete_url_appends_v1_to_a_bare_custom_base():
+    url = XAIVideoConfig().get_complete_url(
+        model="grok-imagine-video",
+        api_base="https://xai-gateway.example.com/",
+        litellm_params={"api_key": "fake-key"},
+    )
+
+    assert url == "https://xai-gateway.example.com/v1/videos/generations"
+
+
+def test_create_response_without_request_id_raises():
+    with pytest.raises(ValueError, match="missing request_id"):
+        XAIVideoConfig().transform_video_create_response(
+            model="grok-imagine-video",
+            raw_response=httpx.Response(200, json={"error": "queued nowhere"}),
+            logging_obj=MagicMock(),
+            custom_llm_provider="xai",
+            request_data={"duration": 6},
+        )
+
+
 def test_get_complete_url_create_and_status_root():
     config = XAIVideoConfig()
     create_url = config.get_complete_url(
@@ -120,7 +160,109 @@ def test_transform_create_and_status_response():
     )
     assert status.status == "completed"
     assert status.seconds == "6"
-    assert status._hidden_params.get("video_url") == "https://vidgen.x.ai/x.mp4"
+    assert status.hidden_params.get("video_url") == "https://vidgen.x.ai/x.mp4"
+
+
+def _created_video_cost(optional_params: dict[str, object], model: str = "grok-imagine-video-1.5") -> tuple[float, str]:
+    config = XAIVideoConfig()
+    request_body, _, _ = config.transform_video_create_request(
+        model=model,
+        prompt="a cat walking",
+        api_base="https://api.x.ai/v1/videos/generations",
+        video_create_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    created = config.transform_video_create_response(
+        model=model,
+        raw_response=httpx.Response(200, json={"request_id": "req-123"}),
+        logging_obj=MagicMock(),
+        custom_llm_provider="xai",
+        request_data=request_body,
+    )
+    cost = litellm.completion_cost(
+        completion_response=created,
+        model=f"xai/{model}",
+        custom_llm_provider="xai",
+        call_type="create_video",
+    )
+    return cost, str(created.seconds)
+
+
+@pytest.mark.parametrize(
+    "optional_params,expected_seconds,rate_key",
+    [
+        ({"duration": 10}, 10, "output_cost_per_second"),
+        ({"duration": "4", "resolution": "720p"}, 4, "output_cost_per_second_720p"),
+    ],
+)
+def test_create_response_bills_the_submitted_duration_and_resolution(optional_params, expected_seconds, rate_key):
+    model_cost = litellm.model_cost["xai/grok-imagine-video-1.5"]
+    assert model_cost["output_cost_per_second_720p"] != model_cost["output_cost_per_second"]
+
+    cost, seconds = _created_video_cost(optional_params)
+
+    assert seconds == str(expected_seconds)
+    assert cost > 0
+    assert cost == pytest.approx(expected_seconds * model_cost[rate_key])
+
+
+def test_create_response_bills_the_default_duration_sent_to_xai():
+    config = XAIVideoConfig()
+    request_body, _, _ = config.transform_video_create_request(
+        model="grok-imagine-video-1.5",
+        prompt="a cat walking",
+        api_base="https://api.x.ai/v1/videos/generations",
+        video_create_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    cost, seconds = _created_video_cost({})
+
+    assert seconds == str(request_body["duration"])
+    assert cost == pytest.approx(
+        request_body["duration"] * litellm.model_cost["xai/grok-imagine-video-1.5"]["output_cost_per_second"]
+    )
+
+
+def test_create_request_forwards_resolution_to_xai():
+    request_body, _, _ = XAIVideoConfig().transform_video_create_request(
+        model="grok-imagine-video-1.5",
+        prompt="a cat walking",
+        api_base="https://api.x.ai/v1/videos/generations",
+        video_create_optional_request_params={"resolution": "1080p"},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request_body["resolution"] == "1080p"
+
+
+def test_create_response_keeps_provider_reported_usage_over_the_request():
+    created = XAIVideoConfig().transform_video_create_response(
+        model="grok-imagine-video-1.5",
+        raw_response=httpx.Response(200, json={"request_id": "req-123", "usage": {"duration_seconds": 3.0}}),
+        logging_obj=MagicMock(),
+        custom_llm_provider="xai",
+        request_data={"duration": 10, "resolution": "720p"},
+    )
+
+    assert created.usage == {"duration_seconds": 3.0, "video_resolution": "720p"}
+
+
+@pytest.mark.parametrize("duration", [None, 0, -5, True, "abc", "nan"])
+def test_create_response_omits_unusable_durations_from_usage(duration):
+    created = XAIVideoConfig().transform_video_create_response(
+        model="grok-imagine-video-1.5",
+        raw_response=httpx.Response(200, json={"request_id": "req-123"}),
+        logging_obj=MagicMock(),
+        custom_llm_provider="xai",
+        request_data={"duration": duration},
+    )
+
+    assert created.usage == {}
+    assert created.seconds is None
 
 
 def test_sync_video_status_through_the_http_handler():
@@ -131,9 +273,7 @@ def test_sync_video_status_through_the_http_handler():
         request=httpx.Request("GET", "https://api.x.ai/v1/videos/req-123"),
     )
 
-    status = litellm.video_status(
-        video_id="req-123", model="xai/grok-imagine-video", api_key="test-key", client=client
-    )
+    status = litellm.video_status(video_id="req-123", model="xai/grok-imagine-video", api_key="test-key", client=client)
 
     assert status.status == "completed"
     assert client.get.call_args.kwargs["url"] == "https://api.x.ai/v1/videos/req-123"

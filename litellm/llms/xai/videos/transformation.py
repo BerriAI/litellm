@@ -1,3 +1,4 @@
+import math
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
@@ -50,6 +51,28 @@ def _duration_from_seconds(seconds: object) -> int:
         return int(seconds) if seconds is not None else 6
     except (TypeError, ValueError):
         return 6
+
+
+def _positive_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _requested_video_usage(request_data: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: VideoObject.usage
+    resolution: Final = request_data.get("resolution") or request_data.get("resolution_name")
+    return {
+        key: value
+        for key, value in (
+            ("duration_seconds", _positive_seconds(request_data.get("duration"))),
+            ("video_resolution", resolution if isinstance(resolution, str) and resolution else None),
+        )
+        if value is not None
+    }
 
 
 _STATUS_MAP: Final = {
@@ -206,6 +229,7 @@ class XAIVideoConfig(BaseVideoConfig):
                 "image",
                 "images",
                 "duration",
+                "resolution",
                 "resolution_name",
                 "aspect_ratio",
                 "size",
@@ -238,7 +262,9 @@ class XAIVideoConfig(BaseVideoConfig):
         if not request_id:
             raise ValueError(f"xAI video generation response missing request_id: {response_data}")
 
-        usage: Final = response_data.get("usage") or {}
+        provider_usage: Final[object] = response_data.get("usage")
+        requested_usage: Final = _requested_video_usage(request_data or {})
+        duration_seconds: Final = requested_usage.get("duration_seconds")
         video_obj: Final = VideoObject(
             id=str(request_id),
             object="video",
@@ -246,11 +272,11 @@ class XAIVideoConfig(BaseVideoConfig):
             created_at=int(time.time()),
             model=XAIModelInfo.get_base_model(model) or model,
             progress=0,
+            seconds=f"{duration_seconds:g}" if isinstance(duration_seconds, float) else None,
         )
         if custom_llm_provider:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
-        usage_body: Final = usage if isinstance(usage, dict) else None
-        video_obj.usage = usage_body or {}
+        video_obj.usage = {**requested_usage, **(provider_usage if _is_json_object(provider_usage) else {})}
         return video_obj
 
     def _video_resource_url(self, api_base: str, video_id: str) -> str:
@@ -301,7 +327,7 @@ class XAIVideoConfig(BaseVideoConfig):
             seconds=seconds,
             usage=response_data.get("usage") if isinstance(response_data.get("usage"), dict) else {},
         )
-        video_obj._hidden_params["video_url"] = video_url  # pyright: ignore[reportPrivateUsage]  # no public setter
+        video_obj.hidden_params["video_url"] = video_url
         if custom_llm_provider and video_obj.id and video_obj.id != "unknown":
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, response_data.get("model"))
         return video_obj
