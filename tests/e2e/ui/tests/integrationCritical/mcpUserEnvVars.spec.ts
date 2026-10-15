@@ -12,7 +12,7 @@ import { captureRequestBody } from "../../helpers/roundTrip";
 import { masterKey } from "../../helpers/traffic";
 
 const master = masterKey();
-const headers = { Authorization: `Bearer ${master}` };
+const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
 const TOKEN = "USER_TOKEN";
 
 type EnvVarStatus = {

@@ -193,7 +193,8 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
-        return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        resolved_api_base: Final = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        return resolved_api_base.rstrip("/") if resolved_api_base else None
 
     @staticmethod
     def get_api_key(

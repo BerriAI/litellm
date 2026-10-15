@@ -11,6 +11,7 @@ vi.mock("@/components/networking", () => ({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "https://example.com/logout",
   }),
+  getUiPageUrl: (url: string) => url,
   serverRootPath: "",
 }));
 

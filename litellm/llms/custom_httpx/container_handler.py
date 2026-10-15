@@ -55,6 +55,7 @@ class EndpointsConfig(TypedDict):
 
 
 _ENDPOINTS_CONFIG: Final = TypeAdapter(EndpointsConfig)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ContainerErrorDetail(TypedDict, total=False):
@@ -145,7 +146,7 @@ def _build_query_params(
 
 def error_message_from_response(response: httpx.Response) -> str:
     try:
-        body: Final[object] = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         return response.text
 

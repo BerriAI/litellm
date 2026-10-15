@@ -1049,7 +1049,13 @@ def test_failed_primary_does_not_fall_back_to_a_shadowing_alias_for_exhausted_ke
         key: Final = exhausted_key(rig, scenario)
         scenario.cleanups.callback(clear_provider_script, rig)
         script_provider(rig, 1)
-        _assert_provider_failure(fresh_chat(rig.gateway, rig.failing_free, key, marker, {"fallbacks": [shadow]}))
+        failed: Final = fresh_chat(rig.gateway, rig.failing_free, key, marker, {"fallbacks": [shadow]})
+        assert failed.status_code == 500, failed.text
+        assert "Controlled provider failure" in failed.text, failed.text
+        assert error_type(failed) != "budget_exceeded", failed.text
+        message: Final = str(object_value(JSON_OBJECT.validate_json(failed.content)["error"])["message"])
+        budget_sentences: Final = tuple(sentence for sentence in message.split(". ") if "budget" in sentence.lower())
+        assert budget_sentences and all(shadow in sentence for sentence in budget_sentences), message
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 1
         _assert_no_served_row(key, marker)
 

@@ -284,6 +284,11 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+def _www_authenticate_header(headers: Mapping[str, str]) -> str | None:
+    return headers.get("WWW-Authenticate") or headers.get("www-authenticate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,6 +453,8 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_resource_client_id: ReadOnly[str]
+    id_jag_resource_client_secret: ReadOnly[str]
     client_private_key: str
     client_private_key_id: str
     client_assertion_signing_alg: str
@@ -1504,7 +1511,14 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
 
 
 _REGISTRY_DUMP_SECRET_FIELDS: Final = frozenset(
-    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+    {
+        "authentication_token",
+        "client_secret",
+        "client_private_key",
+        "id_jag_resource_client_secret",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
 )
 
 
@@ -1699,7 +1713,7 @@ def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final[object] = json.loads(data)
+            parsed: Final = _UNTYPED_VALUE.validate_python(json.loads(data))
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -2754,6 +2768,8 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
+                id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
                 client_private_key=server_config.get("client_private_key", None),
                 client_private_key_id=server_config.get("client_private_key_id", None),
                 client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
@@ -2899,7 +2915,7 @@ class MCPServerManager:
             verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
-                for method in ["get", "post", "put", "delete", "patch"]:
+                for method in ("get", "post", "put", "delete", "patch"):
                     if method not in path_item:
                         continue
 
@@ -3343,6 +3359,12 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
+            id_jag_resource_client_secret=self._decrypt_credential_field(
+                credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
+                "id_jag_resource_client_secret",
+                credentials_are_encrypted,
+            ),
             client_private_key=self._decrypt_credential_field(
                 credentials_dict.get("client_private_key") if credentials_dict else None,
                 "client_private_key",
@@ -3495,7 +3517,9 @@ class MCPServerManager:
         byom_cache_key: Final = self.get_byom_submitted_servers_cache_key(submitter_user_id)
         submitted_server_ids: list[str] | None = None
         try:
-            cached_submitted_server_ids: Final = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            cached_submitted_server_ids: Final = _UNTYPED_VALUE.validate_python(
+                await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            )
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
@@ -5148,7 +5172,7 @@ class MCPServerManager:
 
         header_value: str | None = None
         if exc.response is not None:
-            header_value = exc.response.headers.get("WWW-Authenticate") or exc.response.headers.get("www-authenticate")
+            header_value = _www_authenticate_header(exc.response.headers)
         status_attempt: Final = (
             f"GET {origin}: HTTP {exc.response.status_code}"
             if exc.response is not None
@@ -6279,7 +6303,7 @@ class MCPServerManager:
         *,
         client: MCPClient,
         call_tool_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None,
         mcp_server: MCPServer,
         server_auth_header: str | dict[str, str] | None,
         extra_headers: dict[str, str] | None,
@@ -6346,7 +6370,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str] | None,
         proxy_logging_obj: ProxyLogging | None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
@@ -6823,7 +6847,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
