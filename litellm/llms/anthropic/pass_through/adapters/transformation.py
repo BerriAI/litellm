@@ -1384,12 +1384,12 @@ class LiteLLMAnthropicMessagesAdapter:
         choices: list[Choices],
         tool_name_mapping: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
-        new_content: Final[list[dict[str, Any]]] = []
+        new_content: Final[list[dict[str, object]]] = []
         for choice, compaction_blocks in (
             (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))
             for choice in choices
         ):
-            new_content.extend(_COMPACTION_BLOCK.validate_python(block) for block in compaction_blocks)
+            new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
             # Handle thinking blocks first
             if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:

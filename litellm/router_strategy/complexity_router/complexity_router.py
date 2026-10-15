@@ -1952,9 +1952,9 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None = None,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: dict[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-        raw_messages: list[dict[str, Any]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
+        raw_messages: list[dict[str, object]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -4331,7 +4331,7 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:

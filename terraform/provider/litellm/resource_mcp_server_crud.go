@@ -54,6 +54,8 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 		}
 	}
 
+	req.Credentials = mcpCredentialsFromResource(d)
+
 	// Handle env
 	if env, ok := d.GetOk("env"); ok {
 		envMap := env.(map[string]interface{})
@@ -103,6 +105,21 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 	}
 
 	return req
+}
+
+// mcpCredentialsFromResource builds the credentials object from the write-only
+// secrets and their non-secret companions; nil when none is configured so the
+// proxy keeps whatever it already stores.
+func mcpCredentialsFromResource(d *schema.ResourceData) *MCPCredentials {
+	creds := &MCPCredentials{
+		AuthValue:    writeOnlyString(d, "auth_value_wo"),
+		ClientID:     d.Get("client_id").(string),
+		ClientSecret: writeOnlyString(d, "client_secret_wo"),
+	}
+	if *creds == (MCPCredentials{}) {
+		return nil
+	}
+	return creds
 }
 
 // Helper function to update schema data from MCPServerResponse

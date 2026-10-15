@@ -153,6 +153,7 @@ async def acreate_realtime_client_secret(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -221,6 +222,7 @@ async def acreate_realtime_transcription_session(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -267,7 +269,7 @@ async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: dict[str, Any] | None = None,
+    session: dict[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -282,6 +284,7 @@ async def arealtime_calls(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -461,6 +464,7 @@ async def _arealtime(
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
     )
