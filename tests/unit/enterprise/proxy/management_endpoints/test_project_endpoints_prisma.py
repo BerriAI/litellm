@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import traceback
 from collections.abc import Mapping
@@ -1283,6 +1284,7 @@ async def test_update_project_object_permission_validation_precedes_budget_write
     mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-project"
     budget_table: Final = mock.MagicMock()
     budget_table.update = mock.AsyncMock()
+    budget_table.find_unique = mock.AsyncMock(return_value=None)
     mock_prisma.db.litellm_budgettable = budget_table
 
     def jsonify_object_permission_as_string(payload: dict[str, object]) -> dict[str, object]:
@@ -1315,6 +1317,7 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-project"
     budget_table: Final = mock.MagicMock()
     budget_table.update = mock.AsyncMock()
+    budget_table.find_unique = mock.AsyncMock(return_value=None)
     mock_prisma.db.litellm_budgettable = budget_table
     mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=destination_team_id)
@@ -1516,6 +1519,7 @@ async def test_update_project_clears_only_the_explicit_budget_cap(monkeypatch):
     mock_prisma = _project_update_mocks(monkeypatch, {})
     mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-clear-test"
     mock_prisma.db.litellm_budgettable.update = mock.AsyncMock()
+    mock_prisma.db.litellm_budgettable.find_unique = mock.AsyncMock(return_value=None)
 
     await _run_project_update("project-clear-test", max_budget=None)
 
@@ -1807,3 +1811,28 @@ async def test_project_info_missing_project_is_404_even_for_org_admins(project_a
         )
 
     assert str(exc_info.value.code) == "404"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear", (False, True))
+async def test_project_throttling_edits_persist_and_reject_an_incompatible_cap(
+    monkeypatch: pytest.MonkeyPatch, clear: bool
+) -> None:
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.proxy.utils import jsonify_object
+    from litellm.types.proxy.model_throttling import ModelThrottling, ModelThrottlingThreshold
+
+    config: Final = ModelThrottling(thresholds=(ModelThrottlingThreshold(spend=60, models=("premium",)),))
+    budget: Final = LiteLLM_BudgetTable(budget_id="throttled-budget", max_budget=100, model_throttling=config)
+    database: Final = _project_update_mocks(monkeypatch, {})
+    database.jsonify_object = jsonify_object
+    database.db.litellm_projecttable.find_unique.return_value.budget_id = budget.budget_id
+    database.db.litellm_budgettable.find_unique = mock.AsyncMock(return_value=budget)
+    database.db.litellm_budgettable.update = mock.AsyncMock(return_value=budget)
+    with pytest.raises(ProxyException, match="below the final budget"):
+        await _run_project_update("throttled-project", max_budget=50)
+    database.db.litellm_budgettable.update.assert_not_awaited()
+    await _run_project_update("throttled-project", model_throttling=None if clear else config)
+    persisted: Final = json.loads(database.db.litellm_budgettable.update.call_args.kwargs["data"]["model_throttling"])
+    assert persisted == (None if clear else config.model_dump(mode="json"))
+    assert "max_budget" not in database.db.litellm_budgettable.update.call_args.kwargs["data"]

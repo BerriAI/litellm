@@ -1,4 +1,6 @@
+import json
 from contextlib import contextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -843,6 +845,7 @@ _EXPECTED_CUSTOMER = {
         "budget_id": "b1",
         "soft_budget": None,
         "max_budget": 10.0,
+        "model_throttling": None,
         "max_parallel_requests": None,
         "tpm_limit": None,
         "rpm_limit": None,
@@ -1150,3 +1153,37 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+@pytest.mark.parametrize("clear", (False, True))
+def test_customer_throttling_edits_persist_and_reject_an_incompatible_cap(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, clear: bool
+) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.models.budget import LiteLLM_BudgetTableFull
+    from litellm.types.proxy.model_throttling import ModelThrottling, ModelThrottlingThreshold
+
+    config: Final = ModelThrottling(thresholds=(ModelThrottlingThreshold(spend=60, models=("premium",)),))
+    budget: Final = LiteLLM_BudgetTableFull(
+        budget_id="throttled-budget", max_budget=100, model_throttling=config,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    saved: Final = CustomerResponse(user_id="throttled-customer", blocked=False, litellm_budget_table=budget)
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=saved)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=saved)
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(return_value=budget)
+    invalid: Final = client.post("/customer/update", json={"user_id": saved.user_id, "max_budget": 50})
+    assert invalid.status_code == 400
+    assert "below the final budget" in invalid.text
+    mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
+    response: Final = client.post(
+        "/customer/update",
+        json={"user_id": saved.user_id, "model_throttling": None if clear else config.model_dump(mode="json")},
+    )
+    assert response.status_code == 200, response.text
+    persisted: Final = json.loads(
+        mock_prisma_client.db.litellm_budgettable.update.call_args.kwargs["data"]["model_throttling"]
+    )
+    assert persisted == (None if clear else config.model_dump(mode="json"))
+    assert "max_budget" not in mock_prisma_client.db.litellm_budgettable.update.call_args.kwargs["data"]

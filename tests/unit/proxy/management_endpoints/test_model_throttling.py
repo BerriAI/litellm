@@ -35,7 +35,7 @@ def test_partial_budget_edits_cannot_leave_threshold_above_final_cap(request_typ
     assert validate_model_throttling_update(unchanged, existing) is None
 
 
-@pytest.mark.parametrize("limit", (None, 0, -1, 60))
+@pytest.mark.parametrize("limit", (None, 0, -1, 60, float("nan"), float("inf")))
 def test_throttling_requires_a_later_positive_final_budget(limit: float | None) -> None:
     request: Final = GenerateKeyRequest(max_budget=limit, model_throttling=CONFIG)
     with pytest.raises(HTTPException) as error:
@@ -53,6 +53,15 @@ def test_only_admins_can_change_or_clear_throttling() -> None:
     assert check_model_throttling_permission(UpdateKeyRequest(key="key"), False) is None
 
 
+def test_creation_accepts_an_empty_throttling_default_without_admin_permissions() -> None:
+    empty: Final = GenerateKeyRequest(model_throttling=None)
+    assert check_model_throttling_permission(empty, False, creating=True) is None
+    configured: Final = GenerateKeyRequest(max_budget=100, model_throttling=CONFIG)
+    with pytest.raises(HTTPException) as error:
+        check_model_throttling_permission(configured, False, creating=True)
+    assert error.value.status_code == 403
+
+
 @pytest.mark.parametrize("amount", (0, -1, float("nan"), float("inf")))
 def test_invalid_threshold_amount_is_rejected(amount: float) -> None:
     with pytest.raises(ValidationError):
@@ -65,7 +74,10 @@ def test_empty_model_selection_is_rejected(models: tuple[str, ...]) -> None:
         ModelThrottlingThreshold(spend=60, models=models)
 
 
-@pytest.mark.parametrize("second", (ModelThrottlingThreshold(spend=60, models=("standard",)), CONFIG.thresholds[0]))
+@pytest.mark.parametrize(
+    "second",
+    (ModelThrottlingThreshold(spend=60, models=("standard",)), ModelThrottlingThreshold(spend=85, models=("premium",))),
+)
 def test_duplicate_thresholds_or_models_are_rejected(second: ModelThrottlingThreshold) -> None:
     with pytest.raises(ValidationError):
         ModelThrottling(thresholds=(*CONFIG.thresholds, second))

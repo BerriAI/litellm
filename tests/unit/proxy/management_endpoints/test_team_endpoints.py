@@ -3134,6 +3134,9 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     team_table = MagicMock(spec=LiteLLM_TeamTable)
     team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
 
+    mock_db_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable(budget_id="existing_budget_123", max_budget=100.0)
+    )
     mock_db_client.db.litellm_budgettable.update = AsyncMock(
         side_effect=lambda where, data: SimpleNamespace(**data)
     )

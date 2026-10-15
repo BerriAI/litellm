@@ -1,4 +1,5 @@
 from itertools import chain
+from math import isfinite
 from typing import Annotated, Final
 
 from pydantic import ConfigDict, Field, StringConstraints, model_validator
@@ -47,7 +48,7 @@ class ActiveModelThrottle(LiteLLMBaseModel):
 def model_throttling_budget_error(config: ModelThrottling | None, max_budget: float | None) -> str | None:
     if config is None:
         return None
-    if max_budget is None or max_budget <= 0:
+    if max_budget is None or not isfinite(max_budget) or max_budget <= 0:
         return "Set a positive final budget before enabling model throttling."
     if any(threshold.spend >= max_budget for threshold in config.thresholds):
         return "Each model throttling threshold must be below the final budget."

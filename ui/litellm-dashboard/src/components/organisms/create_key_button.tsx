@@ -1,6 +1,7 @@
+"use client";
+
 import { ModelThrottlingField } from "@/components/key_team_helpers/ModelThrottlingEditor";
 import { type ModelThrottling, modelThrottlingError } from "@/components/key_team_helpers/modelThrottling";
-("use client");
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";

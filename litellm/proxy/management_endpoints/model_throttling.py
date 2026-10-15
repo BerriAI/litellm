@@ -28,6 +28,9 @@ def validate_model_throttling_update(data: BaseModel, existing: object | None = 
         raise HTTPException(status_code=400, detail={"error": error})
 
 
-def check_model_throttling_permission(data: BaseModel, is_proxy_admin: bool) -> None:
-    if "model_throttling" in data.model_fields_set and not is_proxy_admin:
-        raise HTTPException(status_code=403, detail={"error": "Only proxy admins can change model throttling."})
+def check_model_throttling_permission(data: BaseModel, is_proxy_admin: bool, *, creating: bool = False) -> None:
+    if "model_throttling" not in data.model_fields_set or is_proxy_admin:
+        return
+    if creating and _BudgetState.model_validate(data).model_throttling is None:
+        return
+    raise HTTPException(status_code=403, detail={"error": "Only proxy admins can change model throttling."})

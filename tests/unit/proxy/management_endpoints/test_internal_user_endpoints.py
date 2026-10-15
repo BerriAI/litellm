@@ -3515,6 +3515,7 @@ async def test_user_info_v2_response_shape(mocker):
         "object_permission",
         "model_max_budget",
         "model_max_budget_usage",
+        "model_throttling",
     }
     assert set(response_dict.keys()) == expected_fields
 
@@ -5195,3 +5196,31 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear", (False, True))
+async def test_user_throttling_edits_persist_and_reject_an_incompatible_cap(
+    monkeypatch: pytest.MonkeyPatch, clear: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+    from litellm.types.proxy.model_throttling import ModelThrottling, ModelThrottlingThreshold
+
+    config: Final = ModelThrottling(thresholds=(ModelThrottlingThreshold(spend=60, models=("premium",)),))
+    saved: Final = LiteLLM_UserTable(user_id="throttled-user", max_budget=100, model_throttling=config)
+    database: Final = MagicMock()
+    database.db.litellm_usertable.find_first = AsyncMock(return_value=saved)
+    database.update_data = AsyncMock(return_value={"user_id": saved.user_id, "data": saved})
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException, match="below the final budget"):
+        await _update_single_user_helper(UpdateUserRequest(user_id=saved.user_id, max_budget=50), admin)
+    database.update_data.assert_not_awaited()
+    await _update_single_user_helper(
+        UpdateUserRequest(user_id=saved.user_id, model_throttling=None if clear else config), admin
+    )
+    persisted: Final = json.loads(database.update_data.call_args.kwargs["data"]["model_throttling"])
+    assert persisted == (None if clear else config.model_dump(mode="json"))
+    assert "max_budget" not in database.update_data.call_args.kwargs["data"]

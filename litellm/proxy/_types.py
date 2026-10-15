@@ -3181,6 +3181,7 @@ class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     max_budget: float | None = None
+    model_throttling: ModelThrottling | None = None
     soft_budget: float | None = None
     max_parallel_requests: int | None = None
     model_max_budget: dict | None = None

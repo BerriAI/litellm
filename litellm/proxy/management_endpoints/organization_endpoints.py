@@ -399,6 +399,7 @@ async def new_organization(
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -498,7 +499,7 @@ async def new_organization(
             pass
 
     validate_model_throttling_update(data)
-    check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
+    check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin", creating=True)
     if data.budget_id is None:
         """
         Every organization needs a budget attached.

@@ -608,7 +608,7 @@ async def new_project(
                 )
 
         validate_model_throttling_update(data)
-        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
+        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin", creating=True)
 
         # Create budget if not provided
         if data.budget_id is None:

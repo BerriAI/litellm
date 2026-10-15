@@ -348,6 +348,7 @@ async def new_end_user(
     - alias: Optional[str] - A human-friendly alias for the user.
     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -450,7 +451,7 @@ async def new_end_user(
 
         ## CREATE BUDGET ## if set
         validate_model_throttling_update(data)
-        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin")
+        check_model_throttling_permission(data, user_api_key_dict.user_role == "proxy_admin", creating=True)
         _new_budget: Final = new_budget_request(data)
         if _new_budget is not None:
             try:
@@ -623,6 +624,8 @@ async def update_end_user(
     - alias: Optional[str] = None  # human-friendly alias
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region

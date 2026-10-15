@@ -2036,6 +2036,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -2093,6 +2094,8 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -4383,6 +4386,7 @@ export interface paths {
          *     - alias: Optional[str] - A human-friendly alias for the user.
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -4491,6 +4495,8 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -5060,6 +5066,7 @@ export interface paths {
          *     - alias: Optional[str] - A human-friendly alias for the user.
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -5168,6 +5175,8 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -8406,6 +8415,7 @@ export interface paths {
          *     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
          *     - send_invite_email: Optional[bool] - Whether to send an invite email to the user_id, with the generate key
          *     - max_budget: Optional[float] - Specify max budget for a given key.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
@@ -8870,6 +8880,8 @@ export interface paths {
          *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
@@ -11730,6 +11742,7 @@ export interface paths {
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
          *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -16977,6 +16990,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -17208,6 +17222,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -18673,6 +18689,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *     - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -18812,6 +18829,8 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+         *       Set to null to clear the throttling rules.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -39695,6 +39714,7 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            model_throttling?: components["schemas"]["ModelThrottling"] | null;
             /** Models */
             models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;

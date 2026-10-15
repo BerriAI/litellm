@@ -55,6 +55,7 @@ async def new_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -86,7 +87,7 @@ async def new_budget(
         )
 
     validate_model_throttling_update(budget_obj)
-    check_model_throttling_permission(budget_obj, user_api_key_dict.user_role == "proxy_admin")
+    check_model_throttling_permission(budget_obj, user_api_key_dict.user_role == "proxy_admin", creating=True)
     validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present
@@ -141,6 +142,8 @@ async def update_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.

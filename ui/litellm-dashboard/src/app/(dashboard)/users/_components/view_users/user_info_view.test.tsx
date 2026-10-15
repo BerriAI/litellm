@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderWithProviders as render, testQueryClient } from "../../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
@@ -89,6 +90,7 @@ describe("UserInfoView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
     mockUserGetInfoV2.mockResolvedValue(MOCK_USER_DATA);
     mockTeamInfoCall.mockImplementation((_token: string, teamId: string) => {
       const teamMap: Record<string, any> = {

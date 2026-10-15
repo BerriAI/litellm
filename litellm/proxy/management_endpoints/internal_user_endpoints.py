@@ -508,6 +508,7 @@ async def new_user(
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -604,7 +605,9 @@ async def new_user(
         )
 
         validate_model_throttling_update(data)
-        check_model_throttling_permission(data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
+        check_model_throttling_permission(
+            data, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN, creating=True
+        )
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
@@ -1729,6 +1732,8 @@ async def user_update(
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
+    - model_throttling: Optional[ModelThrottling] - Pause models at spend thresholds below max_budget. Proxy admins only.
+      Set to null to clear the throttling rules.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
