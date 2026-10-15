@@ -1019,8 +1019,8 @@ def test_messages_count_tokens_surfaces_the_mantle_error_for_a_non_text_system(
 
 @pytest.mark.parametrize(
     "tools",
-    ["", "x" * 5120, ["get_weather"]],
-    ids=["empty_string", "5kb_string", "list_of_strings"],
+    [5, "", "x" * 5120, ["get_weather"]],
+    ids=["int", "empty_string", "5kb_string", "list_of_strings"],
 )
 def test_messages_count_tokens_rejects_malformed_tools_without_calling_either_peer(
     counting_proxy: OwnedProxy, mantle_port: int, tools: JsonValue
