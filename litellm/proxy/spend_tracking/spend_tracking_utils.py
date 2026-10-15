@@ -934,9 +934,12 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
 
 def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
     beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
-    if isinstance(beside_trace_header, str) and beside_trace_header:
-        return beside_trace_header
-    return caller_session_id(kwargs, TraceControls())
+    caller_session: Final = (
+        beside_trace_header
+        if isinstance(beside_trace_header, str) and beside_trace_header
+        else caller_session_id(kwargs, TraceControls())
+    )
+    return caller_session if caller_session and "\x00" not in caller_session else None
 
 
 def _get_session_id_for_spend_log(

@@ -290,6 +290,19 @@ def test_session_displaced_by_a_trace_header_wins_only_with_correlation_logging(
 
 
 @pytest.mark.parametrize(
+    ("litellm_params", "metadata"),
+    [
+        pytest.param({"litellm_session_id": "convo\x00x"}, {}, id="body-session"),
+        pytest.param({"litellm_session_id": "trace-abc"}, {CALLER_SESSION_ID_METADATA_KEY: "convo\x00x"}, id="beside-trace-header"),
+    ],
+)
+def test_caller_session_postgres_cannot_store_keeps_the_trace_id(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object], metadata: Mapping[str, object]
+):
+    assert _chat_session_id(monkeypatch, litellm_params, metadata=metadata) == "trace-abc"
+
+
+@pytest.mark.parametrize(
     "litellm_params",
     [
         pytest.param({"metadata": {}}, id="no-session"),
