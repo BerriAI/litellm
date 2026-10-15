@@ -218,6 +218,13 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def _detached_tool(tool: AllAnthropicToolsValues) -> AllAnthropicToolsValues:
+    try:
+        return copy.deepcopy(tool)
+    except (TypeError, RecursionError):
+        return tool
+
+
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
     if eager_input_streaming is None:
@@ -809,7 +816,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "eager_input_streaming",
         ]
 
-        for idx, tool in enumerate(copy.deepcopy(tools)):
+        for idx, tool in enumerate(_detached_tool(tool) for tool in tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
