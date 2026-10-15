@@ -1959,12 +1959,11 @@ class TestOCIStreamWrapperTerminalChunk:
 # 1. Non-function tools follow the unsupported-param contract: 400 without
 #    ``drop_params``, dropped with it, and a ``tool_choice`` that forces one of
 #    the dropped tools becomes NONE instead of letting the model pick another.
-# 2. ``reasoning_effort`` is only forwarded to OCI models whose catalog entry
-#    carries ``supports_reasoning`` (gpt-5 family, Gemini 2.5, gpt-oss); xAI
-#    Grok and Meta Llama entries lack it, so ``drop_params`` works and callers
-#    get a clear error otherwise.
-# 3. Flagging Gemini 2.5 as a reasoning model must not move it to
-#    ``maxCompletionTokens`` (OCI accepts but ignores that cap for Gemini).
+# 2. ``reasoning_effort`` is withheld from OCI models whose catalog entry
+#    declares no reasoning effort levels (xAI Grok 4.20), so ``drop_params``
+#    works and callers get a clear error otherwise.
+# 3. Only OpenAI models other than gpt-oss take ``maxCompletionTokens``; OCI
+#    accepts but ignores that cap for Gemini.
 # ---------------------------------------------------------------------------
 from litellm.llms.oci.chat.transformation import (
     _model_supports_reasoning_effort,
@@ -2039,10 +2038,17 @@ class TestNonFunctionTools:
         assert [tool.name for tool in params["tools"]] == ["get_weather"]
         assert params["toolChoice"] == {"type": "NONE"}
 
-    def test_forcing_a_dropped_tool_by_name_disables_tool_calls(self):
-        named_server_tool = {"type": "bash_20250124", "name": "bash"}
-        force_bash = {"type": "function", "function": {"name": "bash"}}
-        params = _oci_tool_params("xai.grok-4.20", [named_server_tool, FUNCTION_TOOL], force_bash, drop_params=True)
+    @pytest.mark.parametrize(
+        ("dropped_tool", "tool_choice"),
+        [
+            ({"type": "bash_20250124", "name": "bash"}, {"type": "function", "function": {"name": "bash"}}),
+            ({"type": "custom", "custom": {"name": "code_exec"}}, "code_exec"),
+            ({"type": "custom", "custom": {"name": "code_exec"}}, {"type": "function", "function": {"name": "code_exec"}}),
+        ],
+    )
+    def test_forcing_a_dropped_tool_by_name_disables_tool_calls(self, dropped_tool, tool_choice):
+        params = _oci_tool_params("xai.grok-4.20", [dropped_tool, FUNCTION_TOOL], tool_choice, drop_params=True)
+        assert [tool.name for tool in params["tools"]] == ["get_weather"]
         assert params["toolChoice"] == {"type": "NONE"}
 
     @pytest.mark.parametrize("tool_choice", [FORCE_FUNCTION, "get_weather"])

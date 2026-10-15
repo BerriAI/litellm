@@ -214,6 +214,11 @@ def _forced_tool_name(tool_choice: object) -> str | None:
     return None
 
 
+def _tool_identifiers(tool: Mapping[str, object]) -> tuple[object, ...]:
+    nested: Final = _as_json_object(tool.get(str(tool.get("type")))) or {}
+    return (tool.get("type"), tool.get("name"), nested.get("name"))
+
+
 def _without_non_function_tools(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     if params.get("tools") is None:
         return params
@@ -235,7 +240,7 @@ def _without_non_function_tools(params: Mapping[str, object], drop_params: bool)
     if not kept:
         return {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
     forced: Final = _forced_tool_name(params.get("tool_choice"))
-    if forced is not None and any(forced in (tool.get("type"), tool.get("name")) for tool in dropped):
+    if forced is not None and any(forced in _tool_identifiers(tool) for tool in dropped):
         return {**params, "tools": kept, "tool_choice": "none"}
     return {**params, "tools": kept}
 
@@ -534,8 +539,7 @@ class OCIChatConfig(BaseConfig):
 
         # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
         # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
-        # Driven by the supports_reasoning flag in the model catalog. Cohere's
-        # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
+        # Cohere's endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key: Final = (
             "maxCompletionTokens"
             if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
