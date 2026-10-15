@@ -92,7 +92,6 @@ def responses_api_bridge_check(
         model_info["mode"] = "responses"
         return model_info, model
 
-    lookup_failed = False
     try:
         model_info = cast(
             dict[str, object],
@@ -100,15 +99,13 @@ def responses_api_bridge_check(
         )
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
-        lookup_failed = True
 
-    # An explicit ``responses/`` prefix (``azure/responses/<deployment-name>``) outranks a deployment's own
-    # mode. That mode replaces only the shared-row mode, and only where the backend serves the endpoint, and
-    # the capability rules below still run, so a pin cannot move a request Chat Completions rejects (gpt-5.4+
-    # function tools with reasoning, xAI web search) off the Responses API.
-    explicit_responses_prefix: Final = model.startswith("responses/") and (
-        lookup_failed or model_info.get("mode") is None
-    )
+    # An explicit ``responses/`` prefix (``azure/responses/<deployment-name>``) always means the Responses
+    # API, even when the router registered a ``mode: chat`` row under that prefixed name, and outranks a
+    # deployment's own mode. That mode replaces only the shared-row mode, and only where the backend serves
+    # the endpoint, and the capability rules below still run, so a pin cannot move a request Chat
+    # Completions rejects (gpt-5.4+ function tools with reasoning, xAI web search) off the Responses API.
+    explicit_responses_prefix: Final = model.startswith("responses/")
     pinned_mode: Final = (
         None if explicit_responses_prefix else deployment_routing_mode(deployment_model_info, custom_llm_provider)
     )

@@ -6,6 +6,7 @@ Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
+import copy
 import json
 from collections.abc import Mapping
 from importlib import import_module
@@ -19,6 +20,7 @@ import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.responses.bridge_check import (
     backend_serves_chat_completions,
@@ -662,6 +664,54 @@ def test_a_chat_pin_does_not_override_an_explicit_responses_prefix(
         deployment_model_info=_CHAT,
     )
     assert (info["mode"], sent_model) == ("responses", model.removeprefix("responses/"))
+
+
+def test_a_chat_pinned_responses_prefixed_router_deployment_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    """The router registers a ``mode: chat`` row under the deployment's own ``responses/gpt-5.6`` name,
+    so the prefix has to win over that row too, or the request goes to Chat Completions as ``responses/gpt-5.6``."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prefixed-chat",
+                "litellm_params": {
+                    "model": "openai/responses/gpt-5.6",
+                    "custom_llm_provider": "openai",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "prefixed-chat-id", "mode": "chat"},
+            }
+        ]
+    )
+
+    response: Final = router.completion(model="prefixed-chat", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert json.loads(responses_route.calls[0].request.read())["model"] == "gpt-5.6"
+    assert response.choices[0].message.content == "ok"
 
 
 def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> None:
