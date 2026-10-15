@@ -6,6 +6,9 @@ admission separately decides whether the selected implementation can execute.
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, TypeAlias
@@ -78,9 +81,24 @@ RULES: Final[Rules] = (
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 
+_ACTIVE_RULES: Final[ContextVar[Rules]] = ContextVar("rust_bridge_active_rules", default=RULES)
+
+
+def active_rules() -> Rules:
+    return _ACTIVE_RULES.get()
+
+
+@contextmanager
+def scoped_rules(rules: Rules) -> Generator[None]:
+    token: Final = _ACTIVE_RULES.set(rules)
+    try:
+        yield
+    finally:
+        _ACTIVE_RULES.reset(token)
+
 
 def rollout(context: Context, rules: Rules | None = None) -> Rollout:
-    selected_rules: Final = RULES if rules is None else rules
+    selected_rules: Final = active_rules() if rules is None else rules
     return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
 
 

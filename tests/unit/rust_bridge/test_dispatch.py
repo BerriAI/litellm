@@ -5,6 +5,7 @@ from typing import Final, TypeAlias
 import pytest
 
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
@@ -21,6 +22,71 @@ def binding() -> NativeBinding[object]:
     bound: Final[NativeBinding[object]] = NativeBinding("unused", validate=lambda value: value)
     bound.override(None)
     return bound
+
+
+def test_sync_dispatch_without_rules_uses_active_scope() -> None:
+    request: Final = Request(model="scoped-model")
+    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED), *catalog.RULES)
+    dispatch: Final = PublicDispatch(
+        route=Route.RESPONSES,
+        request=lambda args, kwargs: request,
+        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
+    )
+    expected: Final = object()
+    native_binding: Final[NativeBinding[Callable[[Request, tuple[object, ...], Mapping[str, object]], object]]] = (
+        NativeBinding("scoped", validate=lambda _: None)
+    )
+    native_binding.override(lambda value, args, kwargs: expected)
+
+    with catalog.scoped_rules(rules):
+        result: Final = dispatch.run(
+            ("scoped-model",),
+            {},
+            python=lambda *args, **kwargs: pytest.fail("Scoped native dispatch must not call Python"),
+            binding=native_binding,
+            native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+        )
+
+    assert result is expected
+
+
+@pytest.mark.asyncio
+async def test_async_dispatch_without_rules_uses_active_scope() -> None:
+    request: Final = Request(model="scoped-model")
+    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED), *catalog.RULES)
+    dispatch: Final = PublicDispatch(
+        route=Route.RESPONSES,
+        request=lambda args, kwargs: request,
+        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
+    )
+    expected: Final = object()
+    native_binding: Final[
+        NativeBinding[Callable[[Request, tuple[object, ...], Mapping[str, object]], Awaitable[object]]]
+    ] = NativeBinding("scoped_async", validate=lambda _: None)
+
+    async def implementation(value: Request, args: tuple[object, ...], kwargs: Mapping[str, object]) -> object:
+        return expected
+
+    native_binding.override(implementation)
+
+    async def native(
+        hook: Callable[[Request, tuple[object, ...], Mapping[str, object]], Awaitable[object]],
+        value: Request,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> object:
+        return await hook(value, args, kwargs)
+
+    with catalog.scoped_rules(rules):
+        result: Final = await dispatch.arun(
+            ("scoped-model",),
+            {},
+            python=lambda *args, **kwargs: pytest.fail("Scoped native dispatch must not call Python"),
+            binding=native_binding,
+            native=native,
+        )
+
+    assert result is expected
 
 
 @pytest.mark.parametrize("rules", ((), (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)))
