@@ -415,7 +415,21 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
         (Feature.MESSAGES_INTERCEPTOR, "deepseek/deepseek-v4-flash", {"tools": [ADVISOR_TOOL]}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
-        (Feature.SSL_SECURITY_LEVEL, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
+        (
+            Feature.WORKLOAD_IDENTITY,
+            "anthropic/claude-sonnet-4-5",
+            {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
+            {},
+        ),
+        (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
+        (
+            Feature.STREAM_COST_INJECTION,
+            "anthropic/claude-sonnet-4-5",
+            {"stream": True},
+            {"include_cost_in_streaming_usage": True},
+        ),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -445,7 +459,12 @@ def test_each_detected_feature_reaches_its_rule(
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "cache", None)
     monkeypatch.setattr(litellm, "ssl_security_level", None)
-    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    for setting in ("modify_params", "enable_anthropic_prompt_caching", "include_cost_in_streaming_usage"):
+        monkeypatch.setattr(litellm, setting, False)
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     assert served({}) is native_result
     for name, value in settings.items():
         monkeypatch.setattr(litellm, name, value)

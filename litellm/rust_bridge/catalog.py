@@ -33,24 +33,61 @@ class Target(str, Enum):
 
 class Feature(str, Enum):
     SAFEGUARDS_CLASSIFIER = "safeguards_classifier"
+    """A non-Claude model with dangerous_tool_use safeguards, which the proxy classifier answers."""
     MOCK_RESPONSE = "mock_response"
+    """mock_response short-circuits before any provider call."""
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
+    """litellm_proxy MCP tools that Python expands and may auto-execute."""
     CALLER_CLIENT = "caller_client"
+    """A caller-supplied HTTP client that Python sends through."""
     TIMEOUT_VARIANTS = "timeout_variants"
-    DROP_MODIFY_PARAMS = "drop_modify_params"
+    """request_timeout, stream_timeout or httpx.Timeout phases beyond a plain timeout."""
+    DROP_PARAMS = "drop_params"
+    """drop_params or additional_drop_params dropping fields per provider."""
+    MODIFY_PARAMS = "modify_params"
+    """litellm.modify_params rewriting the request, like clamping max_tokens."""
     STREAMING = "streaming"
+    """stream=True."""
     PROMPT_MANAGEMENT = "prompt_management"
+    """prompt_id resolved through a prompt manager."""
     TEXT_FORMAT = "text_format"
+    """A text_format model that Python turns into a JSON schema and parses back."""
     CHAT_COMPLETIONS_BRIDGE = "chat_completions_bridge"
+    """use_chat_completions_api or the openai/chat_completions/ prefix, served through Chat Completions."""
     RETRIES_FALLBACKS = "retries_fallbacks"
+    """num_retries, max_retries or fallbacks run by the SDK."""
     DEPLOYMENT_RESPONSE_ID = "deployment_response_id"
+    """A deployment id that Python encodes into the returned response id."""
     ENCODED_ITEM_IDS = "encoded_item_ids"
+    """Input items carrying litellm-encoded ids that Python restores before sending."""
     PRE_REQUEST_HOOK = "pre_request_hook"
+    """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
+    """A WebSearchInterceptionLogger that may answer without calling the provider."""
     MESSAGES_INTERCEPTOR = "messages_interceptor"
+    """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
+    """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
     RESPONSE_CACHE = "response_cache"
-    SSL_SECURITY_LEVEL = "ssl_security_level"
+    """litellm.cache, whose hit and store order differs from native."""
+    TLS_POLICY = "tls_policy"
+    """An OpenSSL security level or ECDH curve that native TLS cannot apply."""
+    MANAGED_RESOURCE_IDS = "managed_resource_ids"
+    """Managed file or vector store ids that Python maps to provider ids."""
+    CACHE_CONTROL_MARKS = "cache_control_marks"
+    """Anthropic cache_control marks that Python strips or turns into prompt cache breakpoints."""
+    ANTHROPIC_TOOL_SEARCH = "anthropic_tool_search"
+    """Anthropic tool search tools that Python maps to OpenAI tool search."""
+    TOOL_SCHEMA_REPAIR = "tool_schema_repair"
+    """Tool schemas that Python decodes, flattens or strips of non-Python regex patterns."""
+    MODEL_PARAM_GATING = "model_param_gating"
+    """Params that Python clamps, drops or rejects from the model map, like gpt-5 temperature."""
+    WORKLOAD_IDENTITY = "workload_identity"
+    """No static key, so Python mints a workload identity federation token."""
+    CACHE_CONTROL_INJECTION = "cache_control_injection"
+    """Prompt caching injection that Python applies to messages and system."""
+    STREAM_COST_INJECTION = "stream_cost_injection"
+    """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +130,7 @@ COMMON_PYTHON_FEATURES: Final = frozenset(
         Feature.CALLER_CLIENT,
         Feature.TIMEOUT_VARIANTS,
         Feature.AGENTIC_LOOP_HOOK,
-        Feature.SSL_SECURITY_LEVEL,
+        Feature.TLS_POLICY,
     }
 )
 
@@ -103,10 +140,15 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.WEBSEARCH_INTERCEPTION,
     Feature.MESSAGES_INTERCEPTOR,
     Feature.RESPONSE_CACHE,
+    Feature.MODIFY_PARAMS,
+    Feature.WORKLOAD_IDENTITY,
+    Feature.CACHE_CONTROL_INJECTION,
+    Feature.STREAM_COST_INJECTION,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
-    Feature.DROP_MODIFY_PARAMS,
+    Feature.DROP_PARAMS,
+    Feature.MODIFY_PARAMS,
     Feature.STREAMING,
     Feature.PROMPT_MANAGEMENT,
     Feature.TEXT_FORMAT,
@@ -114,6 +156,13 @@ RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.RETRIES_FALLBACKS,
     Feature.DEPLOYMENT_RESPONSE_ID,
     Feature.ENCODED_ITEM_IDS,
+    Feature.RESPONSE_CACHE,
+    Feature.MANAGED_RESOURCE_IDS,
+    Feature.CACHE_CONTROL_MARKS,
+    Feature.ANTHROPIC_TOOL_SEARCH,
+    Feature.TOOL_SCHEMA_REPAIR,
+    Feature.MODEL_PARAM_GATING,
+    Feature.WORKLOAD_IDENTITY,
 }
 
 RULES: Final[Rules] = (

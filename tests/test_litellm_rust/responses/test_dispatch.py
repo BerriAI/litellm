@@ -5,6 +5,7 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
@@ -21,6 +22,7 @@ from litellm.rust_bridge.responses.entrypoints import (
     NativeAresponses,
     NativeResponses,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 INPUT: Final = [{"role": "user", "content": "hi"}]
@@ -255,8 +257,8 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.CALLER_CLIENT, {"client": object()}, {}),
         (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, {}, {"callbacks": [_Agentic()]}),
-        (Feature.SSL_SECURITY_LEVEL, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (Feature.DROP_MODIFY_PARAMS, {}, {"drop_params": True}),
+        (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.DROP_PARAMS, {}, {"drop_params": True}),
         (Feature.STREAMING, {"stream": True}, {}),
         (Feature.PROMPT_MANAGEMENT, {"prompt_id": "welcome"}, {}),
         (Feature.TEXT_FORMAT, {"text_format": dict}, {}),
@@ -265,6 +267,34 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.RETRIES_FALLBACKS, {"num_retries": 2}, {}),
         (Feature.DEPLOYMENT_RESPONSE_ID, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, {}),
         (Feature.ENCODED_ITEM_IDS, {"input": [{"type": "reasoning", "id": ENCODED_ID, "summary": []}]}, {}),
+        (Feature.MODIFY_PARAMS, {}, {"modify_params": True}),
+        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
+        (
+            Feature.MANAGED_RESOURCE_IDS,
+            {
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}],
+                "model_file_id_mapping": {"litellm-file": {"deployment-1": "file-abc"}},
+                "model_info": {"id": "deployment-1"},
+            },
+            {},
+        ),
+        (Feature.CACHE_CONTROL_MARKS, {"tools": [{"type": "function", "name": "f", "cache_control": {}}]}, {}),
+        (
+            Feature.ANTHROPIC_TOOL_SEARCH,
+            {"tools": [{"type": sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0], "name": "s"}]},
+            {},
+        ),
+        (Feature.TOOL_SCHEMA_REPAIR, {"tools": [{"type": "function", "name": "f", "parameters": "{}"}]}, {}),
+        (Feature.MODEL_PARAM_GATING, {"max_output_tokens": 1}, {}),
+        (
+            Feature.WORKLOAD_IDENTITY,
+            {
+                "openai_identity_provider_id": "idp-1",
+                "openai_service_account_id": "sa-1",
+                "openai_identity_token_file": "/var/run/token",
+            },
+            {},
+        ),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -291,7 +321,11 @@ def test_each_detected_feature_reaches_its_rule(
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "modify_params", False)
     monkeypatch.setattr(litellm, "ssl_security_level", None)
-    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.setattr(litellm, "cache", None)
+    for setting in ("api_key", "openai_key", "api_base", "num_retries"):
+        monkeypatch.setattr(litellm, setting, None)
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     assert served({}) is native_result
     for name, value in settings.items():
         monkeypatch.setattr(litellm, name, value)

@@ -12,11 +12,25 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 GATEWAY_TOOL: Final = {"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}
 REMOTE_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}
 ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-1", "rs_1")  # pyright: ignore[reportPrivateUsage]  # the encoder litellm stamps on earlier turns
 WRAPPED_CONTENT: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("opaque", "deployment-1")
+
+
+MAPPED_FILE: Final = {
+    "model_file_id_mapping": {"litellm-file": {"deployment-1": "file-abc"}},
+    "model_info": {"id": "deployment-1"},
+}
+MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}]
+CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
+
+
+def function_tool(parameters: object) -> Mapping[str, object]:
+    return {"type": "function", "name": "f", "parameters": parameters}
 
 
 def call(**kwargs: object) -> NativeCall:
@@ -51,14 +65,34 @@ def call(**kwargs: object) -> NativeCall:
         (detectors.retries_fallbacks, {"num_retries": 0}, True),
         (detectors.retries_fallbacks, {"max_retries": 2}, True),
         (detectors.retries_fallbacks, {"fallbacks": ["gpt-5-mini"]}, True),
+        (detectors.retries_fallbacks, {"retry_policy": {"TimeoutErrorRetries": 2}}, True),
         (detectors.retries_fallbacks, {}, False),
-        (detectors.drop_modify_params, {"drop_params": True}, True),
-        (detectors.drop_modify_params, {"drop_params": False}, False),
-        (detectors.drop_modify_params, {"drop_params": " True "}, True),
-        (detectors.drop_modify_params, {"drop_params": "false"}, False),
-        (detectors.drop_modify_params, {"drop_params": "maybe"}, False),
-        (detectors.drop_modify_params, {"additional_drop_params": ["metadata.user_id"]}, True),
-        (detectors.drop_modify_params, {"additional_drop_params": []}, False),
+        (detectors.prompt_management, {"knowledge_bases": ["kb-1"]}, True),
+        (detectors.prompt_management, {"vector_store_ids": []}, False),
+        (detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT, **MAPPED_FILE}, True),
+        (detectors.managed_resource_ids, {"input": MAPPED_FILE_INPUT}, False),
+        (detectors.managed_resource_ids, {"input": "hi"}, False),
+        (detectors.cache_control_marks, {"input": [{"role": "user", "content": [CACHED_TEXT]}]}, True),
+        (detectors.cache_control_marks, {"tools": [{"type": "function", "name": "f", "cache_control": {}}]}, True),
+        (detectors.cache_control_marks, {"input": [{"role": "user", "content": [{"type": "input_text"}]}]}, False),
+        (detectors.anthropic_tool_search, {"tools": [{"type": TOOL_SEARCH_TYPE, "name": "tool_search"}]}, True),
+        (detectors.anthropic_tool_search, {"tools": [{"type": "function", "name": "f"}]}, False),
+        (detectors.tool_schema_repair, {"tools": [function_tool('{"type": "object"}')]}, True),
+        (detectors.tool_schema_repair, {"tools": [function_tool({"type": "string", "pattern": r"\p{L}"})]}, True),
+        (detectors.tool_schema_repair, {"tools": [function_tool({"type": "object"})]}, False),
+        (detectors.tool_schema_repair, {}, False),
+        (detectors.model_param_gating, {"max_output_tokens": 1}, True),
+        (detectors.model_param_gating, {"max_output_tokens": 1024}, False),
+        (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
+        (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
+        (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
+        (detectors.drop_params, {"drop_params": True}, True),
+        (detectors.drop_params, {"drop_params": False}, False),
+        (detectors.drop_params, {"drop_params": " True "}, True),
+        (detectors.drop_params, {"drop_params": "false"}, False),
+        (detectors.drop_params, {"drop_params": "maybe"}, False),
+        (detectors.drop_params, {"additional_drop_params": ["metadata.user_id"]}, True),
+        (detectors.drop_params, {"additional_drop_params": []}, False),
         (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, True),
         (detectors.deployment_response_id, {"litellm_metadata": {"model_info": {}}}, False),
         (detectors.deployment_response_id, {"litellm_metadata": None}, False),
@@ -74,13 +108,63 @@ def test_request_detectors(
     assert detector(call(**kwargs)) is expected
 
 
-@pytest.mark.parametrize("setting", ("drop_params", "modify_params"))
-def test_global_drop_modify_params_are_detected(monkeypatch: pytest.MonkeyPatch, setting: str) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    monkeypatch.setattr(litellm, "modify_params", False)
-    assert not detectors.drop_modify_params(call())
-    monkeypatch.setattr(litellm, setting, True)
-    assert detectors.drop_modify_params(call())
+@pytest.mark.parametrize(
+    ("detector", "setting", "value", "kwargs"),
+    (
+        (detectors.drop_params, "drop_params", True, {}),
+        (detectors.modify_params, "modify_params", True, {}),
+        (detectors.retries_fallbacks, "num_retries", 3, {}),
+        (detectors.cache_control_injection, "enable_anthropic_prompt_caching", True, {}),
+        (detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
+    ),
+)
+def test_global_settings_are_detected(
+    monkeypatch: pytest.MonkeyPatch,
+    detector: Callable[[NativeCall], bool],
+    setting: str,
+    value: object,
+    kwargs: Mapping[str, object],
+) -> None:
+    for name in ("drop_params", "modify_params", "enable_anthropic_prompt_caching", "include_cost_in_streaming_usage"):
+        monkeypatch.setattr(litellm, name, False)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    assert not detector(call(**kwargs))
+    monkeypatch.setattr(litellm, setting, value)
+    assert detector(call(**kwargs))
+
+
+def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    assert not detectors.stream_cost_injection(call())
+
+
+def test_openai_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    identity: Final = {
+        "openai_identity_provider_id": "idp-1",
+        "openai_service_account_id": "sa-1",
+        "openai_identity_token_file": "/var/run/token",
+    }
+    assert detectors.openai_workload_identity(call(**identity))
+    assert not detectors.openai_workload_identity(call(**identity, api_key="sk-static"))
+    assert not detectors.openai_workload_identity(call())
+
+
+def test_anthropic_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    federation: Final = {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"}
+    assert detectors.anthropic_workload_identity(call(**federation))
+    assert not detectors.anthropic_workload_identity(call(**federation, api_key="sk-ant-static"))
+    assert not detectors.anthropic_workload_identity(call(anthropic_federation_rule_id="rule-1"))
 
 
 class _Logger(CustomLogger):
@@ -182,11 +266,29 @@ def test_response_cache_is_skipped_only_by_no_cache(
     ("environment", "setting", "expected"),
     ((None, None, False), ("DEFAULT@SECLEVEL=1", None, True), (None, "DEFAULT@SECLEVEL=1", True)),
 )
-def test_ssl_security_level_reads_the_environment_then_the_setting(
+def test_tls_policy_reads_the_security_level_environment_then_the_setting(
     monkeypatch: pytest.MonkeyPatch, environment: str | None, setting: str | None, expected: bool
 ) -> None:
     monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+    monkeypatch.setattr(litellm, "ssl_ecdh_curve", None)
     if environment is not None:
         monkeypatch.setenv("SSL_SECURITY_LEVEL", environment)
     monkeypatch.setattr(litellm, "ssl_security_level", setting)
-    assert detectors.ssl_security_level(call()) is expected
+    assert detectors.tls_policy(call()) is expected
+
+
+@pytest.mark.parametrize(
+    ("environment", "setting", "expected"),
+    ((None, "X25519", False), (None, " P-256 ", False), ("secp521r1", None, True), (None, "secp521r1", True)),
+)
+def test_tls_policy_flags_only_curves_native_tls_lacks(
+    monkeypatch: pytest.MonkeyPatch, environment: str | None, setting: str | None, expected: bool
+) -> None:
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    if environment is not None:
+        monkeypatch.setenv("SSL_ECDH_CURVE", environment)
+    monkeypatch.setattr(litellm, "ssl_ecdh_curve", setting)
+    assert detectors.tls_policy(call()) is expected

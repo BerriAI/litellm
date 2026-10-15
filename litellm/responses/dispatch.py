@@ -76,7 +76,8 @@ def _provider(request: NativeCall) -> str | None:
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
-        Feature.DROP_MODIFY_PARAMS: detectors.drop_modify_params,
+        Feature.DROP_PARAMS: detectors.drop_params,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.STREAMING: detectors.streaming,
         Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
         Feature.TEXT_FORMAT: detectors.text_format,
@@ -84,6 +85,13 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
         Feature.DEPLOYMENT_RESPONSE_ID: detectors.deployment_response_id,
         Feature.ENCODED_ITEM_IDS: detectors.encoded_item_ids,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MANAGED_RESOURCE_IDS: detectors.managed_resource_ids,
+        Feature.CACHE_CONTROL_MARKS: detectors.cache_control_marks,
+        Feature.ANTHROPIC_TOOL_SEARCH: detectors.anthropic_tool_search,
+        Feature.TOOL_SCHEMA_REPAIR: detectors.tool_schema_repair,
+        Feature.MODEL_PARAM_GATING: detectors.model_param_gating,
+        Feature.WORKLOAD_IDENTITY: detectors.openai_workload_identity,
     }
 )
 

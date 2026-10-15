@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -15,6 +16,7 @@ from litellm.rust_bridge.public_call import NativeCall, optional_mapping, option
 
 if TYPE_CHECKING:
     from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
+    from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponsesAPIOptionalRequestParams
 
 Detector: TypeAlias = Callable[[NativeCall], bool]
 Detectors: TypeAlias = Mapping[Feature, Detector]
@@ -58,7 +60,11 @@ def proxy_mcp_tools(request: NativeCall) -> bool:
 
 
 def prompt_management(request: NativeCall) -> bool:
-    return _present(request, "prompt_id")
+    from litellm.types.utils import DynamicPromptManagementParamLiteral
+
+    return _present(request, "prompt_id") or any(
+        request.resolved.get(param) for param in DynamicPromptManagementParamLiteral.list_all_params()
+    )
 
 
 def text_format(request: NativeCall) -> bool:
@@ -77,16 +83,161 @@ def chat_completions_bridge(request: NativeCall) -> bool:
 
 
 def retries_fallbacks(request: NativeCall) -> bool:
-    return any(_present(request, name) for name in ("num_retries", "max_retries", "fallbacks"))
+    return bool(litellm.num_retries) or any(
+        _present(request, name) for name in ("num_retries", "max_retries", "fallbacks", "retry_policy")
+    )
 
 
-def drop_modify_params(request: NativeCall) -> bool:
+def _openai_model(request: NativeCall) -> str:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    model: Final = str(request.resolved["model"])
+    try:
+        return get_llm_provider(model, optional_str(request.resolved.get("custom_llm_provider")))[0]
+    except BadRequestError:
+        return model
+
+
+def _api_base(request: NativeCall) -> str | None:
+    return optional_str(request.resolved.get("api_base")) or optional_str(request.resolved.get("base_url"))
+
+
+def _model_info(request: NativeCall) -> Mapping[str, object] | None:
+    return optional_mapping(request.resolved.get("model_info"))
+
+
+def _tools(request: NativeCall) -> Sequence[object]:
+    return optional_sequence(request.resolved.get("tools")) or ()
+
+
+def managed_resource_ids(request: NativeCall) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+        update_responses_tools_with_model_file_ids,
+    )
+
+    model_id: Final = optional_str((_model_info(request) or {}).get("id"))
+    mapping: Final = request.resolved.get("model_file_id_mapping")
+    file_ids: Final = cast(
+        "dict[str, dict[str, str]] | None", mapping
+    )  # cast-ok: the handler passes the proxy mapping unvalidated too
+    input_value: Final = request.resolved.get("input")
+    tools: Final = [dict(tool) for tool in map(optional_mapping, _tools(request)) if tool is not None]
+    rewritten_tools: Final = update_responses_tools_with_model_file_ids(tools, model_id, file_ids) if tools else tools
+    return update_responses_input_with_model_file_ids(input_value, model_id, file_ids) != input_value or (
+        rewritten_tools != tools
+    )
+
+
+def _mentions(value: object, key: str) -> bool:
+    if isinstance(value, Mapping):
+        mapping: Final = cast("Mapping[object, object]", value)  # cast-ok: only keys and values are walked
+        return key in mapping or any(_mentions(child, key) for child in mapping.values())
+    if isinstance(value, list | tuple):
+        return any(_mentions(child, key) for child in cast("Sequence[object]", value))  # cast-ok: only items are walked
+    return False
+
+
+def cache_control_marks(request: NativeCall) -> bool:
+    return _mentions(request.resolved.get("input"), "cache_control") or _mentions(_tools(request), "cache_control")
+
+
+def anthropic_tool_search(request: NativeCall) -> bool:
+    from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
+
+    return any(is_anthropic_tool_search_chat_tool(tool) for tool in _tools(request))
+
+
+def _undecoded_schema(tool: object) -> bool:
+    mapping: Final = optional_mapping(tool)
+    parameters: Final = None if mapping is None else mapping.get("parameters")
+    return parameters is not None and not isinstance(parameters, Mapping)
+
+
+def tool_schema_repair(request: NativeCall) -> bool:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    tools: Final = _tools(request)
+    if any(_undecoded_schema(tool) for tool in tools):
+        return True
+    sanitized: Final = OpenAIResponsesAPIConfig()._sanitized_tool_schemas_for_openai(  # pyright: ignore[reportPrivateUsage]  # the handler's own schema rewrite
+        model=_openai_model(request),
+        tools=cast(
+            "Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", tools
+        ),  # cast-ok: the sanitizer skips entries that are not tool dicts
+        litellm_params=GenericLiteLLMParams(model_info=_model_info(request)),
+    )
+    return bool(tools) and sanitized is not tools
+
+
+_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def model_param_gating(request: NativeCall) -> bool:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.rust_bridge.responses.route_host import PARAMETERS
+
+    params: Final = {name: request.resolved[name] for name in PARAMETERS if request.resolved.get(name) is not None}
+    mapped: Final = _PARAMS.validate_python(
+        OpenAIResponsesAPIConfig().map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict
+            cast(
+                "ResponsesAPIOptionalRequestParams", params
+            ),  # cast-ok: the handler hands the same projected kwargs over
+            _openai_model(request),
+            drop_params=True,
+        )
+    )
+    return mapped != params
+
+
+def openai_workload_identity(request: NativeCall) -> bool:
+    from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
+
+    api_key: Final = optional_str(request.resolved.get("api_key")) or litellm.api_key or litellm.openai_key
+    return resolve_openai_workload_identity_config(api_key, _api_base(request), request.resolved) is not None
+
+
+def anthropic_workload_identity(request: NativeCall) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.secret_managers.main import get_secret_str
+
+    def configured(param: str, env: str) -> bool:
+        return _present(request, param) or get_secret_str(env) is not None
+
+    return (
+        AnthropicModelInfo.get_api_key(optional_str(request.resolved.get("api_key"))) is None
+        and AnthropicModelInfo.get_auth_token() is None
+        and configured("anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID")
+        and configured("anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
+    )
+
+
+def cache_control_injection(request: NativeCall) -> bool:
+    from litellm.integrations.anthropic_cache_control_hook import configured_injection_points
+
+    return (
+        litellm.enable_anthropic_prompt_caching is True
+        or request.resolved.get("enable_prompt_caching") is True
+        or bool(configured_injection_points(request.resolved.get("cache_control_injection_points")))
+    )
+
+
+def stream_cost_injection(request: NativeCall) -> bool:
+    return streaming(request) and litellm.include_cost_in_streaming_usage is True
+
+
+def drop_params(request: NativeCall) -> bool:
     return (
         bool(litellm.drop_params)
-        or bool(litellm.modify_params)
         or normalize_drop_params(request.resolved.get("drop_params")) is True
         or bool(optional_sequence(request.resolved.get("additional_drop_params")))
     )
+
+
+def modify_params(_request: NativeCall) -> bool:
+    return bool(litellm.modify_params)
 
 
 def deployment_response_id(request: NativeCall) -> bool:
@@ -159,8 +310,14 @@ def response_cache(request: NativeCall) -> bool:
     return litellm.cache is not None and cache.get("no-cache") is not True
 
 
-def ssl_security_level(_request: NativeCall) -> bool:
-    return bool(os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level))
+_NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
+
+
+def tls_policy(_request: NativeCall) -> bool:
+    curve: Final = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
+    return bool(os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)) or (
+        bool(curve) and str(curve).strip().lower() not in _NATIVE_ECDH_CURVES
+    )
 
 
 COMMON: Final[Detectors] = MappingProxyType(
@@ -170,6 +327,6 @@ COMMON: Final[Detectors] = MappingProxyType(
         Feature.CALLER_CLIENT: caller_client,
         Feature.TIMEOUT_VARIANTS: timeout_variants,
         Feature.AGENTIC_LOOP_HOOK: agentic_loop_hook,
-        Feature.SSL_SECURITY_LEVEL: ssl_security_level,
+        Feature.TLS_POLICY: tls_policy,
     }
 )

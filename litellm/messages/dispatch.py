@@ -109,6 +109,10 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.WEBSEARCH_INTERCEPTION: detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: _intercepted,
         Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.WORKLOAD_IDENTITY: detectors.anthropic_workload_identity,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.STREAM_COST_INJECTION: detectors.stream_cost_injection,
     }
 )
 
