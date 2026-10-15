@@ -20,6 +20,7 @@ export type LogEntry = {
   model_group?: string;
   api_base?: string;
   call_type: string;
+  agent_id?: string | null;
   spend: number;
   total_tokens: number;
   prompt_tokens: number;

@@ -4,7 +4,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../types";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { isAgentLog, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "./eventDisplayName";
 import { ClassifyTag } from "./ClassifyTag";
 import { type DrawerBackTo, DrawerHeader } from "./DrawerHeader";
@@ -53,9 +53,15 @@ interface TraceEventRowProps {
 
 const TRACE_EVENT_ICON_CLASS = "text-muted-foreground shrink-0";
 
-function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
-  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
-  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
+function TraceEventIcon({
+  log,
+  isAutoRouted,
+}: {
+  log: Pick<LogEntry, "call_type" | "agent_id">;
+  isAutoRouted: boolean;
+}) {
+  if (MCP_CALL_TYPES.includes(log.call_type)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (isAgentLog(log)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
   if (isAutoRouted) return <AutoRouterIcon size={12} className={TRACE_EVENT_ICON_CLASS} />;
   return <Sparkles size={12} className={TRACE_EVENT_ICON_CLASS} />;
 }
@@ -76,7 +82,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
-        <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
+        <TraceEventIcon log={row} isAutoRouted={isAutoRouted} />
         <span className="text-xs font-medium text-foreground truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
@@ -277,10 +283,8 @@ export function LogDetailsDrawer({
     sessionLogs.length > 0 ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime()))) : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
-  const llmCount = sessionLogs.filter(
-    (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-  ).length;
-  const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
+  const llmCount = sessionLogs.filter((row) => !MCP_CALL_TYPES.includes(row.call_type) && !isAgentLog(row)).length;
+  const agentCount = sessionLogs.filter((row) => isAgentLog(row)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
@@ -350,12 +354,8 @@ export function LogDetailsDrawer({
                   {[
                     isSessionMode
                       ? llmCount
-                      : logsForList.filter(
-                          (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-                        ).length,
-                    isSessionMode
-                      ? agentCount
-                      : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                      : logsForList.filter((row) => !MCP_CALL_TYPES.includes(row.call_type) && !isAgentLog(row)).length,
+                    isSessionMode ? agentCount : logsForList.filter((row) => isAgentLog(row)).length,
                     isSessionMode
                       ? mcpCount
                       : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,

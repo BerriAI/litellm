@@ -105,6 +105,9 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             "lte": _iso(params[end_index - 1]),
         }
     remaining = clause.group(1) if search_clause is None else clause.group(1).replace(search_clause.group(0), "")
+    agent_row_predicate_present: Final = "COALESCE(agent_id, '') <> ''" in remaining
+    if agent_row_predicate_present:
+        where["span_type"] = "llm" if "AND NOT (call_type = 'asend_message'" in remaining else "agent"
 
     eq_cols = {
         "team_id": "team_id",
@@ -143,7 +146,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["cache_hit"] = "hit"
         elif cond == "(cache_hit IS NULL OR LOWER(cache_hit) != 'true')":
             where["cache_hit"] = "miss"
-        elif "call_type" in cond:
+        elif "call_type" in cond and not agent_row_predicate_present:
             if "call_type NOT IN" in cond:
                 where["span_type"] = "llm"
             elif "call_mcp_tool" in cond:

@@ -249,6 +249,39 @@ describe("Type column", () => {
     expect(screen.getByText("MCP")).toBeInTheDocument();
   });
 
+  it("uses agent identity for the badge and fallback session counts", async () => {
+    const user = userEvent.setup();
+    const agentKeyLog: Partial<LogEntry> = {
+      request_id: "req-agent-key",
+      call_type: "acompletion",
+      agent_id: "agent-1",
+      session_total_count: 3,
+    };
+    renderRows([logEntry(agentKeyLog)]);
+
+    const sessionCount = screen.getByText("3");
+    await user.hover(sessionCount);
+    expect(await screen.findByText("3 Agent")).toBeInTheDocument();
+  });
+
+  it("keeps ordinary completions on the LLM badge without agent identity", () => {
+    renderRows([logEntry({ request_id: "req-llm", call_type: "acompletion", session_total_count: 1 })]);
+
+    expect(screen.getByText("LLM")).toBeInTheDocument();
+  });
+
+  it("keeps MCP rows on the MCP badge when they carry an agent id", () => {
+    const mcpLogWithAgentId: Partial<LogEntry> = {
+      request_id: "req-mcp-agent-id",
+      call_type: "call_mcp_tool",
+      agent_id: "agent-1",
+      session_total_count: 1,
+    };
+    renderRows([logEntry(mcpLogWithAgentId)]);
+
+    expect(screen.getByText("MCP")).toBeInTheDocument();
+  });
+
   it("marks a batch cost row with the Batch badge instead of LLM", () => {
     renderRows([logEntry({ request_id: "batch_1_batch_cost", call_type: "aretrieve_batch" })]);
 
