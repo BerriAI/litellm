@@ -5,6 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from functools import partial
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -287,7 +288,12 @@ class LiteLLMMessagesToResponsesAPIHandler:
         )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        result: Final = await litellm.aresponses(**responses_kwargs)
+        from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+        aresponses_call: Final[
+            partial[Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+        ] = partial(litellm.aresponses)
+        result: Final = await aresponses_call(**responses_kwargs)
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
@@ -370,7 +376,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
             extra_kwargs=kwargs,
         )
 
-        result: Final = litellm.responses(**responses_kwargs)
+        from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+        responses_call: Final[
+            partial[
+                ResponsesAPIResponse
+                | BaseResponsesAPIStreamingIterator
+                | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+            ]
+        ] = partial(litellm.responses)
+        result: Final = responses_call(**responses_kwargs)
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(

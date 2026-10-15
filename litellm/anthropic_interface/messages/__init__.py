@@ -42,7 +42,7 @@ async def acreate(
     top_p: float | None = None,
     container: dict | None = None,
     **kwargs,
-) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator:
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
     """
     Async wrapper for Anthropic's messages API
 

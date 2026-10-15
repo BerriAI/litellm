@@ -241,8 +241,10 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
         from litellm.messages.dispatch import MessagesResult
         from litellm.realtime_api.main import realtime_health_check
+        from litellm.responses.dispatch import ResponsesResult
 
         messages_call: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.anthropic_messages)
+        responses_call: Final[partial[Coroutine[object, object, ResponsesResult]]] = partial(litellm.aresponses)
         return {
             "chat": lambda: litellm.acompletion(
                 **model_params,
@@ -299,7 +301,7 @@ class HealthCheckHelpers:
                 model_params=model_params,
                 filtered_model_params=_filter_model_params(model_params=model_params),
             ),
-            "responses": lambda: litellm.aresponses(
+            "responses": lambda: responses_call(
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
