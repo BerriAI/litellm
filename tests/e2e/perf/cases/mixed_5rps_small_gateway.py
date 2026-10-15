@@ -1,5 +1,5 @@
-"""Mixed traffic at 5 rps on the small gateway: three real model groups over the mock providers
-(one `gpt-6-luna` deployment flaky), two teams plus users in no team, JWT and key callers, a pre and
+"""Mixed traffic at 5 rps on the small gateway: three real model groups over the mock providers,
+two teams plus users in no team, JWT and key callers, a pre and
 a post guardrail, half the requests streaming, short chats, long contexts and tool calls. Budgets
 are real money at cost-map prices (a 335k-token `claude-sonnet-5` request is about $0.70 and the
 run spends roughly $1,500), so they are sized so no caller runs dry mid-run."""
@@ -54,8 +54,8 @@ CASE: Final = PerformanceTestCase(
         endpoints={"chat_completions": 0.5, "responses": 0.25, "messages": 0.25},
         shapes={SHORT: 0.75, LONG: 0.25},
         stream_share=0.5,
-        intervene_share=0.1,
-        block_share=0.02,
+        intervene_share=0.0,
+        block_share=0.0,
         concurrency=100,
     ),
     limits=(

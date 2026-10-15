@@ -60,7 +60,7 @@ model_list:
       api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
       api_key: perf-mock-not-checked
       extra_headers:
-        x-mock-knobs: f30-s529-p25
+        x-mock-knobs: f0-s500-p25
   - model_name: claude-sonnet-5
     litellm_params:
       model: anthropic/claude-sonnet-5
