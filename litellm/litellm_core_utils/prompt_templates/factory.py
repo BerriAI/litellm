@@ -1468,7 +1468,10 @@ def _may_spell_ref_key(raw_json: str) -> bool:
 
 
 def _contains_part_reference(payload: JsonValue) -> bool:
-    """Gemini reads any {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts"""
+    """Gemini reads any {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts
+
+    Google does not document this. It was observed on the Gemini API and Vertex AI on 2026-10-15, see issue #38223
+    """
     levels: Final = itertools.takewhile(
         bool, itertools.accumulate(itertools.repeat(None), _next_json_level, initial=(payload,))
     )

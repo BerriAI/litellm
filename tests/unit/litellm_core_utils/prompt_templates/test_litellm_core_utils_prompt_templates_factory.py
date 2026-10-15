@@ -1478,6 +1478,8 @@ def test_convert_gemini_tool_result_preserves_structured_passthrough_without_par
     """
     Gemini only rejects a $ref holding a non-empty string, so tool output with
     no $ref, or a $ref holding any other value, stays structured.
+    Google does not document that rule. It was observed on the Gemini API and
+    Vertex AI (gemini-3.8-flash, gemini-4-argon) on 2026-10-15.
     Fixes: https://github.com/BerriAI/litellm/issues/38223
     """
     message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
