@@ -437,7 +437,9 @@ def refresh_responses_input_logging_snapshot(
     if isinstance(input_value, str):
         logging_obj.update_messages([{"role": "user", "content": input_value}])
     else:
-        logging_obj.update_messages(cast("list[AllMessageValues]", input_value))  # cast-ok: input list passed verbatim
+        logging_obj.update_messages(
+            cast("list[AllMessageValues]", input_value)  # cast-ok: request input list
+        )
 
 
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
@@ -2376,14 +2378,21 @@ class ProxyBaseLLMRequestProcessing:
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
-        elif route_type == "aresponses" and self.data.get("input") is not None:
+        elif route_type == "aresponses":
             # Same contract as the messages branch above, for the Responses API's
-            # input-shaped body: pre-call guardrails may have rewritten
-            # self.data["input"] (in place or by rebinding a new list), while the
-            # snapshot taken in function_setup still points at the pre-guardrail
-            # objects. Refresh it in the request's own Responses shape so guarded
-            # and unguarded calls log the same schema.
-            refresh_responses_input_logging_snapshot(logging_obj, self.data["input"])
+            # input-shaped body: pre-call guardrails may have rewritten the input
+            # (in place or by rebinding a new list), while the snapshot taken in
+            # function_setup still points at the pre-guardrail objects. Refresh it
+            # in the request's own Responses shape so guarded and unguarded calls
+            # log the same schema.
+            responses_input: Final[object] = self.data.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # bag
+                "input"
+            )
+            if responses_input is not None:
+                refresh_responses_input_logging_snapshot(
+                    logging_obj,
+                    responses_input,  # pyright: ignore[reportUnknownArgumentType]  # bag value
+                )
 
         if (
             self.served_model is not None
