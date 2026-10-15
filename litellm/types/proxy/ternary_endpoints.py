@@ -29,7 +29,7 @@ class TernarySettings(_Frozen):
 
     api_key: str = Field(..., description="Ternary AI Gateway connection API key")
     connection_id: str = Field(..., description="Ternary AI Gateway connection ID")
-    base_url: str = Field(default=TERNARY_DEFAULT_BASE_URL, description="Ternary API base URL")
+    ternary_base_url: str = Field(default=TERNARY_DEFAULT_BASE_URL, description="Ternary API base URL")
     frequency: TernaryExportFrequency = Field(
         default="daily", description="Export cadence. 'interval' is meant for short setup-validation loops"
     )
@@ -37,7 +37,7 @@ class TernarySettings(_Frozen):
         default=None, description="Seconds between exports when frequency is 'interval'"
     )
 
-    _reject_blank_fields = field_validator("api_key", "connection_id", "base_url")(_reject_blank)
+    _reject_blank_fields = field_validator("api_key", "connection_id", "ternary_base_url")(_reject_blank)
 
     @model_validator(mode="after")
     def interval_needs_seconds(self) -> Self:
@@ -51,11 +51,11 @@ class TernarySettingsUpdate(_Frozen):
 
     api_key: str | None = Field(default=None, description="New Ternary connection API key")
     connection_id: str | None = Field(default=None, description="New Ternary connection ID")
-    base_url: str | None = Field(default=None, description="New Ternary API base URL")
+    ternary_base_url: str | None = Field(default=None, description="New Ternary API base URL")
     frequency: TernaryExportFrequency | None = Field(default=None, description="New export cadence")
     interval_seconds: int | None = Field(default=None, description="New seconds between exports for 'interval'")
 
-    _reject_blank_fields = field_validator("api_key", "connection_id", "base_url")(_reject_blank)
+    _reject_blank_fields = field_validator("api_key", "connection_id", "ternary_base_url")(_reject_blank)
 
 
 class TernarySettingsView(_Frozen):
@@ -63,7 +63,7 @@ class TernarySettingsView(_Frozen):
 
     api_key_masked: str | None = Field(default=None, description="Masked API key")
     connection_id: str | None = Field(default=None, description="Ternary connection ID")
-    base_url: str | None = Field(default=None, description="Ternary API base URL")
+    ternary_base_url: str | None = Field(default=None, description="Ternary API base URL")
     frequency: TernaryExportFrequency | None = Field(default=None, description="Export cadence")
     interval_seconds: int | None = Field(default=None, description="Seconds between exports for 'interval'")
     status: str | None = Field(default=None, description="Configuration status")

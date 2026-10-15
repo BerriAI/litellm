@@ -13,7 +13,7 @@ import {
 const filled: TernaryFormValues = {
   api_key: " tern-key ",
   connection_id: " conn-1 ",
-  base_url: "https://api.ternary.app ",
+  ternary_base_url: "https://api.ternary.app ",
   frequency: "daily",
   interval_seconds: "",
 };
@@ -28,7 +28,7 @@ describe("buildCreatePayload", () => {
     expect(buildCreatePayload(filled)).toEqual({
       api_key: "tern-key",
       connection_id: "conn-1",
-      base_url: "https://api.ternary.app",
+      ternary_base_url: "https://api.ternary.app",
       frequency: "daily",
       interval_seconds: null,
     });
@@ -71,9 +71,9 @@ describe("form schemas", () => {
   });
 
   it("rejects a blank connection ID or base URL", () => {
-    expect(issuesFor(createSchema, { ...filled, connection_id: " ", base_url: "" })).toEqual([
+    expect(issuesFor(createSchema, { ...filled, connection_id: " ", ternary_base_url: "" })).toEqual([
       "connection_id",
-      "base_url",
+      "ternary_base_url",
     ]);
   });
 
@@ -88,7 +88,7 @@ describe("formValuesFromSettings", () => {
       formValuesFromSettings({
         api_key_masked: "te****ey",
         connection_id: "conn-1",
-        base_url: "https://eu.example.com",
+        ternary_base_url: "https://eu.example.com",
         frequency: "interval",
         interval_seconds: 120,
         status: "configured",
@@ -96,7 +96,7 @@ describe("formValuesFromSettings", () => {
     ).toEqual({
       api_key: "",
       connection_id: "conn-1",
-      base_url: "https://eu.example.com",
+      ternary_base_url: "https://eu.example.com",
       frequency: "interval",
       interval_seconds: "120",
     });

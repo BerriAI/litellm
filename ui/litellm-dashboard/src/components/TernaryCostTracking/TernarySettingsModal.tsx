@@ -84,14 +84,14 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
                   {...field}
                   ref={ref}
                   autoComplete="off"
-                  placeholder={isEdit ? "Leave empty to keep existing" : "Enter your Ternary API key"}
+                  placeholder={isEdit ? "Enter a new API key" : "Enter your Ternary API key"}
                 />
               )}
             </FormField>
             <FormField control={form.control} name="connection_id" label="Connection ID">
               {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Enter your Ternary connection ID" />}
             </FormField>
-            <FormField control={form.control} name="base_url" label="Base URL">
+            <FormField control={form.control} name="ternary_base_url" label="Base URL">
               {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://api.ternary.app" />}
             </FormField>
             <FormField control={form.control} name="frequency" label="Export Frequency">
