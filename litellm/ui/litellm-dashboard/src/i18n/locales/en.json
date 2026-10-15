@@ -7113,6 +7113,7 @@
       "tabs": {
         "loggingCallbacks": "Logging Callbacks",
         "cloudZero": "CloudZero Cost Tracking",
+        "ternary": "Ternary Cost Export",
         "alertingTypes": "Alerting Types",
         "alertingSettings": "Alerting Settings",
         "emailAlerts": "Email Alerts",
