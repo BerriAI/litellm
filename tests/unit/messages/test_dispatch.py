@@ -13,9 +13,9 @@ from litellm.messages.dispatch import (
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.proxy import proxy_server
-from litellm.rust_bridge import catalog, configuration
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules, Target
+from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
@@ -223,7 +223,7 @@ CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
         ("anthropic/claude-sonnet-4-5", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, False),
     ),
 )
-def test_shipped_rules_keep_proxy_classified_safeguards_on_python(
+def test_proxy_classified_safeguards_reach_the_feature_rule(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
     kwargs: Mapping[str, object],
@@ -237,17 +237,17 @@ def test_shipped_rules_keep_proxy_classified_safeguards_on_python(
     def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
         return python_result
 
-    configuration.rust(True)
-    try:
-        result: Final = _DISPATCH.run(
-            (16, MESSAGES, model),
-            kwargs,
-            python=python,
-            binding=messages_binding(lambda request: native_result),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
-        )
-    finally:
-        configuration.rust(None)
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, model),
+        kwargs,
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(
+            RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
+            RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+        ),
+    )
     assert result is (python_result if serves_python else native_result)
 
 
