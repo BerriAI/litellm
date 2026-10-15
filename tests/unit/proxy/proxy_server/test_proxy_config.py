@@ -5040,12 +5040,16 @@ def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _sync_environment_variables_row(
-    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, values: Mapping[str, str | None], revision: int | None
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, values: Mapping[str, str | None] | None, revision: int | None
 ) -> None:
-    row: Final = SimpleNamespace(
-        param_name="environment_variables",
-        param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
-        reload_revision=revision,
+    row: Final = (
+        None
+        if values is None
+        else SimpleNamespace(
+            param_name="environment_variables",
+            param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
+            reload_revision=revision,
+        )
     )
 
     async def get_config_param(_prisma_client: object, param_name: str) -> SimpleNamespace | None:
@@ -5132,6 +5136,20 @@ async def test_environment_variables_row_without_a_revision_only_sets_keys_a_lat
         os.environ.get("REVISION_TEST_DB_ONLY"),
         os.environ.get("REVISION_TEST_NULLED"),
     ) == ("kept", None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_removed_key_does_not_come_back_with_a_value_set_after_the_first_sync_without_a_row(monkeypatch):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, None, revision=None)
+
+    monkeypatch.setenv("REVISION_TEST_DB_ONLY", "set-at-runtime")
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": "set-at-runtime"}, revision=1)
+    monkeypatch.delenv("REVISION_TEST_DB_ONLY")
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_DB_ONLY": None}, revision=2)
+
+    assert os.environ.get("REVISION_TEST_DB_ONLY") is None
 
 
 @pytest.mark.asyncio

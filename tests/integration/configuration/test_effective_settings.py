@@ -1188,20 +1188,12 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
             "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
         }
         removed: Final = ("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL")
-        with (
-            owned_proxy(
-                gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
-            ) as first,
-            owned_proxy(
-                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
-            ) as peer,
-        ):
-
-            def answers() -> tuple[str, str]:
-                return (_chat_answer(first, alias), _chat_answer(peer, alias))
-
-            from_process_and_config_file: Final = (f"config-file Bearer {process_key}",) * 2
-            assert answers() == from_process_and_config_file
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        from_database: Final = f"database Bearer {database_key}"
+        with owned_proxy(
+            gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
+        ) as first:
+            assert _chat_answer(first, alias) == from_process_and_config_file
 
             stored: Final = first.request(
                 "POST",
@@ -1214,16 +1206,25 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
                 },
             )
             assert stored.status_code == 200, stored.text
-            eventually(answers, lambda values: values == (f"database Bearer {database_key}",) * 2, seconds=30)
+            eventually(lambda: _chat_answer(first, alias), lambda value: value == from_database, seconds=30)
 
-            unset: Final = first.request(
-                "POST",
-                "/config/update",
-                {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
-            )
-            assert unset.status_code == 200, unset.text
-            assert _config_section(database_url, "environment_variables") == {
-                "OPENAI_API_KEY": None,
-                "OPENAI_BASE_URL": None,
-            }
-            eventually(answers, lambda values: values == from_process_and_config_file, seconds=30)
+            with owned_proxy(
+                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
+            ) as peer_booted_with_the_row_stored:
+
+                def answers() -> tuple[str, str]:
+                    return (_chat_answer(first, alias), _chat_answer(peer_booted_with_the_row_stored, alias))
+
+                eventually(answers, lambda values: values == (from_database,) * 2, seconds=30)
+
+                unset: Final = first.request(
+                    "POST",
+                    "/config/update",
+                    {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
+                )
+                assert unset.status_code == 200, unset.text
+                assert _config_section(database_url, "environment_variables") == {
+                    "OPENAI_API_KEY": None,
+                    "OPENAI_BASE_URL": None,
+                }
+                eventually(answers, lambda values: values == (from_process_and_config_file,) * 2, seconds=30)

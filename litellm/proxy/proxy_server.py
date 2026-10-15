@@ -8310,6 +8310,7 @@ class ProxyConfig:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
             return config
 
+        environment_before_db: Final = self._captured_environment_before_db()
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
         for section, response in zip(sections, responses):
@@ -8324,7 +8325,7 @@ class ProxyConfig:
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
             elif section == "environment_variables":
-                self._apply_db_environment_variables(param_value, _config_row_revision(response))
+                self._apply_db_environment_variables(param_value, _config_row_revision(response), environment_before_db)
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
@@ -8348,12 +8349,13 @@ class ProxyConfig:
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
         return _as_settings_mapping(scrubbed)
 
-    def _apply_db_environment_variables(self, value: object, revision: int | None) -> None:
+    def _apply_db_environment_variables(
+        self, value: object, revision: int | None, environment_before_db: Mapping[str, str]
+    ) -> None:
         applied_revision: Final = self._db_environment_revision
         if revision is not None and applied_revision is not None and revision < applied_revision:
             return
         row: Final = _as_settings_mapping(value)
-        environment_before_db: Final = self._captured_environment_before_db()
         decrypted: Final = _ENVIRONMENT_VALUES.validate_python(
             self.decrypt_and_set_db_env_variables(dict(row), return_original_value=True)
         )
