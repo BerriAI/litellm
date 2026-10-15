@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -157,6 +157,66 @@ describe("MemberTable sorting", () => {
 
     expect(screen.getByRole("columnheader", { name: "Rate Limits" })).toBeInTheDocument();
     expect(screen.queryByTestId("sort-header-rate_limits")).not.toBeInTheDocument();
+  });
+});
+
+describe("MemberTable paging", () => {
+  const roster = (): Member[] =>
+    Array.from({ length: 30 }, (_, index) => ({
+      user_id: `u-${index}`,
+      user_email: `member${index}@example.com`,
+      user_alias: `Member ${String(index).padStart(2, "0")}`,
+      role: index === 0 ? "admin" : "user",
+    }));
+
+  const renderRoster = () => {
+    const props = { members: roster(), canEdit: true, onEdit: vi.fn(), onDelete: vi.fn() };
+    const view = renderWithProviders(<MemberTable {...props} />);
+    return { props, view };
+  };
+
+  const goToSecondPage = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(screen.getByText("Showing 26-30 of 30")).toBeInTheDocument();
+  };
+
+  it("stays on the current page when the roster is refetched", async () => {
+    const user = userEvent.setup();
+    const { props, view } = renderRoster();
+    await goToSecondPage(user);
+
+    view.rerender(<MemberTable {...props} members={roster()} />);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    expect(screen.getByText("Showing 26-30 of 30")).toBeInTheDocument();
+  });
+
+  it("returns to the first page when the sort order changes", async () => {
+    const user = userEvent.setup();
+    renderRoster();
+    await goToSecondPage(user);
+
+    await user.click(screen.getByTestId("sort-header-user_email"));
+
+    expect(await screen.findByText("Showing 1-25 of 30")).toBeInTheDocument();
+  });
+
+  it("returns to the first page when the search or the role filter changes", async () => {
+    const user = userEvent.setup();
+    renderRoster();
+    await goToSecondPage(user);
+
+    search("example.com");
+    expect(await screen.findByText("Showing 1-25 of 30")).toBeInTheDocument();
+
+    search("");
+    await goToSecondPage(user);
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(screen.getByTestId("filter-role"));
+    await user.click(await screen.findByRole("option", { name: "user" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    expect(await screen.findByText("Showing 1-25 of 29")).toBeInTheDocument();
   });
 });
 

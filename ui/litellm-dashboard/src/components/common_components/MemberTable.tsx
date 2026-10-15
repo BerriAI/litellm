@@ -1,4 +1,4 @@
-import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
+import type { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Crown, Info, User, UserPlus } from "lucide-react";
 import React, { useState } from "react";
 
@@ -9,6 +9,7 @@ import {
   DataTableFilterField,
   DataTableSortHeader,
   DataTableToolbar,
+  DEFAULT_PAGE_SIZE_OPTIONS,
 } from "@/components/shared/DataTable";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,8 @@ export interface MemberTableProps {
 }
 
 const ALL_ROLES = "all";
+
+const DEFAULT_SORTING: SortingState = [{ id: "user_alias", desc: false }];
 
 export const memberRowId = (member: Member): string => member.user_id ?? member.user_email ?? JSON.stringify(member);
 
@@ -230,7 +233,20 @@ export default function MemberTable({
 }: MemberTableProps) {
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  });
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const backToFirstPage =
+    <T,>(onChange: OnChangeFn<T>): OnChangeFn<T> =>
+    (updaterOrValue) => {
+      onChange(updaterOrValue);
+      setPagination((current) => ({ ...current, pageIndex: 0 }));
+    };
+  const changeSearch = backToFirstPage(setGlobalFilter);
 
   const columnDeps: MemberColumnDeps = {
     canEdit,
@@ -261,13 +277,16 @@ export default function MemberTable({
         columns={columns}
         getRowId={memberRowId}
         paginationMode="client"
+        pagination={pagination}
+        onPaginationChange={setPagination}
         sortingMode="client"
-        defaultSorting={[{ id: "user_alias", desc: false }]}
+        sorting={sorting}
+        onSortingChange={backToFirstPage(setSorting)}
         filterMode="client"
         columnFilters={columnFilters}
-        onColumnFiltersChange={setColumnFilters}
+        onColumnFiltersChange={backToFirstPage(setColumnFilters)}
         globalFilter={globalFilter}
-        onGlobalFilterChange={setGlobalFilter}
+        onGlobalFilterChange={changeSearch}
         noDataMessage={
           <span className="text-muted-foreground">
             {isNarrowed ? "No members match your search or filters" : emptyText ?? "No data"}
@@ -278,7 +297,7 @@ export default function MemberTable({
             <DataTableToolbar
               table={table}
               searchValue={globalFilter}
-              onSearchChange={setGlobalFilter}
+              onSearchChange={changeSearch}
               searchPlaceholder="Search by name, email, or user ID"
               onOpenFilters={() => setFiltersOpen(true)}
               showViewOptions={false}
