@@ -1209,3 +1209,20 @@ class TestOllamaStreamingToolCallIds:
             "",
         ), f"Expected a fresh id for an empty provider id, got '{emitted_id}'"
         UUID(emitted_id)
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/ollama",
+        "http://gateway.example.com/ollama/",
+        "http://gateway.example.com/ollama/api/chat/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        OllamaChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="llama3", optional_params={}, litellm_params={}
+        )
+        == "http://gateway.example.com/ollama/api/chat"
+    )

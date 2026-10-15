@@ -397,6 +397,7 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
 OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
@@ -478,6 +479,7 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT: Final = (
     else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 )
 PROMPT_CACHE_LOOKBACK_POSITIONS: Final = 20
+PROMPT_CACHE_PIN_CACHE_MAX_SIZE: Final = 10_000
 DEFAULT_TRIM_RATIO: Final = get_env_float(
     "DEFAULT_TRIM_RATIO", 0.75
 )  # default ratio of tokens to trim from the end of a prompt
@@ -1652,6 +1654,7 @@ DEFAULT_SOFT_BUDGET: Final = get_env_float(
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
 # Prefix of the 401 raised when a submitted virtual key is not shaped like one.
 INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key provided."
 # Attribute stamped on that 401 at its raise site so log routing recognises it by
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
@@ -1684,6 +1687,7 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
+TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 
