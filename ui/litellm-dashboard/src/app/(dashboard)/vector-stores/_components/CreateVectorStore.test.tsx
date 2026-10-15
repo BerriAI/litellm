@@ -217,8 +217,9 @@ describe("CreateVectorStore", () => {
   });
 
   it("should report the created store and the failed file when a later file fails to ingest", async () => {
+    const firstIngest = { id: "ingest-1", status: "completed", vector_store_id: "vs_123", file_id: "file_1" };
     vi.mocked(networking.ragIngestCall)
-      .mockResolvedValueOnce({ id: "ingest-1", status: "completed", vector_store_id: "vs_123", file_id: "file_1" })
+      .mockResolvedValueOnce(firstIngest)
       .mockRejectedValueOnce(new Error("upstream rejected the file"));
     const onSuccess = vi.fn();
     render(<CreateVectorStore accessToken="test-token" onSuccess={onSuccess} />);

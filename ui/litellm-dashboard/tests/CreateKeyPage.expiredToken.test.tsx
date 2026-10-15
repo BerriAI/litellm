@@ -76,6 +76,8 @@ vi.mock("@/components/networking", () => {
     getUiSettings: vi.fn().mockResolvedValue({ values: {}, field_schema: {} }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
+    getRuntimeBackendBaseUrl: vi.fn(() => null),
+    getUiPageUrl: (url: string) => url,
     // Called when decoding a valid token
     setGlobalLitellmHeaderName: vi.fn(),
     Organization: {},

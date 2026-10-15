@@ -350,6 +350,7 @@ jobs:
               tests/unit/llms/v0
               tests/unit/llms/valkey
               tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/vllm
               tests/unit/llms/volcengine
               tests/unit/llms/voyage
               tests/unit/llms/wandb
@@ -450,6 +451,7 @@ jobs:
               tests/unit/repositories
               tests/unit/secret_managers
               tests/unit/skills/test_skills_main.py
+              tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
             workers: 2
