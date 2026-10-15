@@ -3,6 +3,7 @@
 import json
 import types
 from datetime import date, datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,7 +16,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     PTUModel,
     _active_hours_on_day,
     _compute_daily_flat_cost,
-    _parse_ptu_model,
+    _parse_ptu_models,
     run_ptu_flat_cost_backfill,
     run_ptu_flat_cost_rollup,
     run_scheduled_ptu_rollup,
@@ -23,6 +24,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
 
 DAY = date(2026, 7, 30)
 TODAY = date(2026, 7, 31)
+_SCHEDULED_NOW: Final = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 
 
 # The endpoints require ptu_effective_from alongside the count and rate, so a fixture that
@@ -39,6 +41,14 @@ def _ptu_enabled(monkeypatch):
 
 
 _VALID_PTU = {"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
+
+
+def _parse_ptu_model(row):
+    """The single holding a team_id deployment parses to, else None; shared deployments
+    parse to one holding per team and have their own tests below."""
+    parsed = _parse_ptu_models(row)
+    assert len(parsed) <= 1
+    return parsed[0] if parsed else None
 
 
 def _model_row(model_id="m1", model_name="gpt-4o-mini-ptu", model_info=None, with_start=True):
@@ -161,6 +171,49 @@ def _sentinel_row(row_id, team_id, model):
     return row
 
 
+class _FakeBatch:
+    """prisma's ``batch_()``: writes queue inside the block and commit as one transaction on a clean exit.
+
+    A queued delete reaches the table as ``batch_delete_many``, kept apart from the table's own
+    ``delete_many`` the way prisma keeps batch actions apart from direct ones, so the prune's
+    assertions still see only the prune."""
+
+    def __init__(self, table):
+        self._table = table
+        self._queued = []
+        self.litellm_dailyteamspend = self
+
+    def upsert(self, where, data):
+        self._queued.append((where, data))
+
+    def delete_many(self, where):
+        self._queued.append((where, None))
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            return False
+        committed = (
+            (dict(self._table.rows), len(self._table.upsert_keys))
+            if isinstance(self._table, _FakeSentinelTable)
+            else None
+        )
+        try:
+            for where, data in self._queued:
+                if data is None:
+                    self._table.batch_delete_many(where)
+                else:
+                    await self._table.upsert(where=where, data=data)
+        except Exception:
+            if committed is not None:
+                self._table.rows = committed[0]
+                del self._table.upsert_keys[committed[1] :]
+            raise
+        return False
+
+
 def _prisma_with_models(rows, existing_sentinel_rows=()):
     prisma = MagicMock()
     model_table = MagicMock()
@@ -169,7 +222,9 @@ def _prisma_with_models(rows, existing_sentinel_rows=()):
     daily.find_many = AsyncMock(return_value=list(existing_sentinel_rows))
     daily.upsert = AsyncMock()
     daily.delete_many = AsyncMock()
-    prisma.db = types.SimpleNamespace(litellm_proxymodeltable=model_table, litellm_dailyteamspend=daily)
+    prisma.db = types.SimpleNamespace(
+        litellm_proxymodeltable=model_table, litellm_dailyteamspend=daily, batch_=lambda: _FakeBatch(daily)
+    )
     return prisma, daily
 
 
@@ -685,9 +740,10 @@ async def test_rollup_skips_the_prune_when_a_replacement_write_failed():
 class _FakeSentinelTable:
     """In-memory LiteLLM_DailyTeamSpend that honours the sentinel key and prune predicate."""
 
-    def __init__(self, upsert_gate=None):
+    def __init__(self, upsert_gate=None, failing_team=None):
         self.rows = {}
         self._upsert_gate = upsert_gate
+        self.failing_team = failing_team
         self.upsert_keys = []
         self.delete_many_calls = []
         self.find_many_calls = []
@@ -696,6 +752,8 @@ class _FakeSentinelTable:
         if self._upsert_gate is not None:
             await self._upsert_gate.wait()
         key = where["team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"]
+        if key["team_id"] == self.failing_team:
+            raise RuntimeError(f"write rejected for {self.failing_team}")
         row_key = (key["team_id"], key["date"], key["api_key"], key["model"])
         self.upsert_keys.append(row_key)
         self.rows[row_key] = {
@@ -721,6 +779,16 @@ class _FakeSentinelTable:
         for k in doomed:
             del self.rows[k]
         return len(doomed)
+
+    def batch_delete_many(self, where):
+        """The batch delete of a deployment day's rows. Every clause is honoured and an unexpected
+        one fails, so a dropped scope cannot pass silently."""
+        assert set(where) == {"date", "api_key", "model"}
+        doomed = [
+            k for k in self.rows if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"]
+        ]
+        for k in doomed:
+            del self.rows[k]
 
     async def find_many(self, where=None):
         """Read back sentinel rows the way prisma would, honouring api_key and a date range."""
@@ -756,7 +824,11 @@ def _prisma_for(model_rows, daily_table):
     prisma = MagicMock()
     model_table = MagicMock()
     model_table.find_many = AsyncMock(return_value=model_rows)
-    prisma.db = types.SimpleNamespace(litellm_proxymodeltable=model_table, litellm_dailyteamspend=daily_table)
+    prisma.db = types.SimpleNamespace(
+        litellm_proxymodeltable=model_table,
+        litellm_dailyteamspend=daily_table,
+        batch_=lambda: _FakeBatch(daily_table),
+    )
     return prisma
 
 
@@ -1449,10 +1521,10 @@ async def test_scheduled_rollup_backfills_after_pricing_the_day():
     """The catch-up pass runs after the day's own rollup, so it sees yesterday already
     priced and does not write it a second time."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=2)))], table)
 
-    await run_scheduled_ptu_rollup(prisma)
+    await run_scheduled_ptu_rollup(prisma, clock=lambda: _SCHEDULED_NOW)
 
     yesterday_key = ("t", yesterday.isoformat(), PTU_SENTINEL_API_KEY, "m1")
     assert table.upsert_keys.count(yesterday_key) == 1
@@ -1475,13 +1547,13 @@ async def test_scheduled_rollup_with_an_explicit_target_date_does_not_backfill()
 async def test_scheduled_rollup_holds_one_lock_across_both_phases():
     """Backfill running outside the lock would let another pod's prune race its writes."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=3)))], table)
     rows_at_release = []
     lock = _pod_lock(acquired=True)
     lock.release_lock = AsyncMock(side_effect=lambda **kwargs: rows_at_release.append(len(table.rows)))
 
-    await run_scheduled_ptu_rollup(prisma, pod_lock_manager=lock)
+    await run_scheduled_ptu_rollup(prisma, pod_lock_manager=lock, clock=lambda: _SCHEDULED_NOW)
 
     lock.acquire_lock.assert_awaited_once()
     assert rows_at_release == [4]
@@ -1507,12 +1579,12 @@ async def test_scheduled_rollup_alerts_when_a_backfill_charge_never_landed():
     """An unpriced day that stays unpriced is the silent underbill this work exists to
     remove, so it has to reach an operator too."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=1)))], table)
     prisma.db.litellm_dailyteamspend.upsert = AsyncMock(side_effect=RuntimeError("db down"))
     alert = AsyncMock()
 
-    await run_scheduled_ptu_rollup(prisma, alert=alert)
+    await run_scheduled_ptu_rollup(prisma, alert=alert, clock=lambda: _SCHEDULED_NOW)
 
     messages = [call.args[0] for call in alert.await_args_list]
     assert any("backfill" in message for message in messages)
@@ -1535,21 +1607,39 @@ async def test_a_broken_alert_channel_does_not_fail_the_backfill():
 
 @pytest.mark.asyncio
 async def test_scheduled_rollup_with_no_target_date_closes_a_backdated_window():
-    """The production call shape from proxy_server.py, on the real clock: no target_date,
+    """The production call shape from proxy_server.py, on a frozen clock: no target_date,
     a window backdated 30 days, and every elapsed in-window day has to end up priced with
     no operator alert raised. Every other rollup test pins target_date, which is exactly
     why this regression shipped."""
     table = _FakeSentinelTable()
-    today = datetime.now(timezone.utc).date()
-    opened_on = today - timedelta(days=30)
+    today: Final = _SCHEDULED_NOW.date()
+    opened_on: Final = today - timedelta(days=30)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(opened_on))], table)
     alert = AsyncMock()
 
-    await run_scheduled_ptu_rollup(prisma, alert=alert)
+    await run_scheduled_ptu_rollup(prisma, alert=alert, clock=lambda: _SCHEDULED_NOW)
 
     expected = [(opened_on + timedelta(days=offset)).isoformat() for offset in range(30)]
     assert _priced_dates(table) == expected
     alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_rollup_uses_one_day_across_the_midnight_boundary():
+    table: Final = _FakeSentinelTable()
+    clock: Final = iter(
+        (
+            datetime(2026, 1, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+            datetime(2026, 2, 1, 0, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    ).__next__
+    prisma: Final = _prisma_for([_windowed_row(effective_from=_midnight(date(2026, 1, 27)))], table)
+
+    result: Final = await run_scheduled_ptu_rollup(prisma, clock=clock)
+
+    assert result is not None
+    assert result.day == date(2026, 1, 30)
+    assert _priced_dates(table) == ["2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30"]
 
 
 # --- R8: a rename must not re-price history under the new name ----------------
@@ -1572,6 +1662,70 @@ async def test_backfill_does_not_double_price_a_day_after_a_rename():
     assert len(priced_on) == 1, f"day {_day(-1)} carries two charges: {priced_on}"
     assert result.rows_written == 1
     assert table.upsert_keys == [("t", _day(0).isoformat(), PTU_SENTINEL_API_KEY, "dep-1")]
+
+
+@pytest.mark.asyncio
+async def test_backfill_does_not_bill_a_priced_day_again_after_its_shares_moved_to_other_teams():
+    """Days already billed to the team that held the deployment stay its only charge once the
+    shares move, and only the unpriced day is billed to the teams holding the shares now."""
+    table = _FakeSentinelTable()
+    for offset in (-2, -1):
+        table.seed("team-b", _day(offset), "shared", 1200.0)
+    prisma = _prisma_for(
+        [
+            _model_row(
+                model_id="shared",
+                model_info={
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_shares": {"team-a": 30, "team-c": 20},
+                    "ptu_effective_from": _midnight(_day(-2)).isoformat(),
+                },
+            )
+        ],
+        table,
+    )
+
+    result = await run_ptu_flat_cost_backfill(prisma, today=TODAY)
+
+    assert sorted(table.upsert_keys) == [
+        ("team-a", _day(0).isoformat(), PTU_SENTINEL_API_KEY, "shared"),
+        ("team-c", _day(0).isoformat(), PTU_SENTINEL_API_KEY, "shared"),
+    ]
+    assert result.rows_written == 2
+
+
+@pytest.mark.asyncio
+async def test_a_split_deployment_day_whose_write_fails_for_one_team_is_billed_to_every_team_later():
+    """A day holding only some teams' rows would read as priced to the backfill, so the teams
+    whose rows were lost would never be billed for it."""
+    table = _FakeSentinelTable(failing_team="team-c")
+    prisma = _prisma_for(
+        [
+            _model_row(
+                model_id="shared",
+                model_info={
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_shares": {"team-a": 30, "team-c": 20},
+                    "ptu_effective_from": _midnight(_day(0)).isoformat(),
+                },
+            )
+        ],
+        table,
+    )
+
+    rollup = await run_ptu_flat_cost_rollup(prisma, target_date=_day(0))
+
+    assert table.rows == {}
+    assert (rollup.rows_written, rollup.rows_failed) == (0, 2)
+
+    table.failing_team = None
+    backfill = await run_ptu_flat_cost_backfill(prisma, today=TODAY)
+
+    assert sorted(team for team, *_ in table.rows) == ["team-a", "team-c"]
+    assert sum(row["ptu_flat_cost"] for row in table.rows.values()) == pytest.approx(50 * 24)
+    assert backfill.rows_written == 2
 
 
 @pytest.mark.asyncio
@@ -1724,6 +1878,38 @@ async def test_an_unguarded_run_writes_but_does_not_prune():
     assert table.delete_many_calls == []
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") in table.rows
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-live") in table.rows
+
+
+@pytest.mark.asyncio
+async def test_an_unguarded_rerun_after_a_share_move_bills_the_day_to_the_new_holders_alone():
+    """Without the lock the prune is skipped, so the old holder's row has to go with the day's own
+    write, or rerunning a priced day after its shares moved bills it to the old and new holders."""
+    table = _FakeSentinelTable()
+    table.seed("team-a", DAY, "shared", 720.0)
+    table.seed("team-b", DAY, "shared", 480.0)
+    table.seed("team-b", DAY, "other", 240.0)
+    prisma = _prisma_for(
+        [
+            _model_row(
+                model_id="shared",
+                model_info={
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_shares": {"team-a": 30, "team-c": 20},
+                    "ptu_effective_from": _midnight(DAY).isoformat(),
+                },
+            )
+        ],
+        table,
+    )
+
+    await run_scheduled_ptu_rollup(prisma, target_date=DAY)
+
+    assert {key[0]: row["ptu_flat_cost"] for key, row in table.rows.items() if key[3] == "shared"} == {
+        "team-a": pytest.approx(720.0),
+        "team-c": pytest.approx(480.0),
+    }
+    assert ("team-b", DAY.isoformat(), PTU_SENTINEL_API_KEY, "other") in table.rows
 
 
 @pytest.mark.asyncio
@@ -2066,19 +2252,73 @@ async def test_the_catch_up_pass_reaches_a_config_declared_deployment():
     """The catch-up shares the loader, so config deployments join it without being wired in.
     That is what prices the elapsed days of a reservation declared before today."""
     table = _FakeSentinelTable()
-    now = datetime.now(timezone.utc)
-    started = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+    now: Final = _SCHEDULED_NOW
+    started: Final = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
     entry = _router_entry(
         model_id="cfg-back",
         model_info={"ptu_count": 100, "cost_per_ptu_per_hour": 0.02, "team_id": "t", "ptu_effective_from": started},
     )
 
     await run_scheduled_ptu_rollup(
-        _prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True), router=_router_holding(entry)
+        _prisma_for([], table),
+        pod_lock_manager=_pod_lock(acquired=True),
+        router=_router_holding(entry),
+        clock=lambda: _SCHEDULED_NOW,
     )
 
     charged = sorted(day for (_, day, _, model) in table.rows if model == "cfg-back")
-    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    yesterday: Final = (now.date() - timedelta(days=1)).isoformat()
     assert len(charged) == 3, charged
     assert charged[-1] == yesterday
     assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())
+
+
+# --- a deployment split into per-team PTU shares -----------------------------------------
+
+_SHARED_PTU = {"ptu_count": 50, "cost_per_ptu_per_hour": 1.0, "ptu_shares": {"team-b": 20, "team-a": 30}}
+
+
+def test_a_shared_deployment_parses_to_one_holding_per_team_carrying_its_share():
+    parsed = _parse_ptu_models(_model_row(model_info=dict(_SHARED_PTU)))
+
+    assert [(m.team_id, m.ptu_count) for m in parsed] == [("team-a", 30), ("team-b", 20)]
+    assert {m.model_id for m in parsed} == {"m1"}
+    assert {m.model_name for m in parsed} == {"gpt-4o-mini-ptu"}
+    assert {m.cost_per_ptu_per_hour for m in parsed} == {1.0}
+
+
+def test_a_shared_deployment_whose_shares_do_not_add_up_is_not_priced():
+    assert _parse_ptu_models(_model_row(model_info={**_SHARED_PTU, "ptu_shares": {"team-a": 30}})) == ()
+
+
+@pytest.mark.asyncio
+async def test_rollup_splits_a_shared_deployments_flat_cost_by_share():
+    """50 PTUs at $1/hour for a day is $1,200; team-a's 30 PTUs are $720 of it and team-b's
+    20 are $480, each keyed on the same deployment id and public name."""
+    prisma, table = _prisma_with_models([_model_row(model_info=dict(_SHARED_PTU))])
+
+    result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
+
+    assert result.rows_written == 2
+    assert result.models_processed == 1
+    created = {
+        call.kwargs["data"]["create"]["team_id"]: call.kwargs["data"]["create"] for call in table.upsert.await_args_list
+    }
+    assert created["team-a"]["ptu_flat_cost"] == pytest.approx(720.0)
+    assert created["team-b"]["ptu_flat_cost"] == pytest.approx(480.0)
+    assert sum(row["ptu_flat_cost"] for row in created.values()) == pytest.approx(50 * 1.0 * 24)
+    assert {row["model"] for row in created.values()} == {"m1"}
+    assert {row["model_group"] for row in created.values()} == {"gpt-4o-mini-ptu"}
+    assert {row["api_key"] for row in created.values()} == {PTU_SENTINEL_API_KEY}
+
+
+@pytest.mark.asyncio
+async def test_a_shared_deployment_with_a_closed_window_is_reported_lapsed_once():
+    closed = {**_SHARED_PTU, "ptu_effective_from": "2020-01-01T00:00:00Z", "ptu_effective_to": "2020-02-01T00:00:00Z"}
+    prisma, _ = _prisma_with_models([_model_row(model_id="dep-shared", model_info=closed)])
+    alert = AsyncMock()
+
+    result = await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    assert result.lapsed == ("gpt-4o-mini-ptu",)
+    alert.assert_awaited_once()

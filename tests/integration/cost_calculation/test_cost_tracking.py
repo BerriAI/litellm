@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import struct
-import time
 import uuid
 import wave
 import zlib
@@ -16,10 +15,11 @@ from typing import Final, cast
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, string_value
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, string_value
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact, assert_recount
 from integration.cost_calculation.conftest import (
+    CostRow,
     approx_equal,
     poll_cost_row,
     poll_failure_row,
@@ -28,14 +28,14 @@ from integration.cost_calculation.conftest import (
     read_rows_now,
     register_scenario_deployment,
 )
+from integration.cost_calculation.catalog import STANDALONE_CASES, data_errors
+from integration.cost_calculation.stream_parity.runner import flush_spend_logs
 from integration.cost_calculation.cost_tracking_case import (
-    CASES,
     BinaryResponse,
     CostTrackingTestCase,
     ExactExpected,
     FailureExpected,
     RecountExpected,
-    data_errors,
 )
 from pydantic import JsonValue
 
@@ -43,10 +43,22 @@ if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
 
 
-_CASES: Final = tuple(
-    pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name)
-    for case in CASES
-)
+def _settled_rows(scenario: Scenario, gateway: Gateway, key: str, count: int) -> tuple[CostRow, ...]:
+    """Every row the key will ever get, read after a flush request so a late duplicate cannot hide behind `>= count`."""
+    flush_identity: Final = flush_spend_logs(scenario, gateway, key)
+    settled: Final = tuple(row for row in read_rows_now(key) if row.model_id != flush_identity)
+    assert len(settled) == count, f"expected exactly {count} SpendLogs rows for the key, got {len(settled)}: {settled}"
+    return settled
+
+
+def _marks(case: CostTrackingTestCase) -> tuple[pytest.MarkDecorator, ...]:
+    bug: Final = (
+        (pytest.mark.xfail(strict=True, reason=f"BUG: {case.known_bug}"),) if case.known_bug is not None else ()
+    )
+    return (pytest.mark.covers(case.covers), *bug)
+
+
+_CASES: Final = tuple(pytest.param(case, marks=_marks(case), id=case.name) for case in STANDALONE_CASES)
 
 
 def _wav_bytes(seconds: float) -> bytes:
@@ -98,9 +110,9 @@ def _assert_stream_has_no_error(response_text: str) -> None:
         if payload == "[DONE]":
             continue
         parsed = JSON_OBJECT.validate_json(payload)
-        assert (
-            "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}
-        ), f"stream carried an error event: {parsed}"
+        assert "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}, (
+            f"stream carried an error event: {parsed}"
+        )
 
 
 def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
@@ -132,11 +144,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
     with gateway.scenario() as scenario:
         expected: Final = case.expected
         team_id: Final = scenario.team() if isinstance(expected, ExactExpected) and expected.rollups else None
-        user_id: Final = (
-            scenario.user(team_id=team_id)
-            if team_id is not None
-            else None
-        )
+        user_id: Final = scenario.user(team_id=team_id) if team_id is not None else None
         key: Final = (
             scenario.key(team_id=team_id, user_id=user_id)
             if team_id is not None and user_id is not None
@@ -145,9 +153,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         passthrough_provider: Final = case.passthrough_provider
         scenario_id: Final = f"sc-{marker}-{sha256(key.encode()).hexdigest()[:12]}"
         scenario_handle: Final = (
-            register_scenario(scenario_id, case.response)
-            if passthrough_provider in {"gemini", "anthropic"}
-            else None
+            register_scenario(scenario_id, case.response) if passthrough_provider in {"gemini", "anthropic"} else None
         )
         if scenario_handle is not None:
             scenario.cleanups.callback(delete_scenario, scenario_handle)
@@ -171,13 +177,17 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         model_name: Final = (
             case.model
             if passthrough_provider in {"gemini", "anthropic"}
-            else deployment.model_name if deployment is not None else None
+            else deployment.model_name
+            if deployment is not None
+            else None
         )
         assert model_name is not None
         request_model: Final = (
             case.model.rsplit("/", 1)[-1]
             if passthrough_provider in {"gemini", "anthropic"}
-            else fallback_deployment.model_name if fallback_deployment is not None else model_name
+            else fallback_deployment.model_name
+            if fallback_deployment is not None
+            else model_name
         )
         base_request_values: Final = (
             _replace_model(case.request, request_model)
@@ -185,26 +195,18 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             else {**case.request, "model": model_name}
         )
         end_user_id: Final = (
-            f"end-user-{uuid.uuid4()}"
-            if isinstance(expected, ExactExpected) and expected.rollups
-            else None
+            f"end-user-{uuid.uuid4()}" if isinstance(expected, ExactExpected) and expected.rollups else None
         )
         request_headers: Final = (
             {
                 "x-pass-x-scripted-scenario": scenario_id,
-                **(
-                    {"x-goog-api-key": key}
-                    if passthrough_provider == "gemini"
-                    else {}
-                ),
+                **({"x-goog-api-key": key} if passthrough_provider == "gemini" else {}),
             }
             if passthrough_provider is not None
             else {}
         )
         request_path: Final = (
-            case.endpoint.replace("$MODEL", request_model)
-            if passthrough_provider is not None
-            else case.endpoint
+            case.endpoint.replace("$MODEL", request_model) if passthrough_provider is not None else case.endpoint
         )
         prior_response_id: Final = (
             _prime_prior_response(gateway, request_path, base_request_values, key)
@@ -219,11 +221,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                     if fallback_deployment is not None
                     else {}
                 ),
-                **(
-                    {"user": end_user_id, "cache": {"no-cache": True}}
-                    if end_user_id is not None
-                    else {}
-                ),
+                **({"user": end_user_id, "cache": {"no-cache": True}} if end_user_id is not None else {}),
                 **({"previous_response_id": prior_response_id} if prior_response_id is not None else {}),
             }
         )
@@ -245,6 +243,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert isinstance(expected, RecountExpected)
             assert row.status == "success", f"{case.name}: disconnect row status was {row.status}"
             assert_recount(case.name, expected, row)
+            _settled_rows(scenario, gateway, key, 1)
             return
         responses: Final = tuple(
             (
@@ -266,23 +265,33 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             )
             row: Final = poll_failure_row(key)
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
+            _settled_rows(scenario, gateway, key, 1)
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
+        if case.upstream_body is not None:
+            observed: Final = JSON_OBJECT.validate_json(
+                httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
+            )
+            upstream_bodies: Final = tuple(
+                value.get("body")
+                for value in observed["requests"]
+                if isinstance(value, dict)
+                and value.get("method") == "POST"
+                and str(value.get("path", "")).startswith(f"/{scenario_id}/")
+            )
+            assert upstream_bodies == (case.upstream_body,), (
+                f"{case.name}: upstream received {upstream_bodies}, expected exactly {case.upstream_body}"
+            )
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
-        rows: Final = poll_rows(key, len(responses) + (prior_response_id is not None))
+        row_count: Final = len(responses) + (prior_response_id is not None)
+        rows: Final = poll_rows(key, row_count)
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
             assert_recount(case.name, expected, row)
+            _settled_rows(scenario, gateway, key, row_count)
             return
         assert isinstance(expected, ExactExpected)
-        if fallback_deployment is not None:
-            assert deployment is not None
-            time.sleep(3)
-            settled_rows: Final = read_rows_now(key)
-            assert len(settled_rows) == 1
-            assert settled_rows[0].status == "success"
-            assert settled_rows[0].model_id == deployment.identity
         if isinstance(case.response, BinaryResponse):
             header: Final = response.headers.get("x-litellm-response-cost")
             if header is not None:
@@ -326,3 +335,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert rollups.daily_team.prompt_tokens == expected.prompt_tokens * 3
             assert rollups.daily_team.completion_tokens == expected.completion_tokens * 3
             assert rollups.daily_team.api_requests == 3
+        settled: Final = _settled_rows(scenario, gateway, key, row_count)
+        if fallback_deployment is not None:
+            assert deployment is not None
+            assert settled[0].status == "success"
+            assert settled[0].model_id == deployment.identity

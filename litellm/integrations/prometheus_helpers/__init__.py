@@ -6,18 +6,26 @@ Helpers for the Prometheus integration (extracted to keep ``prometheus.py`` smal
 
 from __future__ import annotations
 
-from typing import Any, Final, cast
+from typing import Final, Literal, Protocol, cast
 
 from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
-    _sanitize_prometheus_label_name,
-    _sanitize_prometheus_label_value,
+    sanitize_prometheus_label_name,
+    sanitize_prometheus_label_value,
 )
 
 _get_end_user_id_for_cost_tracking = None
 
 
-def _get_cached_end_user_id_for_cost_tracking():
+class _EndUserIdGetter(Protocol):
+    def __call__(
+        self,
+        litellm_params: dict[str, object],
+        service_type: Literal["litellm_logging", "prometheus"] = "litellm_logging",
+    ) -> str | None: ...
+
+
+def get_cached_end_user_id_for_cost_tracking() -> _EndUserIdGetter:
     """
     Get cached get_end_user_id_for_cost_tracking function.
     Lazy imports on first call to avoid loading utils.py at import time (60MB saved).
@@ -31,6 +39,9 @@ def _get_cached_end_user_id_for_cost_tracking():
     return _get_end_user_id_for_cost_tracking
 
 
+_get_cached_end_user_id_for_cost_tracking = get_cached_end_user_id_for_cost_tracking
+
+
 class PrometheusLabelFactoryContext:
     """
     Precomputes per-request label inputs so prometheus_label_factory can subset
@@ -38,11 +49,11 @@ class PrometheusLabelFactoryContext:
     """
 
     __slots__ = (
-        "_custom_by_sanitized_key",
         "_resolved_end_user",
-        "_sanitized_enum",
-        "_tag_labels",
+        "custom_by_sanitized_key",
         "enum_values",
+        "sanitized_enum",
+        "tag_labels",
     )
 
     _END_USER_NOT_COMPUTED = object()
@@ -50,27 +61,51 @@ class PrometheusLabelFactoryContext:
     def __init__(self, enum_values: UserAPIKeyLabelValues) -> None:
         self.enum_values = enum_values
         enum_dict: Final = enum_values.model_dump()
-        self._sanitized_enum: dict[str, str | None] = {
-            k: _sanitize_prometheus_label_value(v) for k, v in enum_dict.items()
+        self.sanitized_enum: dict[str, str | None] = {
+            k: sanitize_prometheus_label_value(v) for k, v in enum_dict.items()
         }
-        self._custom_by_sanitized_key: dict[str, str | None] = {}
+        self.custom_by_sanitized_key: dict[str, str | None] = {}
         if enum_values.custom_metadata_labels is not None:
             for key, value in enum_values.custom_metadata_labels.items():
-                sk = _sanitize_prometheus_label_name(key)
-                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(value)
-        self._tag_labels: dict[str, str | None] = {}
+                sk = sanitize_prometheus_label_name(key)
+                self.custom_by_sanitized_key[sk] = sanitize_prometheus_label_value(value)
+        self.tag_labels: dict[str, str | None] = {}
         if enum_values.tags is not None:
             # Late import avoids circular import: ``prometheus`` imports this module.
             from litellm.integrations.prometheus import get_custom_labels_from_tags
 
             for k, v in get_custom_labels_from_tags(enum_values.tags).items():
-                self._tag_labels[k] = _sanitize_prometheus_label_value(v)
+                self.tag_labels[k] = sanitize_prometheus_label_value(v)
         # Use a dedicated sentinel so `None` can be cached as a computed result.
-        self._resolved_end_user: Any = self._END_USER_NOT_COMPUTED
+        self._resolved_end_user: object = self._END_USER_NOT_COMPUTED
+
+    @property
+    def _custom_by_sanitized_key(self) -> dict[str, str | None]:
+        return self.custom_by_sanitized_key
+
+    @_custom_by_sanitized_key.setter
+    def _custom_by_sanitized_key(self, value: dict[str, str | None]) -> None:
+        self.custom_by_sanitized_key = value
+
+    @property
+    def _sanitized_enum(self) -> dict[str, str | None]:
+        return self.sanitized_enum
+
+    @_sanitized_enum.setter
+    def _sanitized_enum(self, value: dict[str, str | None]) -> None:
+        self.sanitized_enum = value
+
+    @property
+    def _tag_labels(self) -> dict[str, str | None]:
+        return self.tag_labels
+
+    @_tag_labels.setter
+    def _tag_labels(self, value: dict[str, str | None]) -> None:
+        self.tag_labels = value
 
     def get_resolved_end_user(self) -> str | None:
         if self._resolved_end_user is self._END_USER_NOT_COMPUTED:
-            fn: Final = _get_cached_end_user_id_for_cost_tracking()
+            fn: Final = get_cached_end_user_id_for_cost_tracking()
             self._resolved_end_user = fn(
                 litellm_params={"user_api_key_end_user_id": self.enum_values.end_user},
                 service_type="prometheus",

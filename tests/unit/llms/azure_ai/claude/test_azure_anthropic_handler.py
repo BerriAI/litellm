@@ -9,7 +9,10 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
+import litellm
 from litellm.llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from litellm.types.utils import ModelResponse
 
@@ -158,12 +161,10 @@ class TestAzureAnthropicChatCompletion:
         mock_make_sync_call.assert_called_once()
         assert result is not None
 
-    @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
+    @patch("litellm.llms.custom_httpx.http_handler.get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_get_client
-    ):
+    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -248,3 +249,26 @@ class TestAzureAnthropicChatCompletion:
         mock_get_client.assert_called_once_with(params={"timeout": timeout})
         assert mock_client.post.call_args.kwargs["timeout"] == timeout
         assert result is not None
+
+
+@respx.mock
+def test_completion_surfaces_the_status_and_headers_of_a_rejected_request():
+    respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens too large"}},
+            headers={"x-request-id": "req-1"},
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.completion(
+            model="azure_ai/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://example-resource.services.ai.azure.com/anthropic",
+            api_key="azure-test-key",
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.litellm_response_headers["x-request-id"] == "req-1"
+    assert "max_tokens too large" in str(rejected.value)

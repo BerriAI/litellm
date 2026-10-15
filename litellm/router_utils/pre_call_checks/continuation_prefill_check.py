@@ -1,6 +1,7 @@
 """Keeps a mid-stream continuation on deployments whose model supports assistant prefill."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
+from itertools import accumulate
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -8,11 +9,10 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.rules import Rules
+from litellm.router_utils.common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponseStream
 from litellm.utils import supports_assistant_prefill
-
-MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 
 
 class _ContinuationMarker:
@@ -68,21 +68,90 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
 def _delta_text(chunk: ModelResponseStream) -> str:
     if not chunk.choices:
         return ""
-    delta: Final = chunk.choices[0].delta
-    content: Final = delta.content if delta is not None else None
+    content: Final = chunk.choices[0].delta.content
     return content if isinstance(content, str) else ""
 
 
-class ContinuationOutputRules:
-    """Runs litellm.post_call_rules over the primary's text plus the continuation's, since each stream wrapper only sees its own fragment."""
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
-    def __init__(self, emitted_text: str, model: str) -> None:
+
+def _prefill_text(prefill_message: Mapping[str, object]) -> str:
+    content: Final = prefill_message.get("content")
+    if isinstance(content, str):
+        return content
+    try:
+        blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
+    except ValidationError:
+        return ""
+    return "".join(
+        text for block in blocks if block.get("type") == "text" and isinstance(text := block.get("text"), str)
+    )
+
+
+def _without_leading_text(chunk: ModelResponseStream, count: int) -> ModelResponseStream:
+    if count <= 0:
+        return chunk
+    choice: Final = chunk.choices[0]
+    delta: Final = choice.delta.model_copy(update={"content": _delta_text(chunk)[count:]})
+    return chunk.model_copy(update={"choices": [choice.model_copy(update={"delta": delta}), *chunk.choices[1:]]})
+
+
+def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> tuple[ModelResponseStream, ...]:
+    lengths: Final = tuple(len(_delta_text(chunk)) for chunk in chunks)
+    offsets: Final = tuple(accumulate(lengths, initial=0))[:-1]
+    return tuple(
+        _without_leading_text(chunk, min(length, count - offset))
+        for chunk, offset, length in zip(chunks, offsets, lengths, strict=True)
+    )
+
+
+class ContinuationOutput:
+    """Splices a fallback's continuation onto the text the client already received. Drops a leading echo of the
+    prefill, since some providers (Mistral) return the prefix inside the completion, and runs litellm.post_call_rules
+    over the joined text, since each stream wrapper only sees its own fragment."""
+
+    def __init__(self, emitted_text: str, prefill_message: Mapping[str, object], model: str) -> None:
         self._text = emitted_text
+        self._prefill_text: Final = _prefill_text(prefill_message)
         self._model: Final = model
         self._rules: Final = Rules()
+        self._held: tuple[ModelResponseStream, ...] = ()
+        self._echo_settled = not self._prefill_text
 
-    def observe(self, chunk: ModelResponseStream) -> None:
+    async def splice(self, stream: AsyncIterable[object]) -> AsyncIterator[object]:
+        async for item in stream:
+            if not isinstance(item, ModelResponseStream):
+                yield item
+                continue
+            for released in self._observed(self._released(item)):
+                yield released
+        for released in self._observed(self._flushed()):
+            yield released
+
+    def _flushed(self) -> tuple[ModelResponseStream, ...]:
+        held: Final = self._held
+        self._held = ()
+        self._echo_settled = True
+        return held
+
+    def _released(self, chunk: ModelResponseStream) -> tuple[ModelResponseStream, ...]:
+        if self._echo_settled:
+            return (chunk,)
+        held: Final = (*self._held, chunk)
+        text: Final = "".join(_delta_text(held_chunk) for held_chunk in held)
+        if len(text) < len(self._prefill_text) and self._prefill_text.startswith(text):
+            self._held = held
+            return ()
+        self._held = ()
+        self._echo_settled = True
+        if not text.startswith(self._prefill_text):
+            return held
+        return _drop_leading_text(held, len(self._prefill_text))
+
+    def _observed(self, chunks: tuple[ModelResponseStream, ...]) -> tuple[ModelResponseStream, ...]:
         if not litellm.post_call_rules:
-            return
-        self._text += _delta_text(chunk)
-        self._rules.post_call_rules(input=self._text, model=self._model)
+            return chunks
+        for chunk in chunks:
+            self._text += _delta_text(chunk)
+            self._rules.post_call_rules(input=self._text, model=self._model)
+        return chunks

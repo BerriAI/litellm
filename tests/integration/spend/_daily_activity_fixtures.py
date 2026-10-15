@@ -317,3 +317,76 @@ def seed_daily_team_unassigned_fixture(
             rows,
         )
     connection.commit()
+
+
+def seed_daily_team_exclusion_fixture(connection: psycopg.Connection, *, schema: str) -> None:
+    team_table: Final = sql.Identifier(schema, "LiteLLM_DailyTeamSpend")
+    rows: Final = (
+        ("exclusion-null", None, "key-excluded-null", 3.0),
+        ("exclusion-empty", "", "key-excluded-empty", 7.0),
+        ("exclusion-dashboard", "litellm-dashboard", "key-excluded-dashboard", 11.0),
+        ("exclusion-normal", "team-normal", "key-excluded-normal", 13.0),
+    )
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            sql.SQL("""
+            INSERT INTO {}
+                (id, team_id, date, api_key, model, model_group, custom_llm_provider,
+                 mcp_namespaced_tool_name, endpoint, prompt_tokens, spend, api_requests, updated_at)
+            VALUES (%s, %s, '2026-06-04', %s, 'model-a', '', 'provider-a', NULL, '/v1/chat/completions',
+                    1, %s, 1, '2026-06-04 12:00:00')
+            """).format(team_table),
+            rows,
+        )
+    connection.commit()
+
+
+_USER_PAGE_SPENDS: Final = (
+    ("user-zeta", 30.0),
+    ("user-alpha", 20.0),
+    ("user-beta", 20.0),
+    ("", 40.0),
+    (None, 5.0),
+    ("user-other", 10.0),
+)
+
+
+def seed_daily_user_page_fixture(connection: psycopg.Connection, *, schema: str) -> None:
+    daily_user_table: Final = sql.Identifier(schema, "LiteLLM_DailyUserSpend")
+    rows: Final = tuple(
+        (
+            f"user-page-{index}",
+            user_id,
+            "2026-06-01",
+            f"user-page-key-{index}",
+            "model-a",
+            "",
+            "provider-a",
+            None,
+            "/v1/chat/completions",
+            10,
+            5,
+            0,
+            0,
+            spend,
+            2,
+            2,
+            0,
+            "2026-06-01 12:00:00",
+        )
+        for index, (user_id, spend) in enumerate(_USER_PAGE_SPENDS)
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(sql.SQL("DELETE FROM {}").format(daily_user_table))
+        cursor.executemany(
+            sql.SQL("""
+            INSERT INTO {}
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 mcp_namespaced_tool_name, endpoint, prompt_tokens, completion_tokens,
+                 cache_read_input_tokens, cache_creation_input_tokens, spend, api_requests,
+                 successful_requests, failed_requests, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """).format(daily_user_table),
+            rows,
+        )
+    connection.commit()

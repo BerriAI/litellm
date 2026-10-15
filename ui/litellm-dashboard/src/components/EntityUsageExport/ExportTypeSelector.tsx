@@ -1,15 +1,15 @@
 import React from "react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import type { ExportScope, EntityType } from "./types";
+import type { ExportType, EntityType } from "./types";
 
 interface ExportTypeSelectorProps {
-  value: ExportScope;
-  onChange: (value: ExportScope) => void;
+  value: ExportType;
+  onChange: (value: ExportType) => void;
   entityType: EntityType;
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
-  const allScopes: { value: ExportScope; title: string; description: string }[] = [
+  const allScopes: { value: ExportType; title: string; description: string }[] = [
     {
       value: "daily",
       title: `Day-by-day breakdown by ${entityType}`,
@@ -36,7 +36,7 @@ const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange
   return (
     <div>
       <label className="text-sm font-medium text-foreground block mb-2">Export type</label>
-      <RadioGroup value={value} onValueChange={(next) => onChange(next as ExportScope)} className="gap-2">
+      <RadioGroup value={value} onValueChange={(next) => onChange(next as ExportType)} className="gap-2">
         {scopes.map((scope) => (
           <label
             key={scope.value}

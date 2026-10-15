@@ -52,7 +52,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-from .cisco_ai_defense_mcp import _CiscoAIDefenseMcpMixin
+from .cisco_ai_defense_mcp import (  # noqa: F401  # legacy module exports
+    CiscoAIDefenseMcpMixin,
+    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
@@ -116,7 +119,7 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
-class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
+class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     """
     Cisco AI Defense guardrail integration.
 
@@ -949,7 +952,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _finalize_inspection(
         self,
-        inspect_response: dict[str, Any],
+        inspect_response: dict[str, object],
         request_data: dict,
         context: _ScanContext,
         start_time: datetime,
@@ -1189,7 +1192,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return any(key in payload for key in cls._DECISION_FIELDS)
 
     @classmethod
-    def _unwrap_verdict_envelope(cls, inspect_response: dict[str, Any]) -> dict[str, Any]:
+    def _unwrap_verdict_envelope(cls, inspect_response: dict[str, object]) -> dict[str, Any]:
         """Return the dict that actually holds is_safe / action / rules.
 
         Cisco AI Defense returns the verdict at different nesting depths

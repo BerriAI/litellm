@@ -2,12 +2,12 @@
 # 1. Generate a Key, and use it to make a call
 
 
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from dotenv import load_dotenv
+from pydantic import JsonValue
 
 load_dotenv()
 
@@ -18,10 +18,10 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm import Router
-from litellm._logging import verbose_proxy_logger
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -29,7 +29,6 @@ from litellm.proxy.anthropic_endpoints.endpoints import (
 from litellm.proxy.proxy_server import token_counter
 from litellm.types.utils import TokenCountResponse
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 
 @pytest.mark.asyncio
@@ -170,8 +169,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
     # Patch the _read_request_body function
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=False):
@@ -210,7 +209,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     finally:
         # Restore original functions
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -244,8 +243,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     # Patch the _read_request_body function
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=True):
@@ -284,7 +283,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     finally:
         # Restore original functions
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -311,20 +310,16 @@ async def test_internal_token_counter_anthropic_provider_detection():
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
     # Test with is_direct_request=False (simulating call from Anthropic endpoint)
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="claude-test",
-            messages=[{"role": "user", "content": "hello"}],
-        ),
-        call_endpoint=True,
-    )
-
-    print("Anthropic provider test response:", response)
-
-    # Verify response structure
-    assert response.request_model == "claude-test"
-    assert response.model_used == "claude-3-sonnet-20240229"
-    assert response.total_tokens > 0
+    # The provider counter is engaged: its API error surfaces instead of a local count
+    with pytest.raises(ProxyException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="claude-test",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            call_endpoint=True,
+        )
+    assert exc_info.value.type == "token_counting_error"
 
     # Test with non-Anthropic provider
     llm_router = Router(
@@ -384,8 +379,8 @@ async def test_anthropic_endpoint_error_handling():
 
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     try:
         # Should raise HTTPException for missing model
@@ -398,7 +393,7 @@ async def test_anthropic_endpoint_error_handling():
         print("✅ Error handling test passed!")
 
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
 
 
 @pytest.mark.asyncio
@@ -756,41 +751,45 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         )
 
 
+class _FailingRuntimeHandler(BedrockCountTokensHandler):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def handle_count_tokens_request(
+        self,
+        request_data: dict[str, object],
+        litellm_params: dict[str, object],
+        resolved_model: str,
+        client: AsyncHTTPHandler | None = None,
+    ) -> dict[str, JsonValue]:
+        raise self._error
+
+
 @pytest.mark.asyncio
 async def test_bedrock_token_counter_error_propagation_bedrock_error():
     """
     Test that BedrockTokenCounter properly returns error response when BedrockError is raised.
     Verifies that the status code and error message are preserved.
     """
-    counter = BedrockTokenCounter()
+    counter = BedrockTokenCounter(
+        runtime_handler=_FailingRuntimeHandler(BedrockError(status_code=429, message="Rate limit exceeded"))
+    )
 
-    # Mock the handler to raise BedrockError with specific status code
-    with patch.object(
-        counter, "count_tokens", wraps=counter.count_tokens
-    ) as mock_count:
-        # We need to patch at the handler level
-        with patch(
-            "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
-        ) as MockHandler:
-            mock_handler_instance = MockHandler.return_value
-            mock_handler_instance.handle_count_tokens_request = AsyncMock(
-                side_effect=BedrockError(status_code=429, message="Rate limit exceeded")
-            )
+    result = await counter.count_tokens(
+        model_to_use="anthropic.claude-3-sonnet",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        deployment={"litellm_params": {}},
+        request_model="bedrock/anthropic.claude-3-sonnet",
+    )
 
-            result = await counter.count_tokens(
-                model_to_use="anthropic.claude-3-sonnet",
-                messages=[{"role": "user", "content": "hello"}],
-                contents=None,
-                deployment={"litellm_params": {}},
-                request_model="bedrock/anthropic.claude-3-sonnet",
-            )
-
-            assert result is not None
-            assert result.error is True
-            assert result.status_code == 429
-            assert "Rate limit exceeded" in result.error_message
-            assert result.tokenizer_type == "bedrock_api"
-            assert result.total_tokens == 0
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 429
+    assert "Rate limit exceeded" in result.error_message
+    assert result.tokenizer_type == "bedrock_api"
+    assert result.total_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -798,28 +797,20 @@ async def test_bedrock_token_counter_error_propagation_generic_exception():
     """
     Test that BedrockTokenCounter returns error response with 500 status for generic exceptions.
     """
-    counter = BedrockTokenCounter()
+    counter = BedrockTokenCounter(runtime_handler=_FailingRuntimeHandler(Exception("Unexpected error")))
 
-    with patch(
-        "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
-    ) as MockHandler:
-        mock_handler_instance = MockHandler.return_value
-        mock_handler_instance.handle_count_tokens_request = AsyncMock(
-            side_effect=Exception("Unexpected error")
-        )
+    result = await counter.count_tokens(
+        model_to_use="anthropic.claude-3-sonnet",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        deployment={"litellm_params": {}},
+        request_model="bedrock/anthropic.claude-3-sonnet",
+    )
 
-        result = await counter.count_tokens(
-            model_to_use="anthropic.claude-3-sonnet",
-            messages=[{"role": "user", "content": "hello"}],
-            contents=None,
-            deployment={"litellm_params": {}},
-            request_model="bedrock/anthropic.claude-3-sonnet",
-        )
-
-        assert result is not None
-        assert result.error is True
-        assert result.status_code == 500
-        assert "Unexpected error" in result.error_message
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 500
+    assert "Unexpected error" in result.error_message
 
 
 @pytest.mark.asyncio
@@ -1023,10 +1014,10 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
 
 
 @pytest.mark.asyncio
-async def test_proxy_token_counter_error_falls_back_when_enabled():
+async def test_proxy_token_counter_error_raises_when_enabled():
     """
-    Test that proxy token_counter falls back to local tokenizer when disable_token_counter=False
-    and provider returns an error response.
+    Test that proxy token_counter raises ProxyException when disable_token_counter=False
+    and the provider returns an error response, never falling back to the local tokenizer.
     """
     # Create error response
     error_response = TokenCountResponse(
@@ -1074,19 +1065,20 @@ async def test_proxy_token_counter_error_falls_back_when_enabled():
             mock_get_provider_token_counter
         )
 
-        # Should not raise, should fall back to local tokenizer
-        result = await token_counter(
-            request=TokenCountRequest(
-                model="claude-bedrock",
-                messages=[{"role": "user", "content": "hello"}],
-            ),
-            call_endpoint=True,
-        )
+        with patch("litellm.token_counter") as mock_local_counter:
+            with pytest.raises(ProxyException) as exc_info:
+                await token_counter(
+                    request=TokenCountRequest(
+                        model="claude-bedrock",
+                        messages=[{"role": "user", "content": "hello"}],
+                    ),
+                    call_endpoint=True,
+                )
 
-        # Should have used the fallback tokenizer
-        assert result.error is False
-        assert result.total_tokens > 0
-        assert result.tokenizer_type != "bedrock_api"
+        assert exc_info.value.code == "429"
+        assert "Rate limit exceeded" in exc_info.value.message
+        assert exc_info.value.type == "token_counting_error"
+        mock_local_counter.assert_not_called()
     finally:
         litellm.disable_token_counter = original_disable
         litellm.proxy.proxy_server._get_provider_token_counter = (
@@ -1114,8 +1106,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1143,7 +1135,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         assert detail["error"]["type"] == "invalid_request_error"
         assert detail["error"]["message"] == "Input is too long for requested model."
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -1166,8 +1158,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1193,7 +1185,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         assert detail["error"]["type"] == "permission_error"
         assert detail["error"]["message"] == "Bearer Token has expired"
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -1216,8 +1208,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1243,5 +1235,5 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         assert detail["error"]["type"] == "rate_limit_error"
         assert detail["error"]["message"] == "Rate limit exceeded"
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter

@@ -13,7 +13,11 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import requests_mock as requests_mock_lib
+import respx
+from pydantic import TypeAdapter
 
+import litellm
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -36,6 +40,9 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 @pytest.mark.asyncio
@@ -241,7 +248,7 @@ def test_chunk_parser_usage_transformation():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())  # use copy to avoid side-effects
+    parsed = decoder.chunk_parser(chunk.copy())  # use copy to avoid side-effects
 
     # The invocation metrics key should be removed and replaced by `usage`
     assert "amazon-bedrock-invocationMetrics" not in parsed
@@ -274,7 +281,7 @@ def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert "amazon-bedrock-invocationMetrics" not in parsed
     assert parsed["usage"]["cache_read_input_tokens"] == 9821
@@ -298,7 +305,7 @@ def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 10174
     assert parsed["usage"]["output_tokens"] == 500
@@ -324,7 +331,7 @@ def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 7
     assert parsed["usage"]["output_tokens"] == 11
@@ -383,7 +390,7 @@ async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics
 
     async def _decoded_stream():  # type: ignore[return-type]
         for chunk in raw_chunks:
-            yield decoder._chunk_parser(copy.deepcopy(chunk))
+            yield decoder.chunk_parser(copy.deepcopy(chunk))
 
     collected: list[bytes] = []
     async for chunk in cfg.bedrock_sse_wrapper(
@@ -1676,7 +1683,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
 
-    message_start = decoder._chunk_parser(
+    message_start = decoder.chunk_parser(
         {
             "type": "message_start",
             "message": {
@@ -1695,7 +1702,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     assert isinstance(message_start, dict)
     assert message_start["message"]["safeguard_results"] == safeguard_results
 
-    message_delta = decoder._chunk_parser(
+    message_delta = decoder.chunk_parser(
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
@@ -3467,6 +3474,160 @@ def test_bedrock_messages_removed_output_config_does_not_add_beta(explicit_beta:
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("route_name", "model"),
+    (
+        pytest.param("anthropic_direct", "claude-fable-5-1", id="anthropic-direct"),
+        pytest.param("azure_ai", "claude-fable-5-1", id="azure-ai"),
+        pytest.param("vertex_ai", "claude-fable-5-1", id="vertex-ai"),
+        pytest.param(
+            "bedrock_converse",
+            "bedrock/converse/us.anthropic.claude-fable-5-1",
+            id="bedrock-converse",
+        ),
+        pytest.param(
+            "bedrock_invoke_chat",
+            "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+            id="bedrock-invoke-chat",
+        ),
+        pytest.param(
+            "bedrock_invoke_messages",
+            "anthropic.claude-opus-4-6-v1",
+            id="bedrock-invoke-messages",
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    ("effort", "expected_effort"),
+    (
+        pytest.param("minimal", "low", id="minimal"),
+        pytest.param("medium", "medium", id="medium"),
+        pytest.param("high", "high", id="high"),
+    ),
+)
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_reasoning_effort_grid_wire_shapes(
+    route_name: str,
+    model: str,
+    effort: str,
+    expected_effort: str,
+    respx_mock: respx.Router,
+    requests_mock: requests_mock_lib.Mocker,
+) -> None:
+    response_body: Final[dict[str, object]] = (
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        if route_name == "bedrock_converse"
+        else {
+            "id": "msg_reasoning",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+    messages: Final = [{"role": "user", "content": "Calculate 47 times 53."}]
+
+    if route_name == "bedrock_invoke_messages":
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            request_body: Final[dict[str, object]] = REASONING_BODY_ADAPTER.validate_python(json.loads(request.content))
+            assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+            assert request_body["output_config"] == {"effort": expected_effort}
+            assert "reasoning_effort" not in request_body
+            return httpx.Response(200, json=response_body)
+
+        await litellm.anthropic_messages(
+            model=f"bedrock/invoke/{model}",
+            messages=messages,
+            max_tokens=4096,
+            reasoning_effort=effort,
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+        )
+        return
+
+    route: Final = respx_mock.post(url__regex=r"https://.*").mock(return_value=httpx.Response(200, json=response_body))
+
+    match route_name:
+        case "anthropic_direct":
+            litellm.completion(
+                model=model,
+                messages=messages,
+                max_tokens=4096,
+                reasoning_effort=effort,
+                custom_llm_provider="anthropic",
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
+        case "azure_ai":
+            litellm.completion(
+                model=f"azure_ai/{model}",
+                messages=messages,
+                max_tokens=4096,
+                reasoning_effort=effort,
+                api_base="https://azure.example",
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
+        case "vertex_ai":
+            requests_mock.post(
+                "https://oauth2.googleapis.com/token",
+                json={"access_token": "test-access-token", "expires_in": 3600, "token_type": "Bearer"},
+            )
+            litellm.completion(
+                model=f"vertex_ai/{model}",
+                messages=messages,
+                max_tokens=4096,
+                reasoning_effort=effort,
+                vertex_project="test-project",
+                vertex_location="us-east5",
+                vertex_credentials={
+                    "type": "authorized_user",
+                    "client_id": "test-client-id",
+                    "client_secret": "test-client-secret",
+                    "refresh_token": "test-refresh-token",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                },
+                client=HTTPHandler(),
+            )
+        case "bedrock_converse" | "bedrock_invoke_chat":
+            litellm.completion(
+                model=model,
+                messages=messages,
+                max_tokens=4096,
+                reasoning_effort=effort,
+                aws_access_key_id="test-access-key",
+                aws_secret_access_key="test-secret-key",
+                aws_region_name="us-east-1",
+                client=HTTPHandler(),
+            )
+        case _:
+            raise AssertionError(f"unknown reasoning route: {route_name}")
+
+    request_body: Final[dict[str, object]] = REASONING_BODY_ADAPTER.validate_python(
+        json.loads(route.calls[0].request.content)
+    )
+    reasoning_fields: Final[dict[str, object]] = (
+        REASONING_BODY_ADAPTER.validate_python(request_body["additionalModelRequestFields"])
+        if route_name == "bedrock_converse"
+        else request_body
+    )
+    assert reasoning_fields["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert reasoning_fields["output_config"] == {"effort": expected_effort}
+    assert "reasoning_effort" not in reasoning_fields
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("display", (None, "summarized", "omitted", "updates"))
 @pytest.mark.parametrize("explicit_beta", (False, True))
@@ -3527,3 +3688,91 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "requested_thinking", "extra_params"),
+    (
+        ("eu.anthropic.claude-opus-5", {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}, {}),
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "enabled", "budget_tokens": 24000, "display": "updates", "block_binding": BLOCK_BINDING},
+            {},
+        ),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+        ),
+    ),
+    ids=("adaptive", "legacy", "legacy_clear_thinking"),
+)
+def test_bedrock_messages_keeps_block_binding_with_display_updates(
+    model: str, requested_thinking: dict[str, object], extra_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_messages_tool_changes_beta(action: str | None, explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    content: Final = (
+        [{"type": action, "tool": {"type": "tool_reference", "name": "mcp__test__ping"}}]
+        if action
+        else "Answer briefly"
+    )
+    messages: Final = [{"role": "user", "content": "Hello"}, {"role": "system", "content": content}]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result.get("anthropic_beta", []).count(beta) == int(action is not None or explicit_beta)
+    assert result["messages"] == messages
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}],
+            },
+            {"role": "user", "content": "Reply with OK"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
+    assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)

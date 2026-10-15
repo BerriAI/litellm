@@ -4,6 +4,7 @@ import litellm
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_KWARG,
     MID_STREAM_CONTINUATION_MARKER,
+    ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
     _deployment_supports_prefill,
 )
@@ -121,3 +122,41 @@ async def test_filter_empties_group_when_no_prefill_capable_deployment():
         request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
     )
     assert result == []
+
+
+def _text_chunk(text: str) -> litellm.ModelResponseStream:
+    return litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": text}}])
+
+
+@pytest.mark.parametrize(
+    "prefill_content,fallback_texts,expected_texts",
+    [
+        ("Hello", ("", "Hel", "lo wor", "ld"), ("", "", " wor", "ld")),
+        ("Hello", ("Hello",), ("",)),
+        ("Hello", (" world",), (" world",)),
+        ("Hello", ("Hel", "p me"), ("Hel", "p me")),
+        ("Hello", ("Hel",), ("Hel",)),
+        ([{"type": "text", "text": "Sure: "}, {"type": "text", "text": "Hello"}], ("Sure: Hello", " world"), ("", " world")),
+    ],
+    ids=[
+        "echo_split_across_chunks_is_dropped",
+        "exact_echo_then_end_is_dropped",
+        "continuation_without_echo_passes_through",
+        "near_echo_is_kept_in_order",
+        "stream_ending_mid_match_is_kept",
+        "content_block_prefill_echo_is_dropped",
+    ],
+)
+@pytest.mark.asyncio
+async def test_continuation_output_drops_only_a_full_echo_of_the_prefill(
+    prefill_content, fallback_texts, expected_texts
+):
+    output = ContinuationOutput("Hello", {"role": "assistant", "content": prefill_content, "prefix": True}, "group")
+
+    async def fallback_stream():
+        for text in fallback_texts:
+            yield _text_chunk(text)
+
+    released = [chunk async for chunk in output.splice(fallback_stream())]
+
+    assert tuple(chunk.choices[0].delta.content for chunk in released) == expected_texts

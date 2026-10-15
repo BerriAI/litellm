@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -40,6 +40,29 @@ class BaseAnthropicMessagesConfig(ABC):
         - api_base: Optional[str] - If the provider needs to update the api_base, return it here. Otherwise, return None.
         """
         return headers, api_base
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        """Async counterpart used by the async handler. The default delegates to the
+        sync implementation; providers whose sync path can block the event loop
+        (e.g. a WIF token exchange) override this."""
+        return self.validate_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
 
     @abstractmethod
     def get_complete_url(
@@ -156,16 +179,28 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return 2
 
-    def should_retry_anthropic_messages_on_http_error(self, e: httpx.HTTPStatusError, litellm_params: dict) -> bool:
+    def should_retry_anthropic_messages_on_http_error(
+        self, e: httpx.HTTPStatusError, litellm_params: dict, request_body: object = None
+    ) -> bool:
         """
         When True, async_anthropic_messages_handler will transform the request body
         and issue one more attempt (bounded by max_retry_on_anthropic_messages_http_error).
+        A binding-mismatch 400 is not retried when the body's ``thinking.block_binding``
+        asked for it, since the retry would strip the very blocks the caller pinned.
         """
         from litellm.llms.anthropic.common_utils import (
+            anthropic_request_errors_on_thinking_binding_mismatch,
             is_anthropic_invalid_thinking_block_error,
+            is_anthropic_thinking_binding_mismatch_error,
         )
 
-        return e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text)
+        if e.response.status_code != 400:
+            return False
+        error_text: Final[str] = e.response.text
+        caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
+            request_body
+        ) and is_anthropic_thinking_binding_mismatch_error(error_text)
+        return not caller_asked_for_this_error and is_anthropic_invalid_thinking_block_error(error_text)
 
     def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         """
