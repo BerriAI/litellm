@@ -1301,3 +1301,24 @@ func TestResourceKeyUpdateRecreatesCascadeDeletedKeyWithMetadataChange(t *testin
 		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
 	}
 }
+
+func TestResourceKeyDeleteTreatsNotFoundAsGone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "sk-test", false)
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("sk-already-deleted")
+
+	diags := resourceKeyDelete(context.Background(), d, c)
+	if diags.HasError() {
+		t.Errorf("resourceKeyDelete returned error for 404, want success: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("resourceKeyDelete did not clear ID, got %q", d.Id())
+	}
+}

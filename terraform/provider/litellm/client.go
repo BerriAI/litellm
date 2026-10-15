@@ -82,6 +82,9 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 	// /key/info nests the key's fields under "info"; only "key" itself is
 	// top-level. Without unwrapping, reads map nothing back into state.
 	if info, ok := resp["info"].(map[string]interface{}); ok {
+		if status, _ := info["status"].(string); status == "deleted" {
+			return nil, nil
+		}
 		if _, present := info["key"]; !present {
 			if k, ok := resp["key"].(string); ok {
 				info["key"] = k

@@ -531,7 +531,7 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 	c := m.(*Client)
 
 	err := c.DeleteKey(d.Id())
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		return diag.FromErr(fmt.Errorf("error deleting key: %s", err))
 	}
 
