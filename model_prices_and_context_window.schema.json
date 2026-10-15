@@ -380,6 +380,10 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_text_message": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_token": {
           "type": "number",
           "minimum": 0,
