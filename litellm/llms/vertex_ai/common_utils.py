@@ -1358,12 +1358,10 @@ class VertexAITokenCounter(BaseTokenCounter):
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContextError,
                 count_context_error_response,
+                gemini_count_contents,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
-            from litellm.llms.vertex_ai.gemini.transformation import (
-                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
-            )
 
             count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
@@ -1372,9 +1370,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             resolved_contents: Final = (
                 contents
                 if contents is not None
-                else gemini_convert_messages_with_history(
-                    messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
-                )
+                else gemini_count_contents(messages or [], messages_format, model_to_use, "vertex_ai")
             )
 
             count_tokens_params: Final = {

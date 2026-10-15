@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from pydantic import JsonValue
@@ -10,6 +10,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
 from litellm.llms.vertex_ai.count_tokens.context import (
     VertexGeminiCountContext,
     VertexGeminiCountContextError,
+    gemini_count_contents,
     vertex_gemini_count_context,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -193,3 +194,57 @@ def test_invalid_tools_return_an_error_value(tools: JsonValue) -> None:
 
     assert isinstance(context, VertexGeminiCountContextError)
     assert "tools" in context.error_message
+
+
+_ANTHROPIC_CONVERSATION: Final = (
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize both"},
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {"query": "x"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "42"}]},
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+) -> None:
+    contents: Final = gemini_count_contents(
+        _ANTHROPIC_CONVERSATION, "anthropic", "gemini-2.5-flash", custom_llm_provider
+    )
+
+    assert contents == [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "Summarize both"},
+                {"inline_data": {"data": "JVBERi0=", "mime_type": "application/pdf"}},
+                {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}},
+            ],
+        },
+        {"role": "model", "parts": [{"function_call": {"name": "lookup", "args": {"query": "x"}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "lookup", "response": {"content": "42"}}}]},
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> None:
+    contents: Final = gemini_count_contents(
+        ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}),
+        "openai",
+        "gemini-2.5-flash",
+        custom_llm_provider,
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "model", "parts": [{"text": "hi"}]},
+    ]

@@ -1,12 +1,16 @@
-from collections.abc import Mapping
+import copy
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
-from litellm.types.utils import TokenCountResponse
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import ContentType
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,3 +146,38 @@ def count_context_error_response(
         error_message=error.error_message,
         status_code=400,
     )
+
+
+def _chat_messages(
+    messages: Sequence[Mapping[str, object]],
+    messages_format: TokenCountMessagesFormat,
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+) -> list[AllMessageValues]:
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+    match messages_format:
+        case "anthropic":
+            return LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+                messages=list(messages),  # pyright: ignore[reportArgumentType]  # raw Anthropic body, read the way /v1/messages inference reads it
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
+        case "openai":
+            return copy.deepcopy(list(messages))  # pyright: ignore[reportReturnType]  # chat messages from the request, copied because the AI Studio conversion rewrites them in place
+        case _:
+            assert_never(messages_format)
+
+
+def gemini_count_contents(
+    messages: Sequence[Mapping[str, object]],
+    messages_format: TokenCountMessagesFormat,
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+) -> list[ContentType]:
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    chat_messages: Final = _chat_messages(messages, messages_format, model, custom_llm_provider)
+    config: Final = GoogleAIStudioGeminiConfig() if custom_llm_provider == "gemini" else VertexGeminiConfig()
+    return config.transform_messages(messages=chat_messages, model=model, litellm_params={})

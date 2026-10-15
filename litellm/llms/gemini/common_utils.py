@@ -503,6 +503,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         from litellm.llms.vertex_ai.count_tokens.context import (
             VertexGeminiCountContextError,
             count_context_error_response,
+            gemini_count_contents,
             vertex_gemini_count_context,
         )
 
@@ -514,7 +515,9 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params: Final = {
             "model": model_to_use,
-            "contents": contents,
+            "contents": contents
+            if contents is not None
+            else gemini_count_contents(messages or [], messages_format, model_to_use, "gemini"),
             "system_instruction": count_context.system_instruction,
             "tools": count_context.tools,
         }

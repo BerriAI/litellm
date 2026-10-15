@@ -465,7 +465,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
-    ) -> list:
+    ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
         replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
         leading_count: Final = next(
