@@ -52,6 +52,7 @@ from litellm.router import (
     _anthropic_stream_forwards_ping_live,
     _stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
+    _fallback_responses_stream_wrapper_class,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
@@ -4774,6 +4775,30 @@ async def test_aresponses_streaming_iterator_fallback():
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_releases_source_without_gc():
+    """The wrapper must not tie the source iterator into a reference cycle, otherwise every
+    streamed /v1/responses request (and its request/response bodies) stays in memory until a
+    full garbage collection runs."""
+    import weakref
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(chunks=[MagicMock(type="response.output_text.delta")])
+    src_ref = weakref.ref(src)
+    wrapped = await router._aresponses_streaming_iterator(
+        response=src, initial_kwargs={"model": "gpt-4", "stream": True}
+    )
+    assert type(wrapped) is _fallback_responses_stream_wrapper_class()
+
+    gc.disable()
+    try:
+        assert len([chunk async for chunk in wrapped]) == 1
+        del src, wrapped
+        assert src_ref() is None
+    finally:
+        gc.enable()
 
 
 @pytest.mark.asyncio
