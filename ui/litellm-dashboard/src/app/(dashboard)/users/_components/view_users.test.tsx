@@ -22,6 +22,7 @@ vi.mock("@/components/networking", () => ({
   invitationCreateCall: vi.fn().mockResolvedValue({}),
   userUpdateUserCall: vi.fn().mockResolvedValue({}),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  getUiPageUrl: (url: string) => url,
   getProxyUISettings: vi.fn().mockResolvedValue({
     PROXY_BASE_URL: null,
     PROXY_LOGOUT_URL: null,
@@ -343,6 +344,17 @@ describe("ViewUserDashboard", () => {
       expect(latest[1]).toBeNull();
       expect(latest[4]).toBeNull();
       expect(latest[2]).toBe(1);
+    });
+
+    it("replaces the previous rows with the loading state while the search request is pending", async () => {
+      renderDashboard();
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+
+      userListCall.mockReturnValue(new Promise(() => undefined));
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: "zzznomatch" } });
+
+      expect(await screen.findByText("Loading users…")).toBeInTheDocument();
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
     });
   });
 });

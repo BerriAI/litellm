@@ -34,9 +34,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -185,6 +184,13 @@ class AzureAIAgentsConfig(BaseConfig):
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)
 
+    def get_agent_id(
+        self,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str:
+        return self._get_agent_id(model, optional_params)
+
     def transform_request(
         self,
         model: str,
@@ -217,7 +223,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
             converted_messages.append({"role": role, "content": content})
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "agent_id": agent_id,
             "messages": converted_messages,
             "api_version": self._get_api_version(optional_params),
@@ -297,7 +303,7 @@ class AzureAIAgentsConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

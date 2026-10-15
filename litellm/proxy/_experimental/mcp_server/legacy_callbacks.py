@@ -1,0 +1,124 @@
+from collections.abc import Mapping
+from typing import Final, Protocol
+
+import httpx2
+from mcp.client.session import ClientRequestContext
+from mcp.types import (
+    CreateMessageRequestParams,
+    CreateMessageResult,
+    CreateMessageResultWithTools,
+    ElicitRequestParams,
+    ElicitResult,
+    ErrorData,
+)
+
+from litellm.constants import MCP_CLIENT_TIMEOUT
+from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
+from litellm.proxy._experimental.mcp_server.scope_challenge import (
+    OAuthScopeResponse,
+    is_tool_call_request,
+    scope_response_from_request,
+)
+from litellm.proxy._types import UserAPIKeyAuth
+
+
+class SamplingCallback(Protocol):
+    async def __call__(
+        self, context: ClientRequestContext, params: CreateMessageRequestParams, /
+    ) -> CreateMessageResult | CreateMessageResultWithTools | ErrorData: ...
+
+
+class ElicitationCallback(Protocol):
+    async def __call__(self, context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData: ...
+
+
+def has_active_mcp_request_context() -> bool:
+    return get_active_mcp_request_ctx() is not None
+
+
+def create_sampling_callback(
+    user_api_key_auth: UserAPIKeyAuth | None = None,
+    raw_headers: Mapping[str, str] | None = None,
+    client_ip: str | None = None,
+    operation_context: OperationContext | None = None,
+) -> SamplingCallback:
+    from litellm.proxy._experimental.mcp_server.server import get_active_auth_context
+
+    auth: Final = get_active_auth_context() if operation_context is None and user_api_key_auth is None else None
+    captured: Final = (
+        operation_context
+        if operation_context is not None
+        else OperationContext(
+            _caller=user_api_key_auth if user_api_key_auth is not None else (auth.user_api_key_auth if auth else None),
+            raw_headers=raw_headers if raw_headers is not None else (auth.raw_headers if auth else None),
+            client_ip=client_ip if client_ip is not None else (auth.client_ip if auth else None),
+        )
+    )
+
+    async def callback(
+        context: ClientRequestContext, params: CreateMessageRequestParams
+    ) -> CreateMessageResult | CreateMessageResultWithTools | ErrorData:
+        import litellm
+        from litellm.proxy._experimental.mcp_server.sampling_handler import handle_sampling_create_message
+
+        return await handle_sampling_create_message(
+            context=context,
+            params=params,
+            default_model=getattr(litellm, "default_mcp_sampling_model", None),
+            user_api_key_auth=captured.user_api_key_auth,
+            raw_headers=dict(captured.raw_headers) if captured.raw_headers is not None else None,
+            client_ip=captured.client_ip,
+        )
+
+    return callback
+
+
+def create_elicitation_callback(timeout: float | None = None) -> ElicitationCallback:
+    from litellm.proxy._experimental.mcp_server.server import get_active_mcp_session
+
+    downstream_session: Final = get_active_mcp_session()
+    request: Final = get_active_mcp_request_ctx()
+    client_params: Final = downstream_session.client_params if downstream_session is not None else None
+    downstream_capabilities: Final = (
+        client_params.capabilities.model_copy(deep=True) if client_params is not None else None
+    )
+    related_request_id: Final = (
+        request.request_id if request is not None and request.session is downstream_session else None
+    )
+    relay_timeout: Final = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
+
+    async def callback(context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData:
+        if request is not None and request.protocol_version == "2026-07-28":
+            return ErrorData(
+                code=-32602,
+                message="A legacy upstream cannot resume input for a modern client; the operation may have partially completed",
+            )
+        from litellm.proxy._experimental.mcp_server.elicitation_handler import handle_elicitation_request
+
+        return await handle_elicitation_request(
+            context=context,
+            params=params,
+            downstream_session=downstream_session,
+            downstream_capabilities=downstream_capabilities,
+            related_request_id=related_request_id,
+            timeout=relay_timeout,
+        )
+
+    return callback
+
+
+def get_scope_response() -> OAuthScopeResponse | None:
+    context: Final = get_active_mcp_request_ctx()
+    return scope_response_from_request(context.request) if context is not None else None
+
+
+async def record_upstream_tool_authorization(response: httpx2.Response, *, pending: OAuthScopeResponse | None) -> None:
+    if pending is None or not pending.pending or not response.is_success or response.request.method != "POST":
+        return
+    try:
+        is_tool_call: Final = is_tool_call_request(response.request.content)
+    except httpx2.RequestNotRead:
+        return
+    if is_tool_call:
+        pending.allow()

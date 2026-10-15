@@ -5,6 +5,7 @@ Canonical definition for ``litellm_accessgrouptable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -16,7 +17,9 @@ class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
     description: str | None = None
     access_model_names: list[str] = []
     access_mcp_server_ids: list[str] = []
+    mcp_tool_permissions: Mapping[str, Sequence[str]] | None = None
     access_agent_ids: list[str] = []
+    access_skill_names: tuple[str, ...] = ()
     assigned_team_ids: list[str] = []
     assigned_key_ids: list[str] = []
     created_at: datetime | None = None
