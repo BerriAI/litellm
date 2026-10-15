@@ -68,6 +68,18 @@ variable "loadgen_instance_type" {
   default = "c7i.2xlarge"
 }
 
+variable "chat_model" {
+  description = "Model behind /v1/chat/completions; groups are named <model>-0, <model>-1, ..."
+  type        = string
+  default     = "gpt-6-astra"
+}
+
+variable "messages_model" {
+  description = "Model behind /v1/messages; groups are named <model>-0, <model>-1, ..."
+  type        = string
+  default     = "claude-opus-5-5"
+}
+
 variable "chat_groups" {
   type    = number
   default = 10

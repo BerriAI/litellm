@@ -1,7 +1,7 @@
 # With several gateways, generators go through an internal NLB like a customer's clients would.
-# NLB TCP flows idle out after 350 s by default: enough for non-streaming calls up to 5 min, and
-# streams keep the flow busy. An ALB in front (as in terraform/litellm/aws, idle_timeout = 120)
-# would cut 2-5 min non-streaming calls; raise it to at least 330 s for this customer.
+# A non-streaming call sends nothing for up to 6 minutes (the customer's timeout), so the NLB's
+# default 350 s TCP idle timeout would cut it; it is raised to 600 s. An ALB in front (as in
+# terraform/litellm/aws, idle_timeout = 120) needs the same: at least 400 s.
 resource "aws_lb" "gateway" {
   count              = var.gateway_count > 1 ? 1 : 0
   name               = substr("${var.name}-gw", 0, 32)
@@ -33,10 +33,11 @@ resource "aws_lb_target_group_attachment" "gateway" {
 }
 
 resource "aws_lb_listener" "gateway" {
-  count             = var.gateway_count > 1 ? 1 : 0
-  load_balancer_arn = aws_lb.gateway[0].arn
-  port              = 4000
-  protocol          = "TCP"
+  count                    = var.gateway_count > 1 ? 1 : 0
+  load_balancer_arn        = aws_lb.gateway[0].arn
+  port                     = 4000
+  protocol                 = "TCP"
+  tcp_idle_timeout_seconds = 600
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.gateway[0].arn

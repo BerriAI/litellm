@@ -23,8 +23,10 @@ import (
 
 func main() {
 	mocks := flag.String("mocks", "http://127.0.0.1:9000", "comma-separated mockllm base URLs; deployments are spread across them")
-	chatGroups := flag.Int("chat-groups", 4, "chat model groups (chat-0, chat-1, ...)")
-	messagesGroups := flag.Int("messages-groups", 4, "messages model groups (msg-0, msg-1, ...)")
+	chatModel := flag.String("chat-model", "gpt-6-astra", "upstream model for chat deployments; groups are named <model>-0, <model>-1, ...")
+	messagesModel := flag.String("messages-model", "claude-opus-5-5", "upstream model for messages deployments; groups are named <model>-0, ...")
+	chatGroups := flag.Int("chat-groups", 4, "chat model groups")
+	messagesGroups := flag.Int("messages-groups", 4, "messages model groups")
 	deployments := flag.Int("deployments", 4, "deployments per model group")
 	chatProvider := flag.String("chat-provider", "openai", "provider prefix for chat deployments (openai_like until native openai lands in Rust)")
 	keys := flag.Int("keys", 1000, "virtual keys to generate")
@@ -49,14 +51,14 @@ func main() {
 		for i := range *deployments {
 			base := strings.TrimRight(bases[n%len(bases)], "/")
 			id := fmt.Sprintf("chat-%d-%d", g, i)
-			deployment(fmt.Sprintf("chat-%d", g), id, *chatProvider+"/mock-gpt", fmt.Sprintf("%s/d/%s/v1", base, id))
+			deployment(fmt.Sprintf("%s-%d", *chatModel, g), id, *chatProvider+"/"+*chatModel, fmt.Sprintf("%s/d/%s/v1", base, id))
 		}
 	}
 	for g := range *messagesGroups {
 		for i := range *deployments {
 			base := strings.TrimRight(bases[n%len(bases)], "/")
 			id := fmt.Sprintf("msg-%d-%d", g, i)
-			deployment(fmt.Sprintf("msg-%d", g), id, "anthropic/claude-mock", fmt.Sprintf("%s/d/%s", base, id))
+			deployment(fmt.Sprintf("%s-%d", *messagesModel, g), id, "anthropic/"+*messagesModel, fmt.Sprintf("%s/d/%s", base, id))
 		}
 	}
 	fmt.Fprintf(&cfg, `router_settings:

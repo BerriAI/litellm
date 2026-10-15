@@ -1,11 +1,11 @@
 {
   "name": "2 hour soak at a steady realistic mix: memory growth, fd leaks, stuck streams",
   "stages": [{"duration_s": 7200, "rps": 30}],
-  "nonstream_max_s": 120,
+  "nonstream_max_s": 360,
   "warmup_s": 60,
   "new_conn_fraction": 0.05,
   "keys": {"file": "out/keys.txt", "zipf_s": 1.1},
-  "models": {"chat": {"prefix": "chat-", "count": 10}, "messages": {"prefix": "msg-", "count": 10}},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
   "classes": [
     {"name": "chat-interactive", "weight": 45, "endpoint": "chat", "stream_fraction": 0.8,
      "context_tokens": {"dist": "loguniform", "min": 10000, "max": 100000},

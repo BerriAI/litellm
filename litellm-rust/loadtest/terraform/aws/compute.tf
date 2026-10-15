@@ -14,6 +14,8 @@ locals {
     registry         = local.registry
     tools_image      = local.tools_image
     gateway_image    = local.gateway_image
+    chat_model       = var.chat_model
+    messages_model   = var.messages_model
     chat_groups      = var.chat_groups
     messages_groups  = var.messages_groups
     deployments      = var.deployments_per_group
