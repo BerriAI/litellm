@@ -1382,7 +1382,9 @@ async def aggregate_token(
             resource=resource,
             signing=signing,
             issue=issue,
-            legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys),
+            legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys)
+            if master_key is not None
+            else None,
         )
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
         return await _token_exchange_grant(
@@ -1631,7 +1633,10 @@ async def refresh_proxy_credential(
     if isinstance(signing, Response):
         return signing
     opened: Final = _open_presented_refresh_token(
-        refresh_token, client_id, signing, legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys)
+        refresh_token,
+        client_id,
+        signing,
+        legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys) if master_key is not None else None,
     )
     if isinstance(opened, Response):
         return opened
@@ -1706,7 +1711,7 @@ async def revoke_session_refresh_token(
         signing.keys,
         signing.now,
         expected_client_id=client_id,
-        legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys),
+        legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys) if master_key is not None else None,
     )
     if isinstance(opened, SessionRefreshOpened):
         guard: Final = _SingleUseGuard(cache)
