@@ -9777,6 +9777,137 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
+def test_nops_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NOPS_API_KEY", "test-key")
+    monkeypatch.delenv("NOPS_OTEL_ENDPOINT", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "nops"
+        spec: Final = next(e for e in v2_logger.config.exporters if e.owner == ExporterOwner.NOPS)
+        assert spec.kind == "otlp_http"
+        assert _otlp_traces_endpoint(spec.endpoint) == "https://api.nops.io/otel/v1/traces"
+        assert spec.headers == "Authorization=Bearer test-key"
+        again: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        (None, "https://api.nops.io/otel/v1/traces"),
+        ("", "https://api.nops.io/otel/v1/traces"),
+        ("http://clara.local:8080/otel/", "http://clara.local:8080/otel/v1/traces"),
+        ("http://clara.local:8080/otel/v1/traces", "http://clara.local:8080/otel/v1/traces"),
+    ],
+    ids=["default", "empty", "override", "signal-path"],
+)
+def test_nops_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch, endpoint, expected):
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    monkeypatch.setenv("NOPS_API_KEY", "legacy-key")
+    if endpoint is None:
+        monkeypatch.delenv("NOPS_OTEL_ENDPOINT", raising=False)
+    else:
+        monkeypatch.setenv("NOPS_OTEL_ENDPOINT", endpoint)
+    monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, OpenTelemetry)
+        assert legacy.callback_name == "nops"
+        assert legacy.config.exporter == "otlp_http"
+        assert legacy.config.endpoint == expected
+        assert legacy.config.headers == "Authorization=Bearer legacy-key"
+        assert legacy._capture_in_span() is False
+        assert legacy._capture_in_event() is False
+        assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+        again: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is legacy
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_AND_EVENT")
+        opted_in: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(opted_in, OpenTelemetry)
+        assert opted_in._capture_in_span() is True
+        assert opted_in._capture_in_event() is True
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("flag", ["true", "false"], ids=["v2", "legacy"])
+@pytest.mark.parametrize("key", [None, ""], ids=["unset", "empty"])
+def test_nops_dispatch_requires_an_api_key(monkeypatch, flag, key):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", flag)
+    if key is None:
+        monkeypatch.delenv("NOPS_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("NOPS_API_KEY", key)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="NOPS_API_KEY not found in environment variables"):
+            logging_module.build_custom_logger_compatible_class("nops", internal_usage_cache=None, llm_router=None)
+        created: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="nops",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert created is None
+        assert not [cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "nops"]
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger

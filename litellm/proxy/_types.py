@@ -3581,6 +3581,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    nops: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="nops",
+        ui_callback_name="nOps",
+        litellm_callback_params=("NOPS_API_KEY", "NOPS_OTEL_ENDPOINT"),
+    )
+
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",

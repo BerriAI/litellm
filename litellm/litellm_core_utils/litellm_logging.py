@@ -5101,6 +5101,43 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_signoz_logger)
         return _signoz_logger
 
+    elif logging_integration == "nops":
+        from litellm.integrations.otel.presets.nops import (
+            NOPS_API_KEY_ENV,
+            NOPS_DEFAULT_OTEL_ENDPOINT,
+            NOPS_OTEL_ENDPOINT_ENV,
+        )
+
+        _nops_key: Final = os.getenv(NOPS_API_KEY_ENV)
+        if not _nops_key:
+            raise ValueError(f"{NOPS_API_KEY_ENV} not found in environment variables")
+
+        _nops_v2: Final = _maybe_construct_otel_v2("nops", _in_memory_loggers)
+        if _nops_v2 is not None:
+            return _nops_v2
+
+        from litellm.integrations.opentelemetry import (
+            CAPTURE_MODE_NO_CONTENT,
+            OpenTelemetry,
+            OpenTelemetryConfig,
+        )
+
+        _nops_base: Final = (os.getenv(NOPS_OTEL_ENDPOINT_ENV) or NOPS_DEFAULT_OTEL_ENDPOINT).rstrip("/")
+        _nops_config: Final = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint=(_nops_base if _nops_base.endswith("/v1/traces") else f"{_nops_base}/v1/traces"),
+            headers=f"Authorization=Bearer {_nops_key}",
+            capture_message_content=(
+                os.getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT") or CAPTURE_MODE_NO_CONTENT
+            ),
+        )
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenTelemetry) and callback.callback_name == "nops":
+                return callback
+        _nops_logger: Final = OpenTelemetry(config=_nops_config, callback_name="nops")
+        _in_memory_loggers.append(_nops_logger)
+        return _nops_logger
+
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):

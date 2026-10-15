@@ -26,6 +26,7 @@ from litellm.integrations.otel.presets.newrelic import (
     newrelic_dynamic_headers,
     newrelic_preset,
 )
+from litellm.integrations.otel.presets.nops import nops_preset
 from litellm.integrations.otel.presets.phoenix import (
     phoenix_preset,
     phoenix_project_headers,
@@ -49,6 +50,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
         "langtrace": langtrace_preset,
         "levo": levo_preset,
         "newrelic": newrelic_preset,
+        "nops": nops_preset,
         "signoz": signoz_preset,
         "weave_otel": weave_preset,
     }
@@ -159,6 +161,7 @@ __all__ = [
     "langtrace_preset",
     "levo_preset",
     "newrelic_preset",
+    "nops_preset",
     "phoenix_preset",
     "project_routing_headers",
     "signoz_preset",
