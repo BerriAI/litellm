@@ -1,7 +1,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::panic_to_pyerr;
-use pyo3::exceptions::{PyBaseException, PyRuntimeError};
+use crate::{Error, panic_to_pyerr};
+use pyo3::exceptions::PyBaseException;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 
@@ -76,15 +76,13 @@ impl Execution {
             match (&execution.state, result.is_some()) {
                 (ExecutionState::Created(_), false) | (ExecutionState::Suspended(_), true) => {}
                 (ExecutionState::Running, _) => {
-                    return Err(PyRuntimeError::new_err("execution is already running"));
+                    return Err(Error::ExecutionRunning.into());
                 }
                 (ExecutionState::Closed, _) => {
-                    return Err(PyRuntimeError::new_err("execution is closed"));
+                    return Err(Error::ExecutionClosed.into());
                 }
                 _ => {
-                    return Err(PyRuntimeError::new_err(
-                        "execution requires start before resume and can only start once",
-                    ));
+                    return Err(Error::ExecutionOutOfOrder.into());
                 }
             }
             match std::mem::replace(&mut execution.state, ExecutionState::Running) {
@@ -116,9 +114,7 @@ impl Execution {
                 drop(body);
                 outcome.and_then(|(step, suspended)| {
                     if suspended {
-                        Err(PyRuntimeError::new_err(
-                            "execution was closed while running",
-                        ))
+                        Err(Error::ExecutionClosedWhileRunning.into())
                     } else {
                         Ok(step)
                     }

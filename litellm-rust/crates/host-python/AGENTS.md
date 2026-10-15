@@ -28,6 +28,7 @@ Terminal notifications share the selected response or exception. An ordinary not
   - `PythonBinding::decode_request` receives the keyword view returned by `prepare_arguments` and updated by `arguments_prepared`, not the caller's dict. A binding that decodes from it inherits all composed argument rewrites
   - A native failure, including one a host op returns as `InvokeError::Native`, is classified exactly once through the binding's `map_error`. A Python exception raised inside the call, and a failure in `prepare_arguments` or `transform_response`, is raised as is
   - A failing `map_error` is raised with the native error's text as its `__context__`, never swallowed
+- Consumers import this crate's error as `use litellm_host_python::Error as HostError`, so it never shadows their own `Error`
 - Use standard PyO3 ownership and conversion APIs
   - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention. Binding/unbinding does not copy payloads
   - Use `pythonize` for selected Serde data, never a JSON-text round trip. Share conversion with `Pythonized<T>`

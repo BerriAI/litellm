@@ -12,8 +12,8 @@ use litellm_host::{
     protocol::Reply,
 };
 use litellm_host_python::{
-    CallOptions, HookChain, InvokeError, PythonBinding, PythonHostCalls, PythonOwned,
-    PythonRuntime, missing_state, run_call,
+    CallOptions, Error as HostError, HookChain, InvokeError, PythonBinding, PythonHostCalls,
+    PythonOwned, PythonRuntime, run_call,
 };
 use pyo3::{
     exceptions::{
@@ -818,7 +818,7 @@ fn cancellation_ends_the_call_without_terminal_dispatch(#[from(interpreter)] _py
                 match chunk {}
             }
             fn encode_response(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
-                Err(missing_state())
+                Err(HostError::MissingState.into())
             }
             fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
                 self.0.push("classify");
@@ -835,7 +835,7 @@ fn cancellation_ends_the_call_without_terminal_dispatch(#[from(interpreter)] _py
                 _: Python<'_>,
                 _: (&'static str, Reply<String>),
             ) -> Result<(), InvokeError<Error>> {
-                Err(missing_state().into())
+                Err(PyErr::from(HostError::MissingState).into())
             }
         }
 
